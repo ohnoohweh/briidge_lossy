@@ -29,6 +29,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
+from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
 from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 TESTS_DIR = Path(__file__).resolve().parent
@@ -63,6 +64,370 @@ def test_macos_swift_host_runner_passes_python_parity_hook_env() -> None:
     assert 'env["EXCLUDED_ROUTES6"] = effectiveExcludedRoutes.ipv6.joined(separator: ",")' in source
 
 
+def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    helper_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+
+    assert "private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?" in source
+    assert 'private var macOSTunHelperTransportKind = "none"' in source
+    assert "typealias MacOSTunHelperClientFactory" in source
+    assert "private let macOSTunHelperClientFactory: MacOSTunHelperClientFactory" in source
+    assert "macOSTunHelperClientFactory ?? Self.makeDefaultMacOSTunHelperClient" in source
+    assert "private static func makeDefaultMacOSTunHelperClient(" in source
+    assert '"OBSTACLEBRIDGE_MACOS_TUN_HELPER_TRANSPORT"' in source
+    assert 'if forcedTransport == "loopback"' in source
+    assert 'if (package["xpc_reachable"] as? Bool) == true' in source
+    assert "ObstacleBridgeNSXPCTunHelperCommandTransport(" in source
+    assert "packetSink: packetSink" in source
+    assert "eventSink: eventSink" in source
+    assert 'transportKind: "xpc"' in source
+    assert "private static func makeLoopbackMacOSTunHelperClient(" in source
+    assert 'transportKind: "loopback"' in source
+    assert "let backend = ObstacleBridgeInProcessMacOSTunHelperClient(" in source
+    assert source.index("ObstacleBridgeNSXPCTunHelperCommandTransport(") < source.index(
+        "private static func makeLoopbackMacOSTunHelperClient("
+    )
+    assert '"tun_helper": macOSTunHelperStatusSnapshot(),' in source
+    assert "private func macOSTunHelperStatusSnapshot() -> [String: Any]" in source
+    assert "func adminTunHelperStatus(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in source
+    assert "func adminTunHelperAction(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in source
+    assert "func adminTunHelperRepair(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in source
+    assert 'case "register", "install", "enable":' in source
+    assert "ObstacleBridgeMacOSTunHelperService.registerResult()" in source
+    assert "ObstacleBridgeMacOSTunHelperService.startResult()" in source
+    assert "ObstacleBridgeMacOSTunHelperService.stopResult(action: action)" in source
+    assert "ObstacleBridgeMacOSTunHelperService.openApprovalSettingsResult()" in source
+    assert 'result["tun_helper"] = macOSTunHelperStatusSnapshot()' in source
+    assert '"mode": ObstacleBridgeTunHelperPlatformScope.desktopHelperMode' in source
+    assert '"backend": ObstacleBridgeTunHelperPlatformScope.macOSBackend' in source
+    assert '"apply_network": networkApplied' in source
+    assert 'let xpcMachServiceName = String(describing: package["xpc_mach_service_name"] ?? "")' in source
+    assert '"socket_path": socketDisplay' in source
+    assert '"xpc_mach_service_name": xpcMachServiceName' in source
+    assert "macOSTunHelperRecoverySnapshot(" in source
+    assert '"needs_manual_cleanup": true' in source
+    assert '"stale_network_possible": true' in source
+    assert '"repair_supported": false' in source
+    assert '"repair_supported_only_for_linux_native_helper"' in source
+    assert "let package = ObstacleBridgeMacOSTunHelperService.statusSnapshot()" in source
+    assert '"package": package' in source
+    assert '"runtime": state.runtime' in source
+    assert '"transport": state.transport' in source
+    assert "macOSTunHelperClient?.transportKind ?? macOSTunHelperTransportKind" in source
+    assert '"actual_ifname": state.runtime["ifname"] ?? ""' in source
+    assert '"runtime_mtu": state.runtime["mtu"] ?? 0' in source
+    assert '"packets_from_runtime": state.runtime["packets_from_runtime"] ?? 0' in source
+    assert '"packets_to_runtime": state.runtime["packets_to_runtime"] ?? 0' in source
+    assert '"helper_disconnect": helperDisconnect' in source
+    assert '"disconnect_reason": disconnectReason' in source
+    assert '"cleanup": [' in source
+    assert '"needed": cleanupNeeded' in source
+    assert "ObstacleBridgeLoopbackTunHelperClient(" in source
+    assert "let server = ObstacleBridgeTunHelperCommandServer(backend: backend)" in source
+    assert "let transport = ObstacleBridgeXPCShapedTunHelperCommandTransport(server: server)" in source
+    assert 'ObstacleBridgeLoopbackTunHelperClient(transport: transport, transportKind: "loopback")' in source
+    assert "let helperClient = macOSTunHelperClientFactory(" in source
+    assert "macOSTunHelperTransportKind = helperClient.transportKind" in source
+    assert "try helperClient.openTun(ObstacleBridgeTunHelperOpenRequest(" in source
+    assert "macOSTunHelperClient?.applyNetwork(action: event, argv: argv, env: helperEnvSnapshot)" in source
+    assert "macOSTunHelperClient?.removeNetwork(action: event, argv: argv, env: helperEnvSnapshot)" in source
+    assert "private func defaultMacOSTunHookArgv(" in source
+    assert 'event == "on_created"' in source
+    assert 'action = "up"' in source
+    assert 'event == "on_stopped"' in source
+    assert 'action = "down"' in source
+    assert 'serverSide ? "./scripts/server-tun-hook-macos.sh" : "./scripts/client-tun-hook-macos.sh"' in source
+    assert "configured?.0 ?? defaultMacOSTunHookArgv" in source
+    assert "try helperClient.writePacket(packet)" in source
+    assert "let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)" in source
+    assert "try process.run()" not in source[source.index("private func runMacOSTunLifecycleHook"):]
+    assert "self.emitPacketFromHelper(packet)" in helper_source
+    assert "ObstacleBridgeTunHelperPacketEnvelope.packetFromHelper(packet)" in helper_source
+    assert "transport.sendPacketToHelper(packet)" in helper_source
+    assert "ObstacleBridgeTunHelperPacketEnvelope.packetToHelper(packet)" in helper_source
+    assert "self?.emitEventFromHelper(event: event, payload: payload)" in helper_source
+    assert "ObstacleBridgeTunHelperEventEnvelope(event: event, payload: payload)" in helper_source
+    assert "private func runHook(action: String, argv: [String], env: [String: String], removing: Bool)" in helper_source
+    assert "#if os(macOS)\n        let process = Process()" in helper_source
+    assert "try process.run()" in helper_source
+    assert "macOS TUN hook execution is not available on iOS" in helper_source
+    assert 'emitEventFromHelper(event: "macos_tun_hook_completed"' in helper_source
+    assert "runtimeSnapshot.markNetworkApplied(action: action, argv: argv, env: env)" in helper_source
+    assert 'stage: "macos_tun_hook_\\(action)"' in helper_source
+    assert 'DispatchQueue(label: "ObstacleBridgeTunHelperClient.Operations")' in helper_source
+    assert "var transportKind: String { get }" in helper_source
+    assert "var applyCalls = 0" in helper_source
+    assert "var removeCalls = 0" in helper_source
+    assert "var lastApplyPayload: [String: Any] = [:]" in helper_source
+    assert "var lastRemovePayload: [String: Any] = [:]" in helper_source
+    assert "var stopped = false" in helper_source
+    assert "var cleanupAttempted = false" in helper_source
+    assert "var cleanupOK = false" in helper_source
+    assert '"apply_calls": applyCalls' in helper_source
+    assert '"remove_calls": removeCalls' in helper_source
+    assert '"last_apply_payload": lastApplyPayload' in helper_source
+    assert '"last_remove_payload": lastRemovePayload' in helper_source
+    assert '"stopped": stopped' in helper_source
+    assert '"cleanup_attempted": cleanupAttempted' in helper_source
+    assert '"cleanup_ok": cleanupOK' in helper_source
+    assert 'var transportKind: String {\n        "in_process"\n    }' in helper_source
+    assert 'init(transport: ObstacleBridgeTunHelperCommandTransport, transportKind: String = "loopback")' in helper_source
+    assert 'recordFailureUnlocked(stage: "apply_network", error: "TUN helper is not open")' in helper_source
+    assert 'recordFailureUnlocked(stage: "write_packet", error: "TUN helper is not open")' in helper_source
+    assert '"seq": sequence' in helper_source
+    assert "helper response sequence mismatch" in helper_source
+    assert "helper packet response sequence mismatch" in helper_source
+    assert 'helperClient.recordFailure(\n                stage: "macos_utun_write"' in source
+    assert "macOSTunHelperHookEnvSnapshot(from: env)" in source
+    assert 'if client.transportKind == "xpc" {' in source
+    assert "macOSTunHelperRuntimeSnapshot.recordPacketToRuntime()" in source
+    assert "let helperRuntimeLost = configured" in source
+    assert 'disconnectReason = xpcReachable ? "xpc_runtime_lost" : "xpc_unreachable"' in source
+
+
+def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
+    service = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift").read_text(encoding="utf-8")
+    xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+    helper_main = (
+        ROOT
+        / "ios"
+        / "native"
+        / "ObstacleBridgePrivilegedHelper"
+        / "ObstacleBridgeTunPrivilegedHelperMain.swift"
+    ).read_text(encoding="utf-8")
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+
+    assert 'helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"' in service
+    assert 'helperExecutableName = "ObstacleBridgeTunHelper"' in service
+    assert 'expectedHelperVersion = "1"' in service
+    assert 'xpcMachServiceName = "\\(helperBundleIdentifier).xpc"' in service
+    assert 'helperLaunchServicesRelativePath = "Contents/Library/LaunchServices/\\(helperExecutableName)"' in service
+    assert 'helperLaunchDaemonRelativePath = "Contents/Library/LaunchDaemons/\\(helperLaunchDaemonPlistName)"' in service
+    assert "statusSnapshot(appBundleURL explicitAppBundleURL: URL? = nil)" in service
+    assert "SMAppService.daemon(plistName: helperLaunchDaemonPlistName)" in service
+    assert "try daemonService().register()" in service
+    assert "try daemonService().unregister()" in service
+    assert 'static func stopResult(action: String = "stop", appBundleURL: URL? = nil)' in service
+    assert '"smappservice_status": serviceStatus' in service
+    assert '"install_supported": installSupported' in service
+    assert '"expected_helper_version": expectedHelperVersion' in service
+    assert '"bundled_helper_version": helperVersion' in service
+    assert '"bundled_helper_status_ok": helperStatusOK' in service
+    assert '"helper_version_matches_expected": helperVersionMatches' in service
+    assert '"helper_package_valid": helperPresent && plistPresent && helperVersionMatches' in service
+    assert "bundledHelperSelfCheck(helperURL: helperURL, helperPresent: helperPresent)" in service
+    assert 'process.arguments = ["--status-json"]' in service
+    assert 'return "helper_version_mismatch"' in service
+    assert "let helperVersionMismatch = helperPresent && plistPresent && helperStatusOK && !helperVersionMatches" in service
+    assert '"repair_action": helperVersionMismatch ? "stop_then_register" : ""' in service
+    assert "Stop/unregister the helper, rebuild or replace the app bundle, then register it again." in service
+    assert '"approval_required": approvalRequired' in service
+    assert '"approval_action": approvalRequired ? "open_system_settings_login_items" : ""' in service
+    assert "Approve the ObstacleBridge TUN helper in System Settings" in service
+    assert 'case .enabled:' in service
+    assert 'return "requires_approval"' in service
+    assert "openApprovalSettingsResult(appBundleURL:" in service
+    assert "SMAppService.openSystemSettingsLoginItems()" in service
+    assert '"xpc_mach_service_name": xpcMachServiceName' in service
+    assert '"xpc_reachable": xpcReachability["ok"] as? Bool ?? false' in service
+    assert '"xpc_last_error": xpcReachability["error"] as? String ?? ""' in service
+    assert 'result["xpc_helper_pid"] = helperPID' in service
+    assert 'result["xpc_runtime"] = runtime' in service
+    assert "ObstacleBridgeTunHelperXPC.ping(machServiceName: xpcMachServiceName)" in service
+    assert '"helper_pid": ProcessInfo.processInfo.processIdentifier' in xpc_source
+    assert "registerSkeletonResult(appBundleURL:" in service
+    assert "startSkeletonResult(appBundleURL:" in service
+    assert "stopSkeletonResult(appBundleURL:" in service
+    assert "registerResult(appBundleURL:" in service
+    assert "startResult(appBundleURL:" in service
+    assert "stopResult(appBundleURL:" in service
+    assert "smAppServiceAvailable" in service
+
+    admin_api = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
+    assert "func adminTunHelperStatus(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in admin_api
+    assert "func adminTunHelperAction(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in admin_api
+    assert "func adminTunHelperRepair(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in admin_api
+    assert 'case ("GET", "/api/tun-helper/status"):' in admin_api
+    assert 'case ("POST", "/api/tun-helper/action"):' in admin_api
+    assert 'case ("POST", "/api/tun-helper/repair"):' in admin_api
+
+    assert "@main" in helper_main
+    assert "ObstacleBridgeTunPrivilegedHelperMain" in helper_main
+    assert '"--status-json"' in helper_main
+    assert "ObstacleBridgeMacOSTunHelperService.helperBundleIdentifier" in helper_main
+    assert "ObstacleBridgeMacOSTunHelperService.expectedHelperVersion" in helper_main
+    assert "ObstacleBridgeTunHelperCommand.allCases.map" in helper_main
+    assert "ObstacleBridgeTunHelperFrameKind.allCases.map" in helper_main
+    assert "runXPCListener()" in helper_main
+    assert "NSXPCListener(machServiceName: ObstacleBridgeMacOSTunHelperService.xpcMachServiceName)" in helper_main
+    assert "ObstacleBridgeTunHelperXPCListenerDelegate()" in helper_main
+    assert "dispatchMain()" in helper_main
+
+    assert "@objc protocol ObstacleBridgeTunHelperXPCServicing" in xpc_source
+    assert "@objc protocol ObstacleBridgeTunHelperXPCClientCallbacks" in xpc_source
+    assert "func ping(_ reply:" in xpc_source
+    assert "static let requestTimeoutSeconds: TimeInterval = 15.0" in xpc_source
+    assert "func handleCommand(_ message: NSDictionary" in xpc_source
+    assert "func handlePacketToHelper(_ message: NSDictionary" in xpc_source
+    assert "func handlePacketFromHelper(_ message: NSDictionary)" in xpc_source
+    assert "func handleEventFromHelper(_ message: NSDictionary)" in xpc_source
+    assert "NSXPCConnection(machServiceName: machServiceName" in xpc_source
+    assert "remoteObjectProxyWithErrorHandler" in xpc_source
+    assert "static func callbackInterface() -> NSXPCInterface" in xpc_source
+    assert "self.connection.exportedInterface = ObstacleBridgeTunHelperXPC.callbackInterface()" in xpc_source
+    assert "self.connection.exportedObject = handler" in xpc_source
+    assert "final class ObstacleBridgeNSXPCTunHelperCommandTransport" in xpc_source
+    assert "final class ObstacleBridgeTunHelperXPCClientCallbackHandler" in xpc_source
+    assert "ObstacleBridgeTunHelperPacketEnvelope.packetFromHelperPacket(" in xpc_source
+    assert "ObstacleBridgeTunHelperEventEnvelope.decode(" in xpc_source
+    assert "helper response sequence mismatch" in xpc_source
+    assert "helper packet response sequence mismatch" in xpc_source
+    assert "final class ObstacleBridgeTunHelperXPCService" in xpc_source
+    assert "private var server: ObstacleBridgeTunHelperCommandServer!" in xpc_source
+    assert "ObstacleBridgeInProcessMacOSTunHelperClient(" in xpc_source
+    assert 'queue: DispatchQueue(label: "ObstacleBridgeTunHelperXPCService.Backend")' in xpc_source
+    assert "try server.handleXPCPayload(raw)" in xpc_source
+    assert "try server.handleXPCPacketPayload(raw)" in xpc_source
+    assert "self?.sendPacketFromHelper(packet)" in xpc_source
+    assert "self?.sendEventFromHelper(event: event, payload: payload)" in xpc_source
+    assert "clientCallbackProxy()?.handlePacketFromHelper" in xpc_source
+    assert "clientCallbackProxy()?.handleEventFromHelper" in xpc_source
+    assert "backend.runtimeSnapshot.payload()" in xpc_source
+    assert "privileged helper XPC command handling is not implemented yet" not in xpc_source
+    assert "final class ObstacleBridgeTunHelperXPCListenerDelegate" in xpc_source
+    assert "NSXPCListenerDelegate" in xpc_source
+    assert "newConnection.remoteObjectInterface = ObstacleBridgeTunHelperXPC.callbackInterface()" in xpc_source
+
+    assert 'HELPER_BINARY_PATH="${BUILD_DIR}/ObstacleBridgeTunHelper"' in build_script
+    assert 'APP_LAUNCHSERVICES_DIR="${APP_CONTENTS_DIR}/Library/LaunchServices"' in build_script
+    assert 'APP_LAUNCHDAEMONS_DIR="${APP_CONTENTS_DIR}/Library/LaunchDaemons"' in build_script
+    assert "compiling macOS TUN privileged helper skeleton" in build_script
+    assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
+    assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
+    assert 'cp "${HELPER_BINARY_PATH}" "${APP_LAUNCHSERVICES_DIR}/${HELPER_EXECUTABLE_NAME}"' in build_script
+    assert 'cat > "${HELPER_PLIST}" <<EOF' in build_script
+    assert "<key>BundleProgram</key>" in build_script
+    assert "Contents/Library/LaunchServices/${HELPER_EXECUTABLE_NAME}" in build_script
+    assert "<key>${HELPER_BUNDLE_ID}.xpc</key>" in build_script
+
+
+def test_macos_tun_helper_package_status_validates_bundled_helper_version(tmp_path: Path) -> None:
+    artifact = build_macos_swift_artifact()
+    helper_path = artifact.app_bundle / "Contents" / "Library" / "LaunchServices" / "ObstacleBridgeTunHelper"
+    completed = subprocess.run(
+        [str(helper_path), "--status-json"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    helper_status = json.loads(completed.stdout)
+    assert helper_status["ok"] is True
+    assert helper_status["helper_version"] == "1"
+    assert "OPEN_TUN" in helper_status["supported_commands"]
+    assert "PACKET_TO_HELPER" in helper_status["supported_frame_kinds"]
+
+    source_path = tmp_path / "helper_package_status_probe.swift"
+    binary_path = tmp_path / "helper_package_status_probe"
+    source_path.write_text(
+        textwrap.dedent(
+            """
+            import Foundation
+
+            @main
+            struct HelperPackageStatusProbe {
+                static func main() throws {
+                    let appBundleURL = URL(fileURLWithPath: CommandLine.arguments[1])
+                    let status = ObstacleBridgeMacOSTunHelperService.statusSnapshot(appBundleURL: appBundleURL)
+                    let data = try JSONSerialization.data(withJSONObject: status, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_tun_helper_contract_probe(source_path, binary_path)
+    status_completed = subprocess.run(
+        [str(binary_path), str(artifact.app_bundle)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    status = json.loads(status_completed.stdout)
+    assert status["bundled_helper_present"] is True
+    assert status["launch_daemon_plist_present"] is True
+    assert status["bundled_helper_status_ok"] is True
+    assert status["bundled_helper_version"] == status["expected_helper_version"] == "1"
+    assert status["helper_version_matches_expected"] is True
+    assert status["helper_package_valid"] is True
+    assert status["repair_action"] == ""
+    assert status["repair_hint"] == ""
+
+
+def test_macos_tun_helper_package_status_reports_stale_helper_version(tmp_path: Path) -> None:
+    app_bundle = tmp_path / "ObstacleBridge.app"
+    helper_dir = app_bundle / "Contents" / "Library" / "LaunchServices"
+    plist_dir = app_bundle / "Contents" / "Library" / "LaunchDaemons"
+    helper_dir.mkdir(parents=True)
+    plist_dir.mkdir(parents=True)
+    helper_path = helper_dir / "ObstacleBridgeTunHelper"
+    helper_path.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--status-json\" ]; then\n"
+        "  printf '%s\\n' '{\"ok\":true,\"helper_version\":\"0\",\"supported_commands\":[\"OPEN_TUN\"],\"supported_frame_kinds\":[\"CONTROL_REQUEST\"]}'\n"
+        "  exit 0\n"
+        "fi\n"
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    helper_path.chmod(0o755)
+    (plist_dir / "com.obstaclebridge.macos.ObstacleBridge.TunHelper.plist").write_text(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?><plist version=\"1.0\"><dict></dict></plist>\n",
+        encoding="utf-8",
+    )
+
+    source_path = tmp_path / "helper_stale_status_probe.swift"
+    binary_path = tmp_path / "helper_stale_status_probe"
+    source_path.write_text(
+        textwrap.dedent(
+            """
+            import Foundation
+
+            @main
+            struct HelperStaleStatusProbe {
+                static func main() throws {
+                    let appBundleURL = URL(fileURLWithPath: CommandLine.arguments[1])
+                    let status = ObstacleBridgeMacOSTunHelperService.statusSnapshot(appBundleURL: appBundleURL)
+                    let data = try JSONSerialization.data(withJSONObject: status, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_tun_helper_contract_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path), str(app_bundle)],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    status = json.loads(completed.stdout)
+    assert status["bundled_helper_present"] is True
+    assert status["launch_daemon_plist_present"] is True
+    assert status["bundled_helper_status_ok"] is True
+    assert status["bundled_helper_version"] == "0"
+    assert status["expected_helper_version"] == "1"
+    assert status["helper_version_matches_expected"] is False
+    assert status["helper_package_valid"] is False
+    assert status["install_supported"] is False
+    assert status["lifecycle_phase"] == "helper_version_mismatch"
+    assert status["repair_action"] == "stop_then_register"
+    assert "Stop/unregister the helper" in status["repair_hint"]
+    assert "does not match expected 1" in status["last_error"]
+
+
 def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_overlay_owner() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
@@ -72,7 +437,8 @@ def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_ove
     assert "activeOwner.owner.acceptLocalUDPConnection(" in source
     assert "activeOwner.owner.acceptLocalTCPConnection(" in source
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
-    assert 'currentOverlayOwner()?.owner.transportSnapshot()["overlay_connected"] as? Bool' in source
+    assert "private func overlayCurrentlyConnected() -> Bool?" in source
+    assert "currentOverlayOwner()?.owner.appReady()" in source
 
 
 def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> None:
@@ -217,7 +583,36 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert "func snapshot() -> [String: Any] {\n        cachedStatusOrBuild()\n    }" in source
     assert "func adminConnectionsSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return connectionsSnapshot()\n    }" in source
     assert "private func connectionsSnapshot() -> [String: Any] {\n        cachedConnectionsOrBuild()\n    }" in source
-    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return cachedTunRoutingOrBuild()\n    }" in source
+    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        refreshAdminSnapshotCache(sync: true)\n        return tunRoutingSnapshotWithVerification(cachedTunRoutingOrBuild())\n    }" in source
+    assert "private func tunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in source
+    assert '"tun_config": configCheck' in source
+    assert '"tun_connectivity": macOSInternalTunVerification(' in source
+    assert '"tun_global_connectivity": macOSInternalTunVerification(' in source
+    assert 'let resolvedPeer = resolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)' in source
+    assert '"peer": resolvedPeer ?? configuredPeerEndpoint' in source
+    assert '"resolved_peer": resolvedPeer ?? NSNull()' in source
+    assert '"resolved_peer_family": resolvedPeer?["family"] ?? NSNull()' in source
+    assert "private func resolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]?" in source
+    assert 'target: peerTarget' in source
+    assert 'target: globalHost' in source
+    assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
+    assert '"method": "internal_icmp_echo"' in source
+    assert '"resolved_target": resolvedTarget' in source
+    assert '"last_success_ago_s": NSNull()' in source
+    assert "let payload = ObstacleBridgeTunPing.probePayload(" in source
+    assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
+    assert 'tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
+
+
+def test_macos_swift_host_runner_keeps_quic_owner_iOS13_compilable() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert "func stop()\n    func connectionRows()" in source
+    assert "@available(iOS 15.0, *)\nextension ObstacleBridgeQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}" in source
+    assert "private var sharedQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning?" in source
+    assert 'guard #available(iOS 15.0, *) else {' in source
+    assert 'handleSharedOverlayOwnerEvent(event: "quic_overlay_unavailable"' in source
 
 
 def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_python() -> None:
@@ -232,6 +627,24 @@ def test_macos_swift_host_runner_peer_status_aggregates_connection_traffic_like_
     assert '"rx_bytes_per_sec": rxRate' in source
     assert '"tx_bytes_per_sec": txRate' in source
     assert '"traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes)' in source
+
+
+def test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields() -> None:
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    transport_sources = [
+        (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8"),
+        (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8"),
+        (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8"),
+    ]
+
+    assert '"next_address_attempt_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
+    assert '"restart_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
+    for source in transport_sources:
+        assert "private var nextReconnectAttemptDeadlineNS: UInt64?" in source
+        assert '"next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull()' in source
+        assert '"restart_in_seconds": NSNull()' in source
+        assert "private func nextAddressAttemptInSeconds() -> Double?" in source
+        assert "DispatchTime.now().uptimeNanoseconds + UInt64(reconnectRetryDelayMS) * 1_000_000" in source
 
 
 def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> None:
@@ -681,6 +1094,55 @@ def _compile_swift_macos_tun_probe(source_path: Path, binary_path: Path) -> None
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
     if completed.returncode != 0:
         raise AssertionError(f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}")
+
+
+def _compile_swift_tun_helper_contract_probe(source_path: Path, binary_path: Path) -> None:
+    swiftc = shutil.which("swiftc")
+    if not swiftc:
+        pytest.skip("swiftc is required for macOS TUN helper contract tests")
+    command = [
+        swiftc,
+        "-o",
+        str(binary_path),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift"),
+        str(source_path),
+    ]
+    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    if completed.returncode != 0:
+        raise AssertionError(f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}")
+
+
+def _python_darwin_helper_snapshot_for_parity() -> dict:
+    backend = DarwinTunHelperBackend()
+    backend._opened = True
+    backend._ifname = "utun7"
+    backend._mtu = 1500
+    backend._network_applied = True
+    backend._apply_calls = 1
+    backend._packets_from_runtime = 1
+    backend._packets_to_runtime = 2
+    backend._last_hook_action = "up"
+    backend._last_hook_argv = ["/app/client-tun-hook-macos.sh", "up", "utun7"]
+    backend._last_hook_env = {
+        "MTU": "1500",
+        "TUN_ADDR": "198.18.70.1/30",
+        "DNS1": "9.9.9.9",
+        "WAN_IF": "en0",
+    }
+    backend._last_apply_payload = {
+        "action": "up",
+        "argv": ["/app/client-tun-hook-macos.sh", "up", "utun7"],
+        "env": {
+            "MTU": "1500",
+            "TUN_ADDR": "198.18.70.1/30",
+            "DNS1": "9.9.9.9",
+            "WAN_IF": "en0",
+        },
+    }
+    return backend.local_snapshot()
 
 
 def _http_json(url: str, *, timeout_sec: float = 2.0) -> dict:
@@ -1473,6 +1935,576 @@ def test_macos_utun_adapter_frame_codec_probe(tmp_path: Path) -> None:
     assert payload["ipv6_roundtrip"] is True
 
 
+def test_macos_tun_helper_contract_snapshot_matches_python_darwin_helper(tmp_path: Path) -> None:
+    source_path = tmp_path / "TunHelperContractProbe.swift"
+    binary_path = tmp_path / "tun-helper-contract-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            final class RecordingTunHelperClient: ObstacleBridgeTunHelperClienting {
+                var operations: [String] = []
+                var requestedIfname: String { runtimeSnapshot.requestedIfname }
+                var actualIfname: String { runtimeSnapshot.ifname }
+                var mtu: Int { runtimeSnapshot.mtu }
+                var isOpen: Bool { runtimeSnapshot.opened }
+                var transportKind: String { "recording" }
+                var runtimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
+                var snapshots: [[String: Any]] = []
+
+                func openTun(_ request: ObstacleBridgeTunHelperOpenRequest) throws -> [String: Any] {
+                    operations.append("open:\(request.requestedIfname)")
+                    runtimeSnapshot.markOpened(
+                        requestedIfname: request.requestedIfname,
+                        actualIfname: "utun9",
+                        mtu: request.mtu
+                    )
+                    snapshots.append(runtimeSnapshot.payload())
+                    return runtimeSnapshot.payload()
+                }
+
+                func applyNetwork(action: String, argv: [String], env: [String: String]) {
+                    operations.append("apply:\(action):\(actualIfname)")
+                    runtimeSnapshot.markNetworkApplied(action: action, argv: argv, env: env)
+                    snapshots.append(runtimeSnapshot.payload())
+                }
+
+                func removeNetwork(action: String, argv: [String], env: [String: String]) {
+                    operations.append("remove:\(action):\(actualIfname)")
+                    runtimeSnapshot.markNetworkApplied(action: action, argv: argv, env: env)
+                    runtimeSnapshot.networkApplied = false
+                    snapshots.append(runtimeSnapshot.payload())
+                }
+
+                func writePacket(_ packet: Data) throws {
+                    operations.append("write:\(packet.count)")
+                    runtimeSnapshot.recordPacketFromRuntime()
+                    snapshots.append(runtimeSnapshot.payload())
+                }
+
+                func recordFailure(stage: String, error: String) {
+                    operations.append("failure:\(stage)")
+                    runtimeSnapshot.markFailure(stage: stage, error: error)
+                    snapshots.append(runtimeSnapshot.payload())
+                }
+
+                func stop() {
+                    operations.append("stop")
+                    runtimeSnapshot.opened = false
+                    runtimeSnapshot.networkApplied = false
+                    snapshots.append(runtimeSnapshot.payload())
+                }
+            }
+
+            @main
+            struct TunHelperContractProbeMain {
+                static func main() throws {
+                    var snapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
+                    snapshot.markOpened(requestedIfname: "obtun0", actualIfname: "utun7", mtu: 1500)
+                    snapshot.markNetworkApplied(
+                        action: "up",
+                        argv: ["/app/client-tun-hook-macos.sh", "up", "utun7"],
+                        env: [
+                            "MTU": "1500",
+                            "TUN_ADDR": "198.18.70.1/30",
+                            "DNS1": "9.9.9.9",
+                            "WAN_IF": "en0",
+                        ]
+                    )
+                    snapshot.recordPacketFromRuntime()
+                    snapshot.recordPacketToRuntime()
+                    snapshot.recordPacketToRuntime()
+                    let openRequest = ObstacleBridgeTunHelperOpenRequest(
+                        requestedIfname: "obtun0",
+                        mtu: 1500
+                    ).payload()
+                    let networkRequest = ObstacleBridgeTunHelperNetworkRequest(
+                        ifname: "utun7",
+                        mtu: 1500,
+                        tunRouting: ["dns_servers": ["9.9.9.9"]],
+                        listenerHookEnv: ["WAN_IF": "en0"]
+                    ).payload()
+                    let hookDir = URL(fileURLWithPath: NSTemporaryDirectory())
+                        .appendingPathComponent("obstaclebridge-hook-probe-\(UUID().uuidString)", isDirectory: true)
+                    try FileManager.default.createDirectory(at: hookDir, withIntermediateDirectories: true)
+                    let successHook = hookDir.appendingPathComponent("hook-ok.sh")
+                    let failureHook = hookDir.appendingPathComponent("hook-fail.sh")
+                    let envRecord = hookDir.appendingPathComponent("env.txt")
+                    try "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$1\" \"$2\" \"$TUN_ADDR\" \"$WAN_IF\" > \"\(envRecord.path)\"\necho hook-ok\nexit 0\n"
+                        .write(to: successHook, atomically: true, encoding: .utf8)
+                    try "#!/bin/sh\necho hook-fail\nexit 7\n"
+                        .write(to: failureHook, atomically: true, encoding: .utf8)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: successHook.path)
+                    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: failureHook.path)
+                    let fakeBackend = RecordingTunHelperClient()
+                    let fakeServer = ObstacleBridgeTunHelperCommandServer(backend: fakeBackend)
+                    let fakeTransport = ObstacleBridgeXPCShapedTunHelperCommandTransport(server: fakeServer)
+                    let fakeLoopbackTransport = ObstacleBridgeLoopbackTunHelperCommandTransport(server: fakeServer)
+                    let fakeClient = ObstacleBridgeLoopbackTunHelperClient(transport: fakeTransport)
+                    let packetBackend = RecordingTunHelperClient()
+                    let packetServer = ObstacleBridgeTunHelperCommandServer(backend: packetBackend)
+                    let packetTransport = ObstacleBridgeXPCShapedTunHelperCommandTransport(server: packetServer)
+                    let packetLoopbackTransport = ObstacleBridgeLoopbackTunHelperCommandTransport(server: packetServer)
+                    var hookEvents: [[String: Any]] = []
+                    let hookBackend = ObstacleBridgeInProcessMacOSTunHelperClient(
+                        queue: DispatchQueue(label: "HookProbe"),
+                        packetSink: { _ in },
+                        eventSink: { event, payload in
+                            hookEvents.append(["event": event, "payload": payload])
+                        }
+                    )
+                    hookBackend.applyNetwork(
+                        action: "on_created",
+                        argv: [successHook.path, "up", "utun-probe"],
+                        env: ["TUN_ADDR": "198.18.70.1/30", "WAN_IF": "en0"]
+                    )
+                    let hookSuccessSnapshot = hookBackend.runtimeSnapshot.payload()
+                    let hookEnvRecord = (try? String(contentsOf: envRecord, encoding: .utf8)
+                        .trimmingCharacters(in: .whitespacesAndNewlines)) ?? ""
+                    hookBackend.removeNetwork(
+                        action: "on_stopped",
+                        argv: [successHook.path, "down", "utun-probe"],
+                        env: ["TUN_ADDR": "198.18.70.1/30", "WAN_IF": "en0"]
+                    )
+                    let hookRemoveSnapshot = hookBackend.runtimeSnapshot.payload()
+                    hookBackend.applyNetwork(
+                        action: "on_channel_connected",
+                        argv: [failureHook.path, "up", "utun-probe"],
+                        env: ["TUN_ADDR": "198.18.70.1/30"]
+                    )
+                    let hookFailureSnapshot = hookBackend.runtimeSnapshot.payload()
+                    let xpcBackend = RecordingTunHelperClient()
+                    let xpcService = ObstacleBridgeTunHelperXPCService(backend: xpcBackend)
+                    var xpcPing: [String: Any] = [:]
+                    xpcService.ping { payload in
+                        xpcPing = payload as? [String: Any] ?? [:]
+                    }
+                    var xpcOpenResponse: [String: Any] = [:]
+                    xpcService.handleCommand(
+                        ObstacleBridgeTunHelperCommandEnvelope(
+                            command: .openTun,
+                            payload: ObstacleBridgeTunHelperOpenRequest(
+                                requestedIfname: "obtun-xpc",
+                                mtu: 1400
+                            ).payload(),
+                            sequence: 41
+                        ).xpcPayload() as NSDictionary
+                    ) { payload in
+                        xpcOpenResponse = payload as? [String: Any] ?? [:]
+                    }
+                    var xpcApplyResponse: [String: Any] = [:]
+                    xpcService.handleCommand(
+                        ObstacleBridgeTunHelperCommandEnvelope(
+                            command: .applyNetwork,
+                            payload: [
+                                "action": "up",
+                                "argv": ["/app/client-tun-hook-macos.sh", "up", "utun9"],
+                                "env": ["MTU": "1400"],
+                            ],
+                            sequence: 42
+                        ).xpcPayload() as NSDictionary
+                    ) { payload in
+                        xpcApplyResponse = payload as? [String: Any] ?? [:]
+                    }
+                    var xpcPacketResponse: [String: Any] = [:]
+                    xpcService.handlePacketToHelper(
+                        ObstacleBridgeTunHelperPacketEnvelope.packetToHelper(
+                            Data([0x45, 0x00, 0x01]),
+                            sequence: 43
+                        ).xpcPayload() as NSDictionary
+                    ) { payload in
+                        xpcPacketResponse = payload as? [String: Any] ?? [:]
+                    }
+                    var xpcBadCommandResponse: [String: Any] = [:]
+                    xpcService.handleCommand([
+                        "command": "NOPE",
+                        "seq": 44,
+                        "payload": [:],
+                    ] as NSDictionary) { payload in
+                        xpcBadCommandResponse = payload as? [String: Any] ?? [:]
+                    }
+                    var callbackPackets: [[UInt8]] = []
+                    var callbackEvents: [[String: Any]] = []
+                    let callbackHandler = ObstacleBridgeTunHelperXPCClientCallbackHandler(
+                        packetSink: { packet in
+                            callbackPackets.append(Array(packet))
+                        },
+                        eventSink: { event, payload in
+                            callbackEvents.append([
+                                "event": event,
+                                "payload": payload,
+                            ])
+                        }
+                    )
+                    callbackHandler.handlePacketFromHelper(
+                        ObstacleBridgeTunHelperPacketEnvelope.packetFromHelper(
+                            Data([0x45, 0x66, 0x01])
+                        ).xpcPayload() as NSDictionary
+                    )
+                    callbackHandler.handleEventFromHelper(
+                        ObstacleBridgeTunHelperEventEnvelope(
+                            event: "macos_utun_started",
+                            payload: ["ifname": "utun9", "mtu": 1400]
+                        ).xpcPayload() as NSDictionary
+                    )
+                    let badSequenceTransport = ObstacleBridgeXPCShapedTunHelperCommandTransport(
+                        sendEnvelope: { message in
+                            [
+                                "ok": true,
+                                "op": message["command"] ?? "",
+                                "seq": 999,
+                                "payload": ["opened": false],
+                            ]
+                        },
+                        sendPacketEnvelope: { _ in
+                            [
+                                "ok": true,
+                                "op": "WRITE_PACKET",
+                                "seq": 999,
+                                "payload": ["opened": false],
+                            ]
+                        }
+                    )
+                    let gatedBackend = RecordingTunHelperClient()
+                    let gatedServer = ObstacleBridgeTunHelperCommandServer(backend: gatedBackend)
+                    let gatedClient = ObstacleBridgeLoopbackTunHelperClient(
+                        transport: ObstacleBridgeXPCShapedTunHelperCommandTransport(server: gatedServer)
+                    )
+                    gatedClient.applyNetwork(
+                        action: "up",
+                        argv: ["/app/client-tun-hook-macos.sh", "up", "utun9"],
+                        env: ["MTU": "1500"]
+                    )
+                    let gatedApplyFailure = gatedClient.runtimeSnapshot.payload()["last_failure"] ?? [:]
+                    var gatedWriteError = ""
+                    do {
+                        try gatedClient.writePacket(Data([0x45]))
+                    } catch {
+                        gatedWriteError = error.localizedDescription
+                    }
+                    let gatedWriteFailure = gatedClient.runtimeSnapshot.payload()["last_failure"] ?? [:]
+                    _ = try fakeClient.openTun(ObstacleBridgeTunHelperOpenRequest(
+                        requestedIfname: "obtun0",
+                        mtu: 1500
+                    ))
+                    fakeClient.applyNetwork(
+                        action: "up",
+                        argv: ["/app/client-tun-hook-macos.sh", "up", fakeClient.actualIfname],
+                        env: ["MTU": "1500"]
+                    )
+                    try fakeClient.writePacket(Data([0x45, 0x00, 0x00]))
+                    fakeClient.removeNetwork(
+                        action: "down",
+                        argv: ["/app/client-tun-hook-macos.sh", "down", fakeClient.actualIfname],
+                        env: ["MTU": "1500"]
+                    )
+                    let transportResponse = try fakeTransport.send(command: .snapshot, payload: [:])
+                    let loopbackResponse = try fakeLoopbackTransport.send(command: .snapshot, payload: [:])
+                    let xpcEnvelope = ObstacleBridgeTunHelperCommandEnvelope(
+                        command: .snapshot,
+                        payload: ["probe": true]
+                    ).xpcPayload()
+                    let decodedEnvelope = try ObstacleBridgeTunHelperCommandEnvelope.decode(xpcEnvelope)
+                    let xpcEnvelopeCommand = decodedEnvelope.command.rawValue
+                    let packetEventEnvelope = ObstacleBridgeTunHelperPacketEnvelope.packetFromHelper(
+                        Data([0x45, 0x23, 0x01])
+                    ).xpcPayload()
+                    let decodedPacket = try ObstacleBridgeTunHelperPacketEnvelope.packetFromHelperPacket(
+                        from: packetEventEnvelope
+                    )
+                    let packetToHelperEnvelope = ObstacleBridgeTunHelperPacketEnvelope.packetToHelper(
+                        Data([0x60, 0x00, 0x02, 0x01])
+                    ).xpcPayload()
+                    let decodedPacketToHelper = try ObstacleBridgeTunHelperPacketEnvelope.packetToHelperPacket(
+                        from: packetToHelperEnvelope
+                    )
+                    let helperEventEnvelope = ObstacleBridgeTunHelperEventEnvelope(
+                        event: "utun_started",
+                        payload: ["ifname": "utun9", "mtu": 1500]
+                    ).xpcPayload()
+                    let decodedHelperEvent = try ObstacleBridgeTunHelperEventEnvelope.decode(
+                        helperEventEnvelope
+                    )
+                    let packetTransportResponse = try packetTransport.sendPacketToHelper(
+                        Data([0x60, 0x00, 0x02, 0x01])
+                    )
+                    let packetLoopbackResponse = try packetLoopbackTransport.sendPacketToHelper(
+                        Data([0x45, 0x02])
+                    )
+                    let packetFrameKinds = ObstacleBridgeTunHelperFrameKind.allCases.map { $0.rawValue }
+                    var badSequenceError = ""
+                    do {
+                        _ = try badSequenceTransport.send(command: .snapshot, payload: [:])
+                    } catch {
+                        badSequenceError = error.localizedDescription
+                    }
+                    var badPacketSequenceError = ""
+                    do {
+                        _ = try badSequenceTransport.sendPacketToHelper(Data([0x45, 0x00]))
+                    } catch {
+                        badPacketSequenceError = error.localizedDescription
+                    }
+                    var badCommandError = ""
+                    do {
+                        _ = try fakeServer.handleXPCPayload(["command": "NOPE", "payload": [:]])
+                    } catch {
+                        badCommandError = error.localizedDescription
+                    }
+                    var badFrameError = ""
+                    do {
+                        _ = try ObstacleBridgeTunHelperPacketEnvelope.decode([
+                            "frame_kind": "NOPE",
+                            "payload": [:],
+                        ])
+                    } catch {
+                        badFrameError = error.localizedDescription
+                    }
+                    var badEventError = ""
+                    do {
+                        _ = try ObstacleBridgeTunHelperEventEnvelope.decode([
+                            "frame_kind": "EVENT",
+                            "payload": [:],
+                        ])
+                    } catch {
+                        badEventError = error.localizedDescription
+                    }
+                    fakeClient.stop()
+                    let commandNames = ObstacleBridgeTunHelperCommand.allCases.map { $0.rawValue }
+                    let payload: [String: Any] = [
+                        "commands": commandNames,
+                        "desktop_helper_mode": ObstacleBridgeTunHelperPlatformScope.desktopHelperMode,
+                        "ios_network_extension_boundary": ObstacleBridgeTunHelperPlatformScope.iOSUsesNetworkExtensionBoundary,
+                        "fake_client_snapshot": fakeClient.runtimeSnapshot.payload(),
+                        "fake_operations": fakeBackend.operations,
+                        "fake_snapshots": fakeBackend.snapshots,
+                        "open_request": openRequest,
+                        "network_request": networkRequest,
+                        "hook_success_snapshot": hookSuccessSnapshot,
+                        "hook_remove_snapshot": hookRemoveSnapshot,
+                        "hook_failure_snapshot": hookFailureSnapshot,
+                        "hook_env_record": hookEnvRecord,
+                        "hook_events": hookEvents,
+                        "transport_response": transportResponse,
+                        "loopback_response": loopbackResponse,
+                        "xpc_envelope": xpcEnvelope,
+                        "xpc_envelope_command": xpcEnvelopeCommand,
+                        "frame_kinds": packetFrameKinds,
+                        "packet_event": [
+                            "frame_kind": packetEventEnvelope["frame_kind"] ?? "",
+                            "seq": packetEventEnvelope["seq"] ?? -1,
+                            "len": (packetEventEnvelope["payload"] as? [String: Any])?["len"] ?? 0,
+                            "packet": Array(decodedPacket),
+                        ],
+                        "packet_to_helper_event": [
+                            "frame_kind": packetToHelperEnvelope["frame_kind"] ?? "",
+                            "seq": packetToHelperEnvelope["seq"] ?? -1,
+                            "len": (packetToHelperEnvelope["payload"] as? [String: Any])?["len"] ?? 0,
+                            "packet": Array(decodedPacketToHelper),
+                        ],
+                        "helper_event": [
+                            "frame_kind": helperEventEnvelope["frame_kind"] ?? "",
+                            "seq": helperEventEnvelope["seq"] ?? -1,
+                            "event": decodedHelperEvent.event,
+                            "payload": decodedHelperEvent.payload,
+                        ],
+                        "packet_transport_response": packetTransportResponse,
+                        "packet_loopback_response": packetLoopbackResponse,
+                        "packet_transport_operations": packetBackend.operations,
+                        "xpc_ping": xpcPing,
+                        "xpc_open_response": xpcOpenResponse,
+                        "xpc_apply_response": xpcApplyResponse,
+                        "xpc_packet_response": xpcPacketResponse,
+                        "xpc_operations": xpcBackend.operations,
+                        "xpc_bad_command_response": xpcBadCommandResponse,
+                        "callback_packets": callbackPackets,
+                        "callback_events": callbackEvents,
+                        "bad_sequence_error": badSequenceError,
+                        "bad_packet_sequence_error": badPacketSequenceError,
+                        "gated_operations": gatedBackend.operations,
+                        "gated_apply_failure": gatedApplyFailure,
+                        "gated_write_error": gatedWriteError,
+                        "gated_write_failure": gatedWriteFailure,
+                        "bad_command_error": badCommandError,
+                        "bad_frame_error": badFrameError,
+                        "bad_event_error": badEventError,
+                        "snapshot": snapshot.payload(),
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_tun_helper_contract_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=True)
+    payload = json.loads(completed.stdout)
+    swift_snapshot = payload["snapshot"]
+    python_snapshot = _python_darwin_helper_snapshot_for_parity()
+    parity_keys = [
+        "backend",
+        "ifname",
+        "mtu",
+        "opened",
+        "network_applied",
+        "apply_calls",
+        "remove_calls",
+        "last_apply_payload",
+        "last_remove_payload",
+        "packets_from_runtime",
+        "packets_to_runtime",
+        "last_hook_action",
+        "last_hook_argv",
+        "last_hook_env",
+        "last_failure",
+        "stopped",
+    ]
+    assert payload["commands"] == [
+        "OPEN_TUN",
+        "APPLY_NETWORK",
+        "REMOVE_NETWORK",
+        "WRITE_PACKET",
+        "SNAPSHOT",
+        "STOP",
+    ]
+    assert payload["desktop_helper_mode"] == "helper"
+    assert payload["ios_network_extension_boundary"] is True
+    assert payload["transport_response"]["ok"] is True
+    assert payload["transport_response"]["op"] == "SNAPSHOT"
+    assert payload["transport_response"]["payload"]["network_applied"] is False
+    assert payload["transport_response"]["payload"]["packets_from_runtime"] == 1
+    assert payload["loopback_response"]["ok"] is True
+    assert payload["loopback_response"]["op"] == "SNAPSHOT"
+    assert payload["xpc_envelope"] == {"command": "SNAPSHOT", "seq": 0, "payload": {"probe": True}}
+    assert payload["xpc_envelope_command"] == "SNAPSHOT"
+    assert payload["bad_command_error"] == "unsupported helper command"
+    assert payload["frame_kinds"] == [
+        "CONTROL_REQUEST",
+        "CONTROL_RESPONSE",
+        "PACKET_FROM_HELPER",
+        "PACKET_TO_HELPER",
+        "EVENT",
+    ]
+    assert payload["packet_event"] == {
+        "frame_kind": "PACKET_FROM_HELPER",
+        "seq": 0,
+        "len": 3,
+        "packet": [0x45, 0x23, 0x01],
+    }
+    assert payload["packet_to_helper_event"] == {
+        "frame_kind": "PACKET_TO_HELPER",
+        "seq": 0,
+        "len": 4,
+        "packet": [0x60, 0x00, 0x02, 0x01],
+    }
+    assert payload["helper_event"] == {
+        "frame_kind": "EVENT",
+        "seq": 0,
+        "event": "utun_started",
+        "payload": {"ifname": "utun9", "mtu": 1500},
+    }
+    assert payload["transport_response"]["seq"] == 5
+    assert payload["packet_transport_response"]["ok"] is True
+    assert payload["packet_transport_response"]["op"] == "WRITE_PACKET"
+    assert payload["packet_transport_response"]["seq"] == 1
+    assert payload["packet_transport_response"]["payload"]["packets_from_runtime"] == 1
+    assert payload["packet_loopback_response"]["ok"] is True
+    assert payload["packet_loopback_response"]["op"] == "WRITE_PACKET"
+    assert payload["packet_loopback_response"]["seq"] == 0
+    assert payload["packet_loopback_response"]["payload"]["packets_from_runtime"] == 2
+    assert payload["packet_transport_operations"] == ["write:4", "write:2"]
+    assert payload["xpc_ping"]["ok"] is True
+    assert payload["xpc_ping"]["backend"] == "darwin-native"
+    assert payload["xpc_open_response"]["ok"] is True
+    assert payload["xpc_open_response"]["op"] == "OPEN_TUN"
+    assert payload["xpc_open_response"]["seq"] == 41
+    assert payload["xpc_open_response"]["payload"]["ifname"] == "utun9"
+    assert payload["xpc_open_response"]["payload"]["mtu"] == 1400
+    assert payload["xpc_apply_response"]["ok"] is True
+    assert payload["xpc_apply_response"]["op"] == "APPLY_NETWORK"
+    assert payload["xpc_apply_response"]["seq"] == 42
+    assert payload["xpc_apply_response"]["payload"]["network_applied"] is True
+    assert payload["xpc_packet_response"]["ok"] is True
+    assert payload["xpc_packet_response"]["op"] == "WRITE_PACKET"
+    assert payload["xpc_packet_response"]["seq"] == 43
+    assert payload["xpc_packet_response"]["payload"]["packets_from_runtime"] == 1
+    assert payload["xpc_operations"] == ["open:obtun-xpc", "apply:up:utun9", "write:3"]
+    assert payload["xpc_bad_command_response"]["ok"] is False
+    assert payload["xpc_bad_command_response"]["seq"] == 44
+    assert payload["xpc_bad_command_response"]["payload"]["error"] == "unsupported helper command"
+    assert payload["callback_packets"] == [[0x45, 0x66, 0x01]]
+    assert payload["callback_events"] == [
+        {
+            "event": "macos_utun_started",
+            "payload": {"ifname": "utun9", "mtu": 1400},
+        }
+    ]
+    assert payload["bad_sequence_error"] == "helper response sequence mismatch"
+    assert payload["bad_packet_sequence_error"] == "helper packet response sequence mismatch"
+    assert payload["gated_operations"] == []
+    assert payload["gated_apply_failure"] == {
+        "stage": "apply_network",
+        "error": "TUN helper is not open",
+    }
+    assert payload["gated_write_error"] == "TUN helper is not open"
+    assert payload["gated_write_failure"] == {
+        "stage": "write_packet",
+        "error": "TUN helper is not open",
+    }
+    assert payload["bad_frame_error"] == "unsupported helper frame"
+    assert payload["bad_event_error"] == "EVENT requires event"
+    assert payload["fake_operations"] == [
+        "open:obtun0",
+        "apply:up:utun9",
+        "write:3",
+        "remove:down:utun9",
+        "stop",
+    ]
+    fake_snapshots = payload["fake_snapshots"]
+    assert fake_snapshots[0]["opened"] is True
+    assert fake_snapshots[0]["ifname"] == "utun9"
+    assert fake_snapshots[1]["network_applied"] is True
+    assert fake_snapshots[2]["packets_from_runtime"] == 1
+    assert fake_snapshots[3]["network_applied"] is False
+    assert fake_snapshots[4]["opened"] is False
+    assert payload["fake_client_snapshot"]["opened"] is False
+    assert payload["fake_client_snapshot"]["packets_from_runtime"] == 1
+    assert payload["open_request"] == {"ifname": "obtun0", "mtu": 1500}
+    assert payload["network_request"]["ifname"] == "utun7"
+    assert payload["network_request"]["listener_hook_env"] == {"WAN_IF": "en0"}
+    assert payload["hook_success_snapshot"]["network_applied"] is True
+    assert payload["hook_success_snapshot"]["apply_calls"] == 1
+    assert payload["hook_success_snapshot"]["last_hook_action"] == "on_created"
+    assert payload["hook_success_snapshot"]["last_hook_argv"][1:] == ["up", "utun-probe"]
+    assert payload["hook_success_snapshot"]["last_hook_env"] == {
+        "TUN_ADDR": "198.18.70.1/30",
+        "WAN_IF": "en0",
+    }
+    assert payload["hook_remove_snapshot"]["network_applied"] is False
+    assert payload["hook_remove_snapshot"]["remove_calls"] == 1
+    assert payload["hook_remove_snapshot"]["last_hook_action"] == "on_stopped"
+    assert payload["hook_remove_snapshot"]["last_remove_payload"]["action"] == "on_stopped"
+    assert payload["hook_failure_snapshot"]["last_failure"] == {
+        "stage": "macos_tun_hook_on_channel_connected",
+        "error": "exit_status=7",
+    }
+    assert payload["hook_failure_snapshot"]["cleanup_attempted"] is False
+    assert payload["hook_env_record"] == "up|utun-probe|198.18.70.1/30|en0"
+    assert [event["event"] for event in payload["hook_events"]] == [
+        "macos_tun_hook_completed",
+        "macos_tun_hook_completed",
+        "macos_tun_hook_completed",
+    ]
+    assert payload["hook_events"][0]["payload"]["status"] == 0
+    assert payload["hook_events"][2]["payload"]["status"] == 7
+    assert swift_snapshot["requested_ifname"] == "obtun0"
+    assert {key: swift_snapshot[key] for key in parity_keys} == {
+        key: python_snapshot[key] for key in parity_keys
+    }
+
+
 class _TCPEchoServer:
     def __init__(self, host: str, port: int) -> None:
         self.host = host
@@ -1781,6 +2813,9 @@ def test_macos_swift_host_runner_myudp_remote_tcp_admin_web_handles_multiple_con
         assert peer_row["transport"] == "myudp"
         assert peer_row["runtime"]["kind"] == "myudp"
         assert peer_row["peer"]["host"] == "127.0.0.1"
+        assert peer_row["peer"] == peer_row["resolved_peer"]
+        assert peer_row["resolved_peer"]["host"] == "127.0.0.1"
+        assert peer_row["resolved_peer_family"] == "ipv4"
         assert int(peer_row["open_connections"]["tcp"]) >= 1
         assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
         assert isinstance(app_js, str) and "async function loadStatus()" in app_js
@@ -3201,7 +4236,7 @@ def test_macos_swift_host_runner_live_websocket_requires_auth_when_credentials_c
         with contextlib.closing(
             _websocket_connect("127.0.0.1", status_port, headers={"Cookie": session_cookie})
         ) as live_socket:
-            hello = _recv_ws_json(live_socket)
+            hello = _wait_ws_message(live_socket, lambda message: message.get("type") == "hello")
             assert hello["type"] == "hello"
             assert sorted(hello["topics"]) == ["connections", "meta", "peers", "status", "tun_routing"]
     finally:
@@ -3794,6 +4829,11 @@ def test_macos_swift_host_runner_tcp_ownserver_proxies_wrapped_overlay_chain(tmp
         _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
         overlay_peer.wait_connected()
         overlay_peer.start_mux_echo_loop()
+        _wait_http_condition(
+            f"http://127.0.0.1:{status_port}/api/peers",
+            lambda doc: bool(doc.get("peers")) and bool(doc["peers"][0].get("secure_link", {}).get("authenticated")),
+            timeout_sec=20.0,
+        )
 
         client = socket.create_connection(("127.0.0.1", listen_port), timeout=2.0)
         message = b"wrapped-chain-" + (b"A" * 256)
@@ -4182,6 +5222,8 @@ def test_macos_swift_host_runner_remote_tcp_admin_web_handles_multiple_connectio
         assert peer_row["transport"] == "tcp"
         assert peer_row["runtime"]["kind"] == "tcp"
         assert peer_row["peer"]["host"] == "127.0.0.1"
+        if peer_row["resolved_peer"] is not None:
+            assert peer_row["resolved_peer"]["host"] == "127.0.0.1"
         assert int(peer_row["open_connections"]["tcp"]) >= 1
         assert isinstance(root_html, str) and ("ObstacleBridge" in root_html or "Admin Web" in root_html)
         assert isinstance(app_js, str) and "async function loadStatus()" in app_js
@@ -4567,6 +5609,9 @@ def test_macos_swift_host_runner_bootstraps_quic_stack_and_serves_status(tmp_pat
         assert peer_row["transport"] == "quic"
         assert peer_row["runtime"]["kind"] == "quic"
         assert peer_row["peer"]["host"] in {"::1", "127.0.0.1"}
+        assert peer_row["peer"] == peer_row["resolved_peer"]
+        assert peer_row["resolved_peer"]["host"] in {"::1", "127.0.0.1"}
+        assert peer_row["resolved_peer_family"] in {"ipv4", "ipv6"}
         assert status["transport_runtime"]["kind"] == "quic"
         assert status["transport_runtime"]["quic"]["overlay_alpn"] == "hq-29"
         assert meta["transport_runtime"]["quic"]["overlay_insecure"] is True

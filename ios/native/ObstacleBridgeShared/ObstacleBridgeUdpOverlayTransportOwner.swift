@@ -60,7 +60,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             self?.handleTCPTransportEvent(event)
         },
         overlayConnectedProvider: { [weak self] in
-            self?.overlayConnected ?? false
+            self?.appReady() ?? false
         },
         activateClientOnReady: true
     )
@@ -290,8 +290,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             let fixedPeerHost: Any = configuredPeerHost ?? NSNull()
             let fixedPeerPort: Any = configuredPeerPort ?? NSNull()
             let protocolStats = overlayRuntime.protocolStatsSnapshot()
+            let connectionLayers = connectionLayersSnapshot()
             var snapshot: [String: Any] = [:]
             snapshot["overlay_connected"] = overlayConnected
+            snapshot["app_ready"] = ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)
+            snapshot["connection_layers"] = connectionLayers
             snapshot["overlay_bind_host"] = bindHost
             snapshot["overlay_bind_port"] = bindPort
             snapshot["overlay_peer_host"] = peerHost
@@ -319,6 +322,27 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
     }
 
+    func connectionLayersSnapshot() -> [[String: Any]] {
+        withOwnerQueue {
+            if let overlayLayerTransportAdapter {
+                return overlayLayerTransportAdapter.connectionLayersSnapshot(
+                    transport: "myudp",
+                    transportConnected: overlayConnected
+                )
+            }
+            return ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
+                transport: "myudp",
+                transportConnected: overlayConnected,
+                compressionEnabled: false,
+                secureLinkStatus: nil
+            )
+        }
+    }
+
+    func appReady() -> Bool {
+        ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
+    }
+
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
         if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
             return body()
@@ -343,7 +367,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                overlayConnected: overlayConnected,
+                overlayConnected: appReady(),
                 bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
                 backpressure: backpressure,
                 activeTunChanIDs: &activeTunChanIDs,
@@ -399,7 +423,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             queue: queue,
             runtime: udpRuntime,
             startedProvider: { [weak self] in self?.started ?? false },
-            overlayConnectedProvider: { [weak self] in self?.overlayConnected ?? false },
+            overlayConnectedProvider: { [weak self] in self?.appReady() ?? false },
             handleSnapshot: { [weak self] event in
                 guard let self else { return }
                 self.udpServerConnections[event.chanID] = connection
@@ -558,7 +582,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handlePeerFallbackTimer() {
-        guard started, peerCandidateIndex + 1 < peerCandidates.count else {
+        guard started, peerCandidates.count > 1 else {
             return
         }
         let nowNS = monotonicNowNS()
@@ -754,7 +778,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func maybeSendStartupMuxFrames() {
-        guard overlayConnected, !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
+        guard appReady(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
             return
         }
         startupMuxFramesSent = true
@@ -776,7 +800,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func currentTunPeerID() -> Int? {
-        1
+        appReady() ? 1 : nil
     }
 
     private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
@@ -787,7 +811,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             tunServiceSpec: tunServiceSpec,
             tunIfname: tunIfname,
             tunMTU: tunMTU,
-            overlayConnected: overlayConnected,
+            overlayConnected: appReady(),
             bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
             currentTunPeerID: currentTunPeerID(),
             activeTunChanIDs: &activeTunChanIDs,
@@ -993,7 +1017,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleImmediatePeerFallback(sendErrno: Int32) {
-        guard started, peerCandidateIndex + 1 < peerCandidates.count else {
+        guard started, peerCandidates.count > 1 else {
             return
         }
         switch sendErrno {
@@ -1005,10 +1029,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func rotateToNextPeerCandidate(nowNS: UInt64, reason: String) {
-        guard peerCandidateIndex + 1 < peerCandidates.count else {
+        guard peerCandidates.count > 1 else {
             return
         }
-        peerCandidateIndex += 1
+        peerCandidateIndex = (peerCandidateIndex + 1) % peerCandidates.count
         currentPeerAddress = peerCandidates[peerCandidateIndex]
         currentPeerSelectedAtNS = nowNS
         lastInboundDatagramNS = 0

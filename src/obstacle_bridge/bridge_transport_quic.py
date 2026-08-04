@@ -15,6 +15,7 @@ from .bridge_transport_common import (
     EgressThroughputTracker,
     StreamRTT,
     StreamRTTRuntime,
+    _resolve_cli_peer_candidates,
     _resolve_cli_peer,
     _strip_brackets,
 )
@@ -145,7 +146,7 @@ class QuicSession(ISession):
         self._listen_host, self._listen_port = _strip_brackets(args.quic_bind), int(args.quic_own_port)
         self._peer_name_host = _strip_brackets(getattr(args, "quic_peer", None) or "")
         self._peer_name_port = int(getattr(args, "quic_peer_port", 0) or 0)
-        peer_info = _resolve_cli_peer(
+        self._peer_candidates: list[tuple[str, int, int]] = _resolve_cli_peer_candidates(
             args,
             peer_attr="quic_peer",
             peer_port_attr="quic_peer_port",
@@ -153,6 +154,8 @@ class QuicSession(ISession):
             bind_host=self._listen_host,
             socktype=socket.SOCK_DGRAM,
         )
+        self._peer_candidate_index: int = 0
+        peer_info = self._peer_candidates[0] if self._peer_candidates else None
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
         )
@@ -166,6 +169,7 @@ class QuicSession(ISession):
         self._rx_task: Optional[asyncio.Task] = None
         self._connecting_task: Optional[asyncio.Task] = None
         self._reconnect_task: Optional[asyncio.Task] = None
+        self._next_reconnect_attempt_monotonic: Optional[float] = None
         self._reconnect_retry_delay_s: float = max(
             0.0,
             float(int(getattr(self._args, "overlay_reconnect_retry_delay_ms", 30000) or 0)) / 1000.0,
@@ -228,6 +232,15 @@ class QuicSession(ISession):
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
     def set_app_payload_passthrough(self, enabled: bool) -> None: self._app_payload_passthrough = bool(enabled)
+
+    def get_connecting_timer_snapshot(self) -> dict:
+        remaining = None
+        deadline = getattr(self, "_next_reconnect_attempt_monotonic", None)
+        if deadline is not None:
+            remaining = max(0.0, float(deadline) - time.monotonic())
+        return {
+            "next_address_attempt_in_seconds": remaining,
+        }
 
     # ---- lifecycle ----
     async def start(self) -> None:
@@ -304,6 +317,18 @@ class QuicSession(ISession):
         if not self._peer_tuple:
             return bool(self._server_peers)
         return self._rtt.is_connected()
+
+    def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
+        connected = bool(self.is_connected())
+        state = "connected" if connected else ("connecting" if self._peer_tuple else "listening")
+        return [{
+            "layer": "transport",
+            "transport": "quic",
+            "state": state,
+            "epoch": 0,
+            "connected": connected,
+            "app_ready": connected,
+        }]
 
     # ---- metrics (for dashboard) ----
     def get_metrics(self) -> SessionMetrics:
@@ -385,6 +410,7 @@ class QuicSession(ISession):
                 "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
                     int(getattr(self._rtt, "_last_rx_wall_ns", 0) or 0)
                 ),
+                **self.get_connecting_timer_snapshot(),
             }]
 
         rows = [{
@@ -652,7 +678,8 @@ class QuicSession(ISession):
     def _ensure_connect_once(self) -> None:
         if self._connecting_task is not None or not self._peer_tuple or not self._run_flag:
             return
-        host, port = self._peer_tuple
+        self._next_reconnect_attempt_monotonic = None
+        host, port = self._current_peer_endpoint()
         async def _connect(): await self._connect_to(host, port)
         self._connecting_task = self._loop.create_task(_connect())  # type: ignore
 
@@ -662,22 +689,26 @@ class QuicSession(ISession):
         if self._reconnect_task is not None and not self._reconnect_task.done():
             return
         self._reconnect_task = None
-        host, port = self._peer_tuple
         async def _reconnect():
             delay = self._reconnect_retry_delay_s
             try:
                 while self._run_flag:
+                    self._next_reconnect_attempt_monotonic = None
                     # If TCP writer exists, exit (RTT runtime will flip overlay state)
                     if self._quic is not None:
                         return
+                    host, port = self._current_peer_endpoint()
                     await self._connect_to(host, port)
                     if self._quic is not None:
                         return
+                    self._advance_peer_candidate()
                     try:
+                        self._next_reconnect_attempt_monotonic = time.monotonic() + delay
                         await asyncio.sleep(delay)
                     except asyncio.CancelledError:
                         return
             finally:
+                self._next_reconnect_attempt_monotonic = None
                 if self._reconnect_task is asyncio.current_task():
                     self._reconnect_task = None
         self._reconnect_task = self._loop.create_task(_reconnect())  # type: ignore
@@ -758,8 +789,26 @@ class QuicSession(ISession):
             self._log.warning(
                 f"[QUIC-SESSION] ({self._probe_id}) connect failed to {host}:{port}: {e!r}"
             )
+            if self._run_flag and self._quic is None:
+                self._start_reconnect_loop()
         finally:
             self._connecting_task = None
+
+    def _current_peer_endpoint(self) -> tuple[str, int]:
+        if self._peer_candidates:
+            host, port, _family = self._peer_candidates[self._peer_candidate_index]
+            self._peer_tuple = (host, port)
+            return host, port
+        if self._peer_tuple is None:
+            raise RuntimeError("overlay peer requires a non-empty host name")
+        return self._peer_tuple
+
+    def _advance_peer_candidate(self) -> None:
+        if len(self._peer_candidates) <= 1:
+            return
+        self._peer_candidate_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        host, port, _family = self._peer_candidates[self._peer_candidate_index]
+        self._peer_tuple = (host, port)
  
     # ---- accept / on-connection ----
     def _on_accept(self, proto: Any) -> None:

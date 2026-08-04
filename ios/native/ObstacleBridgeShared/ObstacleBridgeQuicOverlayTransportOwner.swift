@@ -5,6 +5,7 @@ import Network
 final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     // Keep Swift QUIC writes capped at 1024 bytes. Network.framework has been
@@ -56,12 +57,14 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var reconnectAttempts = 0
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
+    private var nextReconnectAttemptDeadlineNS: UInt64?
     private var startupMuxFramesSent = false
     private var resolvedPeerHost = ""
     private var resolvedPeerPort = 0
     private var resolvedPeerFamily = ""
-    private var resolvedPeerCandidateIndex = -1
+    private var resolvedPeerCandidateIndex = 0
     private var resolvedPeerCandidateCount = 0
+    private var resolvedPeerCandidates: [ResolvedAddress] = []
     private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private var activeTunChanIDs: Set<Int> = []
@@ -85,7 +88,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             self?.handleTCPTransportEvent(event)
         },
         overlayConnectedProvider: { [weak self] in
-            self?.overlayConnected ?? false
+            self?.appReady() ?? false
         },
         activateClientOnReady: true
     )
@@ -176,6 +179,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         overlayConnected = false
         reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         overlayConnection?.cancel()
@@ -210,8 +214,11 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
             let protocolStats = overlayProtocolStats()
+            let connectionLayers = connectionLayersSnapshot()
             return [
                 "overlay_connected": overlayConnected,
+                "app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers),
+                "connection_layers": connectionLayers,
                 "overlay_bind_host": bindHost,
                 "overlay_bind_port": bindPort,
                 "overlay_host": peerHost,
@@ -226,6 +233,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 "reconnect_retry_delay_ms": reconnectRetryDelayMS,
                 "reconnect_attempts": reconnectAttempts,
                 "reconnect_scheduled": reconnectScheduled,
+                "next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull(),
+                "restart_in_seconds": NSNull(),
                 "mux_instance_id": muxInstanceID,
                 "mux_connection_seq": muxConnectionSeq,
                 "server_tcp_channels": tcpTransportOwner.serverConnectionCount,
@@ -240,6 +249,27 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 "protocol_stats": protocolStats,
             ]
         }
+    }
+
+    func connectionLayersSnapshot() -> [[String: Any]] {
+        withOwnerQueue {
+            if let overlayLayerTransportAdapter {
+                return overlayLayerTransportAdapter.connectionLayersSnapshot(
+                    transport: "quic",
+                    transportConnected: overlayConnected
+                )
+            }
+            return ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
+                transport: "quic",
+                transportConnected: overlayConnected,
+                compressionEnabled: false,
+                secureLinkStatus: nil
+            )
+        }
+    }
+
+    func appReady() -> Bool {
+        ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
     }
 
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
@@ -258,7 +288,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                overlayConnected: overlayConnected,
+                overlayConnected: appReady(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,
@@ -315,11 +345,12 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             return
         }
         reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
         do {
-            let resolved = try resolvePeer(host: peerHost, port: peerPort)
+            let resolved = try currentResolvedPeer()
             resolvedPeerHost = resolved.host
             resolvedPeerPort = resolved.port
             resolvedPeerFamily = resolved.family
@@ -363,7 +394,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         return params
     }
 
-    private func resolvePeer(host: String, port: Int) throws -> (host: String, port: Int, family: String, index: Int, candidateCount: Int) {
+    private func resolvePeerCandidates(host: String, port: Int) throws -> [ResolvedAddress] {
         let mode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)
         let candidates = try ObstacleBridgePeerAddressResolver.resolvePeerCandidates(
             host: host,
@@ -373,19 +404,30 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             errorDomain: "ObstacleBridge.QuicOverlay"
         )
         let bindConstraint = ObstacleBridgePeerAddressResolver.bindFamilyConstraint(bindHost)
-        let filtered = Array(candidates.enumerated().filter { bindConstraint == nil || $0.element.family == bindConstraint })
-        let selected = filtered.first ?? Array(candidates.enumerated()).first
-        guard let selected else {
+        let filtered = candidates.filter { bindConstraint == nil || $0.family == bindConstraint }
+        return filtered.isEmpty ? candidates : filtered
+    }
+
+    private func currentResolvedPeer() throws -> (host: String, port: Int, family: String, index: Int, candidateCount: Int) {
+        if resolvedPeerCandidates.isEmpty {
+            resolvedPeerCandidates = try resolvePeerCandidates(host: peerHost, port: peerPort)
+            resolvedPeerCandidateIndex = 0
+        }
+        guard !resolvedPeerCandidates.isEmpty else {
             throw NSError(domain: "ObstacleBridge.QuicOverlay", code: 2, userInfo: [
-                NSLocalizedDescriptionKey: "failed to resolve QUIC peer \(host):\(port)"
+                NSLocalizedDescriptionKey: "failed to resolve QUIC peer \(peerHost):\(peerPort)"
             ])
         }
+        if resolvedPeerCandidateIndex >= resolvedPeerCandidates.count {
+            resolvedPeerCandidateIndex = 0
+        }
+        let selected = resolvedPeerCandidates[resolvedPeerCandidateIndex]
         return (
-            selected.element.host,
-            selected.element.port,
-            ObstacleBridgePeerAddressResolver.familyName(selected.element.family),
-            selected.offset,
-            candidates.count
+            selected.host,
+            selected.port,
+            ObstacleBridgePeerAddressResolver.familyName(selected.family),
+            resolvedPeerCandidateIndex,
+            resolvedPeerCandidates.count
         )
     }
 
@@ -393,6 +435,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         switch state {
         case .ready:
             overlayConnected = true
+            nextReconnectAttemptDeadlineNS = nil
             let snapshot = overlayRuntime.connect(
                 host: resolvedPeerHost.isEmpty ? peerHost : resolvedPeerHost,
                 port: resolvedPeerPort == 0 ? peerPort : resolvedPeerPort,
@@ -441,14 +484,33 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func scheduleReconnect() {
         guard started, !reconnectScheduled else { return }
+        advancePeerCandidate()
         reconnectScheduled = true
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.reconnectScheduled = false
+            self.nextReconnectAttemptDeadlineNS = nil
             self.connectOverlay()
         }
         reconnectWorkItem = workItem
+        nextReconnectAttemptDeadlineNS = DispatchTime.now().uptimeNanoseconds + UInt64(reconnectRetryDelayMS) * 1_000_000
         queue.asyncAfter(deadline: .now() + .milliseconds(reconnectRetryDelayMS), execute: workItem)
+    }
+
+    private func nextAddressAttemptInSeconds() -> Double? {
+        guard reconnectScheduled, let deadline = nextReconnectAttemptDeadlineNS else {
+            return nil
+        }
+        let now = DispatchTime.now().uptimeNanoseconds
+        guard deadline > now else {
+            return 0.0
+        }
+        return Double(deadline - now) / 1_000_000_000.0
+    }
+
+    private func advancePeerCandidate() {
+        guard resolvedPeerCandidates.count > 1 else { return }
+        resolvedPeerCandidateIndex = (resolvedPeerCandidateIndex + 1) % resolvedPeerCandidates.count
     }
 
     private func receiveOverlayData() {
@@ -497,6 +559,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             for inboundPayload in inboundPayloads {
                 handleInboundMuxPayload(inboundPayload)
             }
+            flushStartupMuxFramesIfNeeded()
         }
     }
 
@@ -513,7 +576,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func currentTunPeerID() -> Int? {
-        1
+        appReady() ? 1 : nil
     }
 
     private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
@@ -523,7 +586,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             tunServiceSpec: tunServiceSpec,
             tunIfname: tunIfname,
             tunMTU: tunMTU,
-            overlayConnected: overlayConnected,
+            overlayConnected: appReady(),
             bufferedFrames: 0,
             currentTunPeerID: currentTunPeerID(),
             activeTunChanIDs: &activeTunChanIDs,
@@ -651,7 +714,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func flushStartupMuxFramesIfNeeded() {
-        guard !startupMuxFramesSent, !startupMuxFrames.isEmpty else { return }
+        guard appReady(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(startupMuxFrames)
     }

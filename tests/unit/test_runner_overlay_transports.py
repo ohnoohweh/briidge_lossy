@@ -102,6 +102,48 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         self.assertEqual(payload["transports"], [])
         self.assertEqual(payload["reason"], "unknown_peer_id")
 
+    def test_request_overlay_reconnect_myudp_target_falls_back_to_runner_restart(self):
+        class _Session:
+            def get_overlay_peers_snapshot(self):
+                return [{"peer_id": 0}]
+
+        runner = Runner.__new__(Runner)
+        runner._sessions = [_Session()]
+        runner._session_labels = ["myudp"]
+        restart_reasons = []
+        runner.request_restart = lambda reason="": restart_reasons.append(str(reason))
+
+        payload = Runner.request_overlay_reconnect(runner, target_peer_id="0:0")
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["target_peer_id"], "0:0")
+        self.assertEqual(payload["requested"], 1)
+        self.assertEqual(payload["transports"], ["myudp"])
+        self.assertTrue(payload["reconnect_requested"])
+        self.assertTrue(payload["reconnect_supported"])
+        self.assertTrue(payload["restart_requested"])
+        self.assertFalse(payload["restart_embedded"])
+        self.assertEqual(restart_reasons, ["admin_web:/api/reconnect myudp target=0:0"])
+
+    def test_request_overlay_reconnect_myudp_global_falls_back_to_runner_restart(self):
+        class _Session:
+            def get_overlay_peers_snapshot(self):
+                return [{"peer_id": 0}]
+
+        runner = Runner.__new__(Runner)
+        runner._sessions = [_Session()]
+        runner._session_labels = ["myudp"]
+        restart_reasons = []
+        runner.request_restart = lambda reason="": restart_reasons.append(str(reason))
+
+        payload = Runner.request_overlay_reconnect(runner)
+
+        self.assertTrue(payload["ok"])
+        self.assertIsNone(payload["target_peer_id"])
+        self.assertEqual(payload["requested"], 1)
+        self.assertEqual(payload["transports"], ["myudp"])
+        self.assertEqual(restart_reasons, ["admin_web:/api/reconnect myudp target=all"])
+
     def test_request_secure_link_rekey_targets_matching_peer_id_only(self):
         class _Session:
             def __init__(self, peer_ids):

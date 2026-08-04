@@ -16,6 +16,13 @@ REQ-RUN-001:
     - ios/tests/test_ios_profile_config.py::test_profile_store_keeps_plaintext_secrets_out_of_profile_files
     - ios/tests/test_invite_import.py::test_preview_json_config_snippet_uses_runtime_validation
 
+REQ-RUN-002:
+  unit_tests:
+    - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
+    - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_checks_override_helper_executable
+
 REQ-OVL-002:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
@@ -46,10 +53,13 @@ REQ-OVL-005:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
 
 REQ-OVL-006:
+  # The WebSocket wildcard `::` listener is intentionally dual-stack/all-interface
+  # and is operator-restrictable by configuring a specific bind address.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_udp_peer_labels_bracket_ipv6_and_plain_ipv4
+    - tests/unit/test_ws_payload_mode.py::test_start_server_ipv6_wildcard_uses_dual_stack_socket
 
 REQ-OVL-007:
   # Includes dual-stack peer-resolution parity: native IPv4 literals remain native
@@ -62,12 +72,14 @@ REQ-OVL-007:
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_rotates_to_next_peer_candidate_after_idle_timeout
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_wraps_peer_rotation_after_repeated_idle_timeout
     - tests/unit/test_peer_resolution.py::test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error
     - tests/unit/test_peer_resolution.py::test_send_port_prefer_ipv6_allows_ipv4_mapped_destination_on_ipv6_socket
     - tests/unit/test_peer_resolution.py::test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping
     - ios/tests/test_macos_swift_host_runner.py::test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socket_normalization
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv4_uses_loopback_fallback_on_gaierror
     - tests/unit/test_peer_resolution.py::test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror
+    - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
@@ -219,7 +231,8 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_psk.py::test_data_counter_zero_is_rejected_as_lifecycle_violation
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
-    - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_outer_connected_during_live_rehandshake
+    - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake
+    - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
 
 REQ-AUT-007:
   integration_tests:
@@ -233,6 +246,7 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_psk.py::test_malformed_frame_after_authentication_fails_closed
     - tests/unit/test_secure_link_psk.py::test_unexpected_rekey_commit_fails_closed
     - tests/unit/test_secure_link_psk.py::test_auth_failure_unregisters_server_mux_routes
+    - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
 REQ-AUT-008:
   # The authenticated-failure recovery slice also covers preservation of the
   # pending reconnect timer across runner disconnect resets and transport epoch
@@ -245,8 +259,13 @@ REQ-AUT-008:
     - tests/unit/test_secure_link_psk.py::test_reconnect_respects_remaining_retry_backoff_after_auth_failure
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
+    - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
 REQ-AUT-009:
+  # The supported admin surface for SecureLink remains the peer-scoped summary
+  # contract; retired handshake-debug telemetry fields are intentionally not a
+  # requirement-bearing API surface.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
@@ -322,6 +341,8 @@ REQ-AUT-014:
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity
     - tests/unit/test_secure_link_cert.py::test_cert_mode_operator_rekey_rotates_session
 REQ-AUT-015:
+  # Revocation reload assertions intentionally key on /api/status scope/result
+  # and dropped-peer counters after the revoked peer session has been torn down.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop
@@ -419,6 +440,7 @@ REQ-WSP-006:
     - tests/unit/test_ws_payload_mode.py::test_register_cli_defaults_ws_proxy_mode_to_system_on_windows
     - tests/unit/test_ws_payload_mode.py::test_missing_ws_proxy_mode_uses_platform_default_in_constructor
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_falls_back_to_direct_when_no_endpoint_is_found
+    - tests/unit/test_ws_payload_mode.py::test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect
 
 REQ-WSP-007:
   integration_tests:
@@ -429,6 +451,8 @@ REQ-WSP-007:
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_uses_http_proxy_for_ws
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_uses_https_proxy_for_wss
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_honors_no_proxy_bypass
+    - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_on_linux_uses_http_proxy_env
+    - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_on_linux_honors_no_proxy_env
 
 REQ-WSP-008:
   integration_tests:
@@ -476,6 +500,7 @@ REQ-WSP-012:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_dns_resolution_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
+    - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
 
 REQ-PRX-001:
   integration_tests:
@@ -486,7 +511,10 @@ REQ-PRX-001:
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
     - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_default_egress_mode_is_system
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
+    - tests/unit/test_proxy_server.py::test_python_proxy_server_system_egress_uses_upstream_connect_proxy
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rejects_missing_http_proxy_auth
     - tests/unit/test_proxy_server.py::test_python_proxy_server_accepts_socks5_connect_with_user_password
     - tests/unit/test_proxy_server.py::test_python_proxy_codec_basic_auth_header_matches_swift_shape
@@ -543,6 +571,8 @@ REQ-LIFE-005:
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
+    - tests/unit/test_launcher_entrypoint.py::test_show_restart_countdown_starts_and_closes_placeholder
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
 
 REQ-LIFE-006:
   integration_tests:
@@ -550,6 +580,8 @@ REQ-LIFE-006:
   unit_tests:
     - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_targets_matching_peer_id_only
     - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_rejects_unknown_peer_id
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_myudp_target_falls_back_to_runner_restart
+    - tests/unit/test_runner_overlay_transports.py::test_request_overlay_reconnect_myudp_global_falls_back_to_runner_restart
 
 REQ-LIFE-007:
   integration_tests:
@@ -562,6 +594,8 @@ REQ-LIFE-007:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
+    - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
 
@@ -569,6 +603,7 @@ REQ-LIFE-008:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_default_entrypoint_config_bootstrap_and_webadmin_notice
   unit_tests:
+    - tests/unit/test_launcher_entrypoint.py::test_launcher_surfaces_hidden_child_stderr_when_redirected_startup_fails
     - tests/unit/test_launcher_entrypoint.py::test_launcher_prints_webadmin_url_from_default_config
     - tests/unit/test_launcher_entrypoint.py::test_launcher_prints_webadmin_url_with_cli_override
     - tests/unit/test_launcher_entrypoint.py::test_launcher_skips_webadmin_notice_when_disabled_in_config
@@ -578,6 +613,7 @@ REQ-LIFE-008:
     - tests/unit/test_launcher_entrypoint.py::test_discover_local_network_host_prefers_private_ipv4
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_uses_fallback_services
     - tests/unit/test_launcher_entrypoint.py::test_discover_public_network_host_returns_none_when_services_fail
+    - tests/unit/test_launcher_entrypoint.py::test_restart_countdown_server_serves_html_and_api
 
 REQ-LIFE-009:
   unit_tests:
@@ -585,18 +621,148 @@ REQ-LIFE-009:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_continues_when_dependency_install_declined
 
 REQ-LIFE-010:
+  # macOS elevated scripts preserve CI identity across sudo so hosted-runner
+  # diagnostics remain scoped to the CI privilege boundary, including the
+  # inline case where hosted macOS leaves the TUN row empty and the Swift
+  # packaged-XPC case where hosted macOS leaves the helper service disabled
+  # after privileged setup but the Admin diagnostics endpoint remains responsive.
+  integration_tests:
+    - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_repairs_stale_firewall_and_routes_after_helper_loss
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_rolls_back_partial_apply_failure
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_post_start_helper_loss
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_programs_excluded_routes_and_full_tunnel_policy
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_programs_server_firewall_lifecycle
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_cleanup
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_with_route_dns_warning
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_applies_network_and_carries_packets
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_reports_helper_death_warning
+    - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_repairs_stale_network_state
   unit_tests:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
+    - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
     - tests/unit/test_runner_events.py::test_install_process_signal_handlers_requests_shutdown
     - tests/unit/test_runner_events.py::test_main_logs_system_exit_code
+    - tests/unit/test_runner_events.py::test_linux_tun_elevation_exec_argv_preserves_runtime_env_names
+    - tests/unit/test_runner_events.py::test_main_reexecs_with_linux_tun_privileges_when_local_tun_requires_root
+    - tests/unit/test_runner_events.py::test_linux_helper_mode_skips_whole_process_tun_reexec
+    - tests/unit/test_runner_events.py::test_macos_tun_reexec_prints_notice_before_sudo_password_prompt
+    - tests/unit/test_runner_events.py::test_main_reexecs_with_windows_tun_privileges_when_local_tun_requires_admin
+    - tests/unit/test_runner_events.py::test_main_skips_windows_reexec_when_already_admin
+    - tests/unit/test_tun_helper_settings.py::test_register_cli_parses_defaults
+    - tests/unit/test_tun_helper_settings.py::test_from_mapping_reads_sectioned_config
+    - tests/unit/test_tun_helper_settings.py::test_from_mapping_accepts_cli_dest_names
+    - tests/unit/test_tun_helper_settings.py::test_helper_mode_supported_on_linux_and_macos
+    - tests/unit/test_tun_helper_settings.py::test_register_cli_accepts_windows_native_backend_value
+    - tests/unit/test_tun_helper_settings.py::test_helper_mode_supported_on_windows_for_windows_native_backend
+    - tests/unit/test_tun_helper_settings.py::test_ensure_supported_platform_raises_for_unsupported_helper_mode
+    - tests/unit/test_tun_helper_settings.py::test_resolved_socket_path_defaults_to_loopback_tcp_for_windows_native_backend
+    - tests/unit/test_tun_helper_settings.py::test_resolved_runtime_dir_is_separate_from_windows_pipe_endpoint
+    - tests/unit/test_tun_helper_protocol.py::test_control_frame_round_trip
+    - tests/unit/test_tun_helper_protocol.py::test_decode_control_payload_rejects_unknown_version
+    - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
+    - tests/unit/test_tun_helper_protocol.py::test_packet_frame_preserves_binary_boundaries
+    - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
+    - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
+    - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
+    - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
+    - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_darwin_native_backend
+    - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
+    - tests/unit/test_tun_helper_macos_backend.py::test_open_rejects_non_macos_platform
+    - tests/unit/test_tun_helper_macos_backend.py::test_apply_and_remove_local_network_uses_client_macos_hook_env
+    - tests/unit/test_tun_helper_macos_backend.py::test_apply_server_network_uses_server_macos_hook_env
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_build_arg_parser_reads_entrypoint_args
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_rejects_unknown_backend
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_windows_native_backend
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_server_start_chowns_socket_back_to_invoking_user_when_sudo_env_is_present
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_run_helper_server_starts_socket_and_serves_client
+    - tests/unit/test_tun_helper_linux_backend.py::test_open_write_read_and_stop_round_trip
+    - tests/unit/test_tun_helper_linux_backend.py::test_open_rejects_non_linux_platform
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_tunnel_addresses
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_non_default_included_routes
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_dns_with_resolvectl
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_skips_dns_when_resolvectl_is_unavailable
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_records_failure_and_rolls_back_partial_state
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_allows_test_injected_failure_and_rolls_back_partial_state
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_excluded_routes_and_full_tunnel_policy
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_policy_rules_on_restart
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules_for_remote_server_catalog
+    - tests/unit/test_tun_helper_linux_backend.py::test_repair_runtime_snapshot_replays_cleanup_without_live_helper_process
+    - tests/unit/test_tun_helper_linux_backend.py::test_verify_runtime_snapshot_repaired_reports_remaining_and_skipped_state
+    - tests/unit/test_tun_helper_windows_backend.py::test_open_write_read_and_stop_wraps_existing_wintun_adapter_path
+    - tests/unit/test_tun_helper_windows_backend.py::test_apply_and_remove_network_programs_addresses_routes_and_dns
+    - tests/unit/test_tun_helper_windows_backend.py::test_apply_network_rolls_back_partial_state_when_dns_apply_fails
+    - tests/unit/test_tun_helper_windows_backend.py::test_apply_network_reports_interface_lookup_failure
+    - tests/unit/test_tun_helper_windows_backend.py::test_repair_runtime_snapshot_replays_cleanup_without_live_helper_process
+    - tests/unit/test_tun_helper_windows_backend.py::test_verify_runtime_snapshot_repaired_reports_remaining_and_skipped_state
+    - tests/unit/test_tun_helper_transport_windows.py::test_client_server_round_trip_over_windows_named_pipe
+    - tests/unit/test_tun_helper_transport_windows.py::test_client_can_apply_network_after_open_over_windows_named_pipe
+    - tests/unit/test_tun_helper_client_server.py::test_client_rejects_wrong_session_token
+    - tests/unit/test_tun_helper_client_server.py::test_client_reports_connection_closed_after_server_stop
+    - tests/unit/test_runner_tun_helper.py::test_runner_starts_tun_helper_and_exposes_status_snapshot
+    - tests/unit/test_runner_tun_helper.py::test_runner_rejects_helper_mode_on_unsupported_platform
+    - tests/unit/test_runner_tun_helper.py::test_runner_allows_windows_native_helper_mode_past_platform_gate
+    - tests/unit/test_runner_tun_helper.py::test_windows_native_helper_uses_longer_control_timeout
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_shell_execute_for_windows_native_backend_when_not_admin
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
+    - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
+    - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_can_launch_without_sudo_when_file_capabilities_present
+    - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_requires_sudo_without_effective_or_file_capabilities
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_extends_for_sudo_prompt
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_stays_short_without_sudo
+    - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_post_start_helper_disconnect
+    - tests/unit/test_runner_tun_helper.py::test_runner_reaps_stale_helper_with_no_other_authenticated_clients
+    - tests/unit/test_runner_tun_helper.py::test_runner_reaps_stale_windows_pipe_helper_with_no_other_authenticated_clients
+    - tests/unit/test_runner_tun_helper.py::test_helper_endpoint_candidate_exists_accepts_windows_pipe_without_filesystem_entry
+    - tests/unit/test_runner_tun_helper.py::test_runner_status_reports_helper_recovery_warning_when_cached_runtime_may_need_cleanup
+    - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_linux_native_snapshot_cleanup
+    - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_reports_remaining_stale_state_when_cleanup_incomplete
+    - tests/unit/test_runner_tun_helper.py::test_runner_request_tun_helper_repair_uses_windows_native_snapshot_cleanup
+    - tests/unit/test_runner_tun_helper.py::test_runner_stop_keeps_helper_available_until_mux_stop_finishes
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_opens_and_writes_through_backend
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_registers_reader_and_delivers_packets
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_removes_network_on_close
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_records_critical_runtime_health_when_expected_tun_addresses_missing
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_merges_auto_excluded_overlay_routes
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_awaits_external_helper_remove_network
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_success
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_failure
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_applies_after_external_helper_reports_actual_ifname
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_start_skips_runtime_listener_on_created_hook
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_skips_runtime_listener_on_stopped_hook
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
+    - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
+    - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
+    - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
 
 REQ-LIFE-011:
   integration_tests:
@@ -691,6 +857,12 @@ REQ-MUX-006:
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_myudp_channel_open
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_over_ws_secure_link_channel_open
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
@@ -732,8 +904,20 @@ REQ-MUX-009:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_two_clients_routes_and_rejects_spoof
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_shared_tun_disconnect_cleanup_rebinds_peer
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
+    - tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_helper_applies_routes_and_dns_live
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
+    - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
+    - tests/unit/test_channel_mux_listener_mode.py::test_channel_mux_default_system_egress_auth_is_platform_scoped
+    - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
+    - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
+    - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
@@ -767,6 +951,8 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_accepts_owned_ipv6_source
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_rejects_malformed_packet
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_binds_peer_ref_and_rejects_second_owner_claim
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_recovers_missing_chan_owner_from_bound_runtime_peer
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_retains_prestarted_server_owned_shared_tun_service
@@ -815,6 +1001,9 @@ REQ-MUX-010:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
+    - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_runtime_snapshot_exposes_local_virtual_probe_owner
 
 REQ-MYU-001:
   integration_tests:
@@ -932,6 +1121,8 @@ REQ-ADM-005:
     - tests/unit/test_requirements_unit_gaps.py::test_admin_auth_sessions_are_cookie_scoped_per_client
 
 REQ-ADM-006:
+  # Admin status polling keeps a minimal live-session fallback when the
+  # regular stats snapshot is temporarily unavailable before a cache exists.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
@@ -939,6 +1130,7 @@ REQ-ADM-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
+    - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
   unit_tests:
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_connection_snapshots.py::test_tcp_client_snapshot_includes_last_incoming_age_seconds
@@ -957,14 +1149,22 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
+    - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
+    - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
+    - tests/unit/test_connection_snapshots.py::test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint
     - tests/unit/test_connection_snapshots.py::test_status_snapshot_includes_tun_open_connection_count
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_admin_web_payloads.py::test_meta_payload_suppresses_runtime_dependency_warnings_on_ios
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
+    # The dedicated TUN page also pins shared-drop totals plus ChannelMux flow
+    # and drop-diagnostic rendering for shared-TUN services.
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
+    - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
@@ -973,6 +1173,9 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - ios/tests/test_macos_swift_host_runner.py::test_swift_stream_transports_report_throttle_metrics_like_python
+    - tests/unit/test_connection_snapshots.py::test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_admin_surfaces_consume_layered_readiness
 
 REQ-ADM-007:
   integration_tests:
@@ -995,12 +1198,14 @@ REQ-ADM-010:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
+    - tests/unit/test_runner_config_persistence.py::test_update_config_accepts_grouped_tun_routing_section
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and_compression
 
 REQ-ADM-011:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_service_catalog_modal_preserves_last_valid_draft_on_validation_error
+    - tests/unit/test_admin_web_payloads.py::test_service_catalog_remove_does_not_resync_stale_modal_values
 
 REQ-ADM-012:
   unit_tests:

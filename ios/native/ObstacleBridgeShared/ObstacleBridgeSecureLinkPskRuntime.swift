@@ -23,7 +23,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
 
     private static let firstDataCounter: UInt64 = 1
     private static let maxDataCounter: UInt64 = UInt64.max
-    private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
+    private static let handshakeTimeoutSeconds: TimeInterval = 60.0
 
     struct OutboundSnapshot {
         var sent: Bool
@@ -56,6 +56,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private let psk: Data
     private let randomBytes: (Int) -> Data
     private let sessionIDProvider: () -> UInt64
+    private let timeProvider: () -> TimeInterval
 
     private var sessionID: UInt64 = 0
     private var authenticated = false
@@ -68,12 +69,14 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private var rxCounter: UInt64 = 0
     private var clientHandshakeProofSent = false
     private var lastAuthFailCode = 0
+    private var handshakeStartedAt: TimeInterval?
 
     init(
         clientMode: Bool,
         psk: String,
         randomBytes: ((Int) -> Data)? = nil,
-        sessionIDProvider: (() -> UInt64)? = nil
+        sessionIDProvider: (() -> UInt64)? = nil,
+        timeProvider: (() -> TimeInterval)? = nil
     ) {
         self.clientMode = clientMode
         self.psk = Data(psk.utf8)
@@ -87,6 +90,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             }
             return candidate
         }
+        self.timeProvider = timeProvider ?? { ProcessInfo.processInfo.systemUptime }
     }
 
     var isAuthenticated: Bool {
@@ -94,7 +98,8 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     func statusSnapshot() -> StatusSnapshot {
-        StatusSnapshot(
+        expireHandshakeIfNeeded()
+        return StatusSnapshot(
             clientMode: clientMode,
             authenticated: authenticated,
             peerConfirmedAuthenticated: peerConfirmedAuthenticated,
@@ -116,6 +121,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         }
         resetAuthState(keepSessionID: false)
         sessionID = sessionIDProvider()
+        handshakeStartedAt = timeProvider()
         clientNonce = Data(randomBytes(32).prefix(32))
         let payload = clientNonce + Data([UInt8(Self.capabilityPSKV1), 0])
         let frame = ObstacleBridgeSecureLinkPskCodec.buildFrame(
@@ -134,6 +140,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     func sendApp(_ payload: Data) throws -> OutboundSnapshot {
+        expireHandshakeIfNeeded()
         guard authenticated, sessionID > 0 else {
             throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
         }
@@ -161,6 +168,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     func handleInboundFrame(_ payload: Data) -> InboundSnapshot {
+        expireHandshakeIfNeeded()
         guard let frame = ObstacleBridgeSecureLinkPskCodec.parseFrame(payload) else {
             return fail(sessionID: 0, code: Self.authFailDecode)
         }
@@ -208,6 +216,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         }
         resetAuthState(keepSessionID: false)
         self.sessionID = sessionID
+        handshakeStartedAt = timeProvider()
         self.clientNonce = Data(clientNonce)
         self.serverNonce = Data(randomBytes(32).prefix(32))
         let keys = ObstacleBridgeSecureLinkPskCodec.deriveKeys(
@@ -321,6 +330,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         }
         if !peerConfirmedAuthenticated {
             peerConfirmedAuthenticated = true
+            handshakeStartedAt = nil
         }
         return InboundSnapshot(
             emittedFrames: emittedFrames,
@@ -358,6 +368,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         lastAuthFailCode = code
         authenticated = false
         peerConfirmedAuthenticated = false
+        handshakeStartedAt = nil
         let frame = ObstacleBridgeSecureLinkPskCodec.buildFrame(
             slType: Self.typeAuthFail,
             sessionID: sessionID,
@@ -380,6 +391,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         }
         authenticated = false
         peerConfirmedAuthenticated = false
+        handshakeStartedAt = nil
         clientNonce = Data()
         serverNonce = Data()
         c2sKey = nil
@@ -390,13 +402,25 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         lastAuthFailCode = 0
     }
 
+    func expireHandshakeIfNeeded() {
+        guard sessionID > 0, !peerConfirmedAuthenticated, lastAuthFailCode == 0 else {
+            return
+        }
+        guard let handshakeStartedAt else {
+            return
+        }
+        if (timeProvider() - handshakeStartedAt) >= Self.handshakeTimeoutSeconds {
+            _ = fail(sessionID: sessionID, code: Self.authFailLifecycle)
+        }
+    }
+
     private func serverProof(sessionID: UInt64, clientNonce: Data, serverNonce: Data) -> Data {
-        let message = Self.serverProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
-        let authenticationCode = HMAC<SHA256>.authenticationCode(
-            for: message,
-            using: SymmetricKey(data: psk)
+        ObstacleBridgeSecureLinkPskCodec.serverProof(
+            psk: psk,
+            sessionID: sessionID,
+            clientNonce: clientNonce,
+            serverNonce: serverNonce
         )
-        return Data(authenticationCode)
     }
 
     private func seal(payload: Data, key: Data, counter: UInt64, aad: Data) throws -> Data {

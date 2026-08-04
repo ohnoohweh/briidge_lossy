@@ -655,6 +655,183 @@ h1 {
   gap: 18px;
 }
 
+.proxy-summary-grid,
+.proxy-listener-grid,
+.proxy-listener-grid-inner {
+  display: grid;
+  gap: 12px;
+}
+
+.proxy-summary-grid {
+  grid-template-columns: 1fr;
+}
+
+.proxy-summary-row {
+  display: grid;
+  gap: 12px;
+}
+
+.proxy-summary-row-status {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.proxy-summary-row-endpoints {
+  grid-template-columns: minmax(180px, 1fr) minmax(0, 2fr);
+}
+
+.proxy-summary-row-counters {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.proxy-summary-row-error,
+.proxy-summary-row-throughput {
+  grid-template-columns: 1fr;
+}
+
+.proxy-stat-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(120, 170, 255, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.proxy-stat-card span,
+.proxy-listener-label {
+  color: var(--muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.proxy-stat-card strong {
+  min-width: 0;
+  color: #e8f0ff;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.proxy-throughput-card,
+.proxy-error-card,
+.proxy-protocol-card,
+.proxy-sockets-card,
+.proxy-listener-traffic-card {
+  grid-column: auto;
+}
+
+.proxy-mini-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.proxy-mini-grid > div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+  border: 1px solid rgba(120, 170, 255, 0.1);
+}
+
+.proxy-mini-grid strong {
+  font-size: 17px;
+}
+
+.proxy-protocol-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.proxy-rate-pair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.proxy-rate-box {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 11px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(79, 209, 197, 0.16);
+  background: linear-gradient(135deg, rgba(79, 209, 197, 0.08), rgba(99, 179, 237, 0.06));
+}
+
+.proxy-rate-box strong {
+  font-size: 20px;
+}
+
+.proxy-rate-box em {
+  color: #9fd9ff;
+  font-size: 13px;
+  font-style: normal;
+}
+
+.proxy-rate-track {
+  height: 10px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.proxy-rate-fill {
+  height: 100%;
+  width: 0%;
+  border-radius: inherit;
+  transition: width 220ms ease;
+}
+
+.proxy-rate-fill-rx {
+  background: linear-gradient(90deg, #38bdf8, #22c55e);
+}
+
+.proxy-rate-fill-tx {
+  background: linear-gradient(90deg, #f59e0b, #63b3ed);
+}
+
+.proxy-listener-grid {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.proxy-listener-card {
+  padding: 18px;
+}
+
+.proxy-listener-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.proxy-listener-head > div {
+  display: grid;
+  gap: 6px;
+}
+
+.proxy-listener-head strong {
+  color: #e8f0ff;
+  font-size: 20px;
+}
+
+.proxy-listener-endpoint {
+  padding: 8px 10px;
+  border-radius: 999px;
+  color: #b8d3ff;
+  background: rgba(120, 170, 255, 0.08);
+  border: 1px solid rgba(120, 170, 255, 0.12);
+  overflow-wrap: anywhere;
+}
+
+.proxy-listener-grid-inner {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .traffic-card,
 .warning-card,
 .empty-state,
@@ -1060,6 +1237,7 @@ select.config-editor option:disabled {
 
   .summary-grid,
   .traffic-grid,
+  .proxy-listener-grid-inner,
   .two-col {
     grid-template-columns: 1fr 1fr;
   }
@@ -1081,8 +1259,33 @@ select.config-editor option:disabled {
 
   .summary-grid,
   .traffic-grid,
+  .proxy-listener-grid,
+  .proxy-listener-grid-inner,
+  .proxy-summary-row-status,
+  .proxy-summary-row-endpoints,
+  .proxy-summary-row-counters,
   .two-col {
     grid-template-columns: 1fr;
+  }
+
+  .proxy-throughput-card,
+  .proxy-error-card,
+  .proxy-protocol-card,
+  .proxy-sockets-card,
+  .proxy-listener-traffic-card {
+    grid-column: auto;
+  }
+
+  .proxy-rate-pair {
+    grid-template-columns: 1fr;
+  }
+
+  .proxy-protocol-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .proxy-listener-head {
+    display: grid;
   }
 
   .metric-value {

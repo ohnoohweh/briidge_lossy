@@ -2,7 +2,9 @@
 
 ## Purpose
 
-This document proposes a transport-independent security layer for ObstacleBridge that adds:
+This document describes the current SecureLink design and implementation state in ObstacleBridge.
+
+SecureLink is the transport-independent security layer that adds:
 
 - mutual peer authentication
 - tunnel confidentiality
@@ -10,10 +12,12 @@ This document proposes a transport-independent security layer for ObstacleBridge
 - replay protection
 - key rotation and revocation hooks
 
-The goal is to solve two current gaps:
+Current branch state:
 
-1. overlay traffic is not protected end to end at the ObstacleBridge layer
-2. the tunnel service itself lacks a strong peer-authentication model
+- ObstacleBridge already ships a transport-independent secure-link layer below `ChannelMux` and above the transport sessions
+- PSK mode is delivered across `myudp`, `tcp`, `ws`, and `quic`
+- certificate mode with admin-signed identities, revocation, and live reload/apply controls is delivered
+- the remaining work is now hardening, parity tightening, observability polish, and any future wire-compatibility/operational improvements rather than initial feature bring-up
 
 The design intentionally keeps authentication and encryption below `ChannelMux` and above the transport sessions so that:
 
@@ -23,7 +27,7 @@ The design intentionally keeps authentication and encryption below `ChannelMux` 
 
 ## Scope
 
-This is a design proposal, not an implementation plan tied to one release.
+This document is state-based, not a historical rollout log.
 
 It covers:
 
@@ -36,40 +40,21 @@ It covers:
 
 It does not yet define:
 
-- exact binary wire formats
+- a frozen long-term wire-compatibility commitment for every secure-link frame shape
 - exact storage format for private keys on disk
-- admin UI flows for certificate issuance or revocation
+- full admin UI flows for certificate issuance
+- every remaining parity or observability gap across Python, macOS Swift, and iOS Swift surfaces
 
-## Phase 0 outcome
+## Current State Summary
 
-Phase 0 in this project means architectural commitment without runtime crypto yet.
+The following points describe the currently delivered SecureLink baseline:
 
-The expected output of Phase 0 is:
-
-- a stable layer boundary below `ChannelMux` and above the transport sessions
-- a clear trust model for future secure-link authentication
-- a certificate field set that later implementation can follow
-- a dependency policy that avoids a large or platform-fragile crypto stack
-- contributor documentation that explains what is already decided and what is still intentionally deferred
-
-Phase 0 intentionally does not include:
-
-- encrypted overlay traffic in the runtime
-- certificate parsing or validation in the runtime
-- new CLI/config options for secure-link operation
-- new product requirements claiming secure-link behavior already exists
-
-Current Phase 0 decisions captured by this document:
-
-- the project should use one transport-independent secure-link layer rather than transport-specific security behavior
-- that layer should sit below `ChannelMux` and above the transport/session layer
-- the long-term direction is admin-signed identities plus ephemeral session keys
-- the project should accept at most one focused crypto dependency if implementation proceeds
-- secure-link behavior remains a planned feature until runtime code and black-box tests exist
-
-## Phase 0 decision summary
-
-The following points are considered finalized for Phase 0.
+- one transport-independent secure-link layer spans the supported overlay transports
+- the secure-link layer sits below `ChannelMux` and above the transport/session layer
+- PSK mode exists as an explicit, opt-in development and compatibility mode
+- certificate mode is the deployment-rooted trust model
+- peer-scoped admin/API visibility is part of the delivered model, but some presentation/parity details still evolve
+- the primary open work is no longer "whether SecureLink exists", but how clearly and safely it behaves under churn, replay, reload, parity, and operator troubleshooting
 
 ### Trust model
 
@@ -84,7 +69,7 @@ The following points are considered finalized for Phase 0.
   - `client,server`
 - revocation is identified by certificate serial number
 - the first operational revocation model is a local denylist by serial number
-- no intermediate CA hierarchy is planned for the first implementation phases
+- no intermediate CA hierarchy is currently part of the design
 
 ### Certificate profile
 
@@ -103,33 +88,14 @@ The following points are considered finalized for Phase 0.
 
 ### Dependency policy
 
-- Phase 0 adds no new mandatory runtime dependency
-- if secure-link runtime implementation starts, the only planned mandatory crypto dependency is `cryptography`
+- the Python runtime accepts `cryptography` as the focused mandatory crypto dependency for SecureLink-capable environments
 - no second crypto framework should be introduced for the same feature without a deliberate redesign decision
 - stdlib helpers may be used for configuration, serialization, hashing support, and HKDF-related glue, but not as a substitute for modern asymmetric crypto and AEAD primitives
 - transport-specific TLS libraries are not the primary dependency strategy for secure-link
 
-## Phase 1 mini-spec
+## Current PSK Runtime Model
 
-Phase 1 is the smallest runtime slice intended to validate the secure-link layer boundary before certificate-based authentication is introduced.
-
-Goals:
-
-- implement secure-link framing hooks
-- support an optional PSK mode for development and testing
-- validate layering with `ChannelMux` unchanged
-
-Non-goals for Phase 1:
-
-- certificate parsing
-- certificate validation
-- revocation
-- admin issuance tooling
-- final long-term wire compatibility guarantees
-
-### Phase 1 operating mode
-
-Phase 1 adds one explicit lab/development mode:
+Current explicit PSK mode:
 
 - `secure_link_mode = psk`
 
@@ -137,18 +103,18 @@ Behavioral intent:
 
 - both peers are manually provisioned with the same pre-shared secret
 - the PSK mode is explicit and opt-in
-- PSK mode exists to validate layering, handshake flow, and ciphertext/plaintext transitions before the certificate-based mode is built
+- PSK mode is useful for development, interoperability checks, troubleshooting, and environments that are not yet operating with certificate material
 - PSK mode is not the long-term production trust model
 
-### Phase 1 frame envelope
+### PSK frame envelope
 
-The Phase 1 secure-link layer wraps bytes exchanged between the transport/session layer and the current overlay framing/mux path.
+The delivered PSK secure-link layer wraps bytes exchanged between the transport/session layer and the current overlay framing/mux path.
 
 Conceptual envelope fields:
 
 - `sl_version`
   - secure-link wire version
-  - Phase 1 value: `1`
+  - current value: `1`
 - `sl_type`
   - one of:
     - `client_hello`
@@ -157,7 +123,7 @@ Conceptual envelope fields:
     - `data`
 - `sl_flags`
   - reserved for later negotiation or rekey bits
-  - Phase 1 default: `0`
+  - current default: `0`
 - `sl_session_id`
   - random session identifier chosen by the initiator
   - used to bind the handshake and later data frames to one secure-link session
@@ -168,20 +134,19 @@ Conceptual envelope fields:
 - `sl_payload`
   - handshake payload or ciphertext payload depending on `sl_type`
 
-Phase 1 boundary rule:
+Boundary rule:
 
 - transport/session code carries this envelope opaquely
 - `ChannelMux` does not see the envelope directly
 
-Phase 1 serialization guidance:
+Serialization note:
 
 - a compact binary encoding is preferred for the actual implementation
-- however, the first implementation may use a simple deterministic struct/length-prefix format as long as it is versioned and testable
-- the exact byte layout is intentionally deferred until code starts
+- the exact byte layout is implementation-defined and versioned in code; this document describes the logical contract rather than freezing a permanent public wire standard
 
-### Phase 1 PSK handshake messages
+### PSK handshake messages
 
-The Phase 1 PSK handshake is intentionally small and symmetric enough to validate the new layer without introducing certificate logic.
+The delivered PSK handshake remains intentionally small and symmetric.
 
 #### `client_hello`
 
@@ -195,7 +160,7 @@ Payload contents:
   - initial fixed value identifying `psk-v1`
 - `key_schedule_hint`
   - reserved field for later compatibility
-  - Phase 1 fixed value: `0`
+  - current fixed value: `0`
 
 Meaning:
 
@@ -220,9 +185,7 @@ Meaning:
 - confirms that the responder knows the PSK
 - commits the responder to the handshake transcript
 
-#### client handshake confirmation
-
-The initiator does not need a third explicit handshake control frame in Phase 1.
+#### Client handshake confirmation
 
 Instead:
 
@@ -231,7 +194,7 @@ Instead:
 - if the responder cannot authenticate that proof frame, the secure-link session is rejected
 - the proof frame is consumed inside the secure-link layer and is not surfaced upward as application payload or `ChannelMux` traffic
 
-This keeps Phase 1 smaller while still validating both directions.
+This keeps the PSK control surface smaller while still validating both directions.
 
 #### `auth_fail`
 
@@ -250,7 +213,7 @@ Meaning:
 - makes lab/debug failures easier to observe
 - is not required on every failure path if the safer action is to close the session immediately
 
-### Phase 1 key derivation
+### PSK key derivation
 
 Inputs:
 
@@ -267,13 +230,13 @@ Derivation shape:
   - client-to-server traffic
   - server-to-client traffic
 
-Phase 1 replay and nonce rule:
+Replay and nonce rule:
 
 - each protected `data` frame uses the directional `sl_counter` as AEAD nonce/counter input
 - counters are monotonic per direction
 - duplicate or older counters are rejected
 
-### Phase 1 protected data frames
+### Protected data frames
 
 After successful PSK handshake:
 
@@ -281,15 +244,13 @@ After successful PSK handshake:
 - `sl_payload` carries AEAD-protected bytes
 - plaintext input to the AEAD is exactly the byte stream or frame sequence that would otherwise continue upward to the existing overlay logic
 
-Phase 1 layering validation rule:
+Layering rule:
 
 - secure-link decrypts before bytes reach the current overlay framing/mux path
 - secure-link encrypts after bytes leave the current overlay framing/mux path toward the transport/session layer
 - `ChannelMux` remains unchanged
 
-### Phase 1 config keys
-
-The first implementation should introduce only a minimal explicit config surface.
+### Config keys
 
 Recommended keys:
 
@@ -303,9 +264,6 @@ Recommended keys:
     - `off`
     - `psk`
     - `cert`
-  - Phase 1 supported values:
-    - `off`
-    - `psk`
 - `secure_link_psk`
   - string
   - shared secret input for lab/development PSK mode
@@ -323,19 +281,7 @@ Config interpretation rules:
 - if `secure_link = false`, the runtime behaves exactly as today
 - if `secure_link = true` and `secure_link_mode = psk`, both sides must have the same `secure_link_psk`
 - if `secure_link_rekey_after_frames > 0`, the current PSK runtime slice initiates client-driven rekey using a fresh secure-link session id and fresh nonces while preserving the overlay connection
-- the original Phase 1 plan treated `secure_link_mode = cert` as unsupported until the Phase 2 runtime slice was delivered; that limitation no longer applies on the current branch history
 - `secure_link_require = true` is mainly useful for tests to ensure the path does not silently fall back to plaintext
-
-### Phase 1 first implementation target
-
-To reduce risk, the first runtime slice should aim for:
-
-- one transport first, preferably `tcp` or `ws`
-- one happy-path integration test
-- one wrong-PSK rejection test
-- one ciphertext tamper test
-
-Once that slice is stable, the same secure-link envelope and PSK mode can be exercised across the remaining transports.
 
 ## Design goals
 
@@ -363,7 +309,7 @@ Main reasons:
 - client authentication is described, but server authentication is not fully symmetric
 - signing a public key is not enough without certificate metadata such as role, validity, issuer, and revocation identity
 - a signed identity alone does not define a secure session-key agreement
-- the proposal does not yet bind the handshake transcript strongly enough to stop replay or active manipulation
+- a secure-link design must bind the handshake transcript strongly enough to stop replay or active manipulation
 - "AES256 encryption" is not sufficient as a protocol description without nonce handling, integrity protection, and key derivation
 
 Conclusion:
@@ -418,9 +364,9 @@ Trust anchor distribution:
 
 This is not a public CA model. It is a deployment-local trust hierarchy.
 
-Phase 0 finalization:
+Current design decision:
 
-- no certificate chain beyond root -> leaf is planned for the first implementation phases
+- no certificate chain beyond root -> leaf is currently part of the design
 - leaf certificates are bound to concrete peer identities, not to anonymous user groups
 - the trust anchor is deployment-scoped, so cross-deployment trust is intentionally out of scope
 - the initial revocation model is file/config-driven rather than OCSP/CRL infrastructure
@@ -450,7 +396,7 @@ Required certificate fields:
 - optional constraints or permissions
 - signature by admin root private key
 
-Recommended logical field names for Phase 0:
+Recommended logical field names:
 
 - `version`
 - `serial`
@@ -474,7 +420,7 @@ Field expectations:
 - `subject_id` must be stable enough to identify one peer instance across reconnects and certificate renewal
 - `deployment_id` prevents accidental trust crossover between separate installations that may otherwise reuse hostnames or labels
 - `roles` must be machine-enforced, not only informational
-- `constraints` should start simple and may be empty in the first implementation phase
+- `constraints` should start simple and may be empty in early operational use
 - the signed content must exclude the `signature` field itself and must use one canonical serialization rule
 
 Initial certificate policy decisions:
@@ -502,7 +448,7 @@ When a connection is established:
 
 Without server authentication, a man-in-the-middle can still impersonate the listener side.
 
-Phase 0 finalization:
+Current design decision:
 
 - anonymous secure-link mode is not the target default
 - one-sided authentication is not the target model
@@ -532,7 +478,7 @@ Why:
 - allows frequent rekeying
 - limits blast radius if a traffic key leaks
 
-Phase 0 cryptographic direction:
+Current cryptographic direction:
 
 - static identity signatures: Ed25519
 - ephemeral key agreement: X25519
@@ -559,9 +505,9 @@ Requirements for the secure-link data phase:
 
 The secure-link layer should encrypt the payload that `ChannelMux` would otherwise send directly to the transport.
 
-Phase 0 cipher decision:
+Current cipher decision:
 
-- preferred first implementation cipher: `ChaCha20-Poly1305`
+- preferred baseline cipher: `ChaCha20-Poly1305`
 - acceptable alternative when platform constraints or library integration make it preferable: `AES-256-GCM`
 
 Rationale:
@@ -592,20 +538,19 @@ Alternative:
 
 This document does not lock the project into the Noise protocol library. It recommends adopting the same security properties and handshake structure.
 
-Phase 0 handshake decision:
+Current handshake decision:
 
 - use a Noise-style authenticated handshake shape as the design model
-- do not add a separate Noise framework dependency in the first implementation phase
-- implement only after the secure-link layer contract and test strategy are ready
+- do not add a separate Noise framework dependency by default
+- keep the delivered protocol aligned with the same security properties even if the implementation is project-local
 
 ## Dependency strategy
 
 This project should avoid heavy platform-fragile dependency chains.
 
-Phase 0 dependency decision:
+Dependency decision:
 
-- Phase 0 itself remains documentation-only and adds no dependency
-- Phase 1 or Phase 2 secure-link runtime work may introduce exactly one new mandatory crypto dependency: `cryptography`
+- SecureLink-capable runtime work uses exactly one focused mandatory crypto dependency on the Python side: `cryptography`
 - introducing `cryptography` is preferred over combining several smaller crypto packages or platform-specific wrappers
 - dependencies such as a full TLS stack, PKI framework, or separate Noise library are intentionally not part of the initial dependency plan
 
@@ -640,10 +585,9 @@ Best portability-minded options:
 - supports Ed25519, X25519, HKDF, AES-GCM, ChaCha20-Poly1305
 - larger than stdlib, but still the most practical single dependency
 
-2. optional phased rollout
-- phase 1: no new security feature merged
-- phase 2: add one focused dependency for secure-link only
-- phase 3: make advanced admin issuance tooling optional
+2. optional staged evolution
+- keep one focused dependency for secure-link only
+- keep advanced admin issuance tooling optional
 
 Recommended decision:
 
@@ -758,31 +702,19 @@ Layering:
 - transport sessions read/write ciphertext frames to `SecureLinkSession`
 - `SecureLinkSession` exposes plaintext frames to `ChannelMux`
 
-## Suggested rollout plan
+## Delivered Slices And Remaining Gaps
 
-### Phase 0: design and boundaries
+### Architecture And Boundaries
 
-- finalize trust model
-- define certificate fields
-- define layer boundaries
-- decide dependency policy
-- record those decisions in architecture and contributor-facing project documents without claiming delivery of secure-link runtime behavior
-
-Acceptance criteria:
-
-- the trust model, certificate/profile expectations, layer boundary, and dependency policy are documented and internally consistent
-- the architecture docs state clearly which responsibilities belong to the secure-link layer versus transport/session, `ChannelMux`, runner wiring, and admin/web observability
-- no product requirement claims delivered secure-link runtime behavior before code and black-box tests exist
-
-Current status:
+Current state:
 
 - fulfilled
+- trust model, certificate profile, layer boundary, and dependency policy are all documented and implemented as active project decisions
 
 Evidence:
 
 - [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md):
-  - `Phase 0 outcome`
-  - `Phase 0 decision summary`
+  - `Current State Summary`
   - trust model, dependency policy, and certificate-profile sections
 - [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md):
   - `2. Secure-link layer`
@@ -790,26 +722,14 @@ Evidence:
 - [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md):
   - secure-link certificate input profile and external responsibility split
 - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md):
-  - active `REQ-AUT-*` versus planned `PLAN-AUT-*` separation
+  - active `REQ-AUT-*` secure-link requirement set
 
-### Phase 1: PSK secure-link prototype
+### PSK Runtime Slice
 
-- implement secure-link framing hooks
-- support optional PSK mode for development and testing
-- validate layering with `ChannelMux` unchanged
-
-Acceptance criteria:
-
-- a delivered secure-link runtime slice exists below `ChannelMux` and above the transport/session layer
-- `secure_link_mode=psk` works across the supported overlay transports
-- the protected data phase authenticates and encrypts traffic without requiring `ChannelMux` changes
-- wrong-PSK peers fail instead of reaching a false connected state
-- the admin/API surface exposes first secure-link state visibility for operators
-
-Current status:
+Current state:
 
 - fulfilled for the PSK runtime slice
-- certificate mode remains out of scope for this phase
+- certificate mode exists separately and does not replace the utility of PSK mode for development and troubleshooting
 
 Evidence:
 
@@ -836,9 +756,9 @@ Evidence:
   - [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml)
     `REQ-AUT-001` to `REQ-AUT-005`
 
-### Phase 1.5: PSK hardening checklist
+### PSK Hardening State
 
-This phase hardens the delivered PSK runtime slice before or alongside broader operational use. The goal is not to change the trust model yet, but to make the existing PSK path safer and more explicit under long runtimes, malformed input, and transport churn.
+This section describes hardening that is already delivered plus the remaining gaps for the PSK runtime slice.
 
 #### Rekeying
 
@@ -901,7 +821,7 @@ Evidence:
 - define counter-overflow behavior
 - define whether any limited out-of-order tolerance is allowed or whether the model stays strictly monotonic
 
-Current Phase 1 runtime decision:
+Current runtime decision:
 
 - protected `data` counters are owned per direction and start at `1`
 - counter value `0` is reserved and rejected as a lifecycle violation
@@ -956,7 +876,21 @@ Evidence:
   - mark the session as failed and observable in admin/API state
 - define reconnect throttling so persistent auth failures do not create noisy loops
 
-Current Phase 1 runtime decision:
+Observed field case that now drives the current hardening contract:
+
+- two clients behind the same public NAT can progress differently during PSK handshake churn, for example when one Linux peer was previously healthy, an iPhone peer then connected from the same public IP, and later one side reported the session as authenticated while the other still exposed the same peer slot as handshaking
+- the concrete bad state was "local client verified `server_hello` and derived keys" without yet receiving any protected peer-confirmation traffic back, while the responder had not promoted that session to authenticated
+- in that state, the failure was not only cosmetic in admin/UI state:
+  - the client application could believe the secure-link session was authenticated
+  - the server still treated the peer as unauthenticated or handshaking
+  - TUN and UDP forwarding could appear broken because the overlay had not actually reached a mutually authenticated protected-data phase
+- operationally, a handshaking state lasting longer than the one-minute reauthentication window is unacceptable and must be treated as a failure rather than as a tolerated steady state
+- accepted outcomes for PSK mode are intentionally strict:
+  - both sides peer-confirm and report authenticated
+  - both sides fail closed and retry or reconnect when the PSK or handshake lifecycle is wrong
+  - one-sided "authenticated here, handshaking there" must not persist
+
+Current runtime decision:
 
 - malformed secure-link frames are treated as `decode` failures
 - unexpected or out-of-order secure-link control messages are treated as `decode` or `lifecycle` failures depending on whether the violated invariant is structural or state-machine related
@@ -964,6 +898,10 @@ Current Phase 1 runtime decision:
 - listener/server-side mux routing state for the failed peer is dropped so stale channels cannot continue to route through an unauthenticated peer slot
 - the failure remains observable through `/api/status` and `/api/peers` until a later healthy authenticated session replaces it
 - client-side sessions that had already authenticated and then fail closed schedule a lower-transport reconnect, defaulting to a 30 second delay, so availability can recover through a fresh transport epoch and a fresh secure-link handshake instead of reusing the failed cryptographic session
+- client-side verification of `server_hello` is treated as local handshake progress only, not as final authenticated state
+- a secure-link session is reported as authenticated only after peer-confirmed protected traffic proves that both sides derived and accepted the same keys
+- if a handshake remains locally progressed but not peer-confirmed for 60 seconds, the runtime converts that state into a lifecycle failure instead of letting it linger indefinitely
+- the timeout path is fail-closed and observable through the admin/API surface, and the client-side recovery path can restart the lower transport rather than preserving a half-authenticated session
 
 Acceptance criteria:
 
@@ -971,14 +909,17 @@ Acceptance criteria:
 - no failure path can silently accept plaintext when secure-link is required
 - admin/API state and logs expose a stable machine reason plus human-readable detail
 - repeated auth failures remain observable without destabilizing the surrounding runner state machine
+- no peer can remain in an unbounded locally-authenticated-but-not-peer-confirmed handshake state
+- handshake observability must distinguish "local proof accepted" from "peer-confirmed authenticated" so operators can diagnose lower-level UDP/TUN impact correctly
 
-Current Phase 1 runtime decision:
+Current runtime decision:
 
 - repeated client-side PSK authentication failures now retry under bounded exponential backoff rather than immediate tight looping
 - the current admin/API surface exposes `consecutive_failures`, `retry_backoff_sec`, and `next_retry_unix_ts` for that throttle window
 - authenticated-session failure recovery is distinct from wrong-secret retry: initial PSK mismatch stays on the bounded handshake retry path, while a post-authentication secure-link failure schedules lower-transport reconnect recovery through `secure_link_recover_after_failure` and `secure_link_recover_delay_seconds`
 - the current admin/API surface exposes `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, and `next_recovery_reconnect_unix_ts` so operators can see when a failed client-side secure-link session is waiting for reconnect recovery
 - the current admin/API surface also exposes stronger operational diagnostics such as `failure_session_id`, `handshake_attempts_total`, `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
+- the current PSK runtime and iOS parity runtime both implement the peer-confirmation rule and the 60 second unconfirmed-handshake timeout for the secure-link state machine
 
 Current status:
 
@@ -998,6 +939,7 @@ Evidence:
     - malformed/out-of-order fail-closed tests
     - wrong-PSK retry/backoff tests
     - authenticated failure recovery reconnect tests
+    - `test_client_local_secure_link_auth_times_out_without_peer_confirmation`
     - operational diagnostics assertions
   - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
 - integration evidence:
@@ -1009,9 +951,7 @@ Evidence:
   - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
     secure-link coverage tables and criteria notes
 
-#### Test additions expected in Phase 1.5
-
-Already generated:
+#### Delivered Hardening Coverage
 
 - integration test for rekey under live traffic
   - evidence:
@@ -1081,20 +1021,9 @@ Already generated:
     [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess`
 
-### Phase 2: certificate-based mutual authentication
+### Certificate-Based Mutual Authentication
 
-- add identity keypairs
-- add admin-signed certificates
-- add mutual-authenticated handshake
-- add traffic encryption
-
-Acceptance criteria:
-
-- both sides authenticate with admin-signed certificates before protected traffic is accepted
-- trust-anchor mismatch, role mismatch, validity failure, deployment mismatch, or revocation all fail closed before the protected data phase
-- the admin/API surface preserves the current secure-link visibility model while adding certificate/trust-validation diagnostics
-
-Current status:
+Current state:
 
 - fulfilled for the delivered certificate-mode runtime slice
 
@@ -1126,23 +1055,11 @@ Evidence:
   - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
     `Current certificate-mode secure-link coverage`
 
-### Phase 3: operational controls
+### Operational Controls
 
-- live reload/apply of revocation material
-- live reload/apply of local root/certificate/private-key material
-- immediate trust enforcement against already-authenticated cert-mode peers
-- admin/API visibility for reload results, disconnect reasons, and peer identity/trust metadata
+Current state:
 
-Acceptance criteria:
-
-- operators can apply updated revoked-serial material without process restart and see newly revoked peers dropped immediately
-- operators can apply updated local root/certificate/private-key material without process restart, and broken replacement bundles fail atomically without partially replacing the active material
-- a successful local-identity apply disconnects already-authenticated cert-mode peers so they must re-authenticate under the new material generation
-- `/api/status`, `/api/peers`, and WebAdmin expose reload/apply results and peer-scoped trust/disconnect diagnostics clearly enough for troubleshooting and audit
-
-Current status:
-
-- fulfilled for the delivered Phase 3 operational-control slice
+- fulfilled for the delivered operational-control slice
 
 Evidence:
 
@@ -1175,7 +1092,7 @@ Evidence:
 
 ## Minimal operational model
 
-Recommended first operational model:
+Recommended operational model:
 
 - one admin root keypair per deployment
 - one certificate per peer client and per peer server
@@ -1202,15 +1119,15 @@ This design does not by itself solve:
 
 Recommended direction:
 
-- add a transport-independent secure-link layer below `ChannelMux`
-- use admin-signed peer certificates for mutual authentication
-- use ephemeral ECDH plus HKDF for per-session key derivation
-- use AEAD for traffic protection
-- accept one focused mandatory crypto dependency if implementation proceeds
-- avoid ad hoc custom crypto and avoid splitting the security model across transports
+- keep the transport-independent secure-link layer below `ChannelMux`
+- keep admin-signed peer certificates as the deployment-rooted mutual-authentication model
+- keep ephemeral ECDH plus HKDF for per-session key derivation in certificate mode
+- keep AEAD-protected traffic with explicit replay and lifecycle controls
+- keep PSK mode explicit and opt-in for development, compatibility, and troubleshooting rather than as the primary long-term trust model
+- keep the crypto dependency surface focused instead of splitting the security model across transports or introducing multiple overlapping crypto stacks
 
-If dependency minimization remains the top concern, the best phased path is:
+Remaining practical action plan:
 
-1. design the secure-link layer boundary now
-2. implement an optional PSK prototype first if needed
-3. move to certificate-based mutual authentication only when the project is ready to accept a single portable crypto dependency
+1. add the remaining reconnect/replay hardening coverage that this document still marks as pending, especially integration coverage beyond the current PSK slice for stale-frame rejection and reconnect/replay behavior across more transport/runtime combinations
+2. decide whether SecureLink should commit to a more explicit long-term wire-compatibility/frozen frame-shape policy instead of leaving the on-wire contract versioned but implementation-defined
+3. decide whether certificate issuance should remain an external/operator workflow or gain fuller first-party admin UI support beyond the current reload/apply and observability controls

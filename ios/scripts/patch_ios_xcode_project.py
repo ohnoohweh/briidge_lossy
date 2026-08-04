@@ -73,6 +73,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000007", "71C500000000000000000107", "ObstacleBridgeRuntimeConfig.swift"),
     ("71C500000000000000000020", "71C500000000000000000120", "ObstacleBridgeChannelMuxUdpRuntime.swift"),
     ("71C500000000000000000008", "71C500000000000000000108", "ObstacleBridgeChannelMuxTunRuntime.swift"),
+    ("71C500000000000000000028", "71C500000000000000000128", "ObstacleBridgeTunPing.swift"),
     ("71C500000000000000000009", "71C500000000000000000109", "ObstacleBridgeUdpOverlayCodec.swift"),
     ("71C50000000000000000000A", "71C50000000000000000010A", "ObstacleBridgeUdpOverlaySessionCodec.swift"),
     ("71C50000000000000000000B", "71C50000000000000000010B", "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
@@ -107,7 +108,10 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000002", "71C610000000000000000102", "ObstacleBridgeSecureLinkPskRuntime.swift"),
     ("71C610000000000000000003", "71C610000000000000000103", "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
     ("71C610000000000000000004", "71C610000000000000000104", "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
+    ("71C61000000000000000002A", "71C61000000000000000012A", "ObstacleBridgeTunHelperContract.swift"),
+    ("71C61000000000000000002B", "71C61000000000000000012B", "ObstacleBridgeTunHelperXPCTransport.swift"),
     ("71C610000000000000000022", "71C610000000000000000122", "ObstacleBridgeMacOSTunAdapter.swift"),
+    ("71C61000000000000000002C", "71C61000000000000000012C", "ObstacleBridgeTunPing.swift"),
     ("71C61000000000000000001A", "71C61000000000000000011A", "ObstacleBridgeNativeServiceSpec.swift"),
     ("71C61000000000000000001B", "71C61000000000000000011B", "ObstacleBridgeNativeProxyConnections.swift"),
     ("71C61000000000000000001C", "71C61000000000000000011C", "ObstacleBridgeOverlayConnectionSupport.swift"),
@@ -147,6 +151,12 @@ APP_GENERATED_SWIFT_SOURCE = (
     "71C610000000000000000121",
     "ObstacleBridgeGeneratedBuildStamp.swift",
     "../../../../build/generated/ObstacleBridgeGeneratedBuildStamp.swift",
+)
+
+IPSERVER_GENERATED_SWIFT_SOURCE = (
+    "71C200000000000000000008",
+    APP_GENERATED_SWIFT_SOURCE[1],
+    APP_GENERATED_SWIFT_SOURCE[2],
 )
 
 
@@ -337,6 +347,37 @@ def add_app_generated_swift_source(text: str) -> str:
 
     body = match.group("body")
     entry = f"\t\t\t\t{build_id} /* {name} in Sources */,\n"
+    if entry not in body:
+        body += entry
+
+    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+
+
+def add_ipserver_generated_swift_source(text: str) -> str:
+    build_id, file_id, name = IPSERVER_GENERATED_SWIFT_SOURCE
+    text = insert_before(
+        text,
+        "/* End PBXBuildFile section */\n",
+        f"\t\t{build_id} /* {name} in IPServer Sources */ = {{isa = PBXBuildFile; fileRef = {file_id} /* {name} */; }};\n",
+    )
+
+    match = re.search(
+        r"(?P<head>\t\t71C200000000000000000080 /\* Sources \*/ = \{\n"
+        r"\t\t\tisa = PBXSourcesBuildPhase;\n"
+        r"\t\t\tbuildActionMask = 2147483647;\n"
+        r"\t\t\tfiles = \(\n)"
+        r"(?P<body>.*?)"
+        r"(?P<tail>\t\t\t\);\n"
+        r"\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+        r"\t\t\};)",
+        text,
+        flags=re.DOTALL,
+    )
+    if not match:
+        raise ValueError("IPServer Sources build phase block not found")
+
+    body = match.group("body")
+    entry = f"\t\t\t\t{build_id} /* {name} in IPServer Sources */,\n"
     if entry not in body:
         body += entry
 
@@ -831,6 +872,7 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t};\n",
         )
     text = add_ipserver_shared_swift_sources(text)
+    text = add_ipserver_generated_swift_source(text)
     text = insert_before(
         text,
         "/* Begin PBXVariantGroup section */\n",

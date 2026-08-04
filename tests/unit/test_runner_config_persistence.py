@@ -34,6 +34,30 @@ def test_update_config_persists_to_config_file(tmp_path):
     assert written["misc"]["overlay_transport"] == "myudp"
 
 
+def test_update_config_accepts_grouped_tun_routing_section(tmp_path):
+    runner = _make_runner(tmp_path)
+    runner.args.tunnel_address = "192.168.106.2"
+    runner.args.tunnel_prefix = 24
+    runner.args.tunnel_gateway = "192.168.106.1"
+    runner.args.dns_servers = ["1.1.1.1"]
+    runner.args.log_TUN_routing = "CRITICAL"
+    runner.args._config_sections = {
+        "admin_web": ["admin_web_bind", "admin_web_port"],
+        "TUN_routing": ["tunnel_address", "tunnel_prefix", "tunnel_gateway", "dns_servers", "log_TUN_routing"],
+    }
+
+    ok, err = runner.update_config({"TUN_routing": {"dns_servers": ["192.168.106.1"]}})
+
+    assert ok is True
+    assert err == ""
+    assert runner.args.dns_servers == ["192.168.106.1"]
+
+    written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
+    assert written["TUN_routing"]["dns_servers"] == ["192.168.106.1"]
+    assert written["TUN_routing"]["tunnel_address"] == "192.168.106.2"
+    assert written["TUN_routing"]["tunnel_gateway"] == "192.168.106.1"
+
+
 def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, monkeypatch):
     monkeypatch.setattr(bridge.socket, "gethostname", lambda: "unit-test-host")
     runner = _make_runner(tmp_path)

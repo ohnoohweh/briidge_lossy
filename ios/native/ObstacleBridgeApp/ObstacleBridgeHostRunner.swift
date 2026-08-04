@@ -91,8 +91,11 @@ private final class ObstacleBridgeConfigStore {
 }
 
 private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
+    func stop()
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
     func transportSnapshot() -> [String: Any]
+    func connectionLayersSnapshot() -> [[String: Any]]
+    func appReady() -> Bool
     func sendLocalTunPacket(_ packet: Data)
     func acceptLocalTCPConnection(
         _ connection: NWConnection,
@@ -111,10 +114,17 @@ private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
 
 extension ObstacleBridgeWebSocketOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 extension ObstacleBridgeTcpOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
+@available(iOS 15.0, *)
 extension ObstacleBridgeQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 extension ObstacleBridgeUdpOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning {}
 
 final class ObstacleBridgeHostRunner {
+    typealias MacOSTunHelperClientFactory = (
+        DispatchQueue,
+        @escaping (Data) -> Void,
+        ((String, [String: Any]) -> Void)?
+    ) -> ObstacleBridgeTunHelperClienting
+
     private static let configChallengeTTL: TimeInterval = 90
     private static let serviceStateQueueKey = DispatchSpecificKey<UInt8>()
 
@@ -126,6 +136,7 @@ final class ObstacleBridgeHostRunner {
     private var remoteServerSpecs: [ObstacleBridgeNativeServiceSpec]
     private let bindHost: String
     private let statusPort: Int
+    private let macOSTunHelperClientFactory: MacOSTunHelperClientFactory
     private var startedAt = Date()
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
@@ -152,14 +163,20 @@ final class ObstacleBridgeHostRunner {
     private var sharedQuicOverlayRuntime: ObstacleBridgeQuicOverlayRuntime?
     private var sharedWebSocketOverlayTransportOwner: ObstacleBridgeWebSocketOverlayTransportOwner?
     private var sharedTcpOverlayTransportOwner: ObstacleBridgeTcpOverlayTransportOwner?
-    private var sharedQuicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner?
+    private var sharedQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
     private var proxyProviderLastError = ""
-    private var sharedMacOSTunAdapter: ObstacleBridgeMacOSTunAdapter?
+    private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
+    private var macOSTunHelperRuntimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
+    private var macOSTunHelperTransportKind = "none"
     private var macOSTunChannelConnectedHookFired = false
     private var macOSOverlayUnderlayGatewayV4 = ""
     private var macOSOverlayUnderlayInterfaceV4 = ""
+    private let tunProbeIdentifier = UInt16.random(in: 1...UInt16.max)
+    private var tunProbeSequence: UInt16 = 1
+    private var tunProbeWaiters: [TunProbeWaiterKey: TunProbeWaiterState] = [:]
+    private var tunProbeHistory: [String: TunProbeHistory] = [:]
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
     private var cachedStatusSnapshot: [String: Any] = [:]
@@ -210,7 +227,36 @@ final class ObstacleBridgeHostRunner {
         let owner: ObstacleBridgeOverlayTransportOwning
     }
 
-    init(runtimeConfigPath: String, bindHostOverride: String?, statusPortOverride: Int?) throws {
+    private struct TunProbeWaiterKey: Hashable {
+        let family: Int32
+        let identifier: UInt16
+        let sequence: UInt16
+        let nonce: Data
+    }
+
+    private final class TunProbeWaiterState {
+        let semaphore = DispatchSemaphore(value: 0)
+        var reply: TunProbeReply?
+    }
+
+    private struct TunProbeReply {
+        let sourceIP: String
+        let destinationIP: String
+        let payload: Data
+        let receivedMonotonicNS: UInt64
+    }
+
+    private struct TunProbeHistory {
+        let lastSuccessMonotonic: TimeInterval
+        let lastSuccessRTTMS: Double
+    }
+
+    init(
+        runtimeConfigPath: String,
+        bindHostOverride: String?,
+        statusPortOverride: Int?,
+        macOSTunHelperClientFactory: MacOSTunHelperClientFactory? = nil
+    ) throws {
         self.runtimeConfigPath = runtimeConfigPath
         let decoded = try Self.loadRuntimeConfigFromDisk(runtimeConfigPath: runtimeConfigPath)
         self.runtimeConfigRaw = decoded
@@ -221,7 +267,47 @@ final class ObstacleBridgeHostRunner {
         self.bindHost = bindHostOverride ?? (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
         let configuredPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"])
         self.statusPort = statusPortOverride ?? configuredPort ?? 18080
+        self.macOSTunHelperClientFactory = macOSTunHelperClientFactory ?? Self.makeDefaultMacOSTunHelperClient
         serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
+    }
+
+    private static func makeDefaultMacOSTunHelperClient(
+        queue: DispatchQueue,
+        packetSink: @escaping (Data) -> Void,
+        eventSink: ((String, [String: Any]) -> Void)?
+    ) -> ObstacleBridgeTunHelperClienting {
+        let forcedTransport = (ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_MACOS_TUN_HELPER_TRANSPORT"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        if forcedTransport == "loopback" {
+            return makeLoopbackMacOSTunHelperClient(queue: queue, packetSink: packetSink, eventSink: eventSink)
+        }
+#if os(macOS)
+        let package = ObstacleBridgeMacOSTunHelperService.statusSnapshot()
+        if (package["xpc_reachable"] as? Bool) == true {
+            let transport = ObstacleBridgeNSXPCTunHelperCommandTransport(
+                packetSink: packetSink,
+                eventSink: eventSink
+            )
+            return ObstacleBridgeLoopbackTunHelperClient(transport: transport, transportKind: "xpc")
+        }
+#endif
+        return makeLoopbackMacOSTunHelperClient(queue: queue, packetSink: packetSink, eventSink: eventSink)
+    }
+
+    private static func makeLoopbackMacOSTunHelperClient(
+        queue: DispatchQueue,
+        packetSink: @escaping (Data) -> Void,
+        eventSink: ((String, [String: Any]) -> Void)?
+    ) -> ObstacleBridgeTunHelperClienting {
+        let backend = ObstacleBridgeInProcessMacOSTunHelperClient(
+            queue: queue,
+            packetSink: packetSink,
+            eventSink: eventSink
+        )
+        let server = ObstacleBridgeTunHelperCommandServer(backend: backend)
+        let transport = ObstacleBridgeXPCShapedTunHelperCommandTransport(server: server)
+        return ObstacleBridgeLoopbackTunHelperClient(transport: transport, transportKind: "loopback")
     }
 
     static func appScopedRootURL() throws -> URL {
@@ -521,7 +607,7 @@ final class ObstacleBridgeHostRunner {
             "token": "",
         ]
         let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [
-            "mode": "direct",
+            "mode": "system",
             "address_families": ["ipv4", "ipv6"],
         ]
         let policy = (section?["policy"] ?? runtimeConfig["proxy_provider_policy"]) as? [String: Any] ?? [
@@ -592,6 +678,7 @@ final class ObstacleBridgeHostRunner {
             tunRouting["included_routes6"] = tunRoutingConfig.includedRoutes6 ?? []
             tunRouting["excluded_routes6"] = effectiveExcluded.ipv6
         }
+        tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()
         let updateCache = { [weak self] in
             self?.cachedStatusSnapshot = status
             self?.cachedConnectionsSnapshot = connections
@@ -658,7 +745,555 @@ final class ObstacleBridgeHostRunner {
             payload["included_routes6"] = tunRouting.includedRoutes6 ?? []
             payload["excluded_routes6"] = effectiveExcluded.ipv6
         }
+        payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()
         return payload
+    }
+
+    private func tunRoutingSnapshotWithVerification(_ payload: [String: Any]) -> [String: Any] {
+        var out = payload
+        out["verification"] = tunRoutingVerificationPayload(payload: payload)
+        return out
+    }
+
+    private func tunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any] {
+        let ifname = selectedTunVerificationIfname(payload: payload)
+        let observed = Self.macOSTunInterfaceAddresses(ifname: ifname)
+        let observed4 = (observed["ipv4"] as? [String] ?? []).map { $0.split(separator: "/", maxSplits: 1).first.map(String.init) ?? $0 }
+        let observed6 = (observed["ipv6"] as? [String] ?? []).map { $0.split(separator: "/", maxSplits: 1).first.map(String.init) ?? $0 }
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        let expected4 = (tunRouting?.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected6 = (tunRouting?.tunnelAddress6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let has4 = expected4.isEmpty || observed4.contains(expected4)
+        let has6 = expected6.isEmpty || observed6.contains(expected6)
+        let configCheck: [String: Any]
+        if ifname.isEmpty {
+            configCheck = Self.verificationResult(
+                label: "TUN config verified",
+                ok: false,
+                state: "skipped",
+                summary: "TUN config verified: skipped",
+                detail: "No active TUN interface is available for verification."
+            )
+        } else if has4 && has6 {
+            configCheck = Self.verificationResult(
+                label: "TUN config verified",
+                ok: true,
+                state: "verified",
+                summary: "TUN config verified",
+                detail: "Observed addresses on \(ifname): IPv4 \(expected4.isEmpty ? "-" : expected4), IPv6 \(expected6.isEmpty ? "-" : expected6)."
+            )
+        } else {
+            var missing: [String] = []
+            if !expected4.isEmpty && !has4 {
+                missing.append("IPv4 \(expected4)")
+            }
+            if !expected6.isEmpty && !has6 {
+                missing.append("IPv6 \(expected6)")
+            }
+            configCheck = Self.verificationResult(
+                label: "TUN config verified",
+                ok: false,
+                state: "failed",
+                summary: "TUN config verified: failed",
+                detail: "Missing expected addresses on \(ifname): \(missing.joined(separator: ", ")). Observed IPv4: \(observed4.isEmpty ? "-" : observed4.joined(separator: ", ")); observed IPv6: \(observed6.isEmpty ? "-" : observed6.joined(separator: ", "))"
+            )
+        }
+        let peerTarget = (tunRouting?.tunnelGateway ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let globalHost = (Self.stringValue(from: runtimeConfig["global_connectivity_host"]) ?? Self.stringValue(from: (runtimeConfig["TUN_routing"] as? [String: Any])?["global_connectivity_host"]) ?? "google.de")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return [
+            "ifname": ifname,
+            "observed_addresses": observed,
+            "global_connectivity_host": globalHost,
+            "tun_config": configCheck,
+            "tun_connectivity": macOSInternalTunVerification(
+                probeKind: "peer",
+                target: peerTarget,
+                ifname: ifname,
+                timeoutSeconds: 1.0
+            ),
+            "tun_global_connectivity": macOSInternalTunVerification(
+                probeKind: "global",
+                target: globalHost,
+                ifname: ifname,
+                timeoutSeconds: 2.0
+            ),
+        ]
+    }
+
+    private func selectedTunVerificationIfname(payload: [String: Any]) -> String {
+        let helper = payload["tun_helper"] as? [String: Any] ?? [:]
+        let runtime = helper["runtime"] as? [String: Any] ?? [:]
+        if let ifname = Self.stringValue(from: runtime["ifname"])?.trimmingCharacters(in: .whitespacesAndNewlines), !ifname.isEmpty {
+            return ifname
+        }
+        for row in payload["tun"] as? [[String: Any]] ?? [] {
+            let local = row["local"] as? [String: Any] ?? [:]
+            if let ifname = Self.stringValue(from: local["ifname"])?.trimmingCharacters(in: .whitespacesAndNewlines), !ifname.isEmpty {
+                return ifname
+            }
+        }
+        return ""
+    }
+
+    private static func verificationResult(
+        label: String,
+        ok: Bool,
+        state: String,
+        summary: String,
+        detail: String,
+        target: String = ""
+    ) -> [String: Any] {
+        [
+            "label": label,
+            "ok": ok,
+            "state": state,
+            "summary": summary,
+            "detail": detail,
+            "target": target,
+            "checked_at_unix_ts": Date().timeIntervalSince1970,
+        ]
+    }
+
+    private func tunProbeResult(
+        probeKind: String,
+        target: String,
+        ok: Bool,
+        state: String,
+        summary: String,
+        detail: String,
+        resolvedTarget: String = "",
+        valueMS: Double? = nil,
+        lastSuccessAgoS: Double? = nil,
+        lastSuccessRTTMS: Double? = nil
+    ) -> [String: Any] {
+        var result: [String: Any] = [
+            "label": tunProbeLabel(probeKind),
+            "ok": ok,
+            "state": state,
+            "summary": summary,
+            "detail": detail,
+            "target": target,
+            "resolved_target": resolvedTarget,
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": Date().timeIntervalSince1970,
+            "value_ms": NSNull(),
+            "last_success_ago_s": NSNull(),
+            "last_success_rtt_ms": NSNull(),
+        ]
+        if let valueMS {
+            result["value_ms"] = valueMS
+            result["last_success_rtt_ms"] = valueMS
+        } else if let lastSuccessRTTMS {
+            result["last_success_rtt_ms"] = lastSuccessRTTMS
+        }
+        if let lastSuccessAgoS {
+            result["last_success_ago_s"] = lastSuccessAgoS
+        }
+        return result
+    }
+
+    private static func macOSTunInterfaceAddresses(ifname: String) -> [String: Any] {
+        let trimmed = ifname.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return ["ok": false, "ipv4": [] as [String], "ipv6": [] as [String], "detail": "TUN interface name unavailable."]
+        }
+        guard let result = runProcess(executable: "/sbin/ifconfig", arguments: [trimmed], timeoutSeconds: 1.0) else {
+            return ["ok": false, "ipv4": [] as [String], "ipv6": [] as [String], "detail": "ifconfig command failed."]
+        }
+        var ipv4: [String] = []
+        var ipv6: [String] = []
+        for rawLine in result.output.split(separator: "\n") {
+            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.hasPrefix("inet ") {
+                let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+                if parts.count >= 2 {
+                    ipv4.append(parts[1])
+                }
+            } else if line.hasPrefix("inet6 ") {
+                let parts = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init)
+                if parts.count >= 2 {
+                    ipv6.append(parts[1].split(separator: "%", maxSplits: 1).first.map(String.init) ?? parts[1])
+                }
+            }
+        }
+        return [
+            "ok": result.status == 0,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "detail": result.status == 0 ? "" : result.output,
+        ]
+    }
+
+    private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any] {
+        let label = tunProbeLabel(probeKind)
+        let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedIfname = ifname.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cacheKey = tunProbeCacheKey(probeKind: probeKind, ifname: trimmedIfname, target: trimmedTarget)
+        if trimmedTarget.isEmpty {
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "Verification target is not configured."
+            )
+        }
+        if trimmedIfname.isEmpty {
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "TUN interface name unavailable."
+            )
+        }
+        let actualIfname = withServiceStateQueue {
+            macOSTunHelperClient?.actualIfname.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        if actualIfname != trimmedIfname {
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "TUN interface \(trimmedIfname) is not active on this runtime."
+            )
+        }
+        guard currentOverlayOwner() != nil else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: "No active overlay owner is available for the TUN probe.",
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let candidateFamilies = sourceProbeFamilies()
+        let resolved = resolveTunProbeTarget(trimmedTarget, candidateFamilies: candidateFamilies)
+        guard let resolvedTarget = resolved.target else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: "Probe target resolution failed: \(resolved.error)",
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let family = resolved.family
+        let sourceIP = sourceAddressForProbeFamily(family)
+        guard !sourceIP.isEmpty else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "skipped",
+                summary: "\(label): skipped",
+                detail: "No configured tunnel source address is available for \(resolvedTarget).",
+                resolvedTarget: resolvedTarget,
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let sentMonotonicNS = DispatchTime.now().uptimeNanoseconds
+        let nonce = Self.randomProbeNonce()
+        let kindCode = tunProbeKindCode(probeKind)
+        let payload = ObstacleBridgeTunPing.probePayload(
+            probeKind: kindCode,
+            nonce: nonce,
+            sentMonotonicNS: sentMonotonicNS
+        )
+        let identity = allocateTunProbeIdentity()
+        let packet: Data?
+        if family == AF_INET6 {
+            packet = ObstacleBridgeTunPing.buildIPv6EchoRequest(
+                sourceIP: sourceIP,
+                destinationIP: resolvedTarget,
+                identifier: identity.identifier,
+                sequence: identity.sequence,
+                payload: payload
+            )
+        } else {
+            packet = ObstacleBridgeTunPing.buildIPv4EchoRequest(
+                sourceIP: sourceIP,
+                destinationIP: resolvedTarget,
+                identifier: identity.identifier,
+                sequence: identity.sequence,
+                payload: payload
+            )
+        }
+        guard let packet else {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: "Internal probe failed: unable to build ICMP echo request.",
+                resolvedTarget: resolvedTarget,
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let waiter = TunProbeWaiterState()
+        let waiterKey = TunProbeWaiterKey(
+            family: family,
+            identifier: identity.identifier,
+            sequence: identity.sequence,
+            nonce: nonce
+        )
+        withServiceStateQueue {
+            tunProbeWaiters[waiterKey] = waiter
+        }
+        currentOverlayOwner()?.owner.sendLocalTunPacket(packet)
+        let timedOut = waiter.semaphore.wait(timeout: .now() + max(0.1, timeoutSeconds)) == .timedOut
+        _ = withServiceStateQueue {
+            tunProbeWaiters.removeValue(forKey: waiterKey)
+        }
+        if timedOut || waiter.reply == nil {
+            let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
+            return tunProbeResult(
+                probeKind: probeKind,
+                target: trimmedTarget,
+                ok: false,
+                state: "failed",
+                summary: "\(label): failed",
+                detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", resolvedTarget, timeoutSeconds),
+                resolvedTarget: resolvedTarget,
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
+            )
+        }
+        let receivedMonotonicNS = waiter.reply?.receivedMonotonicNS ?? DispatchTime.now().uptimeNanoseconds
+        let rttMS = max(0.0, Double(receivedMonotonicNS &- sentMonotonicNS) / 1_000_000.0)
+        recordTunProbeSuccess(cacheKey: cacheKey, rttMS: rttMS)
+        return tunProbeResult(
+            probeKind: probeKind,
+            target: trimmedTarget,
+            ok: true,
+            state: "verified",
+            summary: "\(label): verified",
+            detail: "ICMP echo reply received from \(resolvedTarget).",
+            resolvedTarget: resolvedTarget,
+            valueMS: rttMS,
+            lastSuccessAgoS: 0.0,
+            lastSuccessRTTMS: rttMS
+        )
+    }
+
+    private func tunProbeCacheKey(probeKind: String, ifname: String, target: String) -> String {
+        "\(probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(ifname)|\(target)"
+    }
+
+    private func tunProbeLabel(_ probeKind: String) -> String {
+        switch probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "peer":
+            return "TUN connectivity verified"
+        case "global":
+            return "TUN global connectivity verified"
+        default:
+            return "TUN connectivity verification"
+        }
+    }
+
+    private func tunProbeKindCode(_ probeKind: String) -> UInt8 {
+        probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
+            ? ObstacleBridgeTunPing.probeKindGlobal
+            : ObstacleBridgeTunPing.probeKindPeer
+    }
+
+    private func sourceProbeFamilies() -> [Int32] {
+        var families: [Int32] = []
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        if !(tunRouting?.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            families.append(AF_INET)
+        }
+        if !(tunRouting?.tunnelAddress6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            families.append(AF_INET6)
+        }
+        if families.isEmpty {
+            families.append(AF_INET)
+        }
+        return families
+    }
+
+    private func sourceAddressForProbeFamily(_ family: Int32) -> String {
+        let tunRouting = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig)
+        if family == AF_INET6 {
+            return (tunRouting?.tunnelAddress6 ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return (tunRouting?.tunnelAddress ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func allocateTunProbeIdentity() -> (identifier: UInt16, sequence: UInt16) {
+        let sequence = withServiceStateQueue { () -> UInt16 in
+            let current = (tunProbeSequence == 0) ? 1 : tunProbeSequence
+            tunProbeSequence = (current &+ 1)
+            if tunProbeSequence == 0 {
+                tunProbeSequence = 1
+            }
+            return current
+        }
+        return (tunProbeIdentifier, sequence)
+    }
+
+    private func recordTunProbeSuccess(cacheKey: String, rttMS: Double) {
+        withServiceStateQueue {
+            tunProbeHistory[cacheKey] = TunProbeHistory(
+                lastSuccessMonotonic: ProcessInfo.processInfo.systemUptime,
+                lastSuccessRTTMS: rttMS
+            )
+        }
+    }
+
+    private func tunProbeHistorySnapshot(cacheKey: String) -> (lastSuccessAgoS: Double?, lastSuccessRTTMS: Double?) {
+        withServiceStateQueue {
+            guard let history = tunProbeHistory[cacheKey] else {
+                return (nil, nil)
+            }
+            return (
+                max(0.0, ProcessInfo.processInfo.systemUptime - history.lastSuccessMonotonic),
+                history.lastSuccessRTTMS
+            )
+        }
+    }
+
+    private func observeTunProbeReply(_ packet: Data) {
+        guard let parsed = ObstacleBridgeTunPing.parseEchoReply(packet) else {
+            return
+        }
+        let payload = parsed.payload
+        let minimumPayloadLength = ObstacleBridgeTunPing.probeMagic.count + 1 + 8 + 8
+        guard payload.count >= minimumPayloadLength,
+              payload.prefix(ObstacleBridgeTunPing.probeMagic.count) == ObstacleBridgeTunPing.probeMagic else {
+            return
+        }
+        let nonce = payload.subdata(in: 5..<13)
+        let key = TunProbeWaiterKey(
+            family: parsed.family,
+            identifier: parsed.identifier,
+            sequence: parsed.sequence,
+            nonce: nonce
+        )
+        withServiceStateQueue {
+            guard let waiter = tunProbeWaiters.removeValue(forKey: key) else {
+                return
+            }
+            waiter.reply = TunProbeReply(
+                sourceIP: parsed.sourceIP,
+                destinationIP: parsed.destinationIP,
+                payload: payload,
+                receivedMonotonicNS: DispatchTime.now().uptimeNanoseconds
+            )
+            waiter.semaphore.signal()
+        }
+    }
+
+    private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String) {
+        var lastError = "target resolution failed"
+        for family in candidateFamilies {
+            if let directFamily = ObstacleBridgeTunPing.ipFamily(target), directFamily == family {
+                return (target, family, "")
+            }
+            if let resolved = Self.resolveHost(target, family: family) {
+                return (resolved, family, "")
+            }
+            lastError = "unable to resolve \(target) for family=\(family)"
+        }
+        return (nil, candidateFamilies.first ?? AF_INET, lastError)
+    }
+
+    private static func resolveHost(_ host: String, family: Int32) -> String? {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        var hints = addrinfo(
+            ai_flags: AI_ADDRCONFIG,
+            ai_family: family,
+            ai_socktype: SOCK_RAW,
+            ai_protocol: family == AF_INET6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP,
+            ai_addrlen: 0,
+            ai_canonname: nil,
+            ai_addr: nil,
+            ai_next: nil
+        )
+        var result: UnsafeMutablePointer<addrinfo>?
+        let status = getaddrinfo(trimmed, nil, &hints, &result)
+        guard status == 0, let result else {
+            return nil
+        }
+        defer { freeaddrinfo(result) }
+        var cursor: UnsafeMutablePointer<addrinfo>? = result
+        while let info = cursor?.pointee {
+            if info.ai_family == AF_INET,
+               let addr = info.ai_addr?.withMemoryRebound(to: sockaddr_in.self, capacity: 1, { $0.pointee }) {
+                var copy = addr.sin_addr
+                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+                if inet_ntop(AF_INET, &copy, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
+                    return String(cString: buffer)
+                }
+            } else if info.ai_family == AF_INET6,
+                      let addr6 = info.ai_addr?.withMemoryRebound(to: sockaddr_in6.self, capacity: 1, { $0.pointee }) {
+                var copy = addr6.sin6_addr
+                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+                if inet_ntop(AF_INET6, &copy, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil {
+                    return String(cString: buffer)
+                }
+            }
+            cursor = info.ai_next
+        }
+        return nil
+    }
+
+    private static func randomProbeNonce() -> Data {
+        var bytes = [UInt8](repeating: 0, count: 8)
+        let status = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if status == errSecSuccess {
+            return Data(bytes)
+        }
+        return Data((0..<8).map { _ in UInt8.random(in: 0...255) })
+    }
+
+    private static func runProcess(executable: String, arguments: [String], timeoutSeconds: TimeInterval) -> (status: Int32, output: String)? {
+#if os(macOS)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = arguments
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = outputPipe
+        do {
+            try process.run()
+        } catch {
+            return nil
+        }
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            process.terminate()
+        }
+        process.waitUntilExit()
+        let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        return (process.terminationStatus, String(data: data, encoding: .utf8) ?? "")
+#else
+        return nil
+#endif
     }
 
     func snapshot() -> [String: Any] {
@@ -685,6 +1320,7 @@ final class ObstacleBridgeHostRunner {
             "admin_ui": adminUIPayload(),
             "security_advisor": securityAdvisorPayload(),
             "control_actions": controlActionSnapshot(),
+            "tun_helper": macOSTunHelperStatusSnapshot(),
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
             "proxy_provider": proxyProviderSnapshot(),
@@ -741,8 +1377,9 @@ final class ObstacleBridgeHostRunner {
         let connections = connections ?? connectionsSnapshotUncached()
         let counts = connections["counts"] as? [String: Any] ?? [:]
         let transport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
-        let peerEndpoint = peerEndpointSnapshot()
+        let configuredPeerEndpoint = peerEndpointSnapshot()
         let transportRuntime = suppliedTransportRuntime ?? transportRuntimeSnapshot()
+        let resolvedPeer = resolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
         let protocolStats = ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(
             from: transportRuntime,
@@ -750,6 +1387,10 @@ final class ObstacleBridgeHostRunner {
         )
         let trafficTotals = peerTrafficTotals(from: connections)
         let overlayConnected = overlayCurrentlyConnected() ?? false
+        let connectionLayers = ObstacleBridgeAdminSnapshotSupport.connectionLayers(
+            from: transportRuntime,
+            preferredKind: transport
+        )
         let stateText: String
         if overlayConnected {
             stateText = "connected"
@@ -763,7 +1404,11 @@ final class ObstacleBridgeHostRunner {
             "transport": transport,
             "state": stateText,
             "listen": NSNull(),
-            "peer": peerEndpoint,
+            "peer": resolvedPeer ?? configuredPeerEndpoint,
+            "resolved_peer": resolvedPeer ?? NSNull(),
+            "resolved_peer_host": resolvedPeer?["host"] ?? NSNull(),
+            "resolved_peer_port": resolvedPeer?["port"] ?? NSNull(),
+            "resolved_peer_family": resolvedPeer?["family"] ?? NSNull(),
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(
@@ -780,12 +1425,23 @@ final class ObstacleBridgeHostRunner {
                 from: transportRuntime,
                 preferredKind: transport
             ),
+            "next_address_attempt_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "next_address_attempt_in_seconds",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
+            "restart_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(
+                "restart_in_seconds",
+                from: transportRuntime,
+                preferredKind: transport
+            ),
             "traffic": trafficSnapshot(peerID: "1", rxBytes: trafficTotals.rxBytes, txBytes: trafficTotals.txBytes),
             "open_connections": [
                 "udp": counts["udp"] ?? 0,
                 "tcp": counts["tcp"] ?? 0,
                 "tun": counts["tun"] ?? 0,
             ],
+            "connection_layers": connectionLayers,
             "secure_link": secureLinkSnapshot(defaultState: stateText),
             "compress_layer": compressLayerSnapshot(peerID: 1) ?? [
                 "enabled": Self.boolValue(from: runtimeConfig["compress_layer"]) ?? false,
@@ -883,6 +1539,41 @@ final class ObstacleBridgeHostRunner {
         return NSNull()
     }
 
+    private func resolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]? {
+        let selectedRuntime = ObstacleBridgeAdminSnapshotSupport.selectedTransportRuntime(
+            from: transportRuntime,
+            preferredKind: transport
+        )
+        let host =
+            Self.stringValue(from: selectedRuntime["overlay_peer_host"])
+            ?? Self.stringValue(from: selectedRuntime["resolved_peer_host"])
+            ?? Self.stringValue(from: transportRuntime["overlay_peer_host"])
+            ?? Self.stringValue(from: transportRuntime["resolved_peer_host"])
+            ?? ""
+        guard !host.isEmpty else {
+            return nil
+        }
+        let port =
+            Self.intValue(from: selectedRuntime["overlay_peer_port"])
+            ?? Self.intValue(from: selectedRuntime["resolved_peer_port"])
+            ?? Self.intValue(from: transportRuntime["overlay_peer_port"])
+            ?? Self.intValue(from: transportRuntime["resolved_peer_port"])
+        let family =
+            Self.stringValue(from: selectedRuntime["overlay_peer_family"])
+            ?? Self.stringValue(from: selectedRuntime["resolved_peer_family"])
+            ?? Self.stringValue(from: transportRuntime["overlay_peer_family"])
+            ?? Self.stringValue(from: transportRuntime["resolved_peer_family"])
+            ?? ""
+        var snapshot: [String: Any] = [
+            "host": host,
+            "port": port ?? NSNull(),
+        ]
+        if !family.isEmpty {
+            snapshot["family"] = family
+        }
+        return snapshot
+    }
+
     private func transportRuntimeSnapshot() -> [String: Any] {
         let transport = Self.stringValue(from: bootstrapState["transport"]) ?? (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "myudp")
         return ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
@@ -893,6 +1584,125 @@ final class ObstacleBridgeHostRunner {
             quic: quicRuntimeSnapshot(),
             websocket: webSocketRuntimeSnapshot()
         )
+    }
+
+    private func macOSTunHelperStatusSnapshot() -> [String: Any] {
+        let configured = ownServerSpecs.contains { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
+#if os(macOS)
+        let package = ObstacleBridgeMacOSTunHelperService.statusSnapshot()
+#else
+        let package: [String: Any] = [
+            "install_supported": false,
+            "xpc_reachable": false,
+            "xpc_mach_service_name": "",
+            "xpc_last_error": "macOS privileged helper package is not available on iOS",
+        ]
+#endif
+        let state = withServiceStateQueue {
+            (
+                adapterPresent: macOSTunHelperClient?.isOpen ?? false,
+                transport: macOSTunHelperClient?.transportKind ?? macOSTunHelperTransportKind,
+                runtime: macOSTunHelperRuntimeSnapshot.payload()
+            )
+        }
+        let phase: String
+        if !configured {
+            phase = "disabled"
+        } else if state.adapterPresent {
+            phase = "connected"
+        } else {
+            phase = "stopped"
+        }
+        let runtimeOpened = state.runtime["opened"] as? Bool ?? false
+        let networkApplied = state.runtime["network_applied"] as? Bool ?? false
+        let xpcReachable = package["xpc_reachable"] as? Bool ?? false
+        let packageRuntime = package["xpc_runtime"] as? [String: Any] ?? [:]
+        let packageRuntimeOpened = packageRuntime["opened"] as? Bool ?? false
+        let runtimeIfname = String(describing: state.runtime["ifname"] ?? "")
+        let packageRuntimeIfname = String(describing: packageRuntime["ifname"] ?? "")
+        let helperRuntimeLost = configured
+            && state.transport == "xpc"
+            && xpcReachable
+            && (runtimeOpened || networkApplied)
+            && (!packageRuntimeOpened || packageRuntimeIfname != runtimeIfname)
+        let helperDisconnect = configured && state.transport == "xpc" && (!xpcReachable || helperRuntimeLost)
+        let disconnectReason: String
+        if helperDisconnect {
+            disconnectReason = xpcReachable ? "xpc_runtime_lost" : "xpc_unreachable"
+        } else {
+            disconnectReason = ""
+        }
+        let cleanupNeeded = helperDisconnect && (runtimeOpened || networkApplied)
+        let cleanupAttempted = state.runtime["cleanup_attempted"] as? Bool ?? false
+        let cleanupOK = state.runtime["cleanup_ok"] as? Bool ?? false
+        let xpcMachServiceName = String(describing: package["xpc_mach_service_name"] ?? "")
+        let socketDisplay = state.transport == "xpc" && !xpcMachServiceName.isEmpty
+            ? xpcMachServiceName
+            : state.transport
+        var payload: [String: Any] = [
+            "enabled": configured,
+            "mode": ObstacleBridgeTunHelperPlatformScope.desktopHelperMode,
+            "backend": ObstacleBridgeTunHelperPlatformScope.macOSBackend,
+            "connected": state.adapterPresent,
+            "server_started": state.adapterPresent,
+            "apply_network": networkApplied,
+            "lifecycle_phase": phase,
+            "transport": state.transport,
+            "socket_path": socketDisplay,
+            "xpc_mach_service_name": xpcMachServiceName,
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "actual_ifname": state.runtime["ifname"] ?? "",
+            "runtime_mtu": state.runtime["mtu"] ?? 0,
+            "packets_from_runtime": state.runtime["packets_from_runtime"] ?? 0,
+            "packets_to_runtime": state.runtime["packets_to_runtime"] ?? 0,
+            "last_hook_action": state.runtime["last_hook_action"] ?? "",
+            "last_failure": state.runtime["last_failure"] ?? [:],
+            "helper_disconnect": helperDisconnect,
+            "disconnect_reason": disconnectReason,
+            "disconnect_detail": helperDisconnect ? String(describing: package["xpc_last_error"] ?? "") : "",
+            "cleanup": [
+                "needed": cleanupNeeded,
+                "attempted": cleanupAttempted,
+                "ok": cleanupNeeded ? cleanupOK : true,
+            ],
+            "package": package,
+            "runtime": state.runtime,
+            "ios_network_extension_boundary": ObstacleBridgeTunHelperPlatformScope.iOSUsesNetworkExtensionBoundary,
+        ]
+        let recovery = Self.macOSTunHelperRecoverySnapshot(
+            helperDisconnect: helperDisconnect,
+            runtime: state.runtime,
+            networkApplied: networkApplied
+        )
+        if !recovery.isEmpty {
+            payload["recovery"] = recovery
+        }
+        return payload
+    }
+
+    private static func macOSTunHelperRecoverySnapshot(
+        helperDisconnect: Bool,
+        runtime: [String: Any],
+        networkApplied: Bool
+    ) -> [String: Any] {
+        guard helperDisconnect else {
+            return [:]
+        }
+        let staleNetwork = networkApplied
+            || (runtime["network_applied"] as? Bool ?? false)
+            || !(runtime["last_apply_payload"] as? [String: Any] ?? [:]).isEmpty
+        guard staleNetwork else {
+            return [:]
+        }
+        return [
+            "needs_manual_cleanup": true,
+            "stale_firewall_possible": false,
+            "stale_network_possible": true,
+            "warnings": ["helper_owned_network_state_may_remain"],
+            "summary": "Privileged TUN helper exited while helper-owned host state may still need manual cleanup.",
+            "repair_hint": "Manual cleanup may be required: inspect helper-owned routes, addresses, and DNS state before restarting helper-backed TUN.",
+            "repair_supported": false,
+        ]
     }
 
     private func udpRuntimeSnapshot() -> [String: Any]? {
@@ -942,6 +1752,11 @@ final class ObstacleBridgeHostRunner {
         ]
         if let ownerSnapshot = withServiceStateQueue({ sharedWebSocketOverlayTransportOwner?.transportSnapshot() }) {
             for (key, value) in ownerSnapshot {
+                if key == "uri",
+                   let uri = value as? String,
+                   uri.isEmpty {
+                    continue
+                }
                 snapshot[key] = value
             }
         }
@@ -1034,6 +1849,8 @@ final class ObstacleBridgeHostRunner {
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "frames_passed_total": 0,
+                "frames_dropped_total": 0,
                 "peer_subject_id": "",
                 "peer_subject_name": "",
                 "peer_roles": [],
@@ -1076,15 +1893,19 @@ final class ObstacleBridgeHostRunner {
             lastEvent = "authenticated"
             disconnectReason = ""
         } else if snapshot.authFailCode != 0 {
-            state = "auth_failed"
+            state = "failed"
             lastEvent = "auth_failed"
             disconnectReason = "auth_failed"
+        } else if defaultState == "listening" {
+            state = "listening"
+            lastEvent = "bootstrap"
+            disconnectReason = ""
         } else if snapshot.sessionID != 0 {
             state = "handshaking"
             lastEvent = "handshake_started"
             disconnectReason = ""
         } else {
-            state = defaultState
+            state = "waiting_transport"
             lastEvent = "bootstrap"
             disconnectReason = ""
         }
@@ -1102,6 +1923,8 @@ final class ObstacleBridgeHostRunner {
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix),
             "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
             "rekeys_completed_total": 0,
+            "frames_passed_total": 0,
+            "frames_dropped_total": 0,
             "peer_subject_id": "",
             "peer_subject_name": "",
             "peer_roles": [],
@@ -1236,8 +2059,15 @@ final class ObstacleBridgeHostRunner {
            let tunService = ownServerSpecs.first(where: { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }) {
             runMacOSTunLifecycleHook(for: tunService, event: "on_stopped")
         }
-        sharedMacOSTunAdapter?.stop()
-        sharedMacOSTunAdapter = nil
+        macOSTunHelperClient?.stop()
+        if let client = macOSTunHelperClient {
+            macOSTunHelperTransportKind = client.transportKind
+            macOSTunHelperRuntimeSnapshot = client.runtimeSnapshot
+        } else {
+            macOSTunHelperRuntimeSnapshot.opened = false
+            macOSTunHelperRuntimeSnapshot.networkApplied = false
+        }
+        macOSTunHelperClient = nil
         macOSTunChannelConnectedHookFired = false
     }
 
@@ -1686,7 +2516,10 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func prepareSharedOverlayBootstrap() {
-        sharedMacOSTunAdapter?.stop()
+        macOSTunHelperClient?.stop()
+        if let client = macOSTunHelperClient {
+            macOSTunHelperTransportKind = client.transportKind
+        }
         sharedWebSocketOverlayTransportOwner?.stop()
         sharedTcpOverlayTransportOwner?.stop()
         sharedQuicOverlayTransportOwner?.stop()
@@ -1701,7 +2534,10 @@ final class ObstacleBridgeHostRunner {
         sharedTcpOverlayTransportOwner = nil
         sharedQuicOverlayTransportOwner = nil
         sharedUdpOverlayTransportOwner = nil
-        sharedMacOSTunAdapter = nil
+        if let client = macOSTunHelperClient {
+            macOSTunHelperRuntimeSnapshot = client.runtimeSnapshot
+        }
+        macOSTunHelperClient = nil
         macOSTunChannelConnectedHookFired = false
         macOSOverlayUnderlayGatewayV4 = ""
         macOSOverlayUnderlayInterfaceV4 = ""
@@ -1825,6 +2661,7 @@ final class ObstacleBridgeHostRunner {
         }
         let peerHost = Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
         let peerPort = Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0
+        let peerResolveFamily = Self.stringValue(from: runtimeConfig["ws_peer_resolve_family"]) ?? "prefer-ipv6"
         guard !peerHost.isEmpty, peerPort > 0 else {
             return
         }
@@ -1838,6 +2675,7 @@ final class ObstacleBridgeHostRunner {
         let owner = ObstacleBridgeWebSocketOverlayTransportOwner(
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             useTLS: useTLS,
             wsPath: wsPath,
             wsSubprotocol: wsSubprotocol,
@@ -1881,6 +2719,7 @@ final class ObstacleBridgeHostRunner {
         }
         let peerHost = Self.stringValue(from: runtimeConfig["tcp_peer"]) ?? ""
         let peerPort = Self.intValue(from: runtimeConfig["tcp_peer_port"]) ?? 0
+        let peerResolveFamily = Self.stringValue(from: runtimeConfig["tcp_peer_resolve_family"]) ?? "prefer-ipv6"
         let bindHost = Self.stringValue(from: runtimeConfig["tcp_bind"]) ?? "0.0.0.0"
         let bindPort = Self.intValue(from: runtimeConfig["tcp_own_port"]) ?? 0
         guard (!peerHost.isEmpty && peerPort > 0) || bindPort > 0 else {
@@ -1893,6 +2732,7 @@ final class ObstacleBridgeHostRunner {
         let owner = ObstacleBridgeTcpOverlayTransportOwner(
             peerHost: peerHost,
             peerPort: peerPort,
+            peerResolveFamily: peerResolveFamily,
             bindHost: bindHost,
             bindPort: bindPort,
             overlayRuntime: runtime,
@@ -1931,6 +2771,12 @@ final class ObstacleBridgeHostRunner {
         guard let runtime = sharedQuicOverlayRuntime,
               (Self.stringValue(from: runtimeConfig["overlay_transport"]) ?? "").lowercased() == "quic"
         else {
+            return
+        }
+        guard #available(iOS 15.0, *) else {
+            handleSharedOverlayOwnerEvent(event: "quic_overlay_unavailable", fields: [
+                "reason": "quic overlay requires iOS 15.0 or newer"
+            ])
             return
         }
         let peerHost = Self.stringValue(from: runtimeConfig["quic_peer"]) ?? ""
@@ -2052,7 +2898,8 @@ final class ObstacleBridgeHostRunner {
         }
         let ifname = trimmedIfname
         let mtu = max(68, tunService.listenPort)
-        if let existing = sharedMacOSTunAdapter,
+        if let existing = macOSTunHelperClient,
+           existing.isOpen,
            existing.requestedIfname == ifname,
            existing.mtu == mtu {
             // Keep the shared adapter alive across overlay reconnects. The shell
@@ -2060,20 +2907,24 @@ final class ObstacleBridgeHostRunner {
             return
         }
         teardownSharedMacOSTunAdapter(runLifecycleHook: true)
-        let adapter = ObstacleBridgeMacOSTunAdapter(
-            ifname: ifname,
-            mtu: mtu,
-            queue: serviceStateQueue,
-            packetSink: { [weak self] packet in
+        let helperClient = macOSTunHelperClientFactory(
+            serviceStateQueue,
+            { [weak self] packet in
                 self?.deliverLocalTunPacketToActiveOverlay(packet)
             },
-            eventSink: { event, fields in
+            { event, fields in
                 NSLog("[ObstacleBridgeHostRunner][%@] %@", event, String(describing: fields))
             }
         )
+        macOSTunHelperTransportKind = helperClient.transportKind
         do {
-            try adapter.start()
-            sharedMacOSTunAdapter = adapter
+            _ = try helperClient.openTun(ObstacleBridgeTunHelperOpenRequest(
+                requestedIfname: ifname,
+                mtu: mtu
+            ))
+            macOSTunHelperClient = helperClient
+            macOSTunHelperTransportKind = helperClient.transportKind
+            macOSTunHelperRuntimeSnapshot = helperClient.runtimeSnapshot
             macOSTunChannelConnectedHookFired = false
             runMacOSTunLifecycleHook(for: tunService, event: "on_created")
         } catch {
@@ -2083,7 +2934,9 @@ final class ObstacleBridgeHostRunner {
                 mtu,
                 error.localizedDescription
             )
-            sharedMacOSTunAdapter = nil
+            helperClient.recordFailure(stage: "macos_utun_start", error: error.localizedDescription)
+            macOSTunHelperRuntimeSnapshot = helperClient.runtimeSnapshot
+            macOSTunHelperClient = nil
         }
     }
 
@@ -2101,11 +2954,11 @@ final class ObstacleBridgeHostRunner {
             return
         }
         captureMacOSOverlayUnderlayRoute(fields: fields)
-        if sharedMacOSTunAdapter == nil {
+        if macOSTunHelperClient?.isOpen != true {
             ensureSharedMacOSTunAdapter(for: tunService)
         }
         guard !macOSTunChannelConnectedHookFired,
-              sharedMacOSTunAdapter != nil
+              macOSTunHelperClient?.isOpen == true
         else {
             return
         }
@@ -2114,8 +2967,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func macOSTunHookContext(for tunService: ObstacleBridgeNativeServiceSpec, event: String) -> [String: String] {
-        let actualIfname = (sharedMacOSTunAdapter?.actualIfname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-            ? sharedMacOSTunAdapter!.actualIfname
+        let actualIfname = (macOSTunHelperClient?.actualIfname.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? macOSTunHelperClient!.actualIfname
             : tunService.listenBind
         let overlayTransport = overlayTransportName()
         let overlayPeer = configuredOverlayPeerEndpoint(for: overlayTransport)
@@ -2187,6 +3040,7 @@ final class ObstacleBridgeHostRunner {
         guard !trimmedHost.isEmpty else {
             return nil
         }
+#if os(macOS)
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/sbin/route")
         process.arguments = inet6 ? ["-n", "get", "-inet6", trimmedHost] : ["-n", "get", trimmedHost]
@@ -2215,6 +3069,9 @@ final class ObstacleBridgeHostRunner {
             return nil
         }
         return MacOSRouteSnapshot(gateway: gateway, interfaceName: interfaceName)
+#else
+        return nil
+#endif
     }
 
     private static func firstConfiguredPeerHost(from raw: String) -> String {
@@ -2259,6 +3116,43 @@ final class ObstacleBridgeHostRunner {
             return String(trimmed.dropFirst(7))
         }
         return trimmed
+    }
+
+    private static func macOSTunHelperHookEnvSnapshot(from env: [String: String]) -> [String: String] {
+        let allowedKeys = Set([
+            "MTU",
+            "ENABLE_TCPMSS",
+            "ENABLE_TUN_TCPDUMP",
+            "TCPDUMP_PCAP_PATH",
+            "TUN_ADDR",
+            "TUN_GW",
+            "TUN_SUBNET",
+            "TUN_ADDR6",
+            "TUN_GW6",
+            "TUN_SUBNET6",
+            "PEER_ADDR",
+            "PEER_ADDR6",
+            "DNS1",
+            "DNS2",
+            "INCLUDED_ROUTES",
+            "EXCLUDED_ROUTES",
+            "INCLUDED_ROUTES6",
+            "EXCLUDED_ROUTES6",
+            "WAN_IF",
+            "OB_OVERLAY_TRANSPORT",
+            "OB_OVERLAY_PEER_NAME",
+            "OB_OVERLAY_PEER_HOST",
+            "OB_OVERLAY_PEER_PORT",
+            "OB_OVERLAY_UNDERLAY_GW",
+            "OB_OVERLAY_UNDERLAY_IF",
+        ])
+        var filtered: [String: String] = [:]
+        for key in allowedKeys.sorted() {
+            if let value = env[key] {
+                filtered[key] = value
+            }
+        }
+        return filtered
     }
 
     private func renderHookValue(_ value: String, context: [String: String]) -> String {
@@ -2358,20 +3252,37 @@ final class ObstacleBridgeHostRunner {
         return trimmed
     }
 
-    private func runMacOSTunLifecycleHook(for tunService: ObstacleBridgeNativeServiceSpec, event: String) {
+    private func defaultMacOSTunHookArgv(for tunService: ObstacleBridgeNativeServiceSpec, event: String, context: [String: String]) -> [String]? {
+        let action: String
+        if event == "on_created" {
+            action = "up"
+        } else if event == "on_stopped" {
+            action = "down"
+        } else {
+            return nil
+        }
+        let serverSide = String(context["catalog"] ?? "") == "remote_servers"
+        let script = serverSide ? "./scripts/server-tun-hook-macos.sh" : "./scripts/client-tun-hook-macos.sh"
+        return [
+            resolveHookExecutablePath(script),
+            action,
+            context["ifname"] ?? tunService.listenBind,
+        ]
+    }
+
+    private func configuredMacOSTunHookArgv(
+        for tunService: ObstacleBridgeNativeServiceSpec,
+        event: String,
+        context: [String: String]
+    ) -> ([String], ObstacleBridgeChannelMuxCodec.JSONValue?)? {
         guard let hooks = tunService.lifecycleHooks,
               case .object(let listenerHooks)? = hooks["listener"],
-              case .object(let commandObject)? = listenerHooks[event]
-        else {
-            return
-        }
-        guard case .object(let argvContainer)? = commandObject["argv"],
+              case .object(let commandObject)? = listenerHooks[event],
+              case .object(let argvContainer)? = commandObject["argv"],
               case .array(let argvValues)? = argvContainer["darwin"]
         else {
-            return
+            return nil
         }
-
-        let context = macOSTunHookContext(for: tunService, event: event)
         var argv: [String] = argvValues.compactMap { value in
             if case .string(let raw) = value {
                 return renderHookValue(raw, context: context)
@@ -2379,9 +3290,18 @@ final class ObstacleBridgeHostRunner {
             return nil
         }
         guard !argv.isEmpty else {
-            return
+            return nil
         }
         argv[0] = resolveHookExecutablePath(argv[0])
+        return (argv, commandObject["env"])
+    }
+
+    private func runMacOSTunLifecycleHook(for tunService: ObstacleBridgeNativeServiceSpec, event: String) {
+        let context = macOSTunHookContext(for: tunService, event: event)
+        let configured = configuredMacOSTunHookArgv(for: tunService, event: event, context: context)
+        guard let argv = configured?.0 ?? defaultMacOSTunHookArgv(for: tunService, event: event, context: context) else {
+            return
+        }
 
         var env = ProcessInfo.processInfo.environment
         env["OB_OVERLAY_TRANSPORT"] = context["overlay_transport"] ?? ""
@@ -2452,7 +3372,7 @@ final class ObstacleBridgeHostRunner {
             }
         }
 
-        if case .object(let envObject)? = commandObject["env"] {
+        if case .object(let envObject)? = configured?.1 {
             for (key, value) in envObject {
                 switch value {
                 case .string(let stringValue):
@@ -2468,51 +3388,46 @@ final class ObstacleBridgeHostRunner {
                 }
             }
         }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: argv[0])
-        process.arguments = Array(argv.dropFirst())
-        process.environment = env
-        let outputPipe = Pipe()
-        process.standardOutput = outputPipe
-        process.standardError = outputPipe
-        do {
-            try process.run()
-            process.waitUntilExit()
-            let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            NSLog(
-                "[ObstacleBridgeHostRunner][macos_tun_hook_%@] argv=%@ status=%d output=%@",
-                event,
-                argv.description,
-                process.terminationStatus,
-                output
-            )
-        } catch {
-            NSLog(
-                "[ObstacleBridgeHostRunner][macos_tun_hook_%@_failed] argv=%@ error=%@",
-                event,
-                argv.description,
-                error.localizedDescription
-            )
+        let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)
+        if event == "on_stopped" {
+            macOSTunHelperClient?.removeNetwork(action: event, argv: argv, env: helperEnvSnapshot)
+        } else {
+            macOSTunHelperClient?.applyNetwork(action: event, argv: argv, env: helperEnvSnapshot)
+        }
+        if let client = macOSTunHelperClient {
+            macOSTunHelperRuntimeSnapshot = client.runtimeSnapshot
         }
     }
 
     private func deliverLocalTunPacketToActiveOverlay(_ packet: Data) {
+        if let client = macOSTunHelperClient {
+            if client.transportKind == "xpc" {
+                macOSTunHelperRuntimeSnapshot.recordPacketToRuntime()
+            } else {
+                macOSTunHelperRuntimeSnapshot = client.runtimeSnapshot
+            }
+        }
         currentOverlayOwner()?.owner.sendLocalTunPacket(packet)
     }
 
     private func deliverRemoteTunPacketToLocalAdapter(_ packet: Data) {
-        guard let adapter = sharedMacOSTunAdapter else { return }
+        observeTunProbeReply(packet)
+        guard let helperClient = macOSTunHelperClient else { return }
         do {
-            try adapter.write(packet: packet)
+            try helperClient.writePacket(packet)
+            macOSTunHelperRuntimeSnapshot = helperClient.runtimeSnapshot
         } catch {
             NSLog(
                 "[ObstacleBridgeHostRunner][macos_utun_write_failed] ifname=%@ packet_bytes=%d error=%@",
-                adapter.actualIfname,
+                helperClient.actualIfname,
                 packet.count,
                 error.localizedDescription
             )
+            helperClient.recordFailure(
+                stage: "macos_utun_write",
+                error: error.localizedDescription
+            )
+            macOSTunHelperRuntimeSnapshot = helperClient.runtimeSnapshot
         }
     }
 
@@ -2533,7 +3448,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func overlayCurrentlyConnected() -> Bool? {
-        currentOverlayOwner()?.owner.transportSnapshot()["overlay_connected"] as? Bool
+        currentOverlayOwner()?.owner.appReady()
     }
 
     private func overlayTransportName() -> String {
@@ -2634,7 +3549,7 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
 
     func adminTunRoutingSnapshot() -> [String: Any] {
         refreshAdminSnapshotCache(sync: true)
-        return cachedTunRoutingOrBuild()
+        return tunRoutingSnapshotWithVerification(cachedTunRoutingOrBuild())
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {
@@ -2768,6 +3683,96 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
             restartAfterSave: restartAfterSave,
             restartEmbedded: restartAfterSave
         )
+    }
+
+    func adminTunHelperStatus(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "GET" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": true,
+            "tun_helper": macOSTunHelperStatusSnapshot(),
+        ])
+    }
+
+    func adminTunHelperAction(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        guard let body = request.body,
+              let object = try? JSONSerialization.jsonObject(with: body),
+              let payload = object as? [String: Any],
+              let rawAction = payload["action"] as? String else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "expected JSON body with action",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+
+        let action = rawAction.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var result: [String: Any]
+        switch action {
+        case "status":
+            result = ["ok": true, "action": "status"]
+        case "register", "install", "enable":
+#if os(macOS)
+            result = ObstacleBridgeMacOSTunHelperService.registerResult()
+#else
+            result = ["ok": false, "action": action, "error": "macOS privileged helper package is not available on iOS"]
+#endif
+        case "start":
+#if os(macOS)
+            result = ObstacleBridgeMacOSTunHelperService.startResult()
+#else
+            result = ["ok": false, "action": action, "error": "macOS privileged helper package is not available on iOS"]
+#endif
+        case "stop", "unregister", "disable":
+#if os(macOS)
+            result = ObstacleBridgeMacOSTunHelperService.stopResult(action: action)
+#else
+            result = ["ok": false, "action": action, "error": "macOS privileged helper package is not available on iOS"]
+#endif
+        case "open_approval_settings", "approval_settings":
+#if os(macOS)
+            result = ObstacleBridgeMacOSTunHelperService.openApprovalSettingsResult()
+#else
+            result = ["ok": false, "action": action, "error": "macOS privileged helper package is not available on iOS"]
+#endif
+        default:
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "unsupported TUN helper action",
+                "action": rawAction,
+                "supported_actions": [
+                    "status",
+                    "register",
+                    "start",
+                    "stop",
+                    "open_approval_settings",
+                ],
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        result["tun_helper"] = macOSTunHelperStatusSnapshot()
+        return ObstacleBridgeAdminAPI.jsonResponse(result)
+    }
+
+    func adminTunHelperRepair(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "reason": "repair_supported_only_for_linux_native_helper",
+            "repaired": [],
+            "failed": [],
+            "status": ["tun_helper": macOSTunHelperStatusSnapshot()],
+        ], statusLine: "HTTP/1.1 400 Bad Request")
     }
 
     func adminRequestRestart(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {

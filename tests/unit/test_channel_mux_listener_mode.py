@@ -2,10 +2,13 @@
 import argparse
 import asyncio
 import ipaddress
+import socket
 import unittest
 from unittest.mock import AsyncMock, patch
 
 from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, SessionMetrics
+from obstacle_bridge.bridge_proxy_server import ObstacleBridgeProxyProtocolCodec
+from obstacle_bridge.bridge_tun_ping import PROBE_KIND_GLOBAL, build_ipv4_echo_request, checksum16, probe_payload
 from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
 
 
@@ -14,6 +17,7 @@ class _FakeSession:
         self,
         *,
         connected=False,
+        connection_layers=None,
         max_app_payload_size=65535,
         transmit_delay_est_ms=None,
         waiting_count=0,
@@ -28,6 +32,19 @@ class _FakeSession:
         self.peer_disconnect_cb = None
         self.sent = []
         self.connected = connected
+        if connection_layers is None:
+            self.connection_layers = [
+                {
+                    "layer": "session",
+                    "transport": "test",
+                    "state": "connected" if connected else "disconnected",
+                    "epoch": 0,
+                    "connected": bool(connected),
+                    "app_ready": bool(connected),
+                }
+            ]
+        else:
+            self.connection_layers = [dict(entry) for entry in connection_layers]
         self.max_app_payload_size = max_app_payload_size
         self._metrics = SessionMetrics(
             transmit_delay_est_ms=transmit_delay_est_ms,
@@ -42,6 +59,9 @@ class _FakeSession:
 
     def is_connected(self):
         return self.connected
+
+    def get_connection_layers_snapshot(self):
+        return [dict(entry) for entry in self.connection_layers]
 
     def set_on_app_payload(self, cb):
         self.app_cb = cb
@@ -79,6 +99,59 @@ class _FakeDatagramTransport:
 
     def close(self):
         self.closed = True
+
+
+async def _start_tcp_capture_server() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
+    captured: list[bytes] = []
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        data = await reader.read(4096)
+        captured.append(data)
+        writer.write(b"mux-target-ok")
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, int(port), captured
+
+
+async def _start_connect_proxy() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
+    captured: list[bytes] = []
+
+    async def _pipe(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            while True:
+                data = await reader.read(16 * 1024)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        header = await reader.readuntil(b"\r\n\r\n")
+        captured.append(header)
+        request_line = header.decode("latin1", "replace").split("\r\n", 1)[0]
+        parts = request_line.split(" ")
+        destination = ObstacleBridgeProxyProtocolCodec.parse_authority(parts[1], default_port=443) if len(parts) >= 2 else None
+        if destination is None:
+            writer.write(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
+            await writer.drain()
+            writer.close()
+            await writer.wait_closed()
+            return
+        outbound_reader, outbound_writer = await asyncio.open_connection(destination[0], destination[1])
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await writer.drain()
+        await asyncio.gather(_pipe(reader, outbound_writer), _pipe(outbound_reader, writer))
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    return server, int(port), captured
 
 
 def _ipv4_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
@@ -119,7 +192,316 @@ def _ipv6_packet(src: str, dst: str, payload: bytes = b"x") -> bytes:
     return header + payload
 
 
+def _ipv4_echo_reply(src: str, dst: str, identifier: int, sequence: int, payload: bytes) -> bytes:
+    src_b = ipaddress.IPv4Address(src).packed
+    dst_b = ipaddress.IPv4Address(dst).packed
+    icmp = bytearray(8 + len(payload))
+    icmp[0] = 0
+    icmp[1] = 0
+    icmp[4:6] = int(identifier).to_bytes(2, "big")
+    icmp[6:8] = int(sequence).to_bytes(2, "big")
+    icmp[8:] = payload
+    icmp[2:4] = checksum16(bytes(icmp)).to_bytes(2, "big")
+
+    total_len = 20 + len(icmp)
+    header = bytearray(20)
+    header[0] = 0x45
+    header[2:4] = total_len.to_bytes(2, "big")
+    header[8] = 64
+    header[9] = 1
+    header[12:16] = src_b
+    header[16:20] = dst_b
+    header[10:12] = checksum16(bytes(header)).to_bytes(2, "big")
+    return bytes(header) + bytes(icmp)
+
+
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
+        mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
+
+        with patch("sys.platform", "linux"):
+            self.assertEqual(mux._channel_mux_egress_proxy_auth(), "none")
+        with patch("sys.platform", "win32"):
+            self.assertEqual(mux._channel_mux_egress_proxy_auth(), "negotiate")
+
+    def test_tun_routing_settings_accept_global_probe_source_override(self):
+        settings = TunRoutingSettings.from_mapping(
+            {
+                "TUN_routing": {
+                    "global_connectivity_source_ipv4": "192.168.108.31",
+                }
+            }
+        )
+
+        self.assertEqual(settings.global_connectivity_source_ipv4, "192.168.108.31")
+
+    def test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux(self):
+        asyncio.run(self._test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux())
+
+    async def _test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux(self):
+        target_server, target_port, captured_target = await _start_tcp_capture_server()
+        upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        mux.args = argparse.Namespace()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HTTP_PROXY": f"http://127.0.0.1:{upstream_port}",
+                "http_proxy": f"http://127.0.0.1:{upstream_port}",
+                "NO_PROXY": "",
+                "no_proxy": "",
+            },
+            clear=False,
+        ):
+            with patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=False):
+                try:
+                    reader, writer = await mux._open_tcp_target_connection("127.0.0.1", target_port)
+                    writer.write(b"hello-default-system-channelmux")
+                    await writer.drain()
+                    response = await reader.read(4096)
+                    writer.close()
+                    await writer.wait_closed()
+
+                    self.assertEqual(response, b"mux-target-ok")
+                    self.assertEqual(captured_target, [b"hello-default-system-channelmux"])
+                    self.assertTrue(captured_upstream)
+                    self.assertTrue(
+                        captured_upstream[0].startswith(
+                            f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n".encode()
+                        )
+                    )
+                finally:
+                    upstream_server.close()
+                    await upstream_server.wait_closed()
+                    target_server.close()
+                    await target_server.wait_closed()
+
+    def test_tcp_target_connection_default_system_honors_no_proxy_on_linux(self):
+        asyncio.run(self._test_tcp_target_connection_default_system_honors_no_proxy_on_linux())
+
+    async def _test_tcp_target_connection_default_system_honors_no_proxy_on_linux(self):
+        target_server, target_port, captured_target = await _start_tcp_capture_server()
+        upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        mux.args = argparse.Namespace()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HTTP_PROXY": f"http://127.0.0.1:{upstream_port}",
+                "http_proxy": f"http://127.0.0.1:{upstream_port}",
+                "NO_PROXY": "127.0.0.1",
+                "no_proxy": "127.0.0.1",
+            },
+            clear=False,
+        ):
+            with patch("obstacle_bridge.bridge_proxy_common.urllib.request.proxy_bypass", return_value=True):
+                try:
+                    reader, writer = await mux._open_tcp_target_connection("127.0.0.1", target_port)
+                    writer.write(b"hello-no-proxy-channelmux")
+                    await writer.drain()
+                    response = await reader.read(4096)
+                    writer.close()
+                    await writer.wait_closed()
+
+                    self.assertEqual(response, b"mux-target-ok")
+                    self.assertEqual(captured_target, [b"hello-no-proxy-channelmux"])
+                    self.assertEqual(captured_upstream, [])
+                finally:
+                    upstream_server.close()
+                    await upstream_server.wait_closed()
+                    target_server.close()
+                    await target_server.wait_closed()
+
+    def test_probe_tun_connectivity_uses_virtual_probe_source_for_local_shared_service(self):
+        asyncio.run(self._test_probe_tun_connectivity_uses_virtual_probe_source_for_local_shared_service())
+
+    async def _test_probe_tun_connectivity_uses_virtual_probe_source_for_local_shared_service(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address": "192.168.106.1",
+                "global_connectivity_source_ipv4": "192.168.108.31",
+            }
+        )
+        spec = ChannelMux.ServiceSpec(
+            5,
+            'tun',
+            'obtun0',
+            1500,
+            'tun',
+            'obtun1',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 5)
+        mux._local_services[svc_key] = spec
+        dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+        mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        mux._chan_owner_peer_id[11] = 77
+        mux._bind_tun_channel(11, dev)
+        mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=11,
+            packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+        )
+
+        def fake_write_tun(bound_dev, packet):
+            self.assertIs(bound_dev, dev)
+            parsed, parse_error = mux._parse_tun_packet_endpoints(packet)
+            self.assertIsNone(parse_error)
+            self.assertEqual(parsed["source_ip"], "192.168.108.31")
+            self.assertEqual(parsed["destination_ip"], "8.8.8.8")
+            waiter_key, future = next(iter(mux._tun_probe_waiters.items()))
+            self.assertEqual(waiter_key[0], socket.AF_INET)
+            reply = _ipv4_echo_reply(
+                '8.8.8.8',
+                '192.168.108.31',
+                waiter_key[1],
+                waiter_key[2],
+                probe_payload(probe_kind=PROBE_KIND_GLOBAL, nonce=waiter_key[3], sent_monotonic_ns=99),
+            )
+            mux._on_local_tun_packet(dev, reply)
+
+        with patch.object(mux, '_resolve_tun_probe_target', new=AsyncMock(return_value='8.8.8.8')), \
+             patch('sys.platform', 'linux'), \
+             patch.object(mux, '_write_tun_packet', side_effect=fake_write_tun) as write_tun, \
+             patch.object(mux, '_send_mux') as send_mux:
+            result = await mux._probe_tun_connectivity_once(
+                probe_kind='global',
+                ifname='obtun0',
+                target='google.de',
+                timeout_s=0.5,
+            )
+
+        self.assertTrue(result['ok'])
+        write_tun.assert_called_once()
+        send_mux.assert_not_called()
+
+    def test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification(self):
+        asyncio.run(self._test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification())
+
+    async def _test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address": "192.168.106.1",
+                "global_connectivity_source_ipv4": "192.168.108.31",
+            }
+        )
+        spec = ChannelMux.ServiceSpec(
+            5,
+            'tun',
+            'obtun0',
+            1500,
+            'tun',
+            'obtun1',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 5)
+        mux._local_services[svc_key] = spec
+        dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+        mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        mux._chan_owner_peer_id[11] = 77
+        mux._bind_tun_channel(11, dev)
+        mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=11,
+            packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+        )
+
+        def fake_write_tun(bound_dev, packet):
+            self.assertIs(bound_dev, dev)
+            parsed, parse_error = mux._parse_tun_packet_endpoints(packet)
+            self.assertIsNone(parse_error)
+            self.assertEqual(parsed["source_ip"], "192.168.108.31")
+            self.assertEqual(parsed["destination_ip"], "192.168.106.1")
+            waiter_key, _future = next(iter(mux._tun_probe_waiters.items()))
+            reply = _ipv4_echo_reply(
+                '192.168.106.1',
+                '192.168.108.31',
+                waiter_key[1],
+                waiter_key[2],
+                probe_payload(probe_kind=0, nonce=waiter_key[3], sent_monotonic_ns=99),
+            )
+            mux._on_local_tun_packet(dev, reply)
+
+        with patch.object(mux, '_resolve_tun_probe_target', new=AsyncMock(return_value='192.168.106.1')), \
+             patch.object(mux, '_write_tun_packet', side_effect=fake_write_tun) as write_tun, \
+             patch.object(mux, '_send_mux') as send_mux:
+            result = await mux._probe_tun_connectivity_once(
+                probe_kind='peer',
+                ifname='obtun0',
+                target='192.168.106.1',
+                timeout_s=0.5,
+            )
+
+        self.assertTrue(result['ok'])
+        write_tun.assert_called_once()
+        send_mux.assert_not_called()
+
+    def test_tcp_target_connection_uses_system_proxy_egress(self):
+        asyncio.run(self._test_tcp_target_connection_uses_system_proxy_egress())
+
+    async def _test_tcp_target_connection_uses_system_proxy_egress(self):
+        target_server, target_port, captured_target = await _start_tcp_capture_server()
+        upstream_server, upstream_port, captured_upstream = await _start_connect_proxy()
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        mux.args = argparse.Namespace(
+            channel_mux_egress={"mode": "system", "proxy_auth": "none"},
+        )
+
+        with patch.dict(
+            "os.environ",
+            {"OBSTACLEBRIDGE_TEST_SYSTEM_PROXY": f"http=127.0.0.1:{upstream_port}"},
+            clear=False,
+        ):
+            try:
+                reader, writer = await mux._open_tcp_target_connection("127.0.0.1", target_port)
+                writer.write(b"hello-channelmux")
+                await writer.drain()
+                response = await reader.read(4096)
+                writer.close()
+                await writer.wait_closed()
+
+                self.assertEqual(response, b"mux-target-ok")
+                self.assertEqual(captured_target, [b"hello-channelmux"])
+                self.assertTrue(captured_upstream)
+                self.assertTrue(
+                    captured_upstream[0].startswith(
+                        f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n".encode()
+                    )
+                )
+            finally:
+                upstream_server.close()
+                await upstream_server.wait_closed()
+                target_server.close()
+                await target_server.wait_closed()
+
     def test_unified_ingress_throttle_applies_to_udp_from_transport_metrics(self):
         now_ns = 5_000_000_000
         sess = _FakeSession(
@@ -1223,7 +1605,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
 class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.session = _FakeSession()
+        self.session = _FakeSession(connected=True)
         self.mux = ChannelMux(self.session, asyncio.get_running_loop())
         self.mux._overlay_connected = True
         self.mux._accepting_enabled = True
@@ -1376,6 +1758,46 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proto, ChannelMux.Proto.UDP)
         self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
+
+    async def test_overlay_connect_requires_top_layer_app_ready(self):
+        spec = ChannelMux.ServiceSpec(
+            svc_id=1,
+            l_proto='udp',
+            l_bind='0.0.0.0',
+            l_port=16667,
+            r_proto='udp',
+            r_host='127.0.0.1',
+            r_port=16666,
+        )
+        self.session.connection_layers = [
+            {
+                "layer": "transport",
+                "transport": "tcp",
+                "state": "connected",
+                "epoch": 1,
+                "connected": True,
+                "app_ready": True,
+            },
+            {
+                "layer": "secure_link",
+                "transport": "tcp",
+                "state": "handshake",
+                "epoch": 1,
+                "connected": True,
+                "app_ready": False,
+            },
+        ]
+        self.mux._remote_services_requested = [spec]
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+
+        with patch.object(self.mux, '_start_all_services', new=AsyncMock()) as start_all, patch.object(self.mux, '_send_mux') as send_mux:
+            await self.mux.on_overlay_state(True)
+
+        self.assertFalse(self.mux._overlay_connected)
+        self.assertFalse(self.mux._accepting_enabled)
+        start_all.assert_not_awaited()
+        send_mux.assert_not_called()
 
     async def test_overlay_connect_does_not_replay_tun_on_created_hook_for_active_tun_service(self):
         spec = ChannelMux.ServiceSpec(
@@ -1762,6 +2184,49 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(parsed["source_ip"], '192.168.107.9')
         self.assertEqual(reason, 'source_not_owned_by_peer')
 
+    def test_shared_tun_guard_accepts_pending_internal_probe_reply_from_public_source(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2'], 'ipv6': ['fd20:107::2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('peer', 77, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun1', mtu=1500, service_key=svc_key)
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        self.mux._chan_owner_peer_id[1] = 77
+        nonce = b'12345678'
+        self.mux._tun_probe_waiters[(socket.AF_INET, 0x1234, 7, nonce)] = object()
+        packet = _ipv4_echo_reply(
+            '8.8.8.8',
+            '192.168.107.1',
+            0x1234,
+            7,
+            probe_payload(probe_kind=PROBE_KIND_GLOBAL, nonce=nonce, sent_monotonic_ns=99),
+        )
+
+        allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+            dev=dev,
+            chan=1,
+            packet=packet,
+        )
+
+        self.assertTrue(allowed)
+        self.assertEqual(parsed["source_ip"], '8.8.8.8')
+        self.assertEqual(parsed["destination_ip"], '192.168.107.1')
+        self.assertIsNone(reason)
+
     def test_shared_tun_guard_accepts_owned_ipv6_source(self):
         spec = ChannelMux.ServiceSpec(
             2,
@@ -1928,6 +2393,87 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(reason)
         self.assertEqual(parsed["source_ip"], '192.168.107.2')
         self.assertEqual(self.mux._shared_tun_peer_id_by_ref[(svc_key, 'linux-client')], 88)
+
+    def test_shared_tun_guard_recovers_missing_chan_owner_from_bound_runtime_peer(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun1', mtu=1500, service_key=svc_key)
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        self.mux._shared_tun_runtime_by_peer[(svc_key, 77)] = {
+            'preferred_chan_id': 1,
+            'bound_chan_ids': [1],
+        }
+        self.mux._shared_tun_peer_ref_by_peer[(svc_key, 77)] = 'linux-client'
+        self.mux._shared_tun_peer_id_by_ref[(svc_key, 'linux-client')] = 77
+
+        with patch.object(self.mux.log, "warning") as warning:
+            allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=1,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+        self.assertTrue(allowed)
+        self.assertIsNone(reason)
+        self.assertEqual(parsed["source_ip"], '192.168.107.2')
+        self.assertEqual(self.mux._chan_owner_peer_id[1], 77)
+        health = dict(self.mux._tun_runtime_health_by_service.get(svc_key) or {})
+        self.assertEqual(health.get("code"), "shared_tun_channel_owner_recovered")
+        self.assertEqual(health.get("peer_id"), 77)
+        warning.assert_called_once()
+
+    def test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered(self):
+        spec = ChannelMux.ServiceSpec(
+            2,
+            'tun',
+            'obtun1',
+            1500,
+            'tun',
+            'obtun0',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 2)
+        dev = ChannelMux.TunDevice(fd=44, ifname='obtun1', mtu=1500, service_key=svc_key)
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+        with patch.object(self.mux.log, "critical") as critical:
+            allowed, parsed, reason = self.mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=1,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+        self.assertFalse(allowed)
+        self.assertEqual(parsed["source_ip"], '192.168.107.2')
+        self.assertEqual(reason, 'source_peer_identity_missing')
+        health = dict(self.mux._tun_runtime_health_by_service.get(svc_key) or {})
+        self.assertEqual(health.get("code"), "shared_tun_channel_owner_missing")
+        self.assertEqual(health.get("source_ip"), "192.168.107.2")
+        critical.assert_called_once()
 
     def test_shared_tun_open_requires_prestarted_server_owned_service(self):
         spec = ChannelMux.ServiceSpec(
@@ -2671,6 +3217,246 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
                 mux._on_local_tun_packet(dev, _ipv4_packet('192.168.107.1', '192.168.107.9'))
 
             send_mux.assert_not_called()
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_internal_probe_routes_to_active_shared_peer(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+            packet = build_ipv4_echo_request(
+                source_ip='192.168.107.1',
+                destination_ip='8.8.8.8',
+                identifier=0x1234,
+                sequence=1,
+                payload=probe_payload(probe_kind=PROBE_KIND_GLOBAL, nonce=b'12345678', sent_monotonic_ns=7),
+            )
+
+            with patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_tun_packet(dev, packet)
+
+            send_mux.assert_called_once_with(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
+        finally:
+            mux.loop.close()
+
+    def test_probe_uses_kernel_tun_injection_for_local_shared_ipv4_on_linux(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux.args = argparse.Namespace(
+                TUN_routing={
+                    "tunnel_address": "192.168.107.1",
+                }
+            )
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+            with patch('sys.platform', 'linux'):
+                self.assertTrue(
+                    mux._probe_should_use_kernel_tun_injection(
+                        dev,
+                        family=socket.AF_INET,
+                        source_ip="192.168.107.1",
+                    )
+                )
+        finally:
+            mux.loop.close()
+
+    def test_shared_tun_runtime_snapshot_exposes_local_virtual_probe_owner(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux.args = argparse.Namespace(
+                TUN_routing={
+                    "global_connectivity_source_ipv4": "192.168.108.31",
+                }
+            )
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+            snapshot = mux._shared_tun_runtime_snapshot_for_service(svc_key)
+
+            self.assertIsNotNone(snapshot)
+            self.assertEqual(snapshot["local_virtual_peers"][0]["peer_ref"], ChannelMux.SHARED_TUN_LOCAL_PROBE_PEER_REF)
+            self.assertEqual(snapshot["local_virtual_peers"][0]["ipv4"], ["192.168.108.31"])
+            self.assertEqual(snapshot["owner_by_ipv4"]["192.168.108.31"], ChannelMux.SHARED_TUN_LOCAL_PROBE_PEER_REF)
+            local_binding = next(entry for entry in snapshot["active_peer_bindings"] if entry["peer_id"] == 0)
+            self.assertTrue(local_binding["local_virtual"])
+            self.assertEqual(local_binding["ipv4"], ["192.168.108.31"])
+        finally:
+            mux.loop.close()
+
+    def test_probe_falls_back_to_internal_injection_without_active_shared_peer(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            with patch('sys.platform', 'linux'):
+                self.assertFalse(
+                    mux._probe_should_use_kernel_tun_injection(
+                        dev,
+                        family=socket.AF_INET,
+                        source_ip="192.168.107.1",
+                    )
+                )
+        finally:
+            mux.loop.close()
+
+    def test_probe_does_not_use_kernel_tun_injection_for_virtual_probe_source(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux.args = argparse.Namespace(
+                TUN_routing={
+                    "global_connectivity_source_ipv4": "192.168.108.31",
+                    "tunnel_address": "192.168.107.1",
+                }
+            )
+            spec = ChannelMux.ServiceSpec(
+                5,
+                'tun',
+                'obtun0',
+                1500,
+                'tun',
+                'obtun1',
+                1500,
+                options={
+                    'shared_tun_ownership': {
+                        'mode': 'server_shared',
+                        'peers': [
+                            {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                        ],
+                    }
+                },
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+            mux._chan_owner_peer_id[11] = 77
+            mux._bind_tun_channel(11, dev)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev,
+                chan=11,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+            )
+
+            with patch('sys.platform', 'linux'):
+                self.assertFalse(
+                    mux._probe_should_use_kernel_tun_injection(
+                        dev,
+                        family=socket.AF_INET,
+                        source_ip="192.168.108.31",
+                    )
+                )
         finally:
             mux.loop.close()
 

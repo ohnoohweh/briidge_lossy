@@ -1333,6 +1333,7 @@ def test_ios_extension_shim_swift_udp_myudp_secure_link_mixed_service_matrix_sta
             )
             start_result: dict[str, object] | None = None
             stop_result: dict[str, object] | None = None
+            live_socket: socket.socket | None = None
             try:
                 await bridge_server.start()
                 start_result = ipserver_extension.handle_message(
@@ -2017,6 +2018,17 @@ def test_ios_extension_shim_swift_udp_quic_secure_link_remote_tcp_server_reaches
                 status_doc = json.loads(status_text)
                 assert "admin_ui" in status_doc or "build" in status_doc, status_doc
 
+                live_socket = _websocket_connect("127.0.0.1", remote_tcp_port)
+                first_live = _recv_initial_live_ws_message(live_socket)
+                assert first_live["type"] in {"hello", "status", "connections", "peers", "meta"}
+                _send_ws_json(live_socket, {"request": ["status", "connections", "peers"]})
+                live_status = _wait_ws_message(live_socket, lambda message: message.get("type") == "status")
+                live_connections = _wait_ws_message(live_socket, lambda message: message.get("type") == "connections")
+                live_peers = _wait_ws_message(live_socket, lambda message: message.get("type") == "peers")
+                assert "admin_ui" in live_status["data"]
+                assert "counts" in live_connections["data"]
+                assert "peers" in live_peers["data"]
+
                 root_code, root_html = await _probe_http_get("127.0.0.1", remote_tcp_port, "/")
                 assert root_code == 200
                 assert "ObstacleBridge" in root_html or "Admin Web" in root_html
@@ -2422,6 +2434,8 @@ def test_ios_extension_shim_swift_udp_myudp_secure_link_tcp_own_server_reaches_p
                     timeout=6.0,
                 )
             finally:
+                if live_socket is not None:
+                    live_socket.close()
                 if ipserver_extension._CONTROLLER is not None:
                     stop_result = ipserver_extension.handle_message({"command": "disconnect_profile"})
                     ipserver_extension._CONTROLLER = None

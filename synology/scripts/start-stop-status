@@ -1,0 +1,119 @@
+#!/bin/sh
+set -eu
+
+PKG_ID="obstaclebridge"
+PKG_DIR="${SYNOPKG_PKGDEST:-/var/packages/${PKG_ID}/target}"
+VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/${PKG_ID}/var}"
+CFG_PATH="${VAR_DIR}/ObstacleBridge.cfg"
+DEFAULT_CFG="${PKG_DIR}/share/defaults/ObstacleBridge.cfg"
+PID_PATH="${VAR_DIR}/run/obstaclebridge.pid"
+LOG_PATH="${VAR_DIR}/log/obstaclebridge.log"
+SERVICE_LOG="${VAR_DIR}/log/service.log"
+PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3 || true)}"
+PYTHONPATH_VALUE="${PKG_DIR}/src"
+HELPER_PY="${VAR_DIR}/helper-venv/bin/python3"
+
+ensure_layout() {
+    mkdir -p "${VAR_DIR}/run" "${VAR_DIR}/log"
+    if [ ! -f "${CFG_PATH}" ] && [ -f "${DEFAULT_CFG}" ]; then
+        cp "${DEFAULT_CFG}" "${CFG_PATH}"
+    fi
+}
+
+python_ready() {
+    if [ -z "${PY_BIN}" ]; then
+        echo "python3 was not found on PATH." >&2
+        return 1
+    fi
+    "${PY_BIN}" - <<'PY'
+import importlib.util
+import sys
+if sys.version_info < (3, 8):
+    raise SystemExit("ObstacleBridge requires Python 3.8 or newer.")
+missing = [name for name in ("aioquic", "cryptography", "websockets") if importlib.util.find_spec(name) is None]
+if missing:
+    raise SystemExit("Missing Python dependencies: " + ", ".join(missing))
+PY
+}
+
+is_running() {
+    if [ ! -f "${PID_PATH}" ]; then
+        return 1
+    fi
+    pid="$(cat "${PID_PATH}")"
+    if [ -z "${pid}" ]; then
+        return 1
+    fi
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+        return 0
+    fi
+    rm -f "${PID_PATH}"
+    return 1
+}
+
+do_start() {
+    ensure_layout
+    if is_running; then
+        echo "ObstacleBridge is already running."
+        return 0
+    fi
+    python_ready
+    cd "${PKG_DIR}"
+    export PYTHONPATH="${PYTHONPATH_VALUE}${PYTHONPATH:+:${PYTHONPATH}}"
+    if [ -x "${HELPER_PY}" ]; then
+        export OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE="${HELPER_PY}"
+    fi
+    nohup "${PY_BIN}" -m obstacle_bridge.launcher --no-redirect --config "${CFG_PATH}" --log-file "${LOG_PATH}" >>"${SERVICE_LOG}" 2>&1 &
+    pid="$!"
+    echo "${pid}" > "${PID_PATH}"
+    sleep 1
+    if kill -0 "${pid}" >/dev/null 2>&1; then
+        return 0
+    fi
+    rm -f "${PID_PATH}"
+    echo "ObstacleBridge failed to start. Check ${SERVICE_LOG}." >&2
+    return 1
+}
+
+do_stop() {
+    if ! is_running; then
+        return 0
+    fi
+    pid="$(cat "${PID_PATH}")"
+    kill "${pid}" >/dev/null 2>&1 || true
+    count=0
+    while kill -0 "${pid}" >/dev/null 2>&1; do
+        count=$((count + 1))
+        if [ "${count}" -ge 20 ]; then
+            kill -9 "${pid}" >/dev/null 2>&1 || true
+            break
+        fi
+        sleep 1
+    done
+    rm -f "${PID_PATH}"
+}
+
+do_status() {
+    if is_running; then
+        echo "ObstacleBridge is running."
+        return 0
+    fi
+    echo "ObstacleBridge is stopped."
+    return 1
+}
+
+case "${1:-}" in
+    start)
+        do_start
+        ;;
+    stop)
+        do_stop
+        ;;
+    status)
+        do_status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status}" >&2
+        exit 1
+        ;;
+esac

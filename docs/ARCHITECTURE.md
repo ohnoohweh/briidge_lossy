@@ -25,7 +25,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-001` | Transport and session layer | Transport-specific peer connectivity, listener/client state, and per-peer transport ownership |
 | `ARC-CMP-002` | Reliability and framing layer | Reliable overlay framing, retransmission, RTT, inflight, and missed-frame tracking |
 | `ARC-CMP-003` | Channel and service multiplexing layer | `own_servers`, `remote_servers`, channel routing, and peer-scoped service isolation |
-| `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, process startup, and entrypoint supervision |
+| `ARC-CMP-004` | Runner and process orchestration layer | CLI/config composition, lifecycle wiring, restart/shutdown coordination, process startup, entrypoint supervision, and privilege handoff plus operator-facing elevation notices for local TUN startup when required |
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
 | `ARC-CMP-006` | Secure-link layer | Delivered PSK-based and certificate-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux` |
 | `ARC-CMP-007` | Compression layer | Mux-aware per-frame compression/decompression between secure-link/session and `ChannelMux`, no-gain bypass, and compression observability counters |
@@ -657,6 +657,7 @@ Important behaviors:
 - restart handling
 - process-safe event binding
 - configuration persistence
+- privilege handoff at the Python entrypoint boundary when desktop local TUN backends need elevation
 - policy ownership for overload thresholds and whether a given ingress path should pause, drop stale payload, or fail a channel under sustained pressure
 
 ### Entrypoint split (`bridge.py` vs module launcher)

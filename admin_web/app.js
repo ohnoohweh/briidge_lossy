@@ -40,7 +40,7 @@ function fmtText(value) {
     const ifname = typeof value.ifname === 'string' ? value.ifname.trim() : '';
     const port = value.port == null || value.port === '' ? '' : String(value.port).trim();
     if (host || bind) {
-      return port ? `${host || bind}:${port}` : (host || bind);
+      return fmtHostPort(host || bind, port);
     }
     if (ifname) {
       return port ? `${ifname}:${port}` : ifname;
@@ -52,6 +52,15 @@ function fmtText(value) {
     }
   }
   return String(value);
+}
+
+function fmtHostPort(host, port) {
+  const hostText = String(host || '').trim();
+  const portText = port == null ? '' : String(port).trim();
+  if (!hostText) return portText || 'n/a';
+  if (!portText) return hostText;
+  const bracketedHost = hostText.includes(':') && !hostText.startsWith('[') ? `[${hostText}]` : hostText;
+  return `${bracketedHost}:${portText}`;
 }
 
 function fmtBool(value) {
@@ -120,6 +129,26 @@ function fmtRouteList(routes) {
 function fmtAgeSeconds(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
   return fmtUptime(sec);
+}
+
+function fmtTunVerificationValue(check) {
+  const valueMs = Number(check?.value_ms);
+  if (Number.isFinite(valueMs) && valueMs >= 0) {
+    return `${valueMs.toFixed(valueMs >= 10 ? 0 : 1)} ms`;
+  }
+  return 'n/a';
+}
+
+function fmtTunVerificationDetail(check) {
+  const valueMs = Number(check?.value_ms);
+  if (Number.isFinite(valueMs) && valueMs >= 0) {
+    return String(check?.detail || check?.state || 'verified');
+  }
+  const lastSuccessAge = Number(check?.last_success_ago_s);
+  if (Number.isFinite(lastSuccessAge) && lastSuccessAge >= 0) {
+    return `last success ${fmtAgeSeconds(lastSuccessAge)} ago`;
+  }
+  return String(check?.detail || check?.state || 'n/a');
 }
 
 const APP_BASE_TITLE = 'ObstacleBridge';
@@ -1067,20 +1096,26 @@ function setProgress(id, value, maxScale = 256.0) {
   el.style.width = pct.toFixed(1) + '%';
 }
 
+function setPercentWidth(id, pct) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.width = `${Math.max(0, Math.min(100, Number(pct || 0))).toFixed(1)}%`;
+}
+
 function fmtEndpoint(ep) {
   if (!ep) return 'n/a';
-  if (Array.isArray(ep) && ep.length >= 2) return `${ep[0]}:${ep[1]}`;
+  if (Array.isArray(ep) && ep.length >= 2) return fmtHostPort(ep[0], ep[1]);
   if (typeof ep === 'object' && ep.ifname != null) {
     const mtu = ep.mtu != null ? ` mtu ${ep.mtu}` : '';
     return `${ep.ifname}${mtu}`;
   }
-  if (typeof ep === 'object' && ep.host != null && ep.port != null) return `${ep.host}:${ep.port}`;
+  if (typeof ep === 'object' && ep.host != null && ep.port != null) return fmtHostPort(ep.host, ep.port);
   return String(ep);
 }
 
 function fmtDestination(dest) {
   if (!dest) return 'n/a';
-  if (dest.host != null && dest.port != null) return `${dest.host}:${dest.port}`;
+  if (dest.host != null && dest.port != null) return fmtHostPort(dest.host, dest.port);
   return fmtEndpoint(dest);
 }
 
@@ -1106,6 +1141,34 @@ function fmtThrottleSummary(throttle) {
     return `${state} ${used}/${budget} rem ${remaining} agg ${aggregateRemaining} scope ${scopeRemaining}`;
   }
   return `${state} ${used}/${budget} rem ${remaining}`;
+}
+
+function fmtTunFlowSummary(stats) {
+  const rxMsgs = fmtInteger(stats?.rx_msgs ?? 0);
+  const txMsgs = fmtInteger(stats?.tx_msgs ?? 0);
+  const rxBytes = fmtBytes(stats?.rx_bytes ?? 0);
+  const txBytes = fmtBytes(stats?.tx_bytes ?? 0);
+  return `in ${rxMsgs} / ${rxBytes} · out ${txMsgs} / ${txBytes}`;
+}
+
+function fmtDropDiagnostics(shared) {
+  const dropCounters = shared?.drop_counters || {};
+  const total = fmtInteger(dropCounters.total ?? 0);
+  const byReason = dropCounters.by_reason && typeof dropCounters.by_reason === 'object'
+    ? Object.entries(dropCounters.by_reason)
+    : [];
+  const reasons = byReason.length
+    ? byReason
+      .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+      .map(([reason, count]) => `${reason} ${fmtInteger(count)}`)
+      .join(' · ')
+    : 'none';
+  const recentDrops = Array.isArray(shared?.recent_drops) ? shared.recent_drops : [];
+  const latest = recentDrops.length ? recentDrops[recentDrops.length - 1] : null;
+  const latestText = latest
+    ? `last ${latest.reason || 'drop'} ${latest.direction || 'unknown'}${latest.destination_ip ? ` -> ${latest.destination_ip}` : ''}`
+    : 'last none';
+  return `total ${total} · ${reasons}\n${latestText}`;
 }
 
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
@@ -1234,12 +1297,24 @@ function renderTunRoutingConnectionTable(tbodyId, rows) {
   }).join('');
 }
 
+function summarizeTunRuntimeHealth(rows) {
+  const issues = (rows || [])
+    .map((row) => row?.runtime_health || {})
+    .filter((health) => health && typeof health === 'object' && String(health.code || '').trim());
+  if (!issues.length) return '';
+  const first = issues[0];
+  const summary = String(first.summary || 'TUN runtime issue detected').trim();
+  const detail = String(first.detail || '').trim();
+  const suffix = issues.length > 1 ? ` ${issues.length} interfaces currently report a runtime health issue.` : '';
+  return detail ? `${summary} ${detail}${suffix}`.trim() : `${summary}${suffix}`.trim();
+}
+
 function renderTunRoutingSharedTable(tbodyId, rows) {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="5">No shared TUN routing state</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No shared TUN routing state</td></tr>';
     return;
   }
 
@@ -1268,6 +1343,8 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
           return parts.join(' · ');
         }).join('\n')
       : 'none';
+    const flowText = fmtTunFlowSummary(row.stats || {});
+    const dropText = fmtDropDiagnostics(shared);
     return `
       <tr>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
@@ -1275,6 +1352,8 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
         <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(flowText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(dropText)}</td>
       </tr>
     `;
   }).join('');
@@ -1387,15 +1466,67 @@ function proxyListenerRate(listenerName, snapshot) {
   return { rxRate, txRate };
 }
 
+function renderProxyProtocolSockets(cfg) {
+  const protocols = Array.isArray(cfg?.protocols) ? cfg.protocols : [];
+  const hasHttp = protocols.includes('http-connect');
+  const hasSocks5 = protocols.includes('socks5-connect');
+  return `
+    <div>
+      <span>HTTP / CONNECT</span>
+      <strong class="mono">${escapeHtml(hasHttp ? fmtInteger(cfg.http_port) : 'disabled')}</strong>
+    </div>
+    <div>
+      <span>SOCKS5</span>
+      <strong class="mono">${escapeHtml(hasSocks5 ? fmtInteger(cfg.socks5_port) : 'disabled')}</strong>
+    </div>
+  `;
+}
+
+function proxyRatePercents(rxRate, txRate) {
+  const rx = Math.max(0, Number(rxRate || 0));
+  const tx = Math.max(0, Number(txRate || 0));
+  const scale = Math.max(rx, tx, 1);
+  return {
+    rx,
+    tx,
+    rxPct: Math.max(0, Math.min(100, (rx / scale) * 100)),
+    txPct: Math.max(0, Math.min(100, (tx / scale) * 100)),
+  };
+}
+
+function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate) {
+  const rates = proxyRatePercents(rxRate, txRate);
+  return `
+    <div class="proxy-rate-pair proxy-rate-pair-stacked">
+      <div class="proxy-rate-box">
+        <span>RX</span>
+        <strong class="mono">${escapeHtml(fmtBytes(rxBytes))}</strong>
+        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.rx))}</em>
+        <div class="proxy-rate-track">
+          <div class="proxy-rate-fill proxy-rate-fill-rx" style="width: ${rates.rxPct.toFixed(1)}%"></div>
+        </div>
+      </div>
+      <div class="proxy-rate-box">
+        <span>TX</span>
+        <strong class="mono">${escapeHtml(fmtBytes(txBytes))}</strong>
+        <em class="mono">${escapeHtml(fmtBytesPerSecond(rates.tx))}</em>
+        <div class="proxy-rate-track">
+          <div class="proxy-rate-fill proxy-rate-fill-tx" style="width: ${rates.txPct.toFixed(1)}%"></div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderProxyListeners(rows) {
-  const tbody = document.getElementById('proxyListenersBody');
-  if (!tbody) return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
+  const grid = document.getElementById('proxyListenersGrid') || document.getElementById('proxyListenersBody');
+  if (!grid) return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
   if (!rows.length) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="14">No proxy listeners</td></tr>';
+    grid.innerHTML = '<div class="empty-state card"><p>No proxy listeners</p></div>';
     return { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
   }
   const totals = { active: 0, accepted: 0, completed: 0, failed: 0, rx: 0, tx: 0, rxRate: 0, txRate: 0, lastError: '' };
-  tbody.innerHTML = rows.map(({ name, snapshot }) => {
+  grid.innerHTML = rows.map(({ name, snapshot }) => {
     const rates = proxyListenerRate(name, snapshot);
     const active = Number(snapshot.active_connections || 0);
     const accepted = Number(snapshot.accepted_connections || 0);
@@ -1414,22 +1545,57 @@ function renderProxyListeners(rows) {
     totals.txRate += rates.txRate;
     if (lastError) totals.lastError = lastError;
     return `
-      <tr>
-        <td class="mono">${escapeHtml(name)}</td>
-        <td class="mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</td>
-        <td>${escapeHtml(fmtBool(snapshot.http_enabled))}</td>
-        <td>${escapeHtml(fmtBool(snapshot.socks5_enabled))}</td>
-        <td>${escapeHtml(fmtBool(snapshot.auth_required))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(active))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(accepted))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(completed))}</td>
-        <td class="mono">${escapeHtml(fmtInteger(failed))}</td>
-        <td class="mono">${escapeHtml(fmtBytes(rx))}</td>
-        <td class="mono">${escapeHtml(fmtBytes(tx))}</td>
-        <td class="mono">${escapeHtml(fmtBytesPerSecond(rates.rxRate))}</td>
-        <td class="mono">${escapeHtml(fmtBytesPerSecond(rates.txRate))}</td>
-        <td class="mono">${escapeHtml(lastError || 'n/a')}</td>
-      </tr>
+      <article class="proxy-listener-card card">
+        <div class="proxy-listener-head">
+          <div>
+            <span class="proxy-listener-label">Listener</span>
+            <strong class="mono">${escapeHtml(name)}</strong>
+          </div>
+          <span class="proxy-listener-endpoint mono">${escapeHtml(fmtEndpoint({ host: snapshot.bind_host, port: snapshot.port }))}</span>
+        </div>
+        <div class="proxy-listener-grid-inner">
+          <div class="proxy-stat-card">
+            <span>Protocols</span>
+            <strong>${escapeHtml([
+              snapshot.http_enabled ? 'HTTP' : '',
+              snapshot.socks5_enabled ? 'SOCKS5' : '',
+            ].filter(Boolean).join(' + ') || 'disabled')}</strong>
+          </div>
+          <div class="proxy-stat-card">
+            <span>Auth</span>
+            <strong>${escapeHtml(fmtBool(snapshot.auth_required))}</strong>
+          </div>
+          <div class="proxy-stat-card proxy-sockets-card">
+            <span>Sockets</span>
+            <div class="proxy-mini-grid">
+              <div>
+                <span>Active</span>
+                <strong class="mono">${escapeHtml(fmtInteger(active))}</strong>
+              </div>
+              <div>
+                <span>Accepted</span>
+                <strong class="mono">${escapeHtml(fmtInteger(accepted))}</strong>
+              </div>
+              <div>
+                <span>Completed</span>
+                <strong class="mono">${escapeHtml(fmtInteger(completed))}</strong>
+              </div>
+              <div>
+                <span>Failed</span>
+                <strong class="mono">${escapeHtml(fmtInteger(failed))}</strong>
+              </div>
+            </div>
+          </div>
+          <div class="proxy-stat-card proxy-listener-traffic-card">
+            <span>Traffic</span>
+            ${renderProxyTrafficPair(rx, tx, rates.rxRate, rates.txRate)}
+          </div>
+          <div class="proxy-stat-card proxy-error-card">
+            <span>Last Error</span>
+            <strong class="mono">${escapeHtml(lastError || 'n/a')}</strong>
+          </div>
+        </div>
+      </article>
     `;
   }).join('');
   return totals;
@@ -1446,15 +1612,17 @@ function applyProxyDoc() {
   setText('proxyConfigured', cfg.enabled ? 'enabled' : 'disabled');
   setText('proxyRuntime', provider.enabled || rows.length ? 'active' : 'inactive');
   setText('proxyBind', fmtText(cfg.bind));
-  setText('proxyHttpPort', fmtInteger(cfg.http_port));
-  setText('proxySocks5Port', fmtInteger(cfg.socks5_port));
-  setText('proxyProtocols', cfg.protocols.length ? cfg.protocols.join(', ') : 'n/a');
+  const protocolSockets = document.getElementById('proxyProtocolSockets');
+  if (protocolSockets) protocolSockets.innerHTML = renderProxyProtocolSockets(cfg);
   setText('proxyAuth', authMode === 'none' ? 'none' : `${authMode}${authUser ? `:${authUser}` : ''}`);
   setText('proxyActiveConnections', fmtInteger(totals.active));
   setText('proxyAcceptedConnections', fmtInteger(totals.accepted));
   setText('proxyFailedConnections', fmtInteger(totals.failed));
   setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));
   setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));
+  const summaryRates = proxyRatePercents(totals.rxRate, totals.txRate);
+  setPercentWidth('proxyRxRateFill', summaryRates.rxPct);
+  setPercentWidth('proxyTxRateFill', summaryRates.txPct);
   setText('proxyLastError', totals.lastError || 'n/a');
 }
 
@@ -1535,8 +1703,12 @@ async function restart() {
 function fmtBuildBadge(build) {
   if (!build || !build.available) return 'build unknown';
   const commit = String(build.commit || 'unknown');
+  const buildTimestampUTC = String(build.build_timestamp_utc || '').trim();
   const tracked = Number(build.tracked_changes || 0);
   const untracked = Number(build.untracked_changes || 0);
+  if ((commit === 'unknown' || !commit) && buildTimestampUTC) {
+    return `build ${buildTimestampUTC}`;
+  }
   if (build.tainted) {
     return `commit ${commit} tainted (${tracked} tracked, ${untracked} untracked)`;
   }
@@ -1589,6 +1761,36 @@ async function reconnectPeer(peerId, triggerButton = null) {
     if (triggerButton instanceof HTMLElement) {
       triggerButton.blur();
     }
+  }
+}
+
+async function repairTunHelperState() {
+  const btn = document.getElementById('tunHelperRepairBtn');
+  try {
+    if (btn) btn.disabled = true;
+    const r = await apiFetch('/api/tun-helper/repair', { method: 'POST' });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(String(j.error || j.reason || ('HTTP ' + r.status)));
+    }
+    await loadTunRouting();
+    const verification = j.verification || {};
+    const remainingCount = Array.isArray(verification.remaining) ? verification.remaining.length : 0;
+    const skippedCount = Array.isArray(verification.skipped) ? verification.skipped.length : 0;
+    const verificationSummary = String(
+      verification.summary ||
+      (verification.stale_state_remaining
+        ? 'Post-repair verification could not confirm that all helper-owned host state was cleared.'
+        : 'Post-repair verification did not find remaining helper-owned host state.')
+    );
+    window.alert(
+      `TUN helper repair completed. Repaired steps: ${String((j.repaired || []).join(', ') || 'none')}. `
+      + `${verificationSummary} Remaining findings: ${remainingCount}. Unverified checks: ${skippedCount}.`
+    );
+  } catch (e) {
+    window.alert(`TUN helper repair failed: ${e}`);
+  } finally {
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -2638,6 +2840,8 @@ function renderPeerTable(rows) {
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+        renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
+        renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {
@@ -2647,7 +2851,7 @@ function renderPeerTable(rows) {
         renderMetric('TUN Open', fmtInteger(row.open_connections?.tun ?? 0)),
       ]);
       connectionLines.push([
-        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts)),
+        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)),
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
         renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
         renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
@@ -2714,14 +2918,20 @@ function renderPeerTable(rows) {
       }
     }
     const securityMetrics = showSecurityLifecycle ? renderMetricStack(securityLines) : '';
-    const lifecycleMetrics = showSecurityLifecycle ? [
-      renderMetric('last_event', secureLink.last_event),
-      renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
-      renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
-      renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
-      renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
-      renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
-      ...(isCertMode ? [
+    const lifecycleMetrics = showSecurityLifecycle ? renderMetricStack([
+      [
+        renderMetric('last_event', secureLink.last_event),
+        renderMetric('last_event_unix_ts', fmtDateTime(secureLink.last_event_unix_ts)),
+        renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
+        renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
+        renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
+        renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+      ],
+      [
+        renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total)),
+        renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total)),
+      ],
+      ...(isCertMode ? [[
         renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),
         renderMetric('last_material_reload_unix_ts', fmtDateTime(secureLink.last_material_reload_unix_ts)),
         renderMetric('last_material_reload_scope', secureLink.last_material_reload_scope),
@@ -2730,8 +2940,8 @@ function renderPeerTable(rows) {
         renderMetric('trust_enforced_unix_ts', fmtDateTime(secureLink.trust_enforced_unix_ts)),
         renderMetric('disconnect_reason', secureLink.disconnect_reason),
         renderMetric('disconnect_detail', secureLink.disconnect_detail),
-      ] : []),
-    ] : [];
+      ]] : []),
+    ]) : '';
     const rowSpan = 1
       + (showProtocolRow ? 1 : 0)
       + (showCompressionRow ? 1 : 0)
@@ -2778,7 +2988,12 @@ function renderPeerTable(rows) {
         </td>
       </tr>
       `);
-      detailRows.push(renderPeerDetailRow('Lifecycle', lifecycleMetrics, 'peer-detail-row-end'));
+      detailRows.push(`
+      <tr class="peer-detail-row peer-detail-row-end">
+        <td class="peer-detail-kind">Lifecycle</td>
+        <td>${lifecycleMetrics}</td>
+      </tr>
+      `);
     }
     return `
       ${detailRows.join('')}
@@ -2894,10 +3109,81 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingListening', fmtInteger(j.summary?.tun_listening ?? 0));
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
+  setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));
   setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
   setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
+  const verification = j.verification || {};
+  const configVerification = verification.tun_config || {};
+  const peerVerification = verification.tun_connectivity || {};
+  const globalVerification = verification.tun_global_connectivity || {};
+  setText('tunVerificationConfigSummary', String(configVerification.summary || 'pending'));
+  setText('tunVerificationConfigDetail', String(configVerification.detail || 'n/a'));
+  setText('tunVerificationPeerSummary', fmtTunVerificationValue(peerVerification));
+  setText('tunVerificationPeerDetail', fmtTunVerificationDetail(peerVerification));
+  setText('tunVerificationGlobalSummary', fmtTunVerificationValue(globalVerification));
+  setText('tunVerificationGlobalDetail', fmtTunVerificationDetail(globalVerification));
+  setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));
+  const tunRoutingHealthWarning = document.getElementById('tunRoutingHealthWarning');
+  if (tunRoutingHealthWarning) {
+    const warningText = summarizeTunRuntimeHealth(j.tun || []);
+    tunRoutingHealthWarning.textContent = warningText;
+    tunRoutingHealthWarning.classList.toggle('hidden', !warningText);
+  }
+  const helper = j.tun_helper || {};
+  const runtime = helper.runtime || {};
+  setText('tunHelperMode', helper.enabled ? String(helper.mode || 'helper') : 'inline');
+  setText('tunHelperLifecyclePhase', String(helper.lifecycle_phase || (helper.enabled ? 'unknown' : 'disabled')));
+  setText('tunHelperBackend', String(helper.backend || runtime.backend || 'n/a'));
+  setText('tunHelperConnected', helper.connected ? 'yes' : 'no');
+  setText('tunHelperServerStarted', helper.server_started ? 'yes' : 'no');
+  setText('tunHelperApplyNetwork', helper.apply_network ? 'yes' : 'no');
+  setText('tunHelperSocket', String(helper.socket_path || 'n/a'));
+  setText('tunHelperIfname', String(runtime.ifname || 'n/a'));
+  setText('tunHelperMtu', fmtInteger(runtime.mtu ?? 0));
+  setText('tunHelperPacketsFromRuntime', fmtInteger(runtime.packets_from_runtime ?? 0));
+  setText('tunHelperPacketsToRuntime', fmtInteger(runtime.packets_to_runtime ?? 0));
+  setText('tunHelperLastError', String(helper.last_error || 'n/a'));
+  const helperRecovery = helper.recovery || {};
+  let helperRecoveryText = 'none';
+  if (helperRecovery && helperRecovery.needs_manual_cleanup) {
+    helperRecoveryText = String(
+      helperRecovery.summary ||
+      helperRecovery.repair_hint ||
+      'manual cleanup recommended'
+    );
+  }
+  setText('tunHelperRecovery', helperRecoveryText);
+  const helperLastRepair = helper.last_repair || {};
+  let helperLastRepairText = 'none';
+  if (helperLastRepair && helperLastRepair.attempted) {
+    const verification = helperLastRepair.verification || {};
+    const remainingCount = Array.isArray(verification.remaining) ? verification.remaining.length : 0;
+    const skippedCount = Array.isArray(verification.skipped) ? verification.skipped.length : 0;
+    helperLastRepairText = String(
+      helperLastRepair.summary ||
+      (helperLastRepair.stale_state_remaining
+        ? 'repair attempted but stale state may still remain'
+        : 'repair succeeded')
+    );
+    if (remainingCount || skippedCount) {
+      helperLastRepairText += ` (remaining findings: ${remainingCount}, unverified checks: ${skippedCount})`;
+    }
+  }
+  setText('tunHelperLastRepair', helperLastRepairText);
+  const helperRepairBtn = document.getElementById('tunHelperRepairBtn');
+  if (helperRepairBtn instanceof HTMLButtonElement) {
+    const helperBackend = String(helper.backend || runtime.backend || '').toLowerCase();
+    const helperRepairAvailable = Boolean(
+      helperRecovery &&
+      helperRecovery.needs_manual_cleanup &&
+      helperBackend === 'linux-native' &&
+      helperRecovery.repair_supported !== false
+    );
+    helperRepairBtn.classList.toggle('hidden', !helperRepairAvailable);
+    helperRepairBtn.disabled = !helperRepairAvailable;
+  }
 }
 
 async function loadConfig() {
@@ -3716,10 +4002,10 @@ function resetServiceCatalogEditorValue(key) {
   syncServiceCatalogEditor(key);
 }
 
-function closeServiceCatalogModal(root, key, { rerender = true } = {}) {
+function closeServiceCatalogModal(root, key, { rerender = true, syncBeforeClose = true } = {}) {
   const modal = root.querySelector(`[data-service-modal="${CSS.escape(key)}"]`);
   if (!modal) return;
-  if (!syncServiceCatalogEditor(key)) return;
+  if (syncBeforeClose && !syncServiceCatalogEditor(key)) return;
   modal.classList.add('hidden');
   modal.removeAttribute('data-service-active-index');
   modal.innerHTML = '';
@@ -3803,10 +4089,15 @@ function initServiceCatalogEditor(root, key) {
         specs.splice(rowIndex, 1);
         writeServiceCatalogSpecsToSink(root, key, specs);
         renderServiceCatalogItems(root, key, specs);
-        closeServiceCatalogModal(root, key, { rerender: false });
-        initServiceCatalogEditor(root, key);
-        syncServiceCatalogEditor(key);
         refreshConfigPreview(key);
+        if (specs.length) {
+          renderServiceCatalogModal(root, key, Math.min(rowIndex, specs.length - 1));
+          syncServiceCatalogEditor(key);
+        } else {
+          closeServiceCatalogModal(root, key, { rerender: false, syncBeforeClose: false });
+          initServiceCatalogEditor(root, key);
+          syncServiceCatalogEditor(key);
+        }
       });
     });
   };
@@ -4355,6 +4646,7 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('tunHelperRepairBtn')?.addEventListener('click', repairTunHelperState);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);
 document.getElementById('secureLinkReloadRevocationBtn')?.addEventListener('click', () => requestSecureLinkReload('revocation'));

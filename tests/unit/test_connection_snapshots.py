@@ -107,6 +107,61 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.assertEqual(udp_listener[0]["service_name"], "lab-udp")
         self.assertEqual(tcp_listener[0]["service_name"], "lab-tcp")
 
+    def test_snapshot_exposes_requested_remote_servers_as_client_listeners(self):
+        remote_udp = ChannelMux.ServiceSpec(
+            4,
+            "udp",
+            "0.0.0.0",
+            4444,
+            "udp",
+            "10.20.30.40",
+            16666,
+            name="remote-udp",
+        )
+        remote_tcp = ChannelMux.ServiceSpec(
+            5,
+            "tcp",
+            "0.0.0.0",
+            5555,
+            "tcp",
+            "10.20.30.50",
+            18090,
+            name="remote-tcp",
+        )
+        self.mux._overlay_connected = True
+        self.mux._accepting_enabled = True
+        self.mux._remote_services_requested = [remote_udp, remote_tcp]
+
+        snap = self.mux.snapshot_connections()
+
+        self.assertEqual(snap["counts"]["udp"], 0)
+        self.assertEqual(snap["counts"]["tcp"], 0)
+        self.assertEqual(snap["counts"]["udp_listening"], 1)
+        self.assertEqual(snap["counts"]["tcp_listening"], 1)
+
+        udp_listener = next(row for row in snap["udp"] if row.get("service_name") == "remote-udp")
+        tcp_listener = next(row for row in snap["tcp"] if row.get("service_name") == "remote-tcp")
+        self.assertEqual(udp_listener["role"], "client")
+        self.assertEqual(tcp_listener["role"], "client")
+        self.assertEqual(udp_listener["state"], "listening")
+        self.assertEqual(tcp_listener["state"], "listening")
+        self.assertEqual(udp_listener["local_port"], 4444)
+        self.assertEqual(tcp_listener["local_port"], 5555)
+        self.assertEqual(udp_listener["remote_destination"], {"host": "10.20.30.40", "port": 16666})
+        self.assertEqual(tcp_listener["remote_destination"], {"host": "10.20.30.50", "port": 18090})
+
+    def test_snapshot_hides_requested_remote_servers_when_overlay_disconnected(self):
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+        self.mux._remote_services_requested = [
+            ChannelMux.ServiceSpec(4, "tcp", "0.0.0.0", 5555, "tcp", "10.20.30.50", 18090, name="remote-tcp"),
+        ]
+
+        snap = self.mux.snapshot_connections()
+
+        self.assertEqual(snap["tcp"], [])
+        self.assertEqual(snap["counts"]["tcp_listening"], 0)
+
     def test_snapshot_counts_idle_tun_interface_as_listening_not_open(self):
         self.mux._svc_tun_devices[self.tun_key] = ChannelMux.TunDevice(
             fd=-1,
@@ -214,6 +269,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                     "fd20:107::2": "linux-client",
                     "fd20:107::4": "ios-client",
                 },
+                "local_virtual_peers": [],
                 "active_peer_bindings": [
                     {
                         "peer_id": 7,
@@ -223,6 +279,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                         "ipv4": ["192.168.107.2"],
                         "ipv6": ["fd20:107::2"],
                         "address_count": 2,
+                        "local_virtual": False,
                         "throttle_prev_window_bytes": 0,
                         "throttle_curr_window_bytes": 0,
                         "throttle_drop_count": 0,
@@ -619,6 +676,74 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["state"], "authenticated")
         self.assertTrue(peer["secure_link"]["authenticated"])
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1700000000.0)
+        self.assertEqual(peer["connected_since_unix_ts"], 1700000000.0)
+
+    def test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link(self):
+        class _PlainSession:
+            def __init__(self):
+                self._metrics = SessionMetrics(
+                    rtt_est_ms=42.0,
+                    transmit_delay_sample_ms=11.0,
+                    transmit_delay_est_ms=12.0,
+                    inflight=3,
+                )
+                self.last_peer_id = None
+
+            def get_metrics(self):
+                return self._metrics
+
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 7,
+                        "connected": True,
+                        "state": "connected",
+                        "peer": "198.51.100.7:4433",
+                        "mux_chans": [101],
+                    }
+                ]
+
+            def get_transport_connected_since_unix_ts(self, peer_id=None):
+                self.last_peer_id = peer_id
+                return 1700000000.0
+
+        class _MuxWithOnePeer:
+            def snapshot_connections(self):
+                return {
+                    "udp": [
+                        {
+                            "chan_id": 101,
+                            "state": "connected",
+                            "stats": {"rx_bytes": 12, "tx_bytes": 34},
+                        }
+                    ],
+                    "tcp": [],
+                    "tun": [],
+                    "counts": {
+                        "udp": 1,
+                        "tcp": 0,
+                        "tun": 0,
+                        "udp_listening": 0,
+                        "tcp_listening": 0,
+                        "tun_listening": 0,
+                    },
+                }
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        session = _PlainSession()
+        runner = Runner(args)
+        runner._sessions = [session]
+        runner._muxes = [_MuxWithOnePeer()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+        peer = out["peers"][0]
+
+        self.assertEqual(peer["connected_since_unix_ts"], 1700000000.0)
+        self.assertEqual(session.last_peer_id, 7)
 
     def test_listener_snapshot_shows_invalid_myudp_sender_as_connecting_peer(self):
         class _EmptyMux:
@@ -674,6 +799,56 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["decode_errors"], 1)
         self.assertEqual(peer["open_connections"]["udp"], 0)
         self.assertEqual(peer["open_connections"]["tcp"], 0)
+
+    def test_wrapped_myudp_client_snapshot_uses_inner_configured_peer_endpoint(self):
+        class _EmptyMux:
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "tun": [],
+                    "counts": {"udp": 0, "tcp": 0, "udp_listening": 0, "tcp_listening": 0},
+                }
+
+        class _InnerSession:
+            def __init__(self):
+                self._args = argparse.Namespace(
+                    udp_bind="::",
+                    udp_own_port=0,
+                    udp_peer="38.180.143.5",
+                    udp_peer_port=4433,
+                )
+                self._peer_host = "38.180.143.5"
+                self._peer_port = 4433
+                self.peer_proto = None
+
+            def get_metrics(self):
+                return SessionMetrics()
+
+            def is_connected(self):
+                return False
+
+        class _WrappedSession:
+            def __init__(self):
+                self._inner = _InnerSession()
+
+            def get_metrics(self):
+                return SessionMetrics()
+
+            def is_connected(self):
+                return False
+
+        args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
+        runner = Runner(args)
+        runner._sessions = [_WrappedSession()]
+        runner._muxes = [_EmptyMux()]
+        runner._session_labels = ["myudp"]
+
+        out = runner.get_peer_connections_snapshot()
+
+        self.assertEqual(len(out["peers"]), 1)
+        self.assertEqual(out["peers"][0]["state"], "connecting")
+        self.assertEqual(out["peers"][0]["peer"], {"host": "38.180.143.5", "port": 4433})
 
     def test_peer_snapshot_formats_structured_peer_endpoint_for_webadmin(self):
         class _StructuredPeerSession:

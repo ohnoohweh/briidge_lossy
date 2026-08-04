@@ -21,6 +21,12 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         help="run Linux-only elevated integration tests that require /dev/net/tun and interface-create permission",
     )
     parser.addoption(
+        "--run-macos-elevated",
+        action="store_true",
+        default=False,
+        help="run macOS-only elevated integration tests that require utun and route-management permission",
+    )
+    parser.addoption(
         "--run-ios-simulator",
         action="store_true",
         default=False,
@@ -33,6 +39,10 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     if not want_linux_elevated:
         env_value = str(os.environ.get("OBSTACLEBRIDGE_RUN_LINUX_ELEVATED") or "").strip().lower()
         want_linux_elevated = env_value in {"1", "true", "yes", "on"}
+    want_macos_elevated = bool(config.getoption("--run-macos-elevated"))
+    if not want_macos_elevated:
+        env_value = str(os.environ.get("OBSTACLEBRIDGE_RUN_MACOS_ELEVATED") or "").strip().lower()
+        want_macos_elevated = env_value in {"1", "true", "yes", "on"}
     want_ios_simulator = bool(config.getoption("--run-ios-simulator"))
     if not want_ios_simulator:
         env_value = str(os.environ.get("OBSTACLEBRIDGE_RUN_IOS_SIMULATOR") or "").strip().lower()
@@ -40,6 +50,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
 
     skip_linux_elevated = pytest.mark.skip(
         reason="linux_elevated tests require explicit opt-in via --run-linux-elevated or OBSTACLEBRIDGE_RUN_LINUX_ELEVATED=1"
+    )
+    skip_macos_elevated = pytest.mark.skip(
+        reason="macos_elevated tests require explicit opt-in via --run-macos-elevated or OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1"
     )
     skip_ios_simulator = pytest.mark.skip(
         reason="ios_simulator tests require explicit opt-in via --run-ios-simulator or OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1"
@@ -51,6 +64,8 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     for item in items:
         if "linux_elevated" in item.keywords and not want_linux_elevated:
             item.add_marker(skip_linux_elevated)
+        if "macos_elevated" in item.keywords and not want_macos_elevated:
+            item.add_marker(skip_macos_elevated)
         if "ios_simulator" in item.keywords and not want_ios_simulator:
             item.add_marker(skip_ios_simulator)
         if socket_unavailable_reason and "integration" in item.keywords:

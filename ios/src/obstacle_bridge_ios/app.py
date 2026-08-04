@@ -52,6 +52,8 @@ except Exception:  # pragma: no cover - exercised in iOS build/runtime, not unit
 WEBADMIN_DEFAULT_BIND = "127.0.0.1"
 WEBADMIN_DEFAULT_PORT = 18080
 WEBADMIN_DEFAULT_PATH = "/"
+WEBADMIN_REMOTE_DEFAULT_NAME = "WebAdmin iphone"
+WEBADMIN_REMOTE_DEFAULT_PORT = 13081
 
 
 def _config_aware_cli_class() -> Any:
@@ -220,6 +222,9 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
             "admin_web_port": WEBADMIN_DEFAULT_PORT,
             "admin_web_path": WEBADMIN_DEFAULT_PATH,
             "admin_web_dir": str(root / "admin_web"),
+            "admin_snapshot_cache_enabled": False,
+            "admin_web_remote_publish": True,
+            "admin_web_remote_port": WEBADMIN_REMOTE_DEFAULT_PORT,
         },
         "debug_logging": {
             "log": "DEBUG",
@@ -263,6 +268,66 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
     }
 
 
+def _webadmin_target_host_from_bind(bind: Any) -> str:
+    bind_host = str(bind or WEBADMIN_DEFAULT_BIND).strip() or WEBADMIN_DEFAULT_BIND
+    if bind_host in {"0.0.0.0", "::", "*", "localhost"}:
+        return "127.0.0.1"
+    return bind_host
+
+
+def _default_ios_remote_admin_server(config: Mapping[str, Any]) -> dict[str, Any] | None:
+    admin_section = dict(config.get("admin_web") or {})
+    if not bool(admin_section.get("admin_web", True)):
+        return None
+    if not bool(admin_section.get("admin_web_remote_publish", True)):
+        return None
+    admin_port = int(admin_section.get("admin_web_port") or WEBADMIN_DEFAULT_PORT)
+    remote_port = int(admin_section.get("admin_web_remote_port") or WEBADMIN_REMOTE_DEFAULT_PORT)
+    return {
+        "name": str(admin_section.get("admin_web_remote_name") or WEBADMIN_REMOTE_DEFAULT_NAME),
+        "listen": {
+            "protocol": "tcp",
+            "bind": "0.0.0.0",
+            "port": remote_port,
+        },
+        "target": {
+            "protocol": "tcp",
+            "host": _webadmin_target_host_from_bind(admin_section.get("admin_web_bind")),
+            "port": admin_port,
+        },
+    }
+
+
+def _has_remote_admin_forward(config: Mapping[str, Any], remote_servers: list[Any]) -> bool:
+    admin_section = dict(config.get("admin_web") or {})
+    admin_port = int(admin_section.get("admin_web_port") or WEBADMIN_DEFAULT_PORT)
+    target_host = _webadmin_target_host_from_bind(admin_section.get("admin_web_bind"))
+    for spec in remote_servers:
+        if not isinstance(spec, Mapping):
+            continue
+        target = dict(spec.get("target") or {})
+        if str(target.get("protocol") or "").strip().lower() != "tcp":
+            continue
+        if int(target.get("port") or 0) != admin_port:
+            continue
+        if str(target.get("host") or "").strip() not in {target_host, "127.0.0.1", "localhost"}:
+            continue
+        return True
+    return False
+
+
+def _apply_ios_remote_admin_defaults(config: dict[str, Any]) -> dict[str, Any]:
+    channel_mux = dict(config.get("channel_mux") or {})
+    remote_servers = list(channel_mux.get("remote_servers") or [])
+    if not _has_remote_admin_forward(config, remote_servers):
+        default_server = _default_ios_remote_admin_server(config)
+        if default_server is not None:
+            remote_servers.append(default_server)
+    channel_mux["remote_servers"] = remote_servers
+    config["channel_mux"] = channel_mux
+    return config
+
+
 def _load_grouped_runtime_config(root: Path) -> dict[str, Any]:
     path = root / "config" / "ObstacleBridge.cfg"
     defaults = _default_ios_grouped_config(root)
@@ -296,7 +361,7 @@ def _load_grouped_runtime_config(root: Path) -> dict[str, Any]:
             merged[section] = block
         else:
             merged[section] = dict(values)
-    return merged
+    return _apply_ios_remote_admin_defaults(merged)
 
 
 def _flatten_grouped_runtime_config(config: Mapping[str, Any]) -> dict[str, Any]:

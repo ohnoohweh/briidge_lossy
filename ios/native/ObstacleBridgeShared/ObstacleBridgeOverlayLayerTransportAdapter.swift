@@ -21,8 +21,91 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.secureLinkAdapter = secureLinkAdapter
     }
 
+    static func appReady(from layers: [[String: Any]]) -> Bool {
+        guard let last = layers.last else {
+            return false
+        }
+        return (last["app_ready"] as? Bool) ?? false
+    }
+
+    private static func jsonEpochValue(_ value: UInt64) -> Any {
+        if value <= UInt64(Int.max) {
+            return Int(value)
+        }
+        return String(value)
+    }
+
+    static func connectionLayersSnapshot(
+        transport: String,
+        transportConnected: Bool,
+        transportEpoch: UInt64 = 0,
+        compressionEnabled: Bool,
+        secureLinkStatus: ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot?,
+        preserveConnectedDuringEpochRestart: Bool = false
+    ) -> [[String: Any]] {
+        var layers: [[String: Any]] = [[
+            "layer": "transport",
+            "transport": transport,
+            "state": transportConnected ? "connected" : "disconnected",
+            "epoch": jsonEpochValue(transportEpoch),
+            "connected": transportConnected,
+            "app_ready": transportConnected,
+        ]]
+        if compressionEnabled {
+            layers.append([
+                "layer": "compression",
+                "transport": transport,
+                "state": "enabled",
+                "epoch": jsonEpochValue(transportEpoch),
+                "connected": transportConnected,
+                "app_ready": transportConnected,
+                "enabled": true,
+            ])
+        }
+        if let secureLinkStatus {
+            let appReady = secureLinkStatus.authenticated
+            let connected = appReady || preserveConnectedDuringEpochRestart
+            let state: String
+            if appReady {
+                state = "authenticated"
+            } else if secureLinkStatus.authFailCode != 0 {
+                state = "failed"
+            } else if secureLinkStatus.sessionID != 0 {
+                state = "handshaking"
+            } else {
+                state = "waiting_transport"
+            }
+            layers.append([
+                "layer": "secure_link",
+                "transport": transport,
+                "state": state,
+                "epoch": jsonEpochValue(secureLinkStatus.sessionID),
+                "connected": connected,
+                "app_ready": appReady,
+                "preserve_connected_during_epoch_restart": preserveConnectedDuringEpochRestart,
+            ])
+        }
+        return layers
+    }
+
     func secureLinkStatusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot? {
         secureLinkAdapter?.statusSnapshot()
+    }
+
+    func connectionLayersSnapshot(
+        transport: String,
+        transportConnected: Bool,
+        transportEpoch: UInt64 = 0,
+        preserveConnectedDuringEpochRestart: Bool = false
+    ) -> [[String: Any]] {
+        Self.connectionLayersSnapshot(
+            transport: transport,
+            transportConnected: transportConnected,
+            transportEpoch: transportEpoch,
+            compressionEnabled: compressRuntime != nil,
+            secureLinkStatus: secureLinkAdapter?.statusSnapshot(),
+            preserveConnectedDuringEpochRestart: preserveConnectedDuringEpochRestart
+        )
     }
 
     func handleTransportDisconnected() {

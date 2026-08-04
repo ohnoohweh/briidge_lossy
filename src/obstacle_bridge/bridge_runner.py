@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
+import base64
 import contextlib as _process_contextlib
+import ctypes
+import secrets
 import shutil
 import signal as _process_signal
+import subprocess
+import tempfile
 import threading
 from typing import Mapping
+
+from .bridge_tun_helper_client import _open_local_helper_connection
 
 _bridge = export_bridge_globals(globals())
 
@@ -152,6 +159,19 @@ class Runner:
         self._session_labels: List[str] = []
         self._proxy_provider_servers: Dict[str, ObstacleBridgeProxyServer] = {}
         self._proxy_provider_last_error: str = ""
+        self._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
+        self._tun_helper_client: Optional[TunHelperClient] = None
+        self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
+        self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
+        self._tun_helper_session_token: str = ""
+        self._tun_helper_socket_path: str = ""
+        self._tun_helper_config_path: str = ""
+        self._tun_helper_last_error: str = ""
+        self._tun_helper_runtime_snapshot: dict[str, Any] = {}
+        self._tun_helper_last_repair_snapshot: dict[str, Any] = {}
+        self._tun_helper_lifecycle_phase: str = (
+            "disabled" if self._tun_helper_settings.mode != "helper" else "idle"
+        )
         self.stats = StatsBoard(args )
         self.admin_web = None
         self._restart_requested: Optional[asyncio.Event] = None
@@ -401,6 +421,7 @@ class Runner:
                     credentials=credentials,
                     allow_http=allow_http,
                     allow_socks5=allow_socks5,
+                    egress=cfg.get("egress") if isinstance(cfg.get("egress"), dict) else None,
                 )
             )
             try:
@@ -435,6 +456,449 @@ class Runner:
             "last_error": self._proxy_provider_last_error,
         }
 
+    async def _start_tun_helper(self) -> None:
+        settings = self._tun_helper_settings
+        if settings.mode != "helper":
+            self._tun_helper_lifecycle_phase = "disabled"
+            return
+        settings.ensure_supported_platform()
+        if self._tun_helper_process is not None and self._tun_helper_client is not None:
+            self._tun_helper_lifecycle_phase = "connected"
+            return
+        self._tun_helper_session_token = secrets.token_urlsafe(18)
+        self._tun_helper_socket_path = settings.resolved_socket_path()
+        self._tun_helper_backend = None
+        try:
+            await self._reap_stale_tun_helper_processes(self._tun_helper_socket_path)
+            self._tun_helper_lifecycle_phase = "launching_process"
+            self._tun_helper_process = await self._await_with_async_diag(
+                "tun_helper.process.start",
+                self._launch_tun_helper_process(),
+            )
+            self._tun_helper_lifecycle_phase = "waiting_for_socket"
+            await self._await_with_async_diag(
+                "tun_helper.process.ready",
+                self._wait_for_tun_helper_socket_ready(
+                    timeout_s=self._tun_helper_socket_ready_timeout_s(),
+                ),
+            )
+            self._tun_helper_client = TunHelperClient(
+                socket_path=self._tun_helper_socket_path,
+                session_token=self._tun_helper_session_token,
+                response_timeout_s=self._tun_helper_response_timeout_s(),
+                logger=logging.getLogger("tun_helper_client"),
+            )
+            self._tun_helper_lifecycle_phase = "connecting_client"
+            await self._await_with_async_diag(
+                "tun_helper.client.connect",
+                self._tun_helper_client.connect(),
+            )
+            setattr(self.args, "_tun_helper_settings", settings)
+            setattr(self.args, "_tun_helper_client", self._tun_helper_client)
+            self._tun_helper_last_error = ""
+            self._tun_helper_lifecycle_phase = "connected"
+        except Exception as exc:
+            self._tun_helper_last_error = f"{type(exc).__name__}:{exc}"
+            self._tun_helper_lifecycle_phase = "start_failed"
+            with contextlib.suppress(Exception):
+                if self._tun_helper_client is not None:
+                    await self._tun_helper_client.close()
+            self._tun_helper_client = None
+            with contextlib.suppress(Exception):
+                await self._stop_tun_helper_process()
+            self._tun_helper_process = None
+            self._tun_helper_backend = None
+            raise
+
+    async def _reap_stale_tun_helper_processes(self, planned_socket_path: str) -> None:
+        socket_path = str(planned_socket_path or "").strip()
+        if not socket_path:
+            return
+        runtime_dirs = {pathlib.Path(self._tun_helper_settings.resolved_runtime_dir()).expanduser()}
+        if not (is_local_tcp_endpoint(socket_path) or is_windows_pipe_path(socket_path)):
+            runtime_dirs.add(pathlib.Path(socket_path).expanduser().parent)
+        for runtime_dir in runtime_dirs:
+            if not runtime_dir.is_dir():
+                continue
+            for config_path in runtime_dir.glob("tun-helper-launch-*.json"):
+                await self._reap_stale_tun_helper_launch_record(config_path, socket_path)
+
+    async def _reap_stale_tun_helper_launch_record(self, config_path: pathlib.Path, planned_socket_path: str) -> None:
+        socket_path = str(planned_socket_path or "").strip()
+        if not socket_path:
+            return
+        helper_socket = ""
+        helper_token = ""
+        try:
+            with open(config_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if not isinstance(payload, dict):
+                return
+            helper_socket = str(payload.get("socket_path") or "").strip()
+            helper_token = str(payload.get("session_token") or "").strip()
+        except Exception:
+            return
+        if not helper_socket or not helper_token or helper_socket == socket_path:
+            return
+        if not self._helper_endpoint_candidate_exists(helper_socket):
+            with contextlib.suppress(FileNotFoundError):
+                os.unlink(config_path)
+            return
+        client = TunHelperClient(
+            socket_path=helper_socket,
+            session_token=helper_token,
+            response_timeout_s=0.5,
+            logger=logging.getLogger("tun_helper_reaper"),
+        )
+        try:
+            await client.connect()
+            snapshot = await client.snapshot()
+            active_clients = int(snapshot.get("active_authenticated_clients") or 0)
+            if active_clients > 1:
+                return
+            with contextlib.suppress(Exception):
+                await client.request("STOP", {})
+        except Exception:
+            return
+        finally:
+            with contextlib.suppress(Exception):
+                await client.close()
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(config_path)
+
+    @staticmethod
+    def _helper_endpoint_candidate_exists(socket_path: str) -> bool:
+        helper_socket = str(socket_path or "").strip()
+        if not helper_socket:
+            return False
+        if is_local_tcp_endpoint(helper_socket) or is_windows_pipe_path(helper_socket):
+            return True
+        return os.path.exists(helper_socket)
+
+    async def _stop_tun_helper(self) -> None:
+        if self._tun_helper_settings.mode == "helper":
+            self._tun_helper_lifecycle_phase = "stopping"
+        for attr in ("_tun_helper_settings", "_tun_helper_client", "_tun_helper_backend"):
+            with contextlib.suppress(Exception):
+                delattr(self.args, attr)
+        if self._tun_helper_client is not None:
+            with contextlib.suppress(Exception):
+                await self._await_with_async_diag(
+                    "tun_helper.client.close",
+                    self._tun_helper_client.close(),
+                )
+            self._tun_helper_client = None
+        with contextlib.suppress(Exception):
+            await self._await_with_async_diag(
+                "tun_helper.process.stop",
+                self._stop_tun_helper_process(),
+            )
+        self._tun_helper_process = None
+        self._tun_helper_backend = None
+        self._tun_helper_session_token = ""
+        self._tun_helper_config_path = ""
+        self._tun_helper_lifecycle_phase = (
+            "disabled" if self._tun_helper_settings.mode != "helper" else "stopped"
+        )
+
+    def _tun_helper_snapshot(self) -> dict:
+        settings = self._tun_helper_settings
+        process_returncode = None if self._tun_helper_process is None else self._tun_helper_process.returncode
+        client_connected = bool(self._tun_helper_client is not None)
+        client_last_error = ""
+        if self._tun_helper_client is not None:
+            status_getter = getattr(self._tun_helper_client, "connection_status", None)
+            if callable(status_getter):
+                with contextlib.suppress(Exception):
+                    conn = dict(status_getter() or {})
+                    client_connected = bool(conn.get("connected"))
+                    client_last_error = str(conn.get("last_error") or "")
+        payload: dict[str, Any] = {
+            "enabled": settings.mode == "helper",
+            "mode": settings.mode,
+            "lifecycle_phase": self._tun_helper_lifecycle_phase,
+            "backend": settings.helper_backend,
+            "apply_network": bool(settings.helper_apply_network),
+            "socket_path": self._tun_helper_socket_path or settings.resolved_socket_path(),
+            "connected": client_connected,
+            "server_started": bool(self._tun_helper_process is not None and process_returncode is None),
+            "pid": None if self._tun_helper_process is None else int(self._tun_helper_process.pid or 0),
+            "process_returncode": None if process_returncode is None else int(process_returncode),
+            "last_error": str(self._tun_helper_last_error or client_last_error or ""),
+        }
+        if self._tun_helper_client is not None:
+            getter = getattr(self._tun_helper_client, "cached_snapshot", None)
+            if callable(getter):
+                with contextlib.suppress(Exception):
+                    self._tun_helper_runtime_snapshot = dict(getter() or {})
+        if self._tun_helper_runtime_snapshot:
+            payload["runtime"] = dict(self._tun_helper_runtime_snapshot)
+        if bool(payload.get("enabled")) and not bool(payload.get("connected")):
+            if bool(payload.get("server_started")):
+                payload["lifecycle_phase"] = "waiting_for_client"
+            elif isinstance(process_returncode, int) and self._tun_helper_lifecycle_phase == "connected":
+                payload["lifecycle_phase"] = "process_exited"
+        recovery = self._tun_helper_recovery_snapshot(payload)
+        if recovery:
+            payload["recovery"] = recovery
+        if self._tun_helper_last_repair_snapshot:
+            payload["last_repair"] = dict(self._tun_helper_last_repair_snapshot)
+        return payload
+
+    @staticmethod
+    def _tun_helper_recovery_snapshot(helper_snapshot: dict[str, Any]) -> dict[str, Any]:
+        helper = dict(helper_snapshot or {})
+        runtime = dict(helper.get("runtime") or {})
+        if not bool(helper.get("enabled")):
+            return {}
+        if bool(helper.get("connected")):
+            return {}
+        if bool(helper.get("server_started")):
+            return {}
+        process_returncode = helper.get("process_returncode")
+        if not isinstance(process_returncode, int):
+            return {}
+
+        stale_firewall = bool(runtime.get("firewall_manager")) or bool(runtime.get("applied_firewall_rules"))
+        stale_network = bool(runtime.get("network_applied"))
+        stale_network = stale_network or bool(runtime.get("applied_ipv4_cidr")) or bool(runtime.get("applied_ipv6_cidr"))
+        stale_network = stale_network or bool(runtime.get("applied_ipv4_routes")) or bool(runtime.get("applied_ipv6_routes"))
+        stale_network = stale_network or bool(runtime.get("policy_rules4")) or bool(runtime.get("policy_rules6"))
+        stale_network = stale_network or bool(runtime.get("applied_dns_servers"))
+        if not stale_firewall and not stale_network:
+            return {}
+
+        warnings: list[str] = []
+        if stale_firewall:
+            warnings.append("firewall_rules_may_remain")
+        if stale_network:
+            warnings.append("helper_owned_network_state_may_remain")
+        summary = "Privileged TUN helper exited while helper-owned host state may still need manual cleanup."
+        repair_hint = "Manual cleanup may be required: inspect helper-owned firewall, routes, addresses, and DNS state before restarting helper-backed TUN."
+        return {
+            "needs_manual_cleanup": True,
+            "stale_firewall_possible": stale_firewall,
+            "stale_network_possible": stale_network,
+            "warnings": warnings,
+            "summary": summary,
+            "repair_hint": repair_hint,
+        }
+
+    async def _launch_tun_helper_process(self) -> asyncio.subprocess.Process:
+        repo_src = str(pathlib.Path(__file__).resolve().parents[1])
+        env = dict(os.environ)
+        existing_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+        env["PYTHONPATH"] = repo_src if not existing_pythonpath else os.pathsep.join([repo_src, existing_pythonpath])
+        self._tun_helper_config_path = self._write_tun_helper_launch_config()
+        helper_executable = self._tun_helper_executable()
+        module_argv = [
+            helper_executable,
+            "-m",
+            "obstacle_bridge.bridge_tun_helper_server",
+            "--config-path",
+            self._tun_helper_config_path,
+        ]
+        exec_argv = list(module_argv)
+        backend_name = str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
+        geteuid = getattr(os, "geteuid", None)
+        needs_linux_helper_privilege = bool(
+            sys.platform.startswith("linux")
+            and backend_name in {"linux-native", "linux_native", "linux-real"}
+            and callable(geteuid)
+            and int(geteuid()) != 0
+        )
+        needs_darwin_helper_privilege = bool(
+            sys.platform.startswith("darwin")
+            and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}
+            and callable(geteuid)
+            and int(geteuid()) != 0
+        )
+        needs_windows_helper_privilege = bool(
+            sys.platform.startswith("win")
+            and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}
+            and not _is_windows_admin()
+        )
+        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(helper_executable):
+            sudo_path = shutil.which("sudo")
+            if not sudo_path:
+                raise RuntimeError(
+                    "Linux helper mode with the native backend needs elevated privileges, but sudo is not available. "
+                    "Install sudo, run as root, or select the linux-python helper backend."
+                )
+            print(
+                "ObstacleBridge helper mode needs elevated privileges to create/configure the local Linux TUN device. "
+                "sudo may now ask for your password for the helper subprocess only.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.log.warning("[RUNNER] launching elevated Linux TUN helper subprocess for native helper backend")
+            exec_argv = _sudo_tun_helper_exec_argv(module_argv)
+        elif needs_linux_helper_privilege:
+            self.log.info("[RUNNER] launching native Linux TUN helper without sudo because CAP_NET_ADMIN/CAP_SYS_ADMIN is already available")
+        elif needs_darwin_helper_privilege:
+            sudo_path = shutil.which("sudo")
+            if not sudo_path:
+                raise RuntimeError(
+                    "macOS helper mode with the native backend needs elevated privileges, but sudo is not available. "
+                    "Install sudo, run as root, or select inline mode."
+                )
+            print(
+                "ObstacleBridge helper mode needs elevated privileges to create/configure the local macOS utun device. "
+                "sudo may now ask for your password for the helper subprocess only.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.log.warning("[RUNNER] launching elevated macOS TUN helper subprocess for native helper backend")
+            exec_argv = _sudo_tun_helper_exec_argv(module_argv)
+        elif needs_windows_helper_privilege:
+            print(
+                "ObstacleBridge helper mode needs elevated privileges to create/configure the local Windows TUN device. "
+                "A UAC prompt may now appear for the helper subprocess only.",
+                file=sys.stderr,
+                flush=True,
+            )
+            self.log.warning("[RUNNER] launching elevated Windows TUN helper subprocess for windows-native helper backend")
+            return _launch_windows_elevated_helper_process(
+                module_argv,
+                env_updates={"PYTHONPATH": str(env.get("PYTHONPATH") or "")},
+            )
+        return await asyncio.create_subprocess_exec(
+            *exec_argv,
+            stdin=asyncio.subprocess.DEVNULL,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=env,
+        )
+
+    def _tun_helper_launch_config_payload(self) -> dict[str, Any]:
+        return {
+            "version": 1,
+            "socket_path": str(self._tun_helper_socket_path or ""),
+            "session_token": str(self._tun_helper_session_token or ""),
+            "backend": str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND),
+            "log_level": str(self._tun_helper_settings.helper_log_level or "INFO"),
+        }
+
+    def _write_tun_helper_launch_config(self) -> str:
+        socket_path = str(self._tun_helper_socket_path or "").strip()
+        if not socket_path:
+            raise RuntimeError("tun helper socket path is not prepared before helper launch config write")
+        runtime_dir = pathlib.Path(self._tun_helper_settings.resolved_runtime_dir()).expanduser().resolve()
+        runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix="tun-helper-launch-", suffix=".json", dir=str(runtime_dir))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(
+                    self._tun_helper_launch_config_payload(),
+                    handle,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+        except Exception:
+            with contextlib.suppress(Exception):
+                os.unlink(path)
+            raise
+        with contextlib.suppress(Exception):
+            os.chmod(path, 0o600)
+        return str(path)
+
+    async def _wait_for_tun_helper_socket_ready(self, *, timeout_s: float = 2.0) -> None:
+        deadline = time.monotonic() + float(timeout_s)
+        while time.monotonic() < deadline:
+            proc = self._tun_helper_process
+            if proc is not None and proc.returncode is not None:
+                raise RuntimeError(f"tun helper process exited early with code {proc.returncode}")
+            if str(self._tun_helper_socket_path or "").startswith("\\\\.\\pipe\\") or is_local_tcp_endpoint(self._tun_helper_socket_path):
+                try:
+                    probe_reader, probe_writer = await _open_local_helper_connection(self._tun_helper_socket_path)
+                except (FileNotFoundError, ConnectionError, OSError, TimeoutError):
+                    pass
+                else:
+                    probe_writer.close()
+                    with contextlib.suppress(Exception):
+                        await probe_writer.wait_closed()
+                    return
+            if os.path.exists(self._tun_helper_socket_path):
+                return
+            await asyncio.sleep(0.02)
+        raise TimeoutError(f"timed out waiting for tun helper socket {self._tun_helper_socket_path}")
+
+    def _tun_helper_socket_ready_timeout_s(self) -> float:
+        settings = self._tun_helper_settings
+        backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
+        helper_executable = self._tun_helper_executable()
+        geteuid = getattr(os, "geteuid", None)
+        needs_linux_helper_privilege = bool(
+            sys.platform.startswith("linux")
+            and backend_name in {"linux-native", "linux_native", "linux-real"}
+            and callable(geteuid)
+            and int(geteuid()) != 0
+        )
+        needs_darwin_helper_privilege = bool(
+            sys.platform.startswith("darwin")
+            and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}
+            and callable(geteuid)
+            and int(geteuid()) != 0
+        )
+        if needs_linux_helper_privilege and not _linux_native_tun_helper_can_launch_without_sudo(helper_executable):
+            return 30.0
+        if needs_darwin_helper_privilege:
+            return 30.0
+        if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"} and not _is_windows_admin():
+            return 30.0
+        return 2.0
+
+    def _tun_helper_executable(self) -> str:
+        override = str(os.environ.get("OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE") or "").strip()
+        return override or sys.executable
+
+    def _tun_helper_response_timeout_s(self) -> float:
+        settings = self._tun_helper_settings
+        backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
+        if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}:
+            return 20.0
+        return 1.0
+
+    async def _stop_tun_helper_process(self) -> None:
+        proc = self._tun_helper_process
+        if proc is None:
+            self._cleanup_tun_helper_launch_config()
+            return
+        if proc.returncode is not None:
+            self._cleanup_tun_helper_launch_config()
+            return
+        if self._tun_helper_client is not None:
+            with contextlib.suppress(Exception):
+                await self._tun_helper_client.request("STOP", {})
+            request_shutdown = getattr(proc, "request_shutdown", None)
+            if callable(request_shutdown):
+                with contextlib.suppress(Exception):
+                    request_shutdown()
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=1.0)
+            self._cleanup_tun_helper_launch_config()
+            return
+        except asyncio.TimeoutError:
+            proc.terminate()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=1.0)
+        if proc.returncode is None:
+            proc.kill()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+        self._cleanup_tun_helper_launch_config()
+
+    def _cleanup_tun_helper_launch_config(self) -> None:
+        path = str(self._tun_helper_config_path or "").strip()
+        self._tun_helper_config_path = ""
+        if not path:
+            return
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(path)
+
     async def start(self) -> None:
         ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
         self._loop = asyncio.get_running_loop()
@@ -446,6 +910,7 @@ class Runner:
             available_crypto_extract(),
         )
         self._ensure_runtime_events()
+        await self._start_tun_helper()
         await self._start_proxy_provider()
 
         # Make the local admin UI available before overlay/session startup can
@@ -622,18 +1087,59 @@ class Runner:
         for idx, mux in enumerate(reversed(self._muxes)):
             await _run_stop_step(f"mux.stop[{idx}]", mux.stop(reason=stop_reason), timeout_s=5.0)
 
+        self.log.debug("[RUNNER] stop: entering tun_helper.stop")
+        await _run_stop_step("tun_helper.stop", self._stop_tun_helper(), timeout_s=3.0)
+
         self.log.debug("[RUNNER] stop: entering _session_obj")
         for idx, session in enumerate(reversed(self._sessions)):
             await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
         self.log.info("[RUNNER] stop leaving reason=%s", stop_reason)
 
+    @staticmethod
+    def _session_connection_layers_snapshot(session: Optional[ISession]) -> list[dict]:
+        if session is None:
+            return []
+        getter = getattr(session, "get_connection_layers_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                layers = list(getter() or [])
+                return [dict(layer) for layer in layers if isinstance(layer, dict)]
+        connected = False
+        with contextlib.suppress(Exception):
+            connected = bool(session.is_connected())
+        return [{
+            "layer": "session",
+            "transport": "",
+            "state": "connected" if connected else "disconnected",
+            "epoch": 0,
+            "connected": connected,
+            "app_ready": connected,
+        }]
+
+    @classmethod
+    def _session_app_ready(cls, session: Optional[ISession]) -> bool:
+        layers = cls._session_connection_layers_snapshot(session)
+        if layers:
+            return bool(layers[-1].get("app_ready"))
+        return False
+
+    @staticmethod
+    def _session_transport_connected_since_unix_ts(session: Optional[ISession], *, peer_id: Optional[int] = None) -> Optional[float]:
+        if session is None:
+            return None
+        getter = getattr(session, "get_transport_connected_since_unix_ts", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                value = getter(peer_id=peer_id)
+                return float(value) if value is not None else None
+        return None
 
     # ---- overlay state propagation (unchanged behavior) -----------------------
     def _on_state_change(self, transport_name: str, session: ISession, connected: bool):
         self.log.debug(f"[SERVER] _on_state_change transport={transport_name} connected={connected}")
 
         now_mono = time.monotonic()
-        aggregate_connected = any(s.is_connected() for s in self._sessions) if self._sessions else connected
+        aggregate_connected = any(self._session_app_ready(s) for s in self._sessions) if self._sessions else self._session_app_ready(session)
         if aggregate_connected:
             self._last_connected_monotonic = now_mono
             self._last_disconnected_monotonic = None
@@ -651,7 +1157,7 @@ class Runner:
             mux = None
         if mux:
             try:
-                asyncio.get_running_loop().create_task(mux.on_overlay_state(connected))
+                asyncio.get_running_loop().create_task(mux.on_overlay_state(self._session_app_ready(session)))
             except RuntimeError:
                 pass
         # Reset overlay epoch state on disconnect so reconnect starts clean.
@@ -720,6 +1226,7 @@ class Runner:
         sessions = 0
         transports: list[str] = []
         matched_target = False
+        restart_fallback_labels: list[str] = []
         for idx, session in enumerate(self._sessions):
             sessions += 1
             peer_row_ids = self._session_peer_row_ids(idx, session)
@@ -727,16 +1234,21 @@ class Runner:
                 if target not in peer_row_ids:
                     continue
                 matched_target = True
+            label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
             method = getattr(session, "request_reconnect", None)
             if not callable(method):
+                if str(label or "").strip().lower() == "myudp":
+                    restart_fallback_labels.append(str(label))
                 continue
             ok = False
             with contextlib.suppress(Exception):
                 ok = bool(method())
             if ok:
                 requested += 1
-                label = self._session_labels[idx] if idx < len(self._session_labels) else f"session-{idx}"
                 transports.append(str(label))
+                continue
+            if str(label or "").strip().lower() == "myudp":
+                restart_fallback_labels.append(str(label))
         if target and not matched_target:
             return {
                 "ok": False,
@@ -745,6 +1257,23 @@ class Runner:
                 "sessions": sessions,
                 "transports": [],
                 "reason": "unknown_peer_id",
+            }
+        if requested <= 0 and restart_fallback_labels:
+            self.request_restart(reason=f"admin_web:/api/reconnect myudp target={target or 'all'}")
+            embedded = callable(getattr(self, "_embedded_restart_callback", None))
+            return {
+                "ok": True,
+                "target_peer_id": target or None,
+                "requested": 1,
+                "sessions": sessions,
+                "transports": restart_fallback_labels[:1],
+                "reason": "",
+                "reconnect_requested": True,
+                "reconnect_supported": True,
+                "restart_requested": True,
+                "restart_embedded": embedded,
+                "restart_delay_sec": 0,
+                "restart_mode": "immediate",
             }
         return {
             "ok": requested > 0,
@@ -755,8 +1284,138 @@ class Runner:
             "reason": "" if requested > 0 else "no reconnect-capable client overlay session is currently running",
         }
 
+    def request_tun_helper_repair(self) -> dict:
+        helper = self._tun_helper_snapshot()
+        recovery = dict(helper.get("recovery") or {})
+        runtime = dict(helper.get("runtime") or {})
+        if not bool(helper.get("enabled")):
+            return {"ok": False, "reason": "tun_helper_disabled", "repaired": [], "failed": []}
+        if bool(helper.get("connected")) or bool(helper.get("server_started")):
+            return {"ok": False, "reason": "helper_still_running", "repaired": [], "failed": []}
+        if not bool(recovery.get("needs_manual_cleanup")):
+            return {"ok": False, "reason": "no_stale_helper_state_detected", "repaired": [], "failed": []}
+        backend_name = str(helper.get("backend") or "").strip().lower()
+        repair_backend = None
+        if backend_name == "linux-native":
+            repair_backend = LinuxTunHelperBackend
+        elif backend_name == "windows-native":
+            repair_backend = WindowsTunHelperBackend
+        if repair_backend is None:
+            return {"ok": False, "reason": "repair_unsupported_for_helper_backend", "repaired": [], "failed": []}
+
+        result = repair_backend.repair_runtime_snapshot(runtime)
+        verification = repair_backend.verify_runtime_snapshot_repaired(runtime)
+        if bool(result.get("ok")):
+            repaired_runtime = dict(result.get("runtime") or {})
+            repaired_runtime["ifname"] = str(runtime.get("ifname") or repaired_runtime.get("ifname") or "")
+            repaired_runtime["backend"] = str(runtime.get("backend") or repaired_runtime.get("backend") or backend_name)
+            self._tun_helper_runtime_snapshot = repaired_runtime
+        status = self._tun_helper_snapshot()
+        status_helper = dict(status.get("tun_helper") or {})
+        status_recovery = dict(status_helper.get("recovery") or {})
+        stale_state_remaining = bool(verification.get("stale_state_remaining")) or bool(status_recovery.get("needs_manual_cleanup"))
+        overall_ok = not stale_state_remaining
+        cleanup_ok = bool(result.get("ok"))
+        if overall_ok and cleanup_ok:
+            summary = "Repair succeeded and post-repair verification did not find remaining helper-owned state."
+        elif overall_ok:
+            summary = "Repair verification did not find remaining helper-owned state, although some cleanup steps reported errors."
+        else:
+            summary = "Repair attempted but some stale helper-owned state may still remain."
+        self._tun_helper_last_repair_snapshot = {
+            "attempted": True,
+            "ok": overall_ok,
+            "cleanup_ok": cleanup_ok,
+            "stale_state_remaining": stale_state_remaining,
+            "repaired": list(result.get("repaired") or []),
+            "failed": list(result.get("failed") or []),
+            "verification": dict(verification or {}),
+            "verified_state": "stale_state_may_remain" if stale_state_remaining else "stale_state_cleared",
+            "summary": summary,
+            "unix_ts": float(time.time()),
+        }
+        return {
+            "ok": overall_ok,
+            "cleanup_ok": cleanup_ok,
+            "reason": "" if overall_ok else "repair_incomplete",
+            "repaired": list(result.get("repaired") or []),
+            "failed": list(result.get("failed") or []),
+            "verification": dict(verification or {}),
+            "status": self._tun_helper_snapshot(),
+        }
+
+    async def probe_tun_connectivity_verification(
+        self,
+        *,
+        ifname: str,
+        target: str,
+        timeout_seconds: float,
+        probe_kind: str,
+    ) -> dict[str, Any]:
+        text_ifname = str(ifname or "").strip()
+        text_target = str(target or "").strip()
+        for mux in self._muxes:
+            prober = getattr(mux, "probe_tun_connectivity", None)
+            if not callable(prober):
+                continue
+            try:
+                result = await prober(
+                    ifname=text_ifname,
+                    target=text_target,
+                    timeout_s=float(timeout_seconds),
+                    probe_kind=str(probe_kind or ""),
+                )
+            except Exception as exc:
+                return {
+                    "label": "TUN connectivity verification",
+                    "ok": False,
+                    "state": "failed",
+                    "summary": "TUN connectivity verification: failed",
+                    "detail": f"Runner probe dispatch failed: {type(exc).__name__}: {exc}",
+                    "target": text_target,
+                    "method": "internal_icmp_echo",
+                    "checked_at_unix_ts": float(time.time()),
+                    "value_ms": None,
+                    "last_success_ago_s": None,
+                    "last_success_rtt_ms": None,
+                }
+            if isinstance(result, dict) and str(result.get("state") or "") != "skipped":
+                return dict(result)
+        return {
+            "label": "TUN connectivity verification",
+            "ok": False,
+            "state": "skipped",
+            "summary": "TUN connectivity verification: skipped",
+            "detail": "No active mux exposed the requested TUN interface for verification.",
+            "target": text_target,
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": float(time.time()),
+            "value_ms": None,
+            "last_success_ago_s": None,
+            "last_success_rtt_ms": None,
+        }
+
     def get_status_snapshot(self) -> dict:
-        payload = dict(self.stats.snapshot_status())
+        try:
+            payload = dict(self.stats.snapshot_status())
+        except Exception as exc:
+            self.log.warning("[RUNNER] stats snapshot failed; returning minimal status: %r", exc)
+            connected = False
+            sess = self._session_obj
+            if sess is not None:
+                with contextlib.suppress(Exception):
+                    connected = bool(self._session_app_ready(sess))
+            payload = {
+                "peer_state": STATE_CONNECTED if connected else STATE_DISCONNECTED,
+                "stats_snapshot_error": type(exc).__name__,
+            }
+        payload["connection_layers"] = [
+            {
+                "transport": str(label),
+                "layers": self._session_connection_layers_snapshot(session),
+            }
+            for label, session in zip(self._session_labels, self._sessions)
+        ]
         summaries: list[dict] = []
         compress_summaries: list[dict] = []
         for session in self._sessions:
@@ -819,6 +1478,7 @@ class Runner:
             "compression_saving_ratio": savings_ratio,
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
+        payload["tun_helper"] = self._tun_helper_snapshot()
         return payload
 
     def get_connections_snapshot(self) -> dict:
@@ -1103,6 +1763,48 @@ class Runner:
             return f"{host}:{listen_port}"
         return None
 
+    def _session_peer_endpoint_for_ui(self, session_obj: Any, transport: Optional[str] = None) -> Optional[object]:
+        candidates: list[Any] = []
+        for candidate in (session_obj, self._unwrap_snapshot_session(session_obj)):
+            if candidate is None:
+                continue
+            if any(candidate is existing for existing in candidates):
+                continue
+            candidates.append(candidate)
+        for candidate in candidates:
+            with contextlib.suppress(Exception):
+                peer_proto = getattr(candidate, "peer_proto", None)
+                send_port = getattr(peer_proto, "send_port", None)
+                peer_addr = getattr(send_port, "peer_addr", None)
+                if isinstance(peer_addr, tuple) and len(peer_addr) >= 2 and peer_addr[0] and int(peer_addr[1]) > 0:
+                    return {"host": str(peer_addr[0]), "port": int(peer_addr[1])}
+            with contextlib.suppress(Exception):
+                host = str(getattr(candidate, "_peer_host") or "").strip()
+                port = int(getattr(candidate, "_peer_port") or 0)
+                if host and port > 0:
+                    return {"host": host, "port": port}
+            with contextlib.suppress(Exception):
+                getter = getattr(candidate, "get_overlay_peers_snapshot", None)
+                if callable(getter):
+                    for row in list(getter() or []):
+                        if bool(row.get("listening")):
+                            continue
+                        peer_value = RunnerMuxAggregate._peer_label_for_ui(row.get("peer"))
+                        if peer_value is not None:
+                            return peer_value
+        if transport:
+            source_args = getattr(session_obj, "_args", None) or self.args
+            with contextlib.suppress(Exception):
+                real_session = self._unwrap_snapshot_session(session_obj)
+                source_args = getattr(real_session, "_args", None) or source_args
+            with contextlib.suppress(Exception):
+                _, peer_attr, peer_port_attr, _ = _overlay_cli_attrs(str(transport or "myudp").strip().lower())
+                host = str(getattr(source_args, peer_attr, "") or "").strip()
+                port = int(getattr(source_args, peer_port_attr, 0) or 0)
+                if host and port > 0:
+                    return {"host": host, "port": port}
+        return None
+
     @staticmethod
     def _session_last_incoming_age_seconds(session: Any) -> Optional[float]:
         candidates = [
@@ -1130,6 +1832,66 @@ class Runner:
             if value is not None:
                 return value
         return None
+
+    def _session_connecting_timer_snapshot(self, session: Any) -> dict:
+        candidates = []
+        for candidate in (session, self._unwrap_snapshot_session(session), getattr(session, "inner_session", None)):
+            if candidate is None:
+                continue
+            if any(candidate is existing for existing in candidates):
+                continue
+            candidates.append(candidate)
+        for candidate in candidates:
+            getter = getattr(candidate, "get_connecting_timer_snapshot", None)
+            if callable(getter):
+                with contextlib.suppress(Exception):
+                    snap = dict(getter() or {})
+                    if snap:
+                        return snap
+        return {"next_address_attempt_in_seconds": None}
+
+    def _client_restart_watchdog_timer_snapshot(self, session: Any) -> dict:
+        timeout_s = float(getattr(self.args, "client_restart_if_disconnected", 0.0) or 0.0)
+        if timeout_s <= 0:
+            return {"restart_in_seconds": None}
+        if not _has_configured_overlay_peer(self.args):
+            return {"restart_in_seconds": None}
+        restart_requested = getattr(self, "_restart_requested", None)
+        if restart_requested is not None and bool(restart_requested.is_set()):
+            return {"restart_in_seconds": None}
+        stop_evt = getattr(self, "_stop", None)
+        if stop_evt is not None and bool(stop_evt.is_set()):
+            return {"restart_in_seconds": None}
+        session_obj = getattr(self, "_session_obj", None)
+        if session_obj is not None:
+            real_session_obj = self._unwrap_snapshot_session(session_obj)
+            real_session = self._unwrap_snapshot_session(session)
+            if session is not session_obj and real_session is not session_obj and real_session is not real_session_obj:
+                return {"restart_in_seconds": None}
+        secure_link_status = {}
+        get_secure_link_status = getattr(session, "get_secure_link_status_snapshot", None)
+        if callable(get_secure_link_status):
+            with contextlib.suppress(Exception):
+                secure_link_status = dict(get_secure_link_status() or {})
+        if (
+            str(secure_link_status.get("state") or "").strip().lower() == "failed"
+            and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
+        ):
+            return {"restart_in_seconds": None}
+        if (
+            bool(secure_link_status.get("recovery_enabled"))
+            and (
+                secure_link_status.get("next_recovery_reconnect_unix_ts") is not None
+                or str(secure_link_status.get("last_event") or "").strip().lower()
+                in {"recovery_reconnect_scheduled", "recovery_reconnect_started"}
+            )
+        ):
+            return {"restart_in_seconds": None}
+        disconnected_since = getattr(self, "_last_disconnected_monotonic", None)
+        if disconnected_since is None:
+            return {"restart_in_seconds": timeout_s}
+        remaining = max(0.0, timeout_s - (time.monotonic() - float(disconnected_since)))
+        return {"restart_in_seconds": remaining}
 
     @staticmethod
     def _session_decode_errors(session: Any) -> int:
@@ -1290,6 +2052,11 @@ class Runner:
                 getter = getattr(session, "get_overlay_peers_snapshot", None)
                 if callable(getter):
                     overlay_rows = list(getter() or [])
+            if not overlay_rows and real_session is not session:
+                with contextlib.suppress(Exception):
+                    getter = getattr(real_session, "get_overlay_peers_snapshot", None)
+                    if callable(getter):
+                        overlay_rows = list(getter() or [])
 
             if overlay_rows:
                 for p in overlay_rows:
@@ -1396,6 +2163,19 @@ class Runner:
 
                     row_connected = bool(p.get("connected", session.is_connected()))
                     row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
+                    secure_link_snapshot = dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot())
+                    connected_since_unix_ts = self._first_non_null(
+                        p.get("connected_since_unix_ts"),
+                        secure_link_snapshot.get("connected_since_unix_ts"),
+                        self._session_transport_connected_since_unix_ts(row_session, peer_id=p.get("peer_id")),
+                        self._session_transport_connected_since_unix_ts(session, peer_id=p.get("peer_id")),
+                    )
+                    connecting_timers = self._session_connecting_timer_snapshot(row_session)
+                    restart_timer = (
+                        self._client_restart_watchdog_timer_snapshot(row_session)
+                        if row_state.strip().lower() == "connecting"
+                        else {"restart_in_seconds": None}
+                    )
                     peers.append({
                         "id": f"{idx}:{p.get('peer_id', 0)}",
                         "transport": label,
@@ -1412,6 +2192,7 @@ class Runner:
                             p.get("transmit_delay_est_ms"),
                             row_metrics.transmit_delay_est_ms,
                         ),
+                        "connected_since_unix_ts": connected_since_unix_ts,
                         "last_incoming_age_seconds": self._first_non_null(
                             p.get("last_incoming_age_seconds"),
                             self._session_last_incoming_age_seconds(row_session),
@@ -1429,8 +2210,16 @@ class Runner:
                         },
                         "throttle": p_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                         "myudp": self._session_retransmit_stats(row_session),
-                        "secure_link": dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot()),
+                        "secure_link": secure_link_snapshot,
                         "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
+                        "next_address_attempt_in_seconds": self._first_non_null(
+                            p.get("next_address_attempt_in_seconds"),
+                            connecting_timers.get("next_address_attempt_in_seconds"),
+                        ),
+                        "restart_in_seconds": self._first_non_null(
+                            p.get("restart_in_seconds"),
+                            restart_timer.get("restart_in_seconds"),
+                        ),
                     })
                 continue
 
@@ -1445,33 +2234,30 @@ class Runner:
             for archived in peer_payload_totals.values():
                 rx_bytes += int(archived.get("rx_bytes", 0) or 0)
                 tx_bytes += int(archived.get("tx_bytes", 0) or 0)
-            peer_label = None
-            with contextlib.suppress(Exception):
-                if hasattr(session, "peer_proto") and getattr(session, "peer_proto"):
-                    pa = getattr(getattr(session, "peer_proto"), "send_port").peer_addr
-                    if pa:
-                        peer_label = f"{pa[0]}:{pa[1]}"
-            with contextlib.suppress(Exception):
-                if not peer_label and hasattr(session, "_peer_host") and hasattr(session, "_peer_port"):
-                    host = str(getattr(session, "_peer_host") or "")
-                    port = int(getattr(session, "_peer_port") or 0)
-                    if host and port > 0:
-                        peer_label = f"[{host}]:{port}" if ":" in host and not host.startswith("[") else f"{host}:{port}"
+            peer_label = self._session_peer_endpoint_for_ui(session, transport=label)
             decode_errors = 0
             with contextlib.suppress(Exception):
-                pp = getattr(session, "peer_proto", None)
+                pp = getattr(real_session, "peer_proto", None) or getattr(session, "peer_proto", None)
                 if pp is not None:
                     decode_errors = int(getattr(pp, "unidentified_frames", 0) or 0)
+            row_state = "connected" if bool(session.is_connected()) else "connecting"
+            connecting_timers = self._session_connecting_timer_snapshot(real_session)
+            restart_timer = (
+                self._client_restart_watchdog_timer_snapshot(real_session)
+                if row_state == "connecting"
+                else {"restart_in_seconds": None}
+            )
             peers.append({
                 "id": idx,
                 "transport": label,
-                "state": "connected" if bool(session.is_connected()) else "connecting",
+                "state": row_state,
                 "connected": bool(session.is_connected()),
                 "listen": listen_endpoint,
                 "peer": peer_label,
                 "rtt_est_ms": m.rtt_est_ms,
                 "transmit_delay_sample_ms": m.transmit_delay_sample_ms,
                 "transmit_delay_est_ms": m.transmit_delay_est_ms,
+                "connected_since_unix_ts": self._session_transport_connected_since_unix_ts(session),
                 "last_incoming_age_seconds": self._session_last_incoming_age_seconds(real_session),
                 "inflight": m.inflight,
                 "decode_errors": decode_errors,
@@ -1486,6 +2272,8 @@ class Runner:
                 },
                 "throttle": peer_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                 "myudp": self._session_retransmit_stats(session),
+                "next_address_attempt_in_seconds": connecting_timers.get("next_address_attempt_in_seconds"),
+                "restart_in_seconds": restart_timer.get("restart_in_seconds"),
                 "secure_link": dict(
                     getattr(
                         session,
@@ -1711,7 +2499,30 @@ class Runner:
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
-        normalized_updates = dict(updates)
+        section_aliases = {
+            "channel_mux": {
+                "egress": "channel_mux_egress",
+            },
+            "proxy_provider": {
+                "enabled": "proxy_provider_enabled",
+                "bind": "proxy_provider_bind",
+                "http_port": "proxy_provider_http_port",
+                "socks5_port": "proxy_provider_socks5_port",
+                "protocols": "proxy_provider_protocols",
+                "auth": "proxy_provider_auth",
+                "egress": "proxy_provider_egress",
+                "policy": "proxy_provider_policy",
+            },
+        }
+        section_keys = set((getattr(self.args, "_config_sections", {}) or {}).keys())
+        normalized_updates: dict[str, Any] = {}
+        for key, value in dict(updates).items():
+            if key in section_keys and isinstance(value, dict):
+                alias_map = section_aliases.get(str(key), {})
+                for nested_key, nested_value in value.items():
+                    normalized_updates[str(alias_map.get(nested_key, nested_key))] = nested_value
+                continue
+            normalized_updates[str(key)] = value
         if normalized_updates.get("admin_web_auth_disable") is True:
             normalized_updates["admin_web_username"] = ""
             normalized_updates["admin_web_password"] = ""
@@ -1967,6 +2778,15 @@ from .bridge_proxy_server import (
     ObstacleBridgeProxyServer,
     ObstacleBridgeProxyServerConfig,
     ProxyCredentials,
+)
+from .bridge_tun_helper_client import TunHelperClient
+from .bridge_tun_helper_local_transport import is_local_tcp_endpoint, is_windows_pipe_path
+from .bridge_tun_helper_linux import LinuxTunHelperBackend, LinuxTunHelperInMemoryBackend
+from .bridge_tun_helper_windows import WindowsTunHelperBackend
+from .bridge_tun_helper_settings import (
+    DEFAULT_TUN_HELPER_BACKEND,
+    TUN_EXECUTION_SECTION,
+    TunExecutionSettings,
 )
 from .bridge_tun_routing import TUN_ROUTING_SECTION, TunRoutingSettings
 from .bridge_webadmin import AdminWebUI
@@ -2455,6 +3275,9 @@ class ConfigAwareCLI:
         actions = self._scan_actions(parser)
         flat: Dict[str, Any] = {}
         nested_dest_aliases = {
+            "channel_mux": {
+                "egress": "channel_mux_egress",
+            },
             "proxy_provider": {
                 "enabled": "proxy_provider_enabled",
                 "bind": "proxy_provider_bind",
@@ -2464,7 +3287,14 @@ class ConfigAwareCLI:
                 "auth": "proxy_provider_auth",
                 "egress": "proxy_provider_egress",
                 "policy": "proxy_provider_policy",
-            }
+            },
+            "tun_execution": {
+                "mode": "tun_execution_mode",
+                "helper_backend": "tun_helper_backend",
+                "helper_socket": "tun_helper_socket",
+                "helper_apply_network": "tun_helper_apply_network",
+                "helper_log_level": "tun_helper_log_level",
+            },
         }
         # Prefer grouped section values over legacy duplicate root keys.
         for section in self._sections.keys():
@@ -2502,6 +3332,7 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("channel_mux",        ChannelMux.register_cli),
         ("proxy_provider",     ObstacleBridgeProxyProviderSettings.register_cli),
         (IOS_TUN_CONNECTOR_SECTION, IOSTUNConnectorSettings.register_cli),
+        (TUN_EXECUTION_SECTION, TunExecutionSettings.register_cli),
         (TUN_ROUTING_SECTION,   TunRoutingSettings.register_cli),
         ("runner",             Runner.register_overlay_cli),
         ("udp_session",        UdpSession.register_cli),
@@ -2678,6 +3509,33 @@ def _configured_packetflow_connector_mode(args: argparse.Namespace) -> str:
     return str(getattr(args, "packetflow_connector", "") or "").strip().lower()
 
 
+def _configured_tun_execution_settings(args: argparse.Namespace) -> TunExecutionSettings:
+    return TunExecutionSettings.from_mapping(vars(args))
+
+
+def _helper_mode_enabled(args: argparse.Namespace) -> bool:
+    return str(_configured_tun_execution_settings(args).mode or "").strip().lower() == "helper"
+
+
+def _needs_linux_tun_elevation(args: argparse.Namespace) -> bool:
+    if not sys.platform.startswith("linux"):
+        return False
+    geteuid = getattr(os, "geteuid", None)
+    if not callable(geteuid):
+        return False
+    if int(geteuid()) == 0:
+        return False
+    if str(os.environ.get("OBSTACLEBRIDGE_LINUX_TUN_ELEVATED", "") or "").strip():
+        return False
+    if not _configured_local_tun_services(args):
+        return False
+    if _configured_packetflow_connector_mode(args):
+        return False
+    if _helper_mode_enabled(args):
+        return False
+    return True
+
+
 def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
     if not sys.platform.startswith("darwin"):
         return False
@@ -2692,19 +3550,220 @@ def _needs_macos_tun_elevation(args: argparse.Namespace) -> bool:
         return False
     if _configured_packetflow_connector_mode(args):
         return False
+    if _helper_mode_enabled(args):
+        return False
     return True
 
 
-def _macos_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+def _is_windows_admin() -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    if shell32 is None:
+        return False
+    try:
+        return bool(shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _needs_windows_tun_elevation(args: argparse.Namespace) -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    if _is_windows_admin():
+        return False
+    if str(os.environ.get("OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED", "") or "").strip():
+        return False
+    if not _configured_local_tun_services(args):
+        return False
+    if _configured_packetflow_connector_mode(args):
+        return False
+    return True
+
+
+def _sudo_tun_elevation_exec_argv(
+    argv: Optional[List[str]] = None,
+    *,
+    elevated_marker_env: str,
+) -> list[str]:
     runtime_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    preserve_names = [
+        elevated_marker_env,
+        "OBSTACLEBRIDGE_MACOS_TUN_ELEVATED",
+        "OBSTACLEBRIDGE_LINUX_TUN_ELEVATED",
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+    ]
+    preserve_names = list(dict.fromkeys(preserve_names))
     return [
         "sudo",
         "-E",
+        f"--preserve-env={','.join(preserve_names)}",
         sys.executable,
         "-m",
         "obstacle_bridge.bridge_runner",
         *runtime_argv,
     ]
+
+
+def _macos_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    return _sudo_tun_elevation_exec_argv(
+        argv,
+        elevated_marker_env="OBSTACLEBRIDGE_MACOS_TUN_ELEVATED",
+    )
+
+
+def _linux_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    return _sudo_tun_elevation_exec_argv(
+        argv,
+        elevated_marker_env="OBSTACLEBRIDGE_LINUX_TUN_ELEVATED",
+    )
+
+
+def _sudo_tun_helper_exec_argv(module_argv: list[str]) -> list[str]:
+    preserve_names = [
+        "PYTHONPATH",
+        "VIRTUAL_ENV",
+        "XDG_RUNTIME_DIR",
+    ]
+    preserve_names = list(dict.fromkeys(preserve_names))
+    return [
+        "sudo",
+        "-E",
+        f"--preserve-env={','.join(preserve_names)}",
+        *module_argv,
+    ]
+
+
+_LINUX_CAPABILITY_NAMES = {
+    12: "cap_net_admin",
+    21: "cap_sys_admin",
+}
+
+
+def _linux_effective_capability_names() -> set[str]:
+    if not sys.platform.startswith("linux"):
+        return set()
+    try:
+        with open("/proc/self/status", "r", encoding="utf-8") as handle:
+            for line in handle:
+                if not line.startswith("CapEff:"):
+                    continue
+                raw = line.split(":", 1)[1].strip()
+                value = int(raw, 16)
+                out: set[str] = set()
+                for bit, name in _LINUX_CAPABILITY_NAMES.items():
+                    if value & (1 << bit):
+                        out.add(name)
+                return out
+    except Exception:
+        return set()
+    return set()
+
+
+def _linux_executable_capability_names(executable: str) -> set[str]:
+    path = str(executable or "").strip()
+    if not sys.platform.startswith("linux") or not path:
+        return set()
+    getcap_path = shutil.which("getcap")
+    if not getcap_path:
+        return set()
+    try:
+        result = subprocess.run(
+            [getcap_path, path],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return set()
+    text = str(result.stdout or "").strip().lower()
+    out: set[str] = set()
+    if "cap_net_admin" in text:
+        out.add("cap_net_admin")
+    if "cap_sys_admin" in text:
+        out.add("cap_sys_admin")
+    return out
+
+
+def _linux_native_tun_helper_can_launch_without_sudo(executable: str) -> bool:
+    effective = _linux_effective_capability_names()
+    if {"cap_net_admin", "cap_sys_admin"} & effective:
+        return True
+    file_caps = _linux_executable_capability_names(executable)
+    if {"cap_net_admin", "cap_sys_admin"} & file_caps:
+        return True
+    return False
+
+
+class _WindowsElevatedHelperProcess:
+    def __init__(self, *, pid: int = 0) -> None:
+        self.pid = int(pid)
+        self.returncode = None
+        self._wait_event = asyncio.Event()
+
+    async def wait(self) -> int:
+        await self._wait_event.wait()
+        return 0 if self.returncode is None else int(self.returncode)
+
+    def request_shutdown(self) -> None:
+        if self.returncode is None:
+            self.returncode = 0
+        self._wait_event.set()
+
+    def terminate(self) -> None:
+        self.request_shutdown()
+
+    def kill(self) -> None:
+        if self.returncode is None:
+            self.returncode = -9
+        self._wait_event.set()
+
+
+def _maybe_reexec_with_sudo_tun_privileges(
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+    notice: str,
+    marker_env: str,
+    cmd: list[str],
+    platform_name: str,
+) -> None:
+    sudo_path = shutil.which("sudo")
+    if not sudo_path:
+        raise RuntimeError(
+            f"{platform_name} local TUN services require elevated privileges, but sudo is not available. "
+            "Install sudo or run the runtime as root."
+        )
+    env = dict(os.environ)
+    env[marker_env] = "1"
+    print(notice, file=sys.stderr, flush=True)
+    log.warning(
+        "[RUNNER] re-executing with elevated privileges for %s local TUN service(s)",
+        platform_name,
+    )
+    os.execvpe(sudo_path, cmd, env)
+
+
+def _maybe_reexec_with_linux_tun_privileges(
+    args: argparse.Namespace,
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+) -> None:
+    if not _needs_linux_tun_elevation(args):
+        return
+    _maybe_reexec_with_sudo_tun_privileges(
+        argv=argv,
+        log=log,
+        notice=(
+            "ObstacleBridge needs elevated privileges to create/configure the local Linux TUN device. "
+            "sudo may now ask for your password."
+        ),
+        marker_env="OBSTACLEBRIDGE_LINUX_TUN_ELEVATED",
+        cmd=_linux_tun_elevation_exec_argv(argv),
+        platform_name="Linux",
+    )
 
 
 def _maybe_reexec_with_macos_tun_privileges(
@@ -2715,26 +3774,133 @@ def _maybe_reexec_with_macos_tun_privileges(
 ) -> None:
     if not _needs_macos_tun_elevation(args):
         return
-    sudo_path = shutil.which("sudo")
-    if not sudo_path:
-        raise RuntimeError(
-            "macOS local TUN services require elevated privileges, but sudo is not available. "
-            "Install sudo or run the runtime as root."
-        )
-    cmd = _macos_tun_elevation_exec_argv(argv)
-    env = dict(os.environ)
-    env["OBSTACLEBRIDGE_MACOS_TUN_ELEVATED"] = "1"
-    log.warning(
-        "[RUNNER] re-executing with elevated privileges for macOS local TUN service(s); "
-        "this keeps the Python TUN lifecycle aligned with the Linux route/interface model"
+    _maybe_reexec_with_sudo_tun_privileges(
+        argv=argv,
+        log=log,
+        notice=(
+            "ObstacleBridge needs elevated privileges to create/configure the local macOS TUN device. "
+            "sudo may now ask for your password."
+        ),
+        marker_env="OBSTACLEBRIDGE_MACOS_TUN_ELEVATED",
+        cmd=_macos_tun_elevation_exec_argv(argv),
+        platform_name="macOS",
     )
-    os.execvpe(sudo_path, cmd, env)
+
+
+def _windows_tun_elevation_exec_argv(argv: Optional[List[str]] = None) -> list[str]:
+    runtime_argv = list(argv) if argv is not None else list(sys.argv[1:])
+    return [
+        "-m",
+        "obstacle_bridge.bridge_runner",
+        *runtime_argv,
+    ]
+
+
+def _powershell_single_quoted(text: str) -> str:
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def _windows_python_shell_execute(
+    exec_argv: list[str],
+    *,
+    env_updates: Optional[Mapping[str, str]] = None,
+) -> tuple[str, str]:
+    script_lines: list[str] = []
+    for key, value in dict(env_updates or {}).items():
+        script_lines.append(f"$env:{key} = {_powershell_single_quoted(value)}")
+    arg_list = ", ".join(_powershell_single_quoted(part) for part in exec_argv)
+    script_lines.append(f"& {_powershell_single_quoted(sys.executable)} @({arg_list})")
+    script = "\n".join(script_lines)
+    encoded = base64.b64encode(script.encode("utf-16le")).decode("ascii")
+    return (
+        "powershell.exe",
+        f"-NoProfile -ExecutionPolicy Bypass -EncodedCommand {encoded}",
+    )
+
+
+def _windows_tun_elevation_shell_execute(
+    argv: Optional[List[str]] = None,
+) -> tuple[str, str]:
+    exec_argv = _windows_tun_elevation_exec_argv(argv)
+    env_updates = {
+        "OBSTACLEBRIDGE_WINDOWS_TUN_ELEVATED": "1",
+    }
+    wintun_dir = str(os.environ.get("WINTUN_DIR", "") or "").strip()
+    if wintun_dir:
+        env_updates["WINTUN_DIR"] = wintun_dir
+    return _windows_python_shell_execute(exec_argv, env_updates=env_updates)
+
+
+def _windows_tun_helper_shell_execute(
+    module_argv: list[str],
+    *,
+    env_updates: Optional[Mapping[str, str]] = None,
+) -> tuple[str, str]:
+    merged_env = {
+        "OBSTACLEBRIDGE_WINDOWS_TUN_HELPER_ELEVATED": "1",
+    }
+    merged_env.update({str(key): str(value) for key, value in dict(env_updates or {}).items() if str(value)})
+    wintun_dir = str(os.environ.get("WINTUN_DIR", "") or "").strip()
+    if wintun_dir and "WINTUN_DIR" not in merged_env:
+        merged_env["WINTUN_DIR"] = wintun_dir
+    return _windows_python_shell_execute(module_argv, env_updates=merged_env)
+
+
+def _launch_windows_elevated_helper_process(
+    module_argv: list[str],
+    *,
+    env_updates: Optional[Mapping[str, str]] = None,
+) -> _WindowsElevatedHelperProcess:
+    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    if shell32 is None:
+        raise RuntimeError(
+            "Windows helper mode with the windows-native backend needs Administrator privileges, but shell32 is not available "
+            "to request a UAC elevation prompt for the helper subprocess."
+        )
+    executable, params = _windows_tun_helper_shell_execute(module_argv, env_updates=env_updates)
+    rc = int(shell32.ShellExecuteW(None, "runas", executable, params, os.getcwd(), 1))
+    if rc <= 32:
+        raise RuntimeError(
+            "Windows helper mode with the windows-native backend needs Administrator privileges, but the helper elevation request "
+            f"failed or was cancelled (ShellExecuteW rc={rc})."
+        )
+    return _WindowsElevatedHelperProcess()
+
+
+def _maybe_reexec_with_windows_tun_privileges(
+    args: argparse.Namespace,
+    *,
+    argv: Optional[List[str]],
+    log: logging.Logger,
+) -> None:
+    if not _needs_windows_tun_elevation(args):
+        return
+    shell32 = getattr(getattr(ctypes, "windll", None), "shell32", None)
+    if shell32 is None:
+        raise RuntimeError(
+            "Windows local TUN services require Administrator privileges, but shell32 is not available "
+            "to request a UAC elevation prompt."
+        )
+    executable, params = _windows_tun_elevation_shell_execute(argv)
+    log.warning(
+        "[RUNNER] re-executing with elevated privileges for Windows local TUN service(s); "
+        "this prompts for UAC so the WinTun adapter can be created in the same Python runtime path"
+    )
+    rc = int(shell32.ShellExecuteW(None, "runas", executable, params, os.getcwd(), 1))
+    if rc <= 32:
+        raise RuntimeError(
+            "Windows local TUN services require Administrator privileges, but the elevation request "
+            f"failed or was cancelled (ShellExecuteW rc={rc})."
+        )
+    raise SystemExit(0)
 
 
 def main(argv: Optional[List[str]] = None) -> None:
     args = parse_runtime_args(argv, apply_logging=True)
     log = logging.getLogger("runner")
+    _maybe_reexec_with_linux_tun_privileges(args, argv=argv, log=log)
     _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
+    _maybe_reexec_with_windows_tun_privileges(args, argv=argv, log=log)
     r = Runner(args)
     installed_signal_handlers = _install_process_signal_handlers(r, log)
     log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])

@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import concurrent.futures
 import copy
+import shutil
+import subprocess
+import sys
 import threading
 
 from ._bridge_import import export_bridge_globals
@@ -16,6 +19,7 @@ class AdminWebUI:
     LIVE_WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
     LIVE_TOPICS = ("status", "connections", "peers", "tun_routing", "meta")
     ONBOARDING_TOKEN_PREFIX = "ob1."
+    PING_VERIFICATION_CACHE_TTL_SEC = 2.0
 
     @staticmethod
     def _transport_attr_prefix(transport: str) -> str:
@@ -116,6 +120,9 @@ class AdminWebUI:
         self._server_start_error: Optional[BaseException] = None
         self._snapshot_cache_lock = threading.Lock()
         self._snapshot_cache: Dict[str, dict] = {}
+        self._verification_cache_lock = threading.Lock()
+        self._verification_cache: Dict[tuple[str, str, str, int], dict[str, Any]] = {}
+        self._verification_refreshing: Set[tuple[str, str, str, int]] = set()
         self.log = logging.getLogger("admin_web")
         DebugLoggingConfigurator.debug_logger_status(self.log)
         self.started_monotonic = time.monotonic()
@@ -342,6 +349,13 @@ class AdminWebUI:
 
         runner_loop.call_soon_threadsafe(_invoke)
 
+    def _call_runner_coro(self, coro, *, timeout: float = 1.0):
+        runner_loop = self._runner_loop
+        if runner_loop is None:
+            return asyncio.run(coro)
+        fut = asyncio.run_coroutine_threadsafe(coro, runner_loop)
+        return fut.result(timeout=timeout)
+
     def _cache_snapshot(self, topic: str, payload: dict) -> None:
         with self._snapshot_cache_lock:
             self._snapshot_cache[str(topic)] = {
@@ -360,6 +374,14 @@ class AdminWebUI:
                 age_sec = max(0.0, time.monotonic() - float(updated_monotonic))
         if not payload:
             payload = {"ok": False}
+            if str(topic) == "status":
+                sess = getattr(self.runner, "_session_obj", None)
+                if sess is not None:
+                    with contextlib.suppress(Exception):
+                        payload = {
+                            "ok": True,
+                            "peer_state": "CONNECTED" if bool(sess.is_connected()) else "DISCONNECTED",
+                        }
         async_diag_fn = getattr(self.runner, "get_async_diagnostics_snapshot", None)
         if callable(async_diag_fn):
             with contextlib.suppress(Exception):
@@ -528,6 +550,10 @@ class AdminWebUI:
                 await self._handle_tun_routing_status(writer)
                 return
 
+            if path == "/api/tun-helper/repair":
+                await self._handle_tun_helper_repair(writer, method, headers)
+                return
+
             if path == "/api/onboarding/connection-profiles":
                 await self._handle_onboarding_connection_profiles(writer, method)
                 return
@@ -582,9 +608,365 @@ class AdminWebUI:
         self._log_api_response("/api/connections", 200, payload)
         await self._send_json(writer, 200, payload)
 
+    @staticmethod
+    def _selected_tun_ifname(tun_rows: list[dict], status_snapshot: dict) -> str:
+        helper = dict(status_snapshot.get("tun_helper") or {})
+        runtime = dict(helper.get("runtime") or {})
+        ifname = str(runtime.get("ifname") or "").strip()
+        if ifname:
+            return ifname
+        for row in tun_rows:
+            local = row.get("local") if isinstance(row, dict) else None
+            if isinstance(local, dict):
+                ifname = str(local.get("ifname") or "").strip()
+                if ifname:
+                    return ifname
+        return ""
+
+    @staticmethod
+    def _probe_tun_interface_addresses(ifname: str) -> dict[str, Any]:
+        text_ifname = str(ifname or "").strip()
+        if not text_ifname:
+            return {"ok": False, "ipv4": [], "ipv6": [], "detail": "TUN interface name unavailable."}
+        if sys.platform == "darwin":
+            return AdminWebUI._probe_tun_interface_addresses_darwin(text_ifname)
+        ip_bin = shutil.which("ip")
+        if not ip_bin:
+            return {"ok": False, "ipv4": [], "ipv6": [], "detail": "ip command unavailable."}
+        try:
+            result = subprocess.run(
+                [ip_bin, "addr", "show", "dev", text_ifname],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "ipv4": [],
+                "ipv6": [],
+                "detail": f"Interface probe failed: {type(exc).__name__}: {exc}",
+            }
+        ipv4: list[str] = []
+        ipv6: list[str] = []
+        for line in str(result.stdout or "").splitlines():
+            stripped = str(line or "").strip()
+            if stripped.startswith("inet "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    ipv4.append(str(parts[1]))
+            elif stripped.startswith("inet6 "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    ipv6.append(str(parts[1]))
+        return {
+            "ok": int(result.returncode or 0) == 0,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "detail": str(result.stderr or "").strip(),
+        }
+
+    @staticmethod
+    def _probe_tun_interface_addresses_darwin(ifname: str) -> dict[str, Any]:
+        ifconfig_bin = shutil.which("ifconfig")
+        if not ifconfig_bin:
+            return {"ok": False, "ipv4": [], "ipv6": [], "detail": "ifconfig command unavailable."}
+        try:
+            result = subprocess.run(
+                [ifconfig_bin, str(ifname)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+        except Exception as exc:
+            return {
+                "ok": False,
+                "ipv4": [],
+                "ipv6": [],
+                "detail": f"Interface probe failed: {type(exc).__name__}: {exc}",
+            }
+        ipv4: list[str] = []
+        ipv6: list[str] = []
+        for line in str(result.stdout or "").splitlines():
+            stripped = str(line or "").strip()
+            if stripped.startswith("inet "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    ipv4.append(str(parts[1]))
+            elif stripped.startswith("inet6 "):
+                parts = stripped.split()
+                if len(parts) >= 2:
+                    ipv6.append(str(parts[1]).split("%", 1)[0])
+        return {
+            "ok": int(result.returncode or 0) == 0,
+            "ipv4": ipv4,
+            "ipv6": ipv6,
+            "detail": str(result.stderr or "").strip(),
+        }
+
+    @staticmethod
+    def _verification_result(*, label: str, ok: bool, summary: str, detail: str, target: str = "", state: str = "verified") -> dict[str, Any]:
+        return {
+            "label": label,
+            "ok": bool(ok),
+            "state": str(state),
+            "summary": str(summary),
+            "detail": str(detail),
+            "target": str(target or ""),
+            "checked_at_unix_ts": float(time.time()),
+        }
+
+    @staticmethod
+    def _decorate_probe_result(result: dict[str, Any], *, label: str, target: str) -> dict[str, Any]:
+        doc = dict(result or {})
+        doc.setdefault("label", str(label or ""))
+        doc.setdefault("target", str(target or ""))
+        doc.setdefault("method", "internal_icmp_echo")
+        doc.setdefault("checked_at_unix_ts", float(time.time()))
+        doc.setdefault("value_ms", None)
+        doc.setdefault("last_success_ago_s", None)
+        doc.setdefault("last_success_rtt_ms", doc.get("value_ms"))
+        return doc
+
+    def _probe_verification(self, *, label: str, target: str, ifname: str, wait_seconds: int = 2, probe_kind: str) -> dict[str, Any]:
+        text_target = str(target or "").strip()
+        text_ifname = str(ifname or "").strip()
+        if not text_target:
+            return self._decorate_probe_result(AdminWebUI._verification_result(
+                label=label,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail="Verification target is not configured.",
+            ), label=label, target=text_target)
+        if not text_ifname:
+            return self._decorate_probe_result(AdminWebUI._verification_result(
+                label=label,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail="TUN interface name unavailable.",
+                target=text_target,
+            ), label=label, target=text_target)
+        try:
+            result = self._call_runner_coro(
+                self.runner.probe_tun_connectivity_verification(
+                    ifname=text_ifname,
+                    target=text_target,
+                    timeout_seconds=float(wait_seconds),
+                    probe_kind=str(probe_kind or ""),
+                ),
+                timeout=max(1.0, float(wait_seconds) + 1.0),
+            )
+        except concurrent.futures.TimeoutError:
+            return self._decorate_probe_result(AdminWebUI._verification_result(
+                label=label,
+                ok=False,
+                state="failed",
+                summary=f"{label}: failed",
+                detail="Runner probe timed out.",
+                target=text_target,
+            ), label=label, target=text_target)
+        except Exception as exc:
+            return self._decorate_probe_result(AdminWebUI._verification_result(
+                label=label,
+                ok=False,
+                state="failed",
+                summary=f"{label}: failed",
+                detail=f"Internal probe failed: {type(exc).__name__}: {exc}",
+                target=text_target,
+            ), label=label, target=text_target)
+        return self._decorate_probe_result(dict(result or {}), label=label, target=text_target)
+
+    def _schedule_probe_verification_refresh(
+        self,
+        cache_key: tuple[str, str, str, int, str],
+        *,
+        label: str,
+        target: str,
+        ifname: str,
+        wait_seconds: int,
+        probe_kind: str,
+    ) -> None:
+        def _worker() -> None:
+            try:
+                result = self._probe_verification(
+                    label=label,
+                    target=target,
+                    ifname=ifname,
+                    wait_seconds=wait_seconds,
+                    probe_kind=probe_kind,
+                )
+            finally:
+                with self._verification_cache_lock:
+                    self._verification_refreshing.discard(cache_key)
+            with self._verification_cache_lock:
+                self._verification_cache[cache_key] = {
+                    "cached_at_monotonic": float(time.monotonic()),
+                    "result": result,
+                }
+
+        worker = threading.Thread(
+            target=_worker,
+            name=f"ObstacleBridgeAdminTunProbe:{label}",
+            daemon=True,
+        )
+        worker.start()
+
+    @staticmethod
+    def _decorate_cached_verification_result(result: dict[str, Any], *, stale: bool, refresh_in_flight: bool) -> dict[str, Any]:
+        decorated = dict(result or {})
+        decorated["cached"] = True
+        decorated["stale"] = bool(stale)
+        decorated["refresh_in_flight"] = bool(refresh_in_flight)
+        return decorated
+
+    def _cached_probe_verification(
+        self,
+        *,
+        label: str,
+        target: str,
+        ifname: str,
+        wait_seconds: int = 2,
+        probe_kind: str,
+    ) -> dict[str, Any]:
+        text_target = str(target or "").strip()
+        text_ifname = str(ifname or "").strip()
+        if not text_target or not text_ifname:
+            return self._probe_verification(
+                label=label,
+                target=text_target,
+                ifname=text_ifname,
+                wait_seconds=wait_seconds,
+                probe_kind=probe_kind,
+            )
+        if self._server_thread is None or threading.current_thread() is not self._server_thread:
+            return self._probe_verification(
+                label=label,
+                target=text_target,
+                ifname=text_ifname,
+                wait_seconds=wait_seconds,
+                probe_kind=probe_kind,
+            )
+        cache_key = (str(label), text_target, text_ifname, int(wait_seconds), str(probe_kind or ""))
+        now = float(time.monotonic())
+        with self._verification_cache_lock:
+            cached_entry = self._verification_cache.get(cache_key) or {}
+            cached_result = dict(cached_entry.get("result") or {})
+            cached_at = float(cached_entry.get("cached_at_monotonic") or 0.0)
+            refresh_in_flight = cache_key in self._verification_refreshing
+            fresh = bool(cached_result) and (now - cached_at) <= float(self.PING_VERIFICATION_CACHE_TTL_SEC)
+            if fresh:
+                return self._decorate_cached_verification_result(
+                    cached_result,
+                    stale=False,
+                    refresh_in_flight=refresh_in_flight,
+                )
+            if not refresh_in_flight:
+                self._verification_refreshing.add(cache_key)
+                self._schedule_probe_verification_refresh(
+                    cache_key,
+                    label=label,
+                    target=text_target,
+                    ifname=text_ifname,
+                    wait_seconds=wait_seconds,
+                    probe_kind=probe_kind,
+                )
+                refresh_in_flight = True
+            if cached_result:
+                return self._decorate_cached_verification_result(
+                    cached_result,
+                    stale=True,
+                    refresh_in_flight=refresh_in_flight,
+                )
+        return self._verification_result(
+            label=label,
+            ok=False,
+            state="pending",
+            summary=f"{label}: pending",
+            detail=f"Verification scheduled for {text_target}; awaiting background refresh.",
+            target=text_target,
+        )
+
+    def _build_tun_verification_payload(self, tun_rows: list[dict], status_snapshot: dict, tun_cfg: TunRoutingSettings) -> dict[str, Any]:
+        ifname = self._selected_tun_ifname(tun_rows, status_snapshot)
+        observed = self._probe_tun_interface_addresses(ifname)
+        observed4 = [str(item).split("/", 1)[0] for item in list(observed.get("ipv4") or [])]
+        observed6 = [str(item).split("/", 1)[0] for item in list(observed.get("ipv6") or [])]
+        expected4 = str(tun_cfg.tunnel_address or "").strip()
+        expected6 = str(tun_cfg.tunnel_address6 or "").strip()
+        has4 = not expected4 or expected4 in observed4
+        has6 = not expected6 or expected6 in observed6
+        if not ifname:
+            config_check = self._verification_result(
+                label="TUN config verified",
+                ok=False,
+                state="skipped",
+                summary="TUN config verified: skipped",
+                detail="No active TUN interface is available for verification.",
+            )
+        elif has4 and has6:
+            config_check = self._verification_result(
+                label="TUN config verified",
+                ok=True,
+                state="verified",
+                summary="TUN config verified",
+                detail=f"Observed addresses on {ifname}: IPv4 {expected4 or '-'}, IPv6 {expected6 or '-' }.",
+            )
+        else:
+            missing: list[str] = []
+            if expected4 and not has4:
+                missing.append(f"IPv4 {expected4}")
+            if expected6 and not has6:
+                missing.append(f"IPv6 {expected6}")
+            config_check = self._verification_result(
+                label="TUN config verified",
+                ok=False,
+                state="failed",
+                summary="TUN config verified: failed",
+                detail=(
+                    f"Missing expected addresses on {ifname}: {', '.join(missing)}. "
+                    f"Observed IPv4: {', '.join(observed4) or '-'}; observed IPv6: {', '.join(observed6) or '-'}"
+                ),
+            )
+        peer_target = ""
+        virtual_probe_source4 = str(getattr(tun_cfg, "global_connectivity_source_ipv4", "") or "").strip()
+        if virtual_probe_source4:
+            peer_target = str(tun_cfg.tunnel_address or "").strip()
+        if not peer_target:
+            peer_target = str(tun_cfg.tunnel_gateway or tun_cfg._local_gateway4() or "").strip()
+        global_host = str(tun_cfg.global_connectivity_host or "").strip()
+        return {
+            "ifname": ifname,
+            "observed_addresses": {
+                "ipv4": list(observed.get("ipv4") or []),
+                "ipv6": list(observed.get("ipv6") or []),
+            },
+            "global_connectivity_host": global_host,
+            "tun_config": config_check,
+            "tun_connectivity": self._cached_probe_verification(
+                label="TUN connectivity verified",
+                target=peer_target,
+                ifname=ifname,
+                wait_seconds=1,
+                probe_kind="peer",
+            ),
+            "tun_global_connectivity": self._cached_probe_verification(
+                label="TUN global connectivity verified",
+                target=global_host,
+                ifname=ifname,
+                wait_seconds=2,
+                probe_kind="global",
+            ),
+        }
+
     def _build_tun_routing_payload_now(self) -> dict:
         snapshot = self.runner.get_connections_snapshot() or {}
+        status_snapshot = self.runner.get_status_snapshot() or {}
         tun_rows = list(snapshot.get("tun") or [])
+        tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
         shared_rows_by_key: dict[tuple, dict] = {}
         for row in tun_rows:
             if not isinstance(row.get("shared_tun_ownership"), dict):
@@ -609,7 +991,6 @@ class AdminWebUI:
         shared_drop_total = 0
         tun_routing_effective = {}
         with contextlib.suppress(Exception):
-            tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
             extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
             tun_routing_effective = {
                 "included_routes": list(tun_cfg.included_routes),
@@ -626,6 +1007,7 @@ class AdminWebUI:
         payload = {
             "tun": tun_rows,
             "shared_tun": shared_rows,
+            "tun_helper": dict(status_snapshot.get("tun_helper") or {}),
             "summary": {
                 "tun_total": len(tun_rows),
                 "tun_open": sum(
@@ -648,7 +1030,14 @@ class AdminWebUI:
         return payload
 
     def _build_tun_routing_payload(self) -> dict:
-        return self._run_snapshot_builder("tun_routing", self._build_tun_routing_payload_now)
+        payload = self._run_snapshot_builder("tun_routing", self._build_tun_routing_payload_now)
+        if not isinstance(payload, dict):
+            payload = {"ok": False}
+        tun_rows = list(payload.get("tun") or [])
+        status_snapshot = {"tun_helper": dict(payload.get("tun_helper") or {})}
+        tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
+        payload["verification"] = self._build_tun_verification_payload(tun_rows, status_snapshot, tun_cfg)
+        return payload
 
     async def _handle_tun_routing_status(self, writer):
         payload = self._build_tun_routing_payload()
@@ -1029,7 +1418,7 @@ class AdminWebUI:
             "socks5_port": getattr(args, "proxy_provider_socks5_port", 13882),
             "protocols": getattr(args, "proxy_provider_protocols", ["http-connect", "socks5-connect"]),
             "auth": getattr(args, "proxy_provider_auth", {"mode": "none", "username": "", "token": ""}),
-            "egress": getattr(args, "proxy_provider_egress", {"mode": "direct", "address_families": ["ipv4", "ipv6"]}),
+            "egress": getattr(args, "proxy_provider_egress", {"mode": "system", "address_families": ["ipv4", "ipv6"]}),
             "policy": getattr(args, "proxy_provider_policy", {"allow_private_destinations": False, "blocked_host_patterns": []}),
         }
         if hasattr(args, "log_proxy_provider"):
@@ -1454,6 +1843,33 @@ class AdminWebUI:
                 f"requested={payload.get('requested', 0)} sessions={payload.get('sessions', 0)} "
                 f"transports={','.join(payload.get('transports', []))}"
             ),
+        )
+        await self._send_json(writer, code, payload)
+
+    async def _handle_tun_helper_repair(self, writer, method, headers):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+
+        token = getattr(self.args, "admin_web_token", "") or ""
+        if token:
+            auth = headers.get("authorization", "")
+            expected = f"Bearer {token}"
+            if auth != expected:
+                await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
+                return
+
+        try:
+            payload = self._call_runner(self.runner.request_tun_helper_repair, timeout=2.0)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
+        code = 200 if bool(payload.get("ok")) else 409
+        self._log_api_response(
+            "/api/tun-helper/repair",
+            code,
+            payload,
+            summary=f"ok={payload.get('ok')} repaired={len(payload.get('repaired', []))} failed={len(payload.get('failed', []))}",
         )
         await self._send_json(writer, code, payload)
 

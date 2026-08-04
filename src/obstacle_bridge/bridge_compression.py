@@ -385,6 +385,33 @@ class CompressLayerSession(ISession):
     def is_connected(self) -> bool:
         return bool(self._inner.is_connected())
 
+    def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
+        layers = []
+        getter = getattr(self._inner, "get_connection_layers_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                layers = list(getter() or [])
+        layers.append(
+            {
+                "layer": "compression",
+                "transport": self._transport_name,
+                "state": "enabled" if bool(self._configured_enabled) else "passthrough",
+                "epoch": int(layers[-1].get("epoch", 0) or 0) if layers else 0,
+                "connected": bool(self._inner.is_connected()),
+                "app_ready": bool(self._inner.is_connected()),
+                "enabled": bool(self._configured_enabled),
+            }
+        )
+        return layers
+
+    def get_transport_connected_since_unix_ts(self, peer_id: Optional[int] = None) -> Optional[float]:
+        getter = getattr(self._inner, "get_transport_connected_since_unix_ts", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                value = getter(peer_id=peer_id)
+                return float(value) if value is not None else None
+        return None
+
     def request_reconnect(self) -> bool:
         trigger = getattr(self._inner, "request_reconnect", None)
         if callable(trigger):

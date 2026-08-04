@@ -1,12 +1,12 @@
 # ObstacleBridge
-ObstacleBridge is a Python-based overlay and channel-multiplexing toolkit for barrier-resilient networking. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, and host an admin UI for monitoring active channels.
+ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for barrier-resilient networking, with actively maintained Python and Swift implementations. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, provide an HTTP(S)/SOCKS5 proxy server, host an admin UI for monitoring active channels, and provide TUN/full-tunnel paths on the supported operating systems.
 
-The project currently has two macOS product paths:
+The project currently targets four platform families:
 
-- **macOS Python CLI/runtime**: the normal Python product running on macOS, including the Python TUN path and shell hook based routing.
-- **macOS Swift app**: the native app bundle and Swift host runner, sharing protocol behavior with Python while owning macOS app lifecycle and native packet/routing integration.
-
-iOS is a third native product path built around the packet tunnel extension.
+- **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
+- **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
+- **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
+- **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
 
 ## Reader guide
 
@@ -28,6 +28,8 @@ The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.
 
 ### Similar projects
 - [chisel](https://github.com/jpillora/chisel) — a well-known TCP/UDP tunnel over HTTP/WebSocket implemented in Go.
+- [WireGuard](https://www.wireguard.com/) — a modern VPN protocol and implementation with strong kernel/native platform integration.
+- [pproxy](https://github.com/qwj/python-proxy) — a Python proxy server and forwarding toolkit supporting HTTP, SOCKS, and related proxy modes.
 
 ### Why this project was developed
 - `chisel` is implemented in Go, and using/building it on Synology NAS environments can be difficult in practice.
@@ -114,6 +116,8 @@ The wizard is designed for typical peer onboarding:
 - Step 5: Apply + restart
 
 The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, peer endpoint settings, TUN routing, compression, admin web port, mux TCP backpressure knobs, and proxy-provider settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
+
+Invite-derived apply updates use the same grouped config shape as persisted runtime config, including grouped `TUN_routing` sections, so Python and Swift runtimes accept the same onboarding payload structure.
 
 ### Manual/advanced startup (optional)
 If you prefer file-based bootstrap from the command line, use JSON config files:
@@ -373,18 +377,25 @@ ChannelMux can expose a local TUN interface as a muxed packet service. For impor
   "udp_peer": "bridge.example.com",
   "udp_peer_port": 4443,
   "udp_own_port": 0,
+  "TUN_routing": {
+    "tunnel_address": "10.20.0.1",
+    "tunnel_prefix": 30,
+    "tunnel_gateway": "10.20.0.2",
+    "included_routes": ["10.20.0.0/30"],
+    "excluded_routes": ["127.0.0.0/8"],
+    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+    "mtu": 1400
+  },
   "own_servers": [
     {
       "name": "site-a-tun-local",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       }
     }
   ],
@@ -393,13 +404,11 @@ ChannelMux can expose a local TUN interface as a muxed packet service. For impor
       "name": "site-a-tun-remote",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       }
     }
   ]
@@ -412,13 +421,14 @@ Interpretation:
 - `own_servers[0].target.ifname` is the interface name the peer-client expects on the remote side
 - `remote_servers[0].listen.ifname` is the interface created on the peer-server side
 - `remote_servers[0].target.ifname` mirrors the peer-client side so both tunnel ends describe the same routed pair
+- `TUN_routing` is the shared source for the tunnel MTU, address/gateway, DNS, included/excluded routes, and generated hook environment. A TUN service may still set a service-level `mtu` when it intentionally needs an override, but ordinary configs should inherit `TUN_routing.mtu`.
 
 The listener/server snippet stays transport-focused because listener mode does not use local `own_servers` editing the same way a peer client does. The client snippet above carries both the local TUN service and the remote TUN request in one importable JSON document.
 
 Linux (native) notes
 
 - Linux uses `/dev/net/tun` and the standard Python library.
-- The process needs permission to create and configure TUN devices; ObstacleBridge brings the interface up and applies MTU, but it does not assign IP addresses for you.
+- The process needs permission to create and configure TUN devices; ObstacleBridge creates the interface and applies the MTU from `TUN_routing.mtu` unless the TUN service explicitly overrides it. When a local `tun` service is configured from an unprivileged Linux session, `python -m obstacle_bridge` now relaunches itself through `sudo`, preserves the runtime Python environment markers it needs, and warns before `sudo` asks for a password. Address, route, DNS, and firewall setup is normally handled by lifecycle hooks using environment generated from `TUN_routing`.
 
 Example Linux IP assignment (run as root):
 
@@ -433,6 +443,7 @@ Windows (WinTun) notes — tested path
 
 - ObstacleBridge uses a WinTun adapter on Windows. This requires the Wintun driver (tested with Wintun 0.14.1 from https://www.wintun.net/).
 - Administrative privileges are required to install the Wintun driver and to create or configure virtual interfaces.
+- When a local `tun` service is configured and the process starts from a regular user session, `python -m obstacle_bridge` now asks Windows for UAC elevation and relaunches the same Python runtime path so WinTun adapter creation can proceed without a separate manual restart. The relaunch carries the per-process `WINTUN_DIR` setting forward explicitly, so a user-scoped WinTun DLL location can still be used after elevation.
 - The default and tested Windows runtime path in this repository is direct ctypes binding to `wintun.dll`.
 
 How to use a downloaded Wintun folder with this project
@@ -475,7 +486,7 @@ python -c "import struct; print(struct.calcsize('P')*8)"  # prints 64 or 32
 
 - If autodetection loads the wrong architecture or the wrong DLL, set `WINTUN_DIR` to the specific folder that holds the desired `wintun.dll`, for example `...\\bin\\amd64`, and restart the process.
 
-Running example (PowerShell, run as Administrator when creating adapters):
+Running example (PowerShell; a regular user session should trigger a UAC prompt when local TUN services are configured):
 
 ```powershell
 $env:WINTUN_DIR = 'C:\\path\\to\\wintun\\bin\\amd64'  # or setx as shown above
@@ -513,13 +524,15 @@ Runtime behavior and caveats
 
 - The default runtime path on Windows binds directly to `wintun.dll` using ctypes.
 - The ctypes path requires only `wintun.dll` and the driver; no project-specific files need to be added to the downloaded Wintun folder for runtime use.
-- Creating adapters and manipulating virtual interfaces requires Administrator privileges; run the process elevated when exercising adapter creation.
+- Creating adapters and manipulating virtual interfaces requires Administrator privileges. ObstacleBridge requests UAC elevation automatically for local WinTun-backed `tun` services, but the elevation prompt still needs to be approved and a usable WinTun installation still needs to be present.
 
 ## Entry points
 - runtime launcher: `python -m obstacle_bridge`
 - direct bridge CLI help: `python -m obstacle_bridge.bridge --help`
 
-If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux that normally means root or equivalent permission to manage `/dev/net/tun`; on Windows that means an Administrator session plus a usable WinTun installation.
+If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux and macOS, `python -m obstacle_bridge` now warns before relaunching itself through `sudo` for local desktop TUN startup when needed. On Windows that means a usable WinTun installation and either an Administrator session or approval of the automatic UAC relaunch.
+
+The runtime config surface also now reserves a `tun_execution` section for Linux-first helper-backed TUN privilege splitting. At the current delivered stage helper mode starts an authenticated local helper control plane, reports helper state through runtime snapshots, and can route `ChannelMux` local TUN traffic through the helper-backed Linux in-memory backend; the normal desktop inline backend still remains the default path.
 
 ## Configuration
 
@@ -555,9 +568,9 @@ The tables below are generated from the current parser registrations in `bridge.
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--ws-path` | `/` | WebSocket HTTP path (default /) |
-| `--ws-bind` | `::` | WS overlay bind address |
+| `--ws-bind` | `::` | WS overlay bind address. `::` intentionally listens on all interfaces with dual-stack IPv6 plus IPv4-mapped clients where supported; bind a specific address to restrict exposure. `0.0.0.0` is IPv4-only all-interface bind. |
 | `--ws-own-port` | `8080` | WS overlay own port |
-| `--ws-peer` | `None` | WS peer IP/FQDN |
+| `--ws-peer` | `None` | WS peer IP/FQDN; comma-separated IPv4/IPv6 alternatives are accepted |
 | `--ws-peer-port` | `8080` | WS peer overlay port |
 | `--ws-subprotocol` | `None` | Optional WebSocket subprotocol (e.g. mux2) |
 | `--ws-tls` | `False` | Use TLS (wss://). Provide cert/key via your deployment. |
@@ -579,6 +592,8 @@ WebSocket proxy tunneling is currently scoped narrowly:
 - HTTP proxy traversal via `CONNECT`
 
 Current direct WebSocket peer-client bootstrap also performs a separate `GET /` preflight on a separate TCP connection before the later WebSocket upgrade attempt. That preflight must return `200 OK`, the client downloads the full response body before continuing, and the later WebSocket upgrade is refused when the preflight status is not `200`. The proxy-tunneled path skips this preflight.
+
+When `--ws-peer` contains comma-separated IPv4/IPv6 alternatives, the client resolves the configured list first and uses the selected candidate for the websocket URL authority, PAC/system-proxy lookup, proxy CONNECT target, and direct preflight host header. This avoids passing the raw comma-separated list to Windows proxy discovery or HTTP bootstrap code.
 
 Current websocket payload forms:
 
@@ -617,6 +632,7 @@ Current websocket payload forms:
 |---|---:|---|
 | `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Listener instances ignore `--own-servers` because multiple overlay peers make the target ambiguous. |
 | `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. |
+| `--channel-mux-egress` | `{"mode":"system"}` | JSON target-side egress policy object for ChannelMux client dials. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX for TCP target connections. UDP targets remain direct because HTTP CONNECT-style proxies are not UDP relays. |
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
 | `--mux-tcp-bp-poll-interval-ms` | `50` | Mux TCP: polling interval for time-based backpressure (ms). |
@@ -658,37 +674,50 @@ What the scripts automate:
 
 - Server: assign `10.20.0.2/30` to `obtun1`, bring the interface up, enable IPv4 forwarding, add forwarding rules between `obtun1` and `eth0`, add NAT for `10.20.0.0/30`, optionally add TCP MSS clamping, and clean those rules up on disconnect.
 - Client: assign `10.20.0.1/30` to `obtun0`, bring the interface up, auto-detect or preserve the route to the overlay server public IP outside the tunnel, preserve excluded local subnets on their original interfaces when full-tunnel routes are installed, replace the default route via `10.20.0.2 dev obtun0`, set tunnel DNS, and restore the previous default route on disconnect.
-- Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config only needs tunnel-specific values such as TUN addresses, gateway, optional DNS, and optional explicit underlay overrides.
+- TUN routing environment: the runtime generates `MTU`, `TUN_ADDR`, `TUN_GW`, `TUN_ADDR6`, `TUN_GW6`, `PEER_ADDR`, `PEER_ADDR6`, `TUN_SUBNET`, `TUN_SUBNET6`, `DNS1`, `DNS2`, `INCLUDED_ROUTES`, `EXCLUDED_ROUTES`, `ENABLE_TCPMSS`, and optional tcpdump variables from the top-level `TUN_routing` section. Hook-level `env` should be reserved for machine-local values such as `WAN_IF` or deliberate per-event overrides.
+- Client environment: the client hook script auto-detects the original default gateway/interface and reads the resolved overlay peer address from `OB_OVERLAY_PEER_HOST`, so the hook config usually does not need explicit underlay values.
 - Dual-stack note: Linux and Darwin route exclusion helpers also filter IPv4-mapped IPv6 loopback or host forms such as `::ffff:127.0.0.1/128` so listener self-reachability exclusions do not get duplicated across families.
 
 Single peer-client config assumptions:
 
 - Client TUN interface: `obtun0`
-- Client tunnel address: `192.168.105.1/30`
-- Client IPv6 tunnel address: `fd20:105::1/126`
 - Server TUN interface: `obtun1`
-- Server tunnel address: `192.168.105.2/30`
-- Server IPv6 tunnel address: `fd20:105::2/126`
+- Client tunnel address from `TUN_routing`: `192.168.105.1/30`
+- Server tunnel gateway from `TUN_routing`: `192.168.105.2`
+- Client IPv6 tunnel address from `TUN_routing`: `fd20:105::1/126`
+- Server IPv6 tunnel gateway from `TUN_routing`: `fd20:105::2`
 - Server WAN interface: `eth0`
-- Client underlay interface/gateway: `auto`, or explicit values such as `eth0` and `192.168.1.1`
-- DNS servers: `1.1.1.1` and `8.8.8.8`
+- DNS servers from `TUN_routing`: `1.1.1.1` and `8.8.8.8`
 
 Combined peer-client config fragment:
 
 ```json
 {
+  "TUN_routing": {
+    "tunnel_address": "192.168.105.1",
+    "tunnel_prefix": 30,
+    "tunnel_gateway": "192.168.105.2",
+    "tunnel_address6": "fd20:105::1",
+    "tunnel_prefix6": 126,
+    "tunnel_gateway6": "fd20:105::2",
+    "included_routes": ["0.0.0.0/0"],
+    "excluded_routes": ["127.0.0.0/8"],
+    "included_routes6": ["::/0"],
+    "excluded_routes6": ["::1/128"],
+    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+    "mtu": 1400,
+    "enable_tcpmss": true
+  },
   "own_servers": [
     {
       "name": "site-a-tun-local",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       },
       "lifecycle_hooks": {
         "listener": {
@@ -696,50 +725,20 @@ Combined peer-client config fragment:
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-              "env": {
-                "TUN_ADDR": "192.168.105.1/30",
-                "TUN_GW": "192.168.105.2",
-                "TUN_ADDR6": "fd20:105::1/126",
-                "TUN_GW6": "fd20:105::2",
-                "UNDERLAY_IF": "auto",
-                "UNDERLAY_GW": "auto",
-                "DNS1": "1.1.1.1",
-                "DNS2": "8.8.8.8"
-              },
-              "timeout_ms": 15000
-            },
+            "timeout_ms": 15000
+          },
           "on_channel_connected": {
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "up", "{ifname}"]
             },
-              "env": {
-                "TUN_ADDR": "192.168.105.1/30",
-                "TUN_GW": "192.168.105.2",
-                "TUN_ADDR6": "fd20:105::1/126",
-                "TUN_GW6": "fd20:105::2",
-                "UNDERLAY_IF": "auto",
-                "UNDERLAY_GW": "auto",
-                "DNS1": "1.1.1.1",
-                "DNS2": "8.8.8.8"
-              },
-              "timeout_ms": 15000
-            },
+            "timeout_ms": 15000
+          },
           "on_stopped": {
             "argv": {
               "linux": ["./scripts/client-tun-hook.sh", "down", "{ifname}"]
             },
-              "env": {
-                "TUN_ADDR": "192.168.105.1/30",
-                "TUN_GW": "192.168.105.2",
-                "TUN_ADDR6": "fd20:105::1/126",
-                "TUN_GW6": "fd20:105::2",
-                "UNDERLAY_IF": "auto",
-                "UNDERLAY_GW": "auto",
-                "DNS1": "1.1.1.1",
-                "DNS2": "8.8.8.8"
-              },
-              "timeout_ms": 15000
-            }
+            "timeout_ms": 15000
+          }
         }
       }
     }
@@ -749,13 +748,11 @@ Combined peer-client config fragment:
       "name": "site-b-tun-remote",
       "listen": {
         "protocol": "tun",
-        "ifname": "obtun1",
-        "mtu": 1400
+        "ifname": "obtun1"
       },
       "target": {
         "protocol": "tun",
-        "ifname": "obtun0",
-        "mtu": 1400
+        "ifname": "obtun0"
       },
       "lifecycle_hooks": {
         "listener": {
@@ -764,14 +761,7 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "192.168.105.2/30",
-              "PEER_ADDR": "192.168.105.1",
-              "TUN_ADDR6": "fd20:105::2/126",
-              "PEER_ADDR6": "fd20:105::1",
-              "WAN_IF": "eth0",
-              "TUN_SUBNET": "192.168.105.0/30",
-              "TUN_SUBNET6": "fd20:105::/126",
-              "ENABLE_TCPMSS": "1"
+              "WAN_IF": "eth0"
             },
             "timeout_ms": 15000
           },
@@ -780,14 +770,7 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "192.168.105.2/30",
-              "PEER_ADDR": "192.168.105.1",
-              "TUN_ADDR6": "fd20:105::2/126",
-              "PEER_ADDR6": "fd20:105::1",
-              "WAN_IF": "eth0",
-              "TUN_SUBNET": "192.168.105.0/30",
-              "TUN_SUBNET6": "fd20:105::/126",
-              "ENABLE_TCPMSS": "1"
+              "WAN_IF": "eth0"
             },
             "timeout_ms": 15000
           },
@@ -796,14 +779,7 @@ Combined peer-client config fragment:
               "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
             },
             "env": {
-              "TUN_ADDR": "192.168.105.2/30",
-              "PEER_ADDR": "192.168.105.1",
-              "TUN_ADDR6": "fd20:105::2/126",
-              "PEER_ADDR6": "fd20:105::1",
-              "WAN_IF": "eth0",
-              "TUN_SUBNET": "192.168.105.0/30",
-              "TUN_SUBNET6": "fd20:105::/126",
-              "ENABLE_TCPMSS": "1"
+              "WAN_IF": "eth0"
             },
             "timeout_ms": 15000
           }
@@ -825,35 +801,40 @@ A second peer can also use the same peer server as an Internet-exit TUN gateway,
 | Peer client A | `obtun0` | `obtun1` | `192.168.105.1/30` | `192.168.105.2/30` | `fd20:105::1/126` | `fd20:105::2/126` |
 | Peer client B | `obtun0` | `obtun2` | `192.168.105.5/30` | `192.168.105.6/30` | `fd20:105::5/126` | `fd20:105::6/126` |
 
-For the second peer client, keep the client-side `own_servers` shape the same, but change its hook environment:
+For the second peer client, keep the client-side `own_servers` hook shape the same, but give that peer its own `TUN_routing` values:
 
 ```json
 {
-  "TUN_ADDR": "192.168.105.5/30",
-  "TUN_GW": "192.168.105.6",
-  "TUN_ADDR6": "fd20:105::5/126",
-  "TUN_GW6": "fd20:105::6",
-  "UNDERLAY_IF": "auto",
-  "UNDERLAY_GW": "auto",
-  "DNS1": "1.1.1.1",
-  "DNS2": "8.8.8.8"
+  "TUN_routing": {
+    "tunnel_address": "192.168.105.5",
+    "tunnel_prefix": 30,
+    "tunnel_gateway": "192.168.105.6",
+    "tunnel_address6": "fd20:105::5",
+    "tunnel_prefix6": 126,
+    "tunnel_gateway6": "fd20:105::6",
+    "included_routes": ["0.0.0.0/0"],
+    "excluded_routes": ["127.0.0.0/8"],
+    "included_routes6": ["::/0"],
+    "excluded_routes6": ["::1/128"],
+    "dns_servers": ["1.1.1.1", "8.8.8.8"],
+    "mtu": 1400,
+    "enable_tcpmss": true
+  }
 }
 ```
 
-Also change the second peer client's `remote_servers` TUN listener to use a different server-side interface and subnet:
+Also change the second peer client's `remote_servers` TUN listener to use a different server-side interface. The server-side hook receives the corresponding peer/server addresses and subnets from the same `TUN_routing` block; only `WAN_IF` remains as a server-local hook environment value for the provided NAT script:
 
 ```json
 {
   "name": "site-b-tun-remote-client-b",
   "listen": {
     "protocol": "tun",
-    "ifname": "obtun2",
-    "mtu": 1400
+    "ifname": "obtun2"
   },
   "target": {
     "protocol": "tun",
-    "ifname": "obtun0",
-    "mtu": 1400
+    "ifname": "obtun0"
   },
   "lifecycle_hooks": {
     "listener": {
@@ -862,14 +843,7 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "192.168.105.6/30",
-          "PEER_ADDR": "192.168.105.5",
-          "TUN_ADDR6": "fd20:105::6/126",
-          "PEER_ADDR6": "fd20:105::5",
-          "WAN_IF": "eth0",
-          "TUN_SUBNET": "192.168.105.4/30",
-          "TUN_SUBNET6": "fd20:105::4/126",
-          "ENABLE_TCPMSS": "1"
+          "WAN_IF": "eth0"
         },
         "timeout_ms": 15000
       },
@@ -878,14 +852,7 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "up", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "192.168.105.6/30",
-          "PEER_ADDR": "192.168.105.5",
-          "TUN_ADDR6": "fd20:105::6/126",
-          "PEER_ADDR6": "fd20:105::5",
-          "WAN_IF": "eth0",
-          "TUN_SUBNET": "192.168.105.4/30",
-          "TUN_SUBNET6": "fd20:105::4/126",
-          "ENABLE_TCPMSS": "1"
+          "WAN_IF": "eth0"
         },
         "timeout_ms": 15000
       },
@@ -894,14 +861,7 @@ Also change the second peer client's `remote_servers` TUN listener to use a diff
           "linux": ["./scripts/server-tun-hook.sh", "down", "{ifname}"]
         },
         "env": {
-          "TUN_ADDR": "192.168.105.6/30",
-          "PEER_ADDR": "192.168.105.5",
-          "TUN_ADDR6": "fd20:105::6/126",
-          "PEER_ADDR6": "fd20:105::5",
-          "WAN_IF": "eth0",
-          "TUN_SUBNET": "192.168.105.4/30",
-          "TUN_SUBNET6": "fd20:105::4/126",
-          "ENABLE_TCPMSS": "1"
+          "WAN_IF": "eth0"
         },
         "timeout_ms": 15000
       }
@@ -931,8 +891,8 @@ Operational notes:
 - Verify interface names before hardcoding `eth0`: `ip route get 1.1.1.1`.
 - Preserve the overlay peer route on the client. The provided client hook uses `OB_OVERLAY_PEER_HOST` from the runtime to add the host route via the original gateway; without that route, the tunnel may try to carry its own transport packets and collapse.
 - DNS can explain cases where `ping` works but web pages do not. The client script uses `resolvectl`; adapt that part if the system does not use `systemd-resolved`.
-- IPv6 full-tunnel routing is opt-in. Set `TUN_ADDR6` and `TUN_GW6` on the client hook, and set `TUN_ADDR6`, `PEER_ADDR6`, and `TUN_SUBNET6` on the server hook. The server script enables IPv6 forwarding and adds an `ip6tables` MASQUERADE rule for `TUN_SUBNET6`, which is NAT66. NAT66 is not the ideal IPv6 design, but it is useful when the server has IPv6 Internet access and you do not have a routed IPv6 prefix for the tunnel.
-- Keep TCP MSS clamping enabled on the server (`ENABLE_TCPMSS=1`) when tunneling full-path traffic over a reduced MTU.
+- IPv6 full-tunnel routing is opt-in. Set `tunnel_address6`, `tunnel_prefix6`, `tunnel_gateway6`, `included_routes6`, and `excluded_routes6` in `TUN_routing`; the runtime carries those values into hook variables such as `TUN_ADDR6`, `TUN_GW6`, `PEER_ADDR6`, and `TUN_SUBNET6`. The server script enables IPv6 forwarding and adds an `ip6tables` MASQUERADE rule for `TUN_SUBNET6`, which is NAT66. NAT66 is not the ideal IPv6 design, but it is useful when the server has IPv6 Internet access and you do not have a routed IPv6 prefix for the tunnel.
+- Keep TCP MSS clamping enabled through `TUN_routing.enable_tcpmss=true` when tunneling full-path traffic over a reduced MTU.
 - The server script uses `iptables -C` checks before adding rules, so repeated `up` hooks do not create duplicate firewall rules.
 - Use `listener.on_stopped` for route/firewall teardown because it runs for service-level shutdown caused by overlay disconnect, peer disconnect, catalog replacement, or process shutdown. `on_channel_closed` remains useful for per-channel cleanup, but `on_stopped` is the deterministic safety net for full-tunnel routing.
 
@@ -945,7 +905,7 @@ Operational notes:
 | `--proxy-provider-socks5-port` | `13882` | Local SOCKS5 TCP `CONNECT` proxy listener port. |
 | `--proxy-provider-protocols` | `http-connect socks5-connect` | Enabled proxy protocol families. Supported values are `http-connect`, `socks5-connect`, `http`, and `socks5`. |
 | `--proxy-provider-auth` | `{"mode":"none","username":"","token":""}` | JSON auth object. Use `mode` `token`, `basic`, or `password` plus `username` and `token` or `password` to require proxy authentication. |
-| `--proxy-provider-egress` | `{"mode":"direct","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. |
+| `--proxy-provider-egress` | `{"mode":"system","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX. |
 | `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. |
 | `--log-proxy-provider` | inherited | Override the proxy provider logger level, for example `INFO` or `DEBUG`. |
 
@@ -974,7 +934,7 @@ Paste-ready config fragment:
       "token": ""
     },
     "egress": {
-      "mode": "direct",
+      "mode": "system",
       "address_families": ["ipv4", "ipv6"]
     },
     "policy": {
@@ -1073,6 +1033,12 @@ Use `chromium` or `chromium-browser` instead of `google-chrome` if that is the i
 
 When `--admin-web-username` and `--admin-web-password` are configured and auth is not disabled, the admin web page requires a challenge-response login. The browser requests a one-time seed, hashes `seed:username:password` client-side, and sends only the hash proof back to the server. The login flow works over HTTP as well as HTTPS; when the browser is not in a secure context, the admin page uses a JavaScript SHA-256 fallback instead of Web Crypto. The configured password is not returned by the admin config API.
 
+On the WebSocket peer-client path, failed proxy-tunnel bootstrap attempts continue to surface as normal connection-failure state in status/admin views. If a timed-out proxy helper finishes only after the timeout path has already cancelled it, that late cleanup is treated as expected cancellation rather than as a separate unhandled asyncio callback error.
+
+The local proxy provider defaults to `proxy_provider_egress.mode="system"` on Python runtimes. In that mode, outbound HTTP and SOCKS5 proxy-provider traffic resolves Windows system proxy/PAC settings on Windows, and honors `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX. When no upstream proxy is selected, destinations still connect directly.
+
+ChannelMux target-side TCP dials use the same resolver by default with `channel_mux_egress.mode="system"` (or nested config `channel_mux.egress.mode="system"`). This covers remote service targets such as `remote_servers[].target.host` values outside localhost; UDP service targets stay on direct UDP until a UDP-capable proxy relay is added.
+
 Saving configuration changes uses a second challenge-response confirmation bound to the exact update block, so the current admin password must be re-entered before the server applies guarded config writes.
 
 The Configuration tab normally keeps `secure_link_psk` write-only. When admin authentication is enabled, the row also offers a small reveal action: the operator must re-enter the current admin password, the server verifies a fresh reveal proof, returns only an encrypted envelope, and the browser decrypts the PSK locally in the popup. The displayed value disappears when the popup is closed. Because that local decryption uses browser Web Crypto, remote HTTP origins cannot reveal the PSK in browsers that require a secure context; prefer exposing the admin endpoint through the own-server/server-role overlay path, or use HTTPS, localhost, a VPN/TUN route, or an SSH tunnel for remote reveal workflows.
@@ -1085,11 +1051,12 @@ What the admin web shows:
 
 - A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
-- A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to.
-- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, remote endpoints, and per-channel byte/message counters.
+- A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to; connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
+- UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
+- The dedicated TUN / Routing view also shows shared-TUN ownership maps, active channel bindings, interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
-- Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation.
+- Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation. Removing a service commits immediately and, when another entry remains, keeps the popup open on the next valid service so multi-entry cleanup stays fast.
 - A debug log tab with recent in-memory log lines, which is especially useful while investigating channel setup, backpressure, reconnects, and late-data cases.
 
 ### Logging
@@ -1199,6 +1166,8 @@ python -m obstacle_bridge --config ObstacleBridge.cfg
 
 Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
 Any unknown launcher options are forwarded to `bridge.py`.
+During delayed restart windows (`exit code 77`), the launcher now temporarily serves a small holding page on the configured WebAdmin bind/port so operators still get a response with a countdown until the supervised runtime starts again.
+When the default redirected mode is active and startup fails early, the launcher now replays the hidden child stderr tail so issues such as an inaccessible `--log-file` path are still shown to the operator.
 
 #### Current secure-link quick start
 
@@ -1292,11 +1261,13 @@ API fallback for details not fully surfaced in WebAdmin yet:
 - `/api/peers` shows the peer row with `secure_link.authenticated=true`
 - `/api/status` remains limited to runtime metadata and aggregate secure-link reload/apply summaries
 - connection, traffic, and compression telemetry are exposed through `/api/connections` and peer-scoped `/api/peers` rows
+- the supported admin/API contract is intentionally summary-oriented; detailed per-frame secure-link handshake-debug telemetry is not part of the normal WebAdmin surface
 - if the PSK does not match, the client and server stay disconnected and the failure is reported as:
   - `secure_link.state=failed`
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
+- if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, the session remains `handshaking` rather than surfacing as authenticated; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
 - if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery that survives runner reset/epoch cleanup and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and recovery scheduling/starting `last_event` values; cert local-identity reloads use the same reconnect/re-authentication boundary instead of continuing on the superseded transport epoch
 
 Current WebAdmin gap to close in a future update:
@@ -1495,6 +1466,8 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, non-canonical policy-rule reuse, and non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background.
+
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
 
@@ -1502,17 +1475,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `38` | `642` |
-| macOS Swift app | `1` | `47` |
-| iOS app/extension | `24` | `148` |
+| Python CLI/runtime, including macOS Python | `53` | `827` |
+| macOS Swift app | `1` | `54` |
+| iOS app/extension | `24` | `155` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `81/89 = 91.0%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
-| macOS Swift app | `2/89 = 2.2%` | `5/89 = 5.6%` | `7/89 = 7.9%` |
-| iOS app/extension | `8/89 = 9.0%` | `10/89 = 11.2%` | `15/89 = 16.9%` |
+| Python CLI/runtime, including macOS Python | `82/89 = 92.1%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
+| macOS Swift app | `2/89 = 2.2%` | `6/89 = 6.7%` | `8/89 = 9.0%` |
+| iOS app/extension | `10/89 = 11.2%` | `11/89 = 12.4%` | `17/89 = 19.1%` |
 
 #### Architecture traceability
 
@@ -1520,12 +1493,14 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `4/7 = 57.1%` | `5/7 = 71.4%` |
+| iOS app/extension | `4/7 = 57.1%` | `5/7 = 71.4%` | `5/7 = 71.4%` |
 
 The supporting manifests remain shared:
 
 - product-requirement traceability: [.github/requirements_traceability.yaml](.github/requirements_traceability.yaml)
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
+
+This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
 
@@ -1538,9 +1513,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `47` | `0` | `47` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `22` | `22` |
-| Total parity-oriented evidence | Sum of the lanes above | `51` | `141` | `192` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `54` | `0` | `54` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `25` | `25` |
+| Total parity-oriented evidence | Sum of the lanes above | `58` | `144` | `202` |
 
 Important caveat:
 
@@ -1552,15 +1527,19 @@ Important caveat:
 
 - Linux runs the OS-independent shared integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
 - Linux runs the elevated TUN subset separately with `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`
+- macOS runs the Python elevated TUN subset separately with `./scripts/run_macos_elevated_tests.sh` and the Swift elevated TUN subset with `./scripts/run_macos_swift_elevated_tests.sh`, including GitHub `macos-latest` elevated gates when passwordless `sudo` is available; those subsets cover helper-owned Darwin route/DNS hook effects, packet carry, helper-death status, the manual-cleanup warning when cached helper-owned network state may remain after process loss, Swift host-runner real-`utun` packet carry from the built macOS app bundle, packaged XPC helper packet carry when `SMAppService` approval is present, installed signed app Admin helper activation through `/Applications`, live unregister/re-register stale-helper repair guidance, and packaged-helper death reporting plus interface/route cleanup. Hosted macOS may skip Python inline row assertions when privileged setup leaves the TUN list empty, or Swift packaged-XPC assertions when the runner reports the helper service is not enabled or resets the Admin status connection during registration preflight, after confirming the relevant Admin diagnostics endpoint remains responsive.
 - Windows runs the Windows-specific non-elevated integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
-- Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`
+- Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, including inline WinTun channel-open coverage plus `windows-native` helper-mode route/address/DNS apply, packet carry, helper-death warning, and Admin-triggered stale-state repair coverage when Administrator rights and a usable `wintun.dll` are available
 - The iOS E2E testing set is tracked separately from the bridge.py shared gate:
-  - host-side iOS E2E/runtime contract coverage: `pytest -q tests/integration/test_ios_e2e.py`
+  - host-side iOS E2E/runtime contract coverage: `pytest -q tests/integration/test_ios_e2e.py`, including the myUDP packet-tunnel remote-admin regression that exercises forwarded `/api/status`, `/api/live`, and WebAdmin asset reachability without stalling the iOS bridge queue behind TUN verification waits
   - opt-in simulator coverage for the standalone Briefcase E2E app: `OBSTACLEBRIDGE_RUN_IOS_SIMULATOR=1 pytest -q tests/integration/test_ios_simulator_e2e.py -m ios_simulator`
   - focused iOS companion/E2E Python tests: `pytest -q ios/tests`
 - Recent validation for this branch used the Windows-local unit suite, the Windows `windows_only` subset, the Windows elevated TUN subset, and the Linux shared integration subset; the dedicated Linux elevated subset is part of the split CI expectation as well.
 - The Linux shared integration subset is currently validated with the runtime-generated localhost TLS fixture set and the availability-aware loopback port allocator in the integration harness.
+- Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
+- macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.
+- Admin status polling keeps a minimal live-session fallback when stats snapshotting fails before a cached status exists.
 
 ### Development environment and procedure
 - Feature development is done on Fedora 42.
@@ -1571,6 +1550,7 @@ Important caveat:
 - Integration testing is executed on a local machine running Python 3.13.12.
 - After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
 - After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with Python 3.8.
+- The repository now also carries a first-pass Synology DSM SPK wrapper scaffold for that NAS path, plus a helper-interpreter privilege prototype that points helper-mode launches at a dedicated package-managed Python copy with best-effort `CAP_NET_ADMIN`; see [docs/synology_design.md](docs/synology_design.md), [synology/README.md](synology/README.md), and `python3 scripts/build_synology_spk.py`.
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.

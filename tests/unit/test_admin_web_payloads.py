@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 import sys
+import threading
 import time
 import unittest
 from unittest import mock
@@ -25,6 +26,70 @@ class _RunnerStub:
             secure_link_psk="bridge-secret",
         )
         self.restart_requested = False
+        self.tun_probe_result = {
+            "label": "TUN connectivity verified",
+            "ok": True,
+            "state": "verified",
+            "summary": "TUN connectivity verified: verified",
+            "detail": "ICMP echo reply received from 192.168.106.1.",
+            "target": "192.168.106.1",
+            "resolved_target": "192.168.106.1",
+            "method": "internal_icmp_echo",
+            "checked_at_unix_ts": 1700000000.0,
+            "value_ms": 12.4,
+            "last_success_ago_s": 0.0,
+            "last_success_rtt_ms": 12.4,
+        }
+        self.tun_helper_repair_response = {
+            "ok": True,
+            "cleanup_ok": True,
+            "repaired": ["firewall", "included_routes"],
+            "failed": [],
+            "verification": {
+                "ok": True,
+                "checked": ["firewall", "included_routes"],
+                "remaining": [],
+                "skipped": [],
+                "stale_state_remaining": False,
+                "summary": "Post-repair verification did not find remaining helper-owned host state.",
+            },
+            "status": {
+                "enabled": True,
+                "mode": "helper",
+                "backend": "linux-native",
+                "apply_network": True,
+                "socket_path": "/run/user/1000/obstaclebridge/tun-helper.sock",
+                "connected": False,
+                "server_started": False,
+                "last_error": "TUN helper connection closed",
+                "recovery": {},
+                "last_repair": {
+                    "attempted": True,
+                    "ok": True,
+                    "cleanup_ok": True,
+                    "stale_state_remaining": False,
+                    "repaired": ["firewall", "included_routes"],
+                    "failed": [],
+                    "verification": {
+                        "ok": True,
+                        "checked": ["firewall", "included_routes"],
+                        "remaining": [],
+                        "skipped": [],
+                        "stale_state_remaining": False,
+                        "summary": "Post-repair verification did not find remaining helper-owned host state.",
+                    },
+                    "verified_state": "stale_state_cleared",
+                    "summary": "Repair succeeded and post-repair verification did not find remaining helper-owned state.",
+                },
+                "runtime": {
+                    "backend": "linux-native",
+                    "ifname": "obtun0",
+                    "firewall_manager": "",
+                    "applied_firewall_rules": [],
+                    "network_applied": False,
+                },
+            },
+        }
 
     def get_config_snapshot(self, include_secrets: bool = False):
         blocked = {"config", "dump_config", "save_config", "save_format", "force", "help"}
@@ -50,6 +115,12 @@ class _RunnerStub:
                 row["readonly"] = True
             rows.append(row)
         return {"misc": rows}
+
+    async def probe_tun_connectivity_verification(self, *, ifname: str, target: str, timeout_seconds: float, probe_kind: str):
+        result = dict(self.tun_probe_result)
+        result["target"] = str(target or result.get("target") or "")
+        result["label"] = "TUN global connectivity verified" if str(probe_kind) == "global" else "TUN connectivity verified"
+        return result
 
     def update_config(self, updates):
         for key, value in updates.items():
@@ -90,6 +161,54 @@ class _RunnerStub:
                 "decompress_fail_total": 0,
                 "compression_saving_ratio": 0.5,
             },
+            "tun_helper": {
+                "enabled": True,
+                "mode": "helper",
+                "lifecycle_phase": "connected",
+                "backend": "linux-python",
+                "apply_network": True,
+                "socket_path": "/run/user/1000/obstaclebridge/tun-helper.sock",
+                "connected": True,
+                "server_started": True,
+                "last_error": "",
+                "recovery": {},
+                "last_repair": {
+                    "attempted": True,
+                    "ok": True,
+                    "cleanup_ok": True,
+                    "stale_state_remaining": False,
+                    "repaired": ["firewall"],
+                    "failed": [],
+                    "verification": {
+                        "ok": True,
+                        "checked": ["firewall"],
+                        "remaining": [],
+                        "skipped": [],
+                        "stale_state_remaining": False,
+                        "summary": "Post-repair verification did not find remaining helper-owned host state.",
+                    },
+                    "verified_state": "stale_state_cleared",
+                    "summary": "Repair succeeded and post-repair verification did not find remaining helper-owned state.",
+                },
+                "runtime": {
+                    "backend": "linux-python-memory",
+                    "opened": True,
+                    "ifname": "obtun0",
+                    "mtu": 1500,
+                    "packets_from_runtime": 12,
+                    "packets_to_runtime": 9,
+                    "last_failure": {
+                        "operation": "apply_network",
+                        "stage": "dns_apply",
+                        "error_type": "CalledProcessError",
+                        "detail": "dns failed",
+                        "cleanup_attempted": True,
+                        "cleanup_ok": True,
+                        "unix_ts": 1700000300.0,
+                    },
+                    "stopped": False,
+                },
+            },
         }
 
     def get_peer_connections_snapshot(self):
@@ -126,6 +245,8 @@ class _RunnerStub:
                         "connected_since_unix_ts": 1699999900.0,
                         "authenticated_sessions_total": 1,
                         "rekeys_completed_total": 0,
+                        "frames_passed_total": 17,
+                        "frames_dropped_total": 3,
                         "transport": "tcp",
                     },
                     "compress_layer": {
@@ -188,6 +309,7 @@ class _RunnerStub:
                     "local": {"ifname": "obtun0", "mtu": 1500},
                     "remote_destination": {"ifname": "obtun1", "mtu": 1500},
                     "stats": {"rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0},
+                    "runtime_health": {},
                     "shared_tun_ownership": {
                         "mode": "server_shared",
                         "peer_count": 2,
@@ -246,6 +368,9 @@ class _RunnerStub:
 
     def request_restart(self):
         self.restart_requested = True
+
+    def request_tun_helper_repair(self):
+        return dict(self.tun_helper_repair_response)
 
 
 class _RunnerCertStub(_RunnerStub):
@@ -580,10 +705,49 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["shared_services"], 1)
         self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
         self.assertEqual(payload["summary"]["shared_drop_total"], 3)
+        self.assertTrue(payload["tun_helper"]["enabled"])
+        self.assertEqual(payload["tun_helper"]["mode"], "helper")
+        self.assertEqual(payload["tun_helper"]["lifecycle_phase"], "connected")
+        self.assertEqual(payload["tun_helper"]["runtime"]["ifname"], "obtun0")
+        self.assertEqual(payload["tun_helper"]["runtime"]["packets_from_runtime"], 12)
+        self.assertEqual(payload["tun_helper"]["runtime"]["last_failure"]["stage"], "dns_apply")
+        self.assertEqual(payload["tun_helper"]["recovery"], {})
+        self.assertTrue(payload["tun_helper"]["last_repair"]["attempted"])
+        self.assertFalse(payload["tun_helper"]["last_repair"]["stale_state_remaining"])
         self.assertEqual(len(payload["shared_tun"]), 1)
         self.assertEqual(payload["shared_tun"][0]["service_name"], "shared-tun")
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["peer_count"], 2)
         self.assertEqual(payload["shared_tun"][0]["shared_tun_ownership"]["drop_counters"]["by_reason"]["unknown_destination"], 2)
+
+    def test_build_tun_routing_payload_preserves_tun_runtime_health_warning(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        snapshot = runner.get_connections_snapshot()
+        snapshot["tun"][0]["runtime_health"] = {
+            "code": "tun_addresses_missing",
+            "severity": "critical",
+            "summary": "TUN interface obtun0 is up but expected tunnel addressing is missing.",
+            "detail": "Missing expected addresses after helper_apply_network: IPv4 192.168.106.2.",
+        }
+        runner.get_connections_snapshot = lambda: snapshot
+        ui = AdminWebUI(args, runner)
+
+        payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["tun"][0]["runtime_health"]["code"], "tun_addresses_missing")
+        self.assertEqual(payload["tun"][0]["runtime_health"]["severity"], "critical")
 
     def test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row(self):
         args = argparse.Namespace(
@@ -682,6 +846,304 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["included_routes6"], ["::/0"])
         self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:38.180.143.5/128"])
 
+    def test_build_tun_routing_payload_exposes_verification_checks(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            included_routes=["0.0.0.0/0"],
+            excluded_routes=["127.0.0.0/8"],
+            included_routes6=["::/0"],
+            excluded_routes6=["::1/128"],
+            tunnel_address="192.168.106.2",
+            tunnel_prefix=24,
+            tunnel_gateway="192.168.106.1",
+            tunnel_address6="fd20:106::2",
+            tunnel_prefix6=64,
+            tunnel_gateway6="fd20:106::1",
+            dns_servers=["1.1.1.1"],
+            global_connectivity_host="google.de",
+            mtu=1600,
+            log_TUN_routing="CRITICAL",
+            enable_tcpmss=False,
+            enable_tun_tcpdump=False,
+            tun_tcpdump_pcap_path="",
+            shared_tun_disable_outgoing_normalization=False,
+            shared_tun_disable_inflow_filter=False,
+            shared_tun_disable_outflow_filter=False,
+            disable_channelmux_inflow_throttle=False,
+            shared_tun_disable_scoped_throttle=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        with mock.patch.object(
+            AdminWebUI,
+            "_probe_tun_interface_addresses",
+            return_value={"ok": True, "ipv4": ["192.168.106.2/24"], "ipv6": ["fd20:106::2/64"], "detail": ""},
+        ), mock.patch.object(
+            AdminWebUI,
+            "_cached_probe_verification",
+            side_effect=[
+                {
+                    "label": "TUN connectivity verified",
+                    "ok": True,
+                    "state": "verified",
+                    "summary": "TUN connectivity verified: verified",
+                    "detail": "ICMP echo reply received from 192.168.106.1.",
+                    "target": "192.168.106.1",
+                    "value_ms": 18.5,
+                    "last_success_ago_s": 0.0,
+                    "last_success_rtt_ms": 18.5,
+                },
+                {
+                    "label": "TUN global connectivity verified",
+                    "ok": True,
+                    "state": "verified",
+                    "summary": "TUN global connectivity verified: verified",
+                    "detail": "ICMP echo reply received from 142.250.185.227.",
+                    "target": "google.de",
+                    "value_ms": 25.0,
+                    "last_success_ago_s": 0.0,
+                    "last_success_rtt_ms": 25.0,
+                },
+            ],
+        ):
+            payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["verification"]["global_connectivity_host"], "google.de")
+        self.assertTrue(payload["verification"]["tun_config"]["ok"])
+        self.assertEqual(payload["verification"]["tun_config"]["summary"], "TUN config verified")
+        self.assertEqual(payload["verification"]["tun_connectivity"]["target"], "192.168.106.1")
+        self.assertEqual(payload["verification"]["tun_connectivity"]["value_ms"], 18.5)
+        self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
+        self.assertEqual(payload["verification"]["tun_global_connectivity"]["value_ms"], 25.0)
+
+    def test_build_tun_routing_payload_uses_server_tun_address_for_virtual_probe_local_check(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            included_routes=[],
+            excluded_routes=["127.0.0.0/8"],
+            included_routes6=[],
+            excluded_routes6=["::1/128"],
+            tunnel_address="192.168.106.1",
+            tunnel_prefix=24,
+            tunnel_gateway="",
+            tunnel_address6="fd20:106::1",
+            tunnel_prefix6=64,
+            tunnel_gateway6="",
+            dns_servers=[],
+            global_connectivity_host="google.de",
+            global_connectivity_source_ipv4="192.168.106.31",
+            mtu=1600,
+            log_TUN_routing="CRITICAL",
+            enable_tcpmss=False,
+            enable_tun_tcpdump=False,
+            tun_tcpdump_pcap_path="",
+            shared_tun_disable_outgoing_normalization=False,
+            shared_tun_disable_inflow_filter=False,
+            shared_tun_disable_outflow_filter=False,
+            disable_channelmux_inflow_throttle=False,
+            shared_tun_disable_scoped_throttle=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+
+        captured_targets = []
+
+        def _fake_cached_probe_verification(*, label: str, target: str, ifname: str, wait_seconds: int = 2, probe_kind: str):
+            captured_targets.append((label, target, probe_kind))
+            return {
+                "label": label,
+                "ok": True,
+                "state": "verified",
+                "summary": f"{label}: verified",
+                "detail": f"ICMP echo reply received from {target}.",
+                "target": target,
+                "value_ms": 5.0,
+                "last_success_ago_s": 0.0,
+                "last_success_rtt_ms": 5.0,
+            }
+
+        with mock.patch.object(
+            AdminWebUI,
+            "_probe_tun_interface_addresses",
+            return_value={"ok": True, "ipv4": ["192.168.106.1/24"], "ipv6": ["fd20:106::1/64"], "detail": ""},
+        ), mock.patch.object(
+            AdminWebUI,
+            "_cached_probe_verification",
+            side_effect=_fake_cached_probe_verification,
+        ):
+            payload = ui._build_tun_routing_payload()
+
+        self.assertEqual(payload["verification"]["tun_connectivity"]["target"], "192.168.106.1")
+        self.assertEqual(payload["verification"]["tun_global_connectivity"]["target"], "google.de")
+        self.assertEqual(
+            captured_targets,
+            [
+                ("TUN connectivity verified", "192.168.106.1", "peer"),
+                ("TUN global connectivity verified", "google.de", "global"),
+            ],
+        )
+
+    def test_tun_verification_parses_darwin_ifconfig_addresses(self):
+        ifconfig_output = """utun4: flags=8051<UP,POINTOPOINT,RUNNING,MULTICAST> mtu 1600
+        inet 192.168.106.3 --> 192.168.106.1 netmask 0xffffff00
+        inet6 fe80::1%utun4 prefixlen 64 scopeid 0x1
+        inet6 fd20:106::3 prefixlen 64
+        """
+
+        with mock.patch("obstacle_bridge.bridge_webadmin.sys.platform", "darwin"), \
+             mock.patch("obstacle_bridge.bridge_webadmin.shutil.which", return_value="/sbin/ifconfig"), \
+             mock.patch("obstacle_bridge.bridge_webadmin.subprocess.run") as run_mock:
+            run_mock.return_value = mock.Mock(returncode=0, stdout=ifconfig_output, stderr="")
+            observed = AdminWebUI._probe_tun_interface_addresses("utun4")
+
+        self.assertEqual(observed["ipv4"], ["192.168.106.3"])
+        self.assertEqual(observed["ipv6"], ["fe80::1", "fd20:106::3"])
+        run_mock.assert_called_once()
+
+    def test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        ui = AdminWebUI(args, _RunnerStub())
+        ui._server_thread = threading.current_thread()
+
+        scheduled: list[tuple[tuple[str, str, str, int, str], str, str, str, int, str]] = []
+
+        def _fake_schedule(cache_key, *, label, target, ifname, wait_seconds, probe_kind):
+            scheduled.append((cache_key, label, target, ifname, wait_seconds, probe_kind))
+
+        with mock.patch.object(ui, "_schedule_probe_verification_refresh", side_effect=_fake_schedule), \
+             mock.patch.object(ui, "_probe_verification") as probe_mock:
+            result = ui._cached_probe_verification(
+                label="TUN global connectivity verified",
+                target="google.de",
+                ifname="obtun0",
+                wait_seconds=2,
+                probe_kind="global",
+            )
+
+        self.assertEqual(result["state"], "pending")
+        self.assertEqual(result["target"], "google.de")
+        self.assertEqual(len(scheduled), 1)
+        self.assertEqual(scheduled[0][0], ("TUN global connectivity verified", "google.de", "obtun0", 2, "global"))
+        probe_mock.assert_not_called()
+
+    def test_probe_verification_calls_runner_internal_probe(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        ui = AdminWebUI(args, runner)
+
+        result = ui._probe_verification(
+            label="TUN connectivity verified",
+            target="192.168.106.1",
+            ifname="obtun0",
+            wait_seconds=1,
+            probe_kind="peer",
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["method"], "internal_icmp_echo")
+        self.assertEqual(result["value_ms"], 12.4)
+        self.assertEqual(result["last_success_rtt_ms"], 12.4)
+
+    def test_tun_routing_ui_binds_tun_helper_fields(self):
+        app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
+
+        self.assertIn("setText('tunHelperMode'", app_js)
+        self.assertIn("setText('tunHelperLifecyclePhase'", app_js)
+        self.assertIn("setText('tunHelperBackend'", app_js)
+        self.assertIn("setText('tunHelperConnected'", app_js)
+        self.assertIn("setText('tunHelperPacketsFromRuntime'", app_js)
+        self.assertIn("setText('tunHelperPacketsToRuntime'", app_js)
+        self.assertIn("setText('tunHelperLastError'", app_js)
+        self.assertIn("setText('tunHelperRecovery'", app_js)
+        self.assertIn("setText('tunHelperLastRepair'", app_js)
+        self.assertIn("tunRoutingHealthWarning", app_js)
+        self.assertIn("summarizeTunRuntimeHealth", app_js)
+        self.assertIn("setText('tunVerificationConfigSummary'", app_js)
+        self.assertIn("setText('tunVerificationPeerSummary'", app_js)
+        self.assertIn("setText('tunVerificationGlobalSummary'", app_js)
+        self.assertIn("setText('tunVerificationGlobalHost'", app_js)
+        self.assertIn("fmtTunVerificationValue", app_js)
+        self.assertIn("fmtTunVerificationDetail", app_js)
+        self.assertIn("last success", app_js)
+        self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
+        self.assertIn("Remaining findings:", app_js)
+        self.assertIn("document.getElementById('tunHelperRepairBtn')", app_js)
+        self.assertIn("helperBackend === 'linux-native'", app_js)
+        self.assertIn("helperRecovery.repair_supported !== false", app_js)
+
+    def test_tun_helper_repair_endpoint_returns_runner_payload(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="tcp",
+            dashboard=False,
+            admin_web_token="",
+        )
+        runner = _RunnerStub()
+        ui = AdminWebUI(args, runner)
+
+        async def run_flow():
+            writer = _WriterStub()
+            await ui._handle_tun_helper_repair(writer, "POST", {})
+            doc = _http_json_body(writer)
+            self.assertTrue(doc["ok"])
+            self.assertTrue(doc["cleanup_ok"])
+            self.assertEqual(doc["repaired"], ["firewall", "included_routes"])
+            self.assertEqual(doc["failed"], [])
+            self.assertEqual(doc["verification"]["remaining"], [])
+
+        asyncio.run(run_flow())
+
     def test_meta_payload_suppresses_runtime_dependency_warnings_on_ios(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -730,6 +1192,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tab-tun-routing"', index_html)
         self.assertIn('id="tunRoutingConnectionsBody"', index_html)
         self.assertIn('id="tunRoutingSharedBody"', index_html)
+        self.assertIn('id="tunRoutingSharedDrops"', index_html)
+        self.assertIn('id="tunVerificationConfigSummary"', index_html)
+        self.assertIn('id="tunVerificationPeerSummary"', index_html)
+        self.assertIn('id="tunVerificationGlobalSummary"', index_html)
+        self.assertIn('id="tunVerificationGlobalHost"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes"', index_html)
         self.assertIn('id="tunRoutingExcludedRoutes"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes6"', index_html)
@@ -738,10 +1205,17 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertNotIn('id="tunOpen"', index_html)
         self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
         self.assertIn("applyTunRoutingDoc(j);", app_js)
+        self.assertIn("setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));", app_js)
         self.assertIn("setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));", app_js)
         self.assertIn("setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));", app_js)
+        self.assertIn("const verification = j.verification || {};", app_js)
+        self.assertIn("setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));", app_js)
+        self.assertIn("function fmtTunFlowSummary(stats) {", app_js)
+        self.assertIn("function fmtDropDiagnostics(shared) {", app_js)
+        self.assertIn("<th>ChannelMux Flow</th>", index_html)
+        self.assertIn("<th>Drop Diagnostics</th>", index_html)
         self.assertIn("topics.push('tun_routing')", app_js)
         self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
 
@@ -764,22 +1238,36 @@ class AdminWebPayloadTests(unittest.TestCase):
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
 
         self.assertIn('id="tab-proxy"', index_html)
-        self.assertIn('id="proxyHttpPort"', index_html)
-        self.assertIn('id="proxySocks5Port"', index_html)
+        self.assertIn('proxy-summary-row-status', index_html)
+        self.assertIn('proxy-summary-row-endpoints', index_html)
+        self.assertIn('proxy-summary-row-counters', index_html)
+        self.assertIn('proxy-summary-row-error', index_html)
+        self.assertIn('proxy-summary-row-throughput', index_html)
+        self.assertIn('id="proxyProtocolSockets"', index_html)
+        self.assertIn('proxy-protocol-card', index_html)
         self.assertIn('id="proxyActiveConnections"', index_html)
         self.assertIn('id="proxyRxRate"', index_html)
         self.assertIn('id="proxyTxRate"', index_html)
-        self.assertIn('id="proxyListenersBody"', index_html)
+        self.assertIn('id="proxyRxRateFill"', index_html)
+        self.assertIn('id="proxyTxRateFill"', index_html)
+        self.assertIn('id="proxyListenersGrid"', index_html)
+        self.assertIn('class="proxy-rate-pair"', index_html)
         self.assertIn("function applyProxyDoc()", app_js)
         self.assertIn("function proxyListenerRate(listenerName, snapshot)", app_js)
+        self.assertIn("function proxyRatePercents(rxRate, txRate)", app_js)
+        self.assertIn("function renderProxyTrafficPair(rxBytes, txBytes, rxRate, txRate)", app_js)
+        self.assertIn('proxy-sockets-card', app_js)
+        self.assertIn('proxy-mini-grid', app_js)
         self.assertIn("root.proxy_provider_enabled", app_js)
         self.assertIn("root.proxy_provider_http_port", app_js)
         self.assertIn("root.proxy_provider_socks5_port", app_js)
-        self.assertIn("setText('proxyHttpPort', fmtInteger(cfg.http_port));", app_js)
-        self.assertIn("setText('proxySocks5Port', fmtInteger(cfg.socks5_port));", app_js)
+        self.assertIn("function renderProxyProtocolSockets(cfg)", app_js)
+        self.assertIn("protocolSockets.innerHTML = renderProxyProtocolSockets(cfg);", app_js)
         self.assertIn("setText('proxyActiveConnections', fmtInteger(totals.active));", app_js)
         self.assertIn("setText('proxyRxRate', fmtBytesPerSecond(totals.rxRate));", app_js)
         self.assertIn("setText('proxyTxRate', fmtBytesPerSecond(totals.txRate));", app_js)
+        self.assertIn("setPercentWidth('proxyRxRateFill', summaryRates.rxPct);", app_js)
+        self.assertIn("setPercentWidth('proxyTxRateFill', summaryRates.txPct);", app_js)
         self.assertIn("if (isTabActive('proxy')) activeTabs.push('proxy');", app_js)
         self.assertIn("if (!isTabActive('proxy')) return;", app_js)
 
@@ -1014,6 +1502,15 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("if (!syncServiceCatalogEditor(key)) return;", text)
                 self.assertNotIn('sink.value = \'"__invalid_service_catalog__"\'', text)
 
+    def test_service_catalog_remove_does_not_resync_stale_modal_values(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        for app_path in self._canonical_webadmin_paths():
+            with self.subTest(app_path=str(app_path.relative_to(repo_root))):
+                text = app_path.read_text(encoding="utf-8")
+                self.assertIn("function closeServiceCatalogModal(root, key, { rerender = true, syncBeforeClose = true } = {})", text)
+                self.assertIn("closeServiceCatalogModal(root, key, { rerender: false, syncBeforeClose: false });", text)
+                self.assertIn("renderServiceCatalogModal(root, key, Math.min(rowIndex, specs.length - 1));", text)
+
     def test_build_peers_payload_includes_secure_link_rows(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -1042,6 +1539,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["last_event"], "authenticated")
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
+        self.assertEqual(peer["secure_link"]["frames_passed_total"], 17)
+        self.assertEqual(peer["secure_link"]["frames_dropped_total"], 3)
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
         self.assertEqual(peer["rtt_est_ms"], 42.0)
         self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
@@ -1050,6 +1549,13 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(peer["throttle"]["active"])
         self.assertEqual(peer["throttle"]["remaining_bytes"], 1200)
         self.assertTrue(peer["compress_layer"]["enabled"])
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total))", app_js)
+        self.assertIn("renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total))", app_js)
+        self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", app_js)
+        self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", app_js)
+        self.assertIn("fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)", app_js)
         self.assertEqual(peer["compress_layer"]["algorithm"], "zlib")
         self.assertEqual(peer["compress_layer"]["compress_applied_total"], 7)
 
@@ -1147,6 +1653,63 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIsNone(peer["transmit_delay_sample_ms"])
         self.assertIsNone(peer["transmit_delay_est_ms"])
         self.assertIsNone(peer["last_incoming_age_seconds"])
+
+    def test_runner_peer_snapshot_exposes_connecting_reconnect_and_restart_timers(self):
+        class _Mux:
+            def snapshot_connections(self):
+                return {"udp": [], "tcp": [], "tun": [], "counts": {}}
+
+        class _Session:
+            def __init__(self):
+                self._last_rx_wall_ns = time.monotonic_ns()
+
+            def get_metrics(self):
+                return bridge_runner.SessionMetrics(
+                    rtt_est_ms=None,
+                    transmit_delay_sample_ms=None,
+                    transmit_delay_est_ms=None,
+                    inflight=0,
+                )
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {
+                        "peer_id": 1,
+                        "connected": False,
+                        "state": "connecting",
+                        "peer": ("127.0.0.1", 1234),
+                        "last_incoming_age_seconds": None,
+                    }
+                ]
+
+            def get_connecting_timer_snapshot(self):
+                return {"next_address_attempt_in_seconds": 12.5}
+
+            def get_secure_link_status_snapshot(self):
+                return {"state": "connecting", "recovery_enabled": False}
+
+            def is_connected(self):
+                return False
+
+        runner = bridge_runner.Runner.__new__(bridge_runner.Runner)
+        runner.args = argparse.Namespace(client_restart_if_disconnected=20.0, tcp_peer="127.0.0.1", tcp_peer_port=1234)
+        session = _Session()
+        runner._sessions = [session]
+        runner._muxes = [_Mux()]
+        runner._session_labels = ["tcp"]
+        runner._peer_traffic_rate_state = {}
+        runner._session_obj = session
+        runner._restart_requested = threading.Event()
+        runner._stop = threading.Event()
+        runner._last_disconnected_monotonic = time.monotonic() - 5.0
+
+        payload = runner.get_peer_connections_snapshot()
+        peer = payload["peers"][0]
+        self.assertEqual(peer["state"], "connecting")
+        self.assertAlmostEqual(peer["next_address_attempt_in_seconds"], 12.5, places=2)
+        self.assertIsNotNone(peer["restart_in_seconds"])
+        self.assertGreater(peer["restart_in_seconds"], 14.0)
+        self.assertLess(peer["restart_in_seconds"], 16.0)
 
     def test_build_peers_payload_includes_cert_identity_and_trust_fields(self):
         args = argparse.Namespace(

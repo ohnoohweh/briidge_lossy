@@ -14,13 +14,19 @@ GENERATED_SWIFT_DIR="${IOS_DIR}/build/generated"
 GENERATED_BUILD_STAMP_SWIFT="${GENERATED_SWIFT_DIR}/ObstacleBridgeGeneratedBuildStamp.swift"
 BINARY_PATH="${BUILD_DIR}/ObstacleBridgeHostRunner"
 BUILD_INFO_JSON="${BUILD_DIR}/ObstacleBridgeHostRunner.build-info.json"
+HELPER_BINARY_PATH="${BUILD_DIR}/ObstacleBridgeTunHelper"
 APP_BUNDLE="${BUILD_DIR}/ObstacleBridge.app"
 APP_CONTENTS_DIR="${APP_BUNDLE}/Contents"
 APP_MACOS_DIR="${APP_CONTENTS_DIR}/MacOS"
 APP_RESOURCES_DIR="${APP_CONTENTS_DIR}/Resources"
+APP_LAUNCHSERVICES_DIR="${APP_CONTENTS_DIR}/Library/LaunchServices"
+APP_LAUNCHDAEMONS_DIR="${APP_CONTENTS_DIR}/Library/LaunchDaemons"
 APP_EXECUTABLE="${APP_MACOS_DIR}/ObstacleBridge"
 APP_INFO_PLIST="${APP_CONTENTS_DIR}/Info.plist"
 APP_BUNDLE_ID="${OBSTACLEBRIDGE_MACOS_BUNDLE_ID:-com.obstaclebridge.macos.ObstacleBridge}"
+HELPER_BUNDLE_ID="${OBSTACLEBRIDGE_MACOS_TUN_HELPER_BUNDLE_ID:-com.obstaclebridge.macos.ObstacleBridge.TunHelper}"
+HELPER_EXECUTABLE_NAME="ObstacleBridgeTunHelper"
+HELPER_PLIST="${APP_LAUNCHDAEMONS_DIR}/${HELPER_BUNDLE_ID}.plist"
 APP_CODESIGN_IDENTITY="${OBSTACLEBRIDGE_CODESIGN_IDENTITY:--}"
 APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"
 APP_ICONSET_DIR="${BUILD_DIR}/ObstacleBridge.iconset"
@@ -125,7 +131,11 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskTransportAdapter.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayLayerTransportAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" \
@@ -155,9 +165,19 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift"
 
+echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
+"${SWIFTC_CMD}" \
+  "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
+  -o "${HELPER_BINARY_PATH}" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgePrivilegedHelper/ObstacleBridgeTunPrivilegedHelperMain.swift"
+
 echo "[build_macos_app] preparing macOS app bundle"
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${APP_MACOS_DIR}" "${APP_RESOURCES_DIR}"
+mkdir -p "${APP_MACOS_DIR}" "${APP_RESOURCES_DIR}" "${APP_LAUNCHSERVICES_DIR}" "${APP_LAUNCHDAEMONS_DIR}"
 
 echo "[build_macos_app] generating macOS app icon"
 build_macos_app_icon
@@ -180,7 +200,11 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskTransportAdapter.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayLayerTransportAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" \
@@ -257,6 +281,28 @@ cp "${REPO_ROOT}/ios/build/generated/obstaclebridge-build-info.json" "${BUILD_IN
 cp "${BUILD_INFO_JSON}" "${APP_RESOURCES_DIR}/ObstacleBridge.build-info.json"
 cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
 chmod 755 "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
+cp "${HELPER_BINARY_PATH}" "${APP_LAUNCHSERVICES_DIR}/${HELPER_EXECUTABLE_NAME}"
+chmod 755 "${APP_LAUNCHSERVICES_DIR}/${HELPER_EXECUTABLE_NAME}"
+
+cat > "${HELPER_PLIST}" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${HELPER_BUNDLE_ID}</string>
+  <key>MachServices</key>
+  <dict>
+    <key>${HELPER_BUNDLE_ID}.xpc</key>
+    <true/>
+  </dict>
+  <key>BundleProgram</key>
+  <string>Contents/Library/LaunchServices/${HELPER_EXECUTABLE_NAME}</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>
+EOF
 
 if [ "${APP_CODESIGN_IDENTITY}" != "off" ]; then
   echo "[build_macos_app] codesigning app bundle"

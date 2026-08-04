@@ -1763,6 +1763,7 @@ class UdpSession(ISession):
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
         self._server_next_mux_chan: int = 1
+        self._connected_since_unix_ts: Optional[float] = None
         self._app_payload_passthrough: bool = False
         self._listener_peer_cleanup_task: Optional[asyncio.Task] = None
         self._peer_candidates: List[Tuple[str, int, int]] = []
@@ -2003,6 +2004,11 @@ class UdpSession(ISession):
                     "mux_chans": sorted(mux_by_peer.get(peer_id, [])),
                     "rtt_est_ms": getattr(session, "rtt_est_ms", None),
                     "last_incoming_age_seconds": last_incoming_age_seconds,
+                    "connected_since_unix_ts": (
+                        float(ctx.get("connected_since_unix_ts"))
+                        if isinstance(ctx, dict) and ctx.get("connected_since_unix_ts") is not None
+                        else None
+                    ),
                 })
             return rows
         peer_endpoint = None
@@ -2022,7 +2028,18 @@ class UdpSession(ISession):
             "last_incoming_age_seconds": _monotonic_age_seconds_from_ns(
                 int(getattr(getattr(self.inner_session, "proto", None), "_last_rx_wall_ns", 0) or 0)
             ),
+            "connected_since_unix_ts": self.get_transport_connected_since_unix_ts(),
         }]
+
+    def get_transport_connected_since_unix_ts(self, peer_id: Optional[int] = None) -> Optional[float]:
+        if self._listener_mode:
+            if peer_id is None:
+                return None
+            ctx = self._server_peers.get(int(peer_id))
+            if isinstance(ctx, dict) and ctx.get("connected_since_unix_ts") is not None:
+                return float(ctx.get("connected_since_unix_ts"))
+            return None
+        return float(self._connected_since_unix_ts) if self._connected_since_unix_ts is not None else None
 
 
     # ---- ISession: lifecycle ----
@@ -2231,6 +2248,18 @@ class UdpSession(ISession):
             return any(bool(ctx.get("connected")) for ctx in self._server_peers.values())
         return self._proto_state.is_connected()
 
+    def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
+        connected = bool(self.is_connected())
+        state = "connected" if connected else ("connecting" if not self._listener_mode else "listening")
+        return [{
+            "layer": "transport",
+            "transport": "myudp",
+            "state": state,
+            "epoch": 0,
+            "connected": connected,
+            "app_ready": connected,
+        }]
+
     # ---- ISession: data path ----
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         self._log.debug(f"[UdpSession] send_app len {len(payload)}  on session id=%x", id(self))
@@ -2381,6 +2410,11 @@ class UdpSession(ISession):
             getattr(s, "rtt_est_ms", 0.0),
             getattr(s, "last_rtt_ok_ns", 0),
         )
+        if connected:
+            if self._connected_since_unix_ts is None:
+                self._connected_since_unix_ts = time.time()
+        else:
+            self._connected_since_unix_ts = None
 
         if callable(self._on_state):
             try:
@@ -2434,14 +2468,14 @@ class UdpSession(ISession):
     def _rotate_to_next_peer_candidate(self) -> bool:
         if self._listener_mode or self._proto is None or self._proto.send_port is None:
             return False
-        next_index = self._peer_candidate_index + 1
-        if next_index >= len(self._peer_candidates):
+        if len(self._peer_candidates) <= 1:
             return False
+        next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
         old_peer = self._peer_candidates[self._peer_candidate_index]
         new_peer = self._peer_candidates[next_index]
         self._peer_candidate_index = next_index
         self._log.warning(
-            "[UDP/SESSION] no liveness on preferred peer %r, falling back to %r",
+            "[UDP/SESSION] no liveness on current peer %r, rotating to %r",
             old_peer[:2],
             new_peer[:2],
         )
@@ -2491,7 +2525,7 @@ class UdpSession(ISession):
 
     async def _peer_candidate_fallback_loop(self) -> None:
         try:
-            while not self._listener_mode and self._peer_candidate_index < (len(self._peer_candidates) - 1):
+            while not self._listener_mode and len(self._peer_candidates) > 1:
                 await asyncio.sleep(3.0)
                 if self.is_connected():
                     return
@@ -2506,6 +2540,11 @@ class UdpSession(ISession):
         ctx = self._server_peers.get(peer_id)
         if ctx is not None:
             ctx["connected"] = bool(connected)
+            if connected:
+                if ctx.get("connected_since_unix_ts") is None:
+                    ctx["connected_since_unix_ts"] = time.time()
+            else:
+                ctx["connected_since_unix_ts"] = None
             self.peer_proto = ctx.get("peer_proto") or self.peer_proto
         self._update_server_connected_state()
         if not connected:
@@ -2567,6 +2606,7 @@ class UdpSession(ISession):
                 "session": session,
                 "peer_proto": peer_proto,
                 "connected": False,
+                "connected_since_unix_ts": None,
                 "last_incoming_wall_ns": rx_wall_ns,
             }
             self._server_peer_by_addr[key] = peer_id

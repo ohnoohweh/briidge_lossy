@@ -258,6 +258,229 @@ Design impact:
 
 ### Outcome 6: iOS Requires Canonical WebAdmin Asset Staging Into Packaged Builds
 
+## macOS vs iOS Swift Parity Checklist
+
+This checklist compares the two Apple-native Swift runtime surfaces that ship in
+this repository today:
+
+- macOS host-runner:
+  `ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift`
+- iOS packet-tunnel provider:
+  `ios/native/IPServer/PacketTunnelProvider.swift`
+
+The goal here is not to erase every platform difference. Some differences are
+required by Apple platform boundaries. The goal is to keep operator-visible
+behavior, Admin Web semantics, and transport/tunnel diagnostics aligned unless
+there is a deliberate platform reason not to.
+
+### Parity status summary
+
+- `done`: status snapshots, connection snapshots, peer snapshots, meta
+  snapshots, and live-topic reads now use the same broad caching model on both
+  Swift runtimes
+- `done`: TUN config, peer-connectivity, and global-connectivity verification
+  now use the same internal ICMP/ICMPv6 echo model on both Swift runtimes
+- `done`: onboarding invite generate/preview and shared Admin API surfaces now
+  exist on both Swift runtimes
+- `different by design`: macOS owns a packaged helper / XPC / `SMAppService`
+  lifecycle surface; iOS uses Network Extension as the privileged packet
+  boundary and should not mirror the desktop helper shape
+- `remaining gaps`: a smaller set of operator controls and runtime-detail
+  surfaces remain richer on macOS than on iOS
+
+### A. Admin snapshot and live-status parity
+
+#### 1. Cached snapshot publisher
+
+- `parity: done`
+- macOS Swift has a background admin snapshot publisher plus synchronous
+  refresh on API reads
+- iOS Swift now matches that model:
+  - background publisher refreshes cached snapshots on a timer
+  - `adminStatusSnapshot()`, `adminConnectionsSnapshot()`,
+    `adminTunRoutingSnapshot()`, `adminPeersSnapshot()`, and
+    `adminMetaSnapshot()` now also call `refreshAdminSnapshotCache(sync: true)`
+    before returning
+
+Why this matters:
+
+- WebAdmin should not feel more stale or more bursty on iOS than on macOS
+- uptime, counters, and TUN verification should follow the same freshness
+  contract on both Swift runtimes
+
+#### 2. Live topic semantics
+
+- `parity: mostly done`
+- both runtimes route live-topic payloads through the shared
+  `ObstacleBridgeAdminAPI.liveTopicPayload(...)`
+- both now read from cached snapshot builders instead of requiring each UI
+  request to recompute the full status tree
+
+Follow-up:
+
+- keep the refresh cadence and freshness semantics intentionally aligned when
+  future rate limiting, debounce, or probe-TTL adjustments are introduced
+
+### B. TUN verification parity
+
+#### 3. Packet-level connectivity verification
+
+- `parity: done`
+- both macOS Swift and iOS Swift now report:
+  - `tun_config`
+  - `tun_connectivity`
+  - `tun_global_connectivity`
+- both use internal ICMP/ICMPv6 echo probes through the live tunnel path
+- both expose:
+  - `method = internal_icmp_echo`
+  - `value_ms`
+  - `last_success_ago_s`
+  - `last_success_rtt_ms`
+
+#### 4. Tunnel-address observation semantics
+
+- `parity: done`
+- iOS no longer fails `tun_config` merely because a legacy packet-pump flag is
+  false while effective tunnel IPs are already applied
+- both Swift runtimes now treat observed configured addresses as the primary
+  config-verification signal
+
+#### 5. Probe lifecycle maturity
+
+- `parity: partial`
+- both runtimes now have internal probe generation and reply matching
+- macOS still has the more mature surrounding lifecycle story because its admin
+  snapshot/cache design landed earlier and has seen more runtime bake time
+
+Follow-up:
+
+- keep probe-history freshness, pending-state semantics, and cache invalidation
+  aligned across both Swift runtimes when further UI polish is added
+
+### C. Admin control-action parity
+
+#### 6. Restart and reconnect
+
+- `parity: done`
+- both runtimes expose restart and reconnect as supported control actions
+
+#### 7. Shutdown
+
+- `parity: intentionally different`
+- macOS Swift supports shutdown
+- iOS Swift reports shutdown unsupported
+
+Reason:
+
+- the macOS host runner owns a full app/runtime lifecycle that can terminate
+  itself meaningfully
+- the iOS Network Extension is hosted under Apple-managed extension lifecycle
+  rules and should not pretend to offer the same operator shutdown contract
+
+### D. Onboarding and config-surface parity
+
+#### 8. Onboarding invites
+
+- `parity: done`
+- both runtimes expose onboarding profiles plus invite generate/preview through
+  the shared Admin API contract
+
+#### 9. Config challenge and guarded writes
+
+- `parity: done in broad shape`
+- both runtimes expose config challenge and guarded config update surfaces
+- exact restart/reload side effects differ because the surrounding lifecycle
+  model differs between app-hosted macOS runtime and iOS packet-tunnel runtime
+
+Follow-up:
+
+- keep the same operator-visible success/error payload shape when restart or
+  reconnect is triggered after config edits
+
+### E. SecureLink and transport observability parity
+
+#### 10. SecureLink top-level visibility
+
+- `parity: mostly done`
+- both runtimes expose SecureLink state in status/peer/meta surfaces
+- both use the shared Admin snapshot support helpers for most of the
+  operator-visible structure
+
+#### 11. Detailed reload/material-generation diagnostics
+
+- `parity: macOS richer`
+- macOS meta/status surfaces currently expose more explicit SecureLink reload
+  bookkeeping such as generation counters and last-reload metadata
+- iOS does not yet mirror that richer bookkeeping in the same depth
+
+Follow-up:
+
+- if those fields prove useful in production debugging on macOS, carry the same
+  operator-visible fields into iOS meta/status snapshots rather than inventing
+  a separate mobile-only vocabulary
+
+### F. Helper / privileged-boundary parity
+
+#### 12. `tun_helper` package/runtime status
+
+- `parity: intentionally different`
+- macOS Swift exposes packaged-helper, XPC, and `SMAppService` status because
+  it owns a real helper boundary
+- iOS uses `NEPacketTunnelProvider` as the privileged packet boundary and does
+  not have a separate local helper package to report on
+
+Design rule:
+
+- keep the operator-visible meaning aligned where possible
+- do not force iOS to mimic desktop helper packaging concepts that do not exist
+  on Apple’s Network Extension model
+
+#### 13. Helper-loss recovery and repair UX
+
+- `parity: intentionally different`
+- macOS has richer helper recovery warnings because helper-owned Darwin network
+  state may outlive helper death
+- iOS should not grow fake helper-repair surfaces just for symmetry
+
+### G. Remaining parity work worth doing
+
+These are the remaining macOS-vs-iOS Swift gaps that look worth closing:
+
+1. Align SecureLink reload/material-generation diagnostics if the macOS fields
+   are proving operationally valuable.
+2. Align any future probe freshness / pending-state UI semantics so both Swift
+   runtimes report staleness the same way.
+3. Keep transport-runtime and peer-traffic field names stable across both
+   runtimes whenever one side adds new operator-visible counters.
+4. Add focused parity tests that compare high-level Admin payload shape between
+   macOS Swift and iOS Swift for:
+   - status
+   - connections
+   - TUN routing verification
+   - peers
+   - meta
+
+### H. Areas that should remain intentionally different
+
+These differences are healthy and should not be "fixed" away:
+
+- macOS packaged helper / XPC / `SMAppService` lifecycle controls
+- iOS Network Extension ownership of the privileged packet boundary
+- macOS shutdown support versus iOS shutdown unsupported
+- helper recovery / repair surfaces that only make sense when a separate helper
+  process owns host-network state
+
+### Practical interpretation
+
+For current product work, "Swift parity" between macOS and iOS should now mean:
+
+- the same Admin API vocabulary
+- the same TUN verification semantics
+- the same freshness model for live snapshots
+- the same broad onboarding/config contracts
+- platform-specific lifecycle and privilege differences only where the Apple
+  runtime model truly requires them
+
 ### Outcome 7: Swift Packet Adapters Differ From The Python Host-TUN Path
 
 The current product now has a concrete cross-platform lesson from shared-TUN

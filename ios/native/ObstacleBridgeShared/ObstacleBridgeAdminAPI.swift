@@ -9,6 +9,9 @@ protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
     func adminConfigSnapshot() -> [String: Any]
     func adminConfigChallenge(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminUpdateConfig(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
+    func adminTunHelperStatus(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
+    func adminTunHelperAction(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
+    func adminTunHelperRepair(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminAuthRequired() -> Bool
     func adminIsAuthenticated(headers: [String: String]) -> Bool
     func adminAuthState(headers: [String: String]) -> [String: Any]
@@ -65,6 +68,32 @@ extension ObstacleBridgeAdminAPIStateProvider {
         return ObstacleBridgeAdminAPI.jsonResponse([
             "ok": false,
             "error": "config update unsupported",
+        ], statusLine: "HTTP/1.1 400 Bad Request")
+    }
+
+    func adminTunHelperStatus(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        _ = request
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": true,
+            "tun_helper": adminStatusSnapshot()["tun_helper"] ?? [:],
+        ])
+    }
+
+    func adminTunHelperAction(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        _ = request
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "error": "TUN helper actions unsupported",
+        ], statusLine: "HTTP/1.1 400 Bad Request")
+    }
+
+    func adminTunHelperRepair(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        _ = request
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "reason": "repair_supported_only_for_linux_native_helper",
+            "repaired": [],
+            "failed": [],
         ], statusLine: "HTTP/1.1 400 Bad Request")
     }
 
@@ -214,6 +243,12 @@ enum ObstacleBridgeAdminAPI {
             return jsonResponse(provider.adminConnectionsSnapshot())
         case ("GET", "/api/tun-routing/status"):
             return jsonResponse(provider.adminTunRoutingSnapshot())
+        case ("GET", "/api/tun-helper/status"):
+            return provider.adminTunHelperStatus(request: request)
+        case ("POST", "/api/tun-helper/action"):
+            return provider.adminTunHelperAction(request: request)
+        case ("POST", "/api/tun-helper/repair"):
+            return provider.adminTunHelperRepair(request: request)
         case ("GET", "/api/peers"):
             return jsonResponse(["peers": provider.adminPeersSnapshot()])
         case ("GET", "/api/config"):
@@ -357,6 +392,7 @@ enum ObstacleBridgeAdminAPI {
         [
             "tun": [],
             "shared_tun": [],
+            "tun_helper": [:],
             "summary": [
                 "tun_total": 0,
                 "tun_open": 0,
@@ -403,6 +439,7 @@ enum ObstacleBridgeAdminAPI {
         return [
             "tun": tunRows,
             "shared_tun": sharedRows,
+            "tun_helper": [:],
             "summary": [
                 "tun_total": tunRows.count,
                 "tun_open": tunOpen,

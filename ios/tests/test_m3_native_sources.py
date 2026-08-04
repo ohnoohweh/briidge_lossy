@@ -104,17 +104,30 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "ws_bind"' in runtime_config
     assert 'schemaItem(key: "ws_own_port"' in runtime_config
     assert 'schemaItem(key: "ws_path"' in runtime_config
+    assert '"tun_execution"' in runtime_config
+    assert 'schemaItem(key: "tun_execution_mode", description: "Desktop local TUN execution topology: inline current-process ownership or helper-backed ownership.", defaultValue: "inline", choices: ["inline", "helper"])' in runtime_config
+    assert 'schemaItem(key: "tun_helper_backend", description: "Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.", defaultValue: "linux-native")' in runtime_config
+    assert 'schemaItem(key: "tun_helper_apply_network", description: "Whether the helper should own privileged address/route/DNS/firewall apply-remove work.", defaultValue: true)' in runtime_config
+    assert 'private static let tunExecutionCompatibilityAliases = [' in runtime_config
+    assert '"mode": "tun_execution_mode"' in runtime_config
+    assert '"helper_backend": "tun_helper_backend"' in runtime_config
     assert '"proxy_provider"' in runtime_config
     assert 'schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider."' in runtime_config
     assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port."' in runtime_config
     assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
     assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
     assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
+    assert 'schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [' in runtime_config
+    assert '"mode": "system"' in runtime_config
     assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
     assert 'schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1)' in runtime_config
     assert 'schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 200)' in runtime_config
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
+    assert '"mode": "system"' in provider
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [' in host_runner
+    assert '"mode": "system"' in host_runner
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -338,6 +351,7 @@ def test_webadmin_server_source_exists() -> None:
 def test_proxy_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeProxyProtocolCodec" in runtime
@@ -362,6 +376,10 @@ def test_proxy_server_source_exists() -> None:
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider
+    assert '"frames_passed_total": 0' in host_runner
+    assert '"frames_dropped_total": 0' in host_runner
+    assert '"frames_passed_total": 0' in provider
+    assert '"frames_dropped_total": 0' in provider
     assert "class ObstacleBridgeProxyProtocolCodec" in python_runtime
     assert "class ObstacleBridgeProxyServer" in python_runtime
     assert "parse_http_request_head" in python_runtime
@@ -384,6 +402,64 @@ def test_admin_api_source_exists() -> None:
     assert "adminTunRoutingSnapshot()" in runtime
     assert "tunRoutingSnapshot(fromConnections:" in runtime
     assert '"admin_api_request"' in runtime
+
+
+def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
+    assert 'static let providerBuildTimestampUTC = "unknown"' in provider
+    assert 'private func buildSummary() -> [String: Any]' in provider
+    assert '"source": "embedded-build-info"' in provider
+    assert '"build_timestamp_utc": timestamp' in provider
+    assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
+    assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
+    assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider
+    assert "func adminConnectionsSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminConnectionsSnapshotUncached()\n        }" in provider
+    assert "func adminTunRoutingSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminTunRoutingSnapshotUncached()\n        }" in provider
+    assert "func adminPeersSnapshot() -> [[String: Any]] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminPeersSnapshotUncached()\n        }" in provider
+    assert "func adminMetaSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminMetaSnapshotUncached()\n        }" in provider
+    assert 'let resolvedPeer = adminResolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)' in provider
+    assert '"peer": resolvedPeer ?? configuredEndpoint' in provider
+    assert '"resolved_peer": resolvedPeer ?? NSNull()' in provider
+    assert '"resolved_peer_family": resolvedPeer?["family"] ?? NSNull()' in provider
+    assert "private func adminResolvedPeerSnapshot(transport: String, transportRuntime: [String: Any]) -> [String: Any]?" in provider
+    assert 'ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["overlay_peer_host"])' in provider
+    assert 'ObstacleBridgeRuntimeConfig.stringValue(from: selectedRuntime["resolved_peer_host"])' in provider
+    assert 'private let adminSnapshotRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminSnapshotRefresh", qos: .utility)' in provider
+    assert "let timer = DispatchSource.makeTimerSource(queue: adminSnapshotRefreshQueue)" in provider
+    assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
+    assert 'if let active = snapshot["active"] as? Bool {' in provider
+    assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
+    assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
+    assert 'private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)' in provider
+    assert "private func startAdminTunVerificationPublisher()" in provider
+    assert "private func refreshAdminTunVerificationCache(sync: Bool = false)" in provider
+    assert 'state: "pending"' in provider
+    assert 'if !adminPacketProcessingActive() {' in provider
+    assert 'state: "skipped"' in provider
+    assert '"ifname": "NEPacketTunnelFlow"' in provider
+    assert '"tun_config": Self.iOSVerificationResult(' in provider
+    assert '"tun_connectivity": cachedTunConnectivityVerificationOrProbe(' in provider
+    assert '"tun_global_connectivity": cachedTunConnectivityVerificationOrProbe(' in provider
+    assert '?? "google.de")' in provider
+    assert 'method: "network_extension_settings"' in provider
+    assert "} else if addressesPresent && !adminPacketProcessingActive() {" in provider
+    assert '"Packet processing is not active yet."' in provider
+    assert "guard adminPacketProcessingActive() else {" in provider
+    assert 'return bridge.probeTunConnectivity(' in provider
+
+    app_js = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
+    assert "const buildTimestampUTC = String(build.build_timestamp_utc || '').trim();" in app_js
+    assert "return `build ${buildTimestampUTC}`;" in app_js
+    assert "function fmtHostPort(host, port) {" in app_js
+    assert "const bracketedHost = hostText.includes(':') && !hostText.startsWith('[') ? `[${hostText}]` : hostText;" in app_js
+    assert "if (Array.isArray(ep) && ep.length >= 2) return fmtHostPort(ep[0], ep[1]);" in app_js
+    assert "if (dest.host != null && dest.port != null) return fmtHostPort(dest.host, dest.port);" in app_js
+    assert '"method": "internal_icmp_echo"' in provider
+    assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in provider
+    assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
+    assert "ObstacleBridgeTunPing.buildIPv6EchoRequest(" in provider
 
 
 def test_macos_swift_host_runner_source_exists() -> None:
@@ -444,6 +520,7 @@ def test_macos_app_main_source_exists() -> None:
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
+    tun_helper_contract = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
 
     assert "@main" in app_main
     assert "WKWebView" in app_main
@@ -459,6 +536,9 @@ def test_macos_app_main_source_exists() -> None:
     assert "let root = base" in control
     assert "#if os(macOS)" in control
     assert "return loadSharedRuntimeConfigJSON() ?? [:]" in control
+    assert 'remoteAdminPort = 13081' in control
+    assert 'remoteAdminName = "WebAdmin iphone"' in control
+    assert '"admin_snapshot_cache_enabled": false' in control
     assert 'privilegedHostRunnerExecutableName = "ObstacleBridgeHostRunner"' in control
     assert "do shell script" in control
     assert "with administrator privileges" in control
@@ -474,6 +554,13 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridge.app" in build_script
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
+    assert "ObstacleBridgeTunHelperContract.swift" in build_script
+    assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
+    assert "ObstacleBridgeMacOSTunHelperService.swift" in build_script
+    assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
+    assert "ObstacleBridgeTunHelper" in build_script
+    assert "Library/LaunchServices" in build_script
+    assert "Library/LaunchDaemons" in build_script
     assert 'cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"' in build_script
     assert "codesign" in build_script
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
@@ -481,6 +568,8 @@ def test_macos_app_main_source_exists() -> None:
     assert 'OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION' in build_script
     assert 'SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")' in build_script
     assert "tunServiceSpec: tunService?.toChannelMuxServiceSpec()" in runner
+    assert 'case openTun = "OPEN_TUN"' in tun_helper_contract
+    assert "iOSUsesNetworkExtensionBoundary = true" in tun_helper_contract
 
 
 def test_websocket_payload_codec_source_exists() -> None:
@@ -603,6 +692,21 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
     assert "handleInboundFrame(" in runtime
     assert "flushPendingPayloads(" in runtime
     assert "beginClientHandshake(" in runtime
+
+
+def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert 'secureState = "failed"' in provider
+    assert 'secureState = "waiting_transport"' in provider
+    assert 'secureState = "listening"' in provider
+    assert 'secureState = "auth_failed"' not in provider
+
+    assert 'state = "failed"' in host_runner
+    assert 'state = "waiting_transport"' in host_runner
+    assert 'state = "listening"' in host_runner
+    assert 'state = "auth_failed"' not in host_runner
 
 
 def test_overlay_layer_transport_adapter_source_exists() -> None:
@@ -781,6 +885,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "provider_response" in control
     assert 'let runtimeConfig = ObstacleBridgeTunnelControl.loadRuntimeConfigJSON()' in control
     assert 'payload["runtime_config"] = runtimeConfig' in control
+    assert "applyingRemoteAdminDefaultsToGroupedPayload" in control
+    assert "admin_web_remote_publish" in control
+    assert 'channelMux["remote_servers"] = remoteServers' in control
     assert "runtimeConfigForProviderConfiguration(" not in control
     assert "swiftUDPRuntimeConfig(payload: payload)" not in control
     assert "tunnelProtocol.username" in control

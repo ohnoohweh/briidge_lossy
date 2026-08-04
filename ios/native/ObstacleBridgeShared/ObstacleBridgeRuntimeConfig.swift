@@ -335,6 +335,7 @@ enum ObstacleBridgeRuntimeConfig {
         "ws_session",
         "secure_link",
         "compress_layer",
+        "tun_execution",
         "TUN_routing",
         "admin_web",
         "debug_logging",
@@ -353,6 +354,13 @@ enum ObstacleBridgeRuntimeConfig {
         "auth": "proxy_provider_auth",
         "egress": "proxy_provider_egress",
         "policy": "proxy_provider_policy",
+    ]
+    private static let tunExecutionCompatibilityAliases = [
+        "mode": "tun_execution_mode",
+        "helper_backend": "tun_helper_backend",
+        "helper_socket": "tun_helper_socket",
+        "helper_apply_network": "tun_helper_apply_network",
+        "helper_log_level": "tun_helper_log_level",
     ]
 
     static func configSchemaSnapshot() -> [String: Any] {
@@ -444,6 +452,13 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "compress_layer_min_bytes", description: "Minimum payload size before compression", defaultValue: 64),
                 schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
             ],
+            "tun_execution": [
+                schemaItem(key: "tun_execution_mode", description: "Desktop local TUN execution topology: inline current-process ownership or helper-backed ownership.", defaultValue: "inline", choices: ["inline", "helper"]),
+                schemaItem(key: "tun_helper_backend", description: "Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.", defaultValue: "linux-native"),
+                schemaItem(key: "tun_helper_socket", description: "Optional explicit local IPC socket path for helper mode.", defaultValue: ""),
+                schemaItem(key: "tun_helper_apply_network", description: "Whether the helper should own privileged address/route/DNS/firewall apply-remove work.", defaultValue: true),
+                schemaItem(key: "tun_helper_log_level", description: "Log level for the TUN helper control path.", defaultValue: "INFO", choices: ["CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"]),
+            ],
             "TUN_routing": [
                 schemaItem(key: "tunnel_address", description: "IPv4 tunnel address for the local iOS/macOS tunnel endpoint.", defaultValue: "192.168.106.1"),
                 schemaItem(key: "tunnel_prefix", description: "IPv4 tunnel prefix length.", defaultValue: 30),
@@ -481,8 +496,8 @@ enum ObstacleBridgeRuntimeConfig {
                     "username": "",
                     "token": "",
                 ]),
-                schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for direct outbound connection behavior.", defaultValue: [
-                    "mode": "direct",
+                schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [
+                    "mode": "system",
                     "address_families": ["ipv4", "ipv6"],
                 ]),
                 schemaItem(key: "proxy_provider_policy", description: "Proxy destination policy object.", defaultValue: [
@@ -657,7 +672,7 @@ enum ObstacleBridgeRuntimeConfig {
         }
         if payload["proxy_provider_egress"] == nil {
             payload["proxy_provider_egress"] = [
-                "mode": "direct",
+                "mode": "system",
                 "address_families": ["ipv4", "ipv6"],
             ]
         }
@@ -743,6 +758,11 @@ enum ObstacleBridgeRuntimeConfig {
             for alias in proxyProviderCompatibilityAliases.keys {
                 normalized.removeValue(forKey: alias)
             }
+        } else if sectionName == "tun_execution" {
+            applyCompatibilityAliases(to: &normalized)
+            for alias in tunExecutionCompatibilityAliases.keys {
+                normalized.removeValue(forKey: alias)
+            }
         }
         for row in rows {
             let key = String(describing: row["key"] ?? "")
@@ -775,6 +795,11 @@ enum ObstacleBridgeRuntimeConfig {
             payload["udp_peer_resolve_family"] = value
         }
         for (alias, canonical) in proxyProviderCompatibilityAliases where payload[canonical] == nil {
+            if let value = payload[alias] {
+                payload[canonical] = value
+            }
+        }
+        for (alias, canonical) in tunExecutionCompatibilityAliases where payload[canonical] == nil {
             if let value = payload[alias] {
                 payload[canonical] = value
             }

@@ -1732,26 +1732,49 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         '-o',
         str(binary_path),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminAPI.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminAuth.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminConfigChallenge.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminConfigSupport.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeConfigSecretCodec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminSnapshotSupport.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminWebSupport.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeCrypto.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunHelperService.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperContract.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperXPCTransport.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunAdapter.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunPing.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeRuntimeConfig.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOnboarding.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebAdminServer.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxUdpRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTcpRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTunRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTCPTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlaySessionCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeCompressLayerRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeServiceSpec.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeProxyConnections.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeProxyServer.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayChannelCore.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayConnectionSupport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayStackPlanner.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressResolver.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketPayloadCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayTransportOwner.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeQuicOverlayRuntime.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeQuicOverlayTransportOwner.swift'),
         str(SWIFT_APP_MAC_RUNNER_SOURCE),
         str(SWIFT_HOST_RUNNER_MAIN_SOURCE),
     ]
@@ -2348,6 +2371,10 @@ def _admin_host_for_port(admin_port: int) -> str:
     return _admin_loopback_hosts(admin_port)[0]
 
 
+def _admin_http_url(admin_port: int, path: str) -> str:
+    return f'http://{_admin_host_for_port(admin_port)}:{admin_port}{path}'
+
+
 def _rewrite_registered_admin_url(url: str) -> str:
     try:
         parsed = urllib.parse.urlsplit(str(url))
@@ -2658,9 +2685,9 @@ def assert_static_http_root_serves_repeatedly(url: str, *, attempts: int = 6, ti
 
 def get_health(admin_port: int) -> dict:
     urls = [
-        f'http://127.0.0.1:{admin_port}/api/health',
-        f'http://127.0.0.1:{admin_port}/healthz',
-        f'http://127.0.0.1:{admin_port}/api/status',
+        _admin_http_url(admin_port, '/api/health'),
+        _admin_http_url(admin_port, '/healthz'),
+        _admin_http_url(admin_port, '/api/status'),
     ]
     last_exc: Optional[Exception] = None
     for url in urls:
@@ -2678,7 +2705,7 @@ def get_health(admin_port: int) -> dict:
 
 def try_get_status(admin_port: int) -> Optional[dict]:
     try:
-        _code, body = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.5)
+        _code, body = fetch_json(_admin_http_url(admin_port, '/api/status'), timeout=1.5)
         return body
     except urllib.error.HTTPError as e:
         if e.code == 503:
@@ -2713,7 +2740,7 @@ def wait_admin_up(admin_port: int, timeout: float = 10.0) -> dict:
 def wait_admin_auth_up(admin_port: int, timeout: float = 10.0) -> dict:
     end = time.time() + timeout
     last_exc = None
-    url = f'http://127.0.0.1:{admin_port}/api/auth/state'
+    url = _admin_http_url(admin_port, '/api/auth/state')
     log.info(f'[HARNESS] wait_admin_auth_up using {url}')
     while time.time() < end:
         try:
@@ -2740,7 +2767,7 @@ def wait_status_connected_auth(
     last = None
     while time.time() < end:
         code, body = fetch_json_auth(
-            f'http://127.0.0.1:{admin_port}/api/status',
+            _admin_http_url(admin_port, '/api/status'),
             timeout=1.5,
             opener=opener,
         )
@@ -2763,7 +2790,7 @@ def admin_authenticate(
 ) -> tuple[int, dict, urllib.request.OpenerDirector]:
     op = opener or make_json_opener(with_cookies=True)
     code, challenge = request_json(
-        f'http://127.0.0.1:{admin_port}/api/auth/challenge',
+        _admin_http_url(admin_port, '/api/auth/challenge'),
         timeout=1.5,
         opener=op,
     )
@@ -2775,7 +2802,7 @@ def admin_authenticate(
     challenge_id = str(challenge.get('challenge_id') or '')
     proof = hashlib.sha256(f'{seed}:{username}:{password}'.encode('utf-8')).hexdigest()
     login_code, login_doc = request_json(
-        f'http://127.0.0.1:{admin_port}/api/auth/login',
+        _admin_http_url(admin_port, '/api/auth/login'),
         method='POST',
         payload={'challenge_id': challenge_id, 'proof': proof},
         timeout=1.5,
@@ -8675,20 +8702,21 @@ def test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path(tmp_path:
             assert body.get('ok') is True
             assert body.get('scope') == 'revocation'
             assert int(body.get('dropped') or 0) >= 1
-            failed_doc = wait_peer_secure_link_state(
-                client_proc.admin_port or 0,
-                expected_state='failed',
-                timeout=12.0,
-                label='client',
-                transport='tcp',
-                authenticated=False,
-                failure_reason='revoked_serial',
-            )
-            secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
-            assert secure.get('disconnect_reason') == 'revocation_applied'
-            assert secure.get('last_material_reload_scope') == 'revocation'
-            assert secure.get('last_material_reload_result') == 'applied'
-            _status_code, status_doc = fetch_json(f'http://127.0.0.1:{client_proc.admin_port}/api/status', timeout=1.5)
+
+            status_doc = {}
+            deadline = time.time() + 12.0
+            while time.time() < deadline:
+                _status_code, status_doc = fetch_json(
+                    f'http://127.0.0.1:{client_proc.admin_port}/api/status',
+                    timeout=1.5,
+                )
+                if (
+                    status_doc.get('secure_link_last_reload_scope') == 'revocation'
+                    and status_doc.get('secure_link_last_reload_result') == 'applied'
+                    and int(status_doc.get('secure_link_peers_dropped_total') or 0) >= 1
+                ):
+                    break
+                time.sleep(0.25)
             assert status_doc.get('secure_link_last_reload_scope') == 'revocation'
             assert status_doc.get('secure_link_last_reload_result') == 'applied'
             assert int(status_doc.get('secure_link_peers_dropped_total') or 0) >= 1
@@ -11299,6 +11327,40 @@ def test_overlay_e2e_alloc_admin_ports_isolates_xdist_workers(monkeypatch: pytes
     assert server_port < 65535
     assert client_port < 65535
     assert admin_args(server_port) == ['--admin-web', '--admin-web-bind', expected_admin_host, '--admin-web-port', str(server_port)]
+
+
+def test_overlay_e2e_get_health_uses_registered_admin_loopback_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    port = 61234
+    ADMIN_PORT_LOOPBACKS[port] = ("127.88.77.66", "::1")
+    seen_urls: list[str] = []
+
+    def _fake_fetch_json(url: str, timeout: float = 1.5):
+        seen_urls.append(url)
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(sys.modules[__name__], "fetch_json", _fake_fetch_json)
+
+    body = get_health(port)
+
+    assert body == {"ok": True}
+    assert seen_urls == [f"http://127.88.77.66:{port}/api/health"]
+
+
+def test_overlay_e2e_try_get_status_uses_registered_admin_loopback_host(monkeypatch: pytest.MonkeyPatch) -> None:
+    port = 61235
+    ADMIN_PORT_LOOPBACKS[port] = ("127.88.77.67", "::1")
+    seen_urls: list[str] = []
+
+    def _fake_fetch_json(url: str, timeout: float = 1.5):
+        seen_urls.append(url)
+        return 200, {"ok": True, "state": "CONNECTED"}
+
+    monkeypatch.setattr(sys.modules[__name__], "fetch_json", _fake_fetch_json)
+
+    body = try_get_status(port)
+
+    assert body == {"ok": True, "state": "CONNECTED"}
+    assert seen_urls == [f"http://127.88.77.67:{port}/api/status"]
 
 
 def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:

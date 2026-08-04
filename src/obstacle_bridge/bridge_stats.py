@@ -338,6 +338,15 @@ class StatsBoard:
             dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r, compact=False
         )
 
+    @staticmethod
+    def _stdout_safe_text(text: str) -> str:
+        encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+        try:
+            text.encode(encoding)
+            return text
+        except UnicodeEncodeError:
+            return text.encode(encoding, "replace").decode(encoding, "replace")
+
     async def _status_task_fn(self) -> None:
         try:
             while not self._stop_evt.is_set():
@@ -368,14 +377,16 @@ class StatsBoard:
 
                 if self._dashboard_enabled:
                     sys.stdout.write(ANSI_HOME_CLEAR)
-                    sys.stdout.write(self._render_dashboard(dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r))
+                    sys.stdout.write(self._stdout_safe_text(
+                        self._render_dashboard(dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r)
+                    ))
                     sys.stdout.flush()
                 else:
                     # Reuse the unified renderer in compact mode (no ANSI, concise title/footer)
                     block = self._render_status_block(
                         dt, app_rx_r, app_tx_r, peer_rx_r, peer_tx_r, compact=True
                     )
-                    print(block, flush=True)
+                    print(self._stdout_safe_text(block), flush=True)
 
         except asyncio.CancelledError:
             return

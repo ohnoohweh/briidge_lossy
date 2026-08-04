@@ -124,6 +124,11 @@ class _RunnerStub:
         }
 
 
+class _ConnectedSessionStub:
+    def is_connected(self):
+        return True
+
+
 class AdminAuthRequirementUnitTests(unittest.IsolatedAsyncioTestCase):
     async def test_auth_disabled_reports_authenticated_without_session(self):
         args = _admin_args(admin_web_auth_disable=True, admin_web_username="", admin_web_password="")
@@ -204,6 +209,20 @@ class AdminWebResilienceUnitTests(unittest.TestCase):
         self.assertEqual(payload["admin_web_snapshot"]["error"], "runner_loop_timeout")
         self.assertEqual(payload["runner_async_diagnostics"]["async"]["last_started_name"], "myudp.mux.start")
         self.assertEqual(payload["runner_async_diagnostics"]["sync"]["last_started_name"], "ChannelMux._on_local_tun_packet")
+
+    def test_status_snapshot_uses_live_session_state_when_uncached_runner_snapshot_fails(self):
+        args = _admin_args()
+        runner = _RunnerStub(args)
+        runner._session_obj = _ConnectedSessionStub()
+        ui = AdminWebUI(args, runner)
+
+        with mock.patch.object(ui, "_call_runner", side_effect=AttributeError("stats unavailable")):
+            payload = ui._build_status_payload()
+
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["peer_state"], "CONNECTED")
+        self.assertTrue(payload["admin_web_snapshot"]["stale"])
+        self.assertEqual(payload["admin_web_snapshot"]["error"], "AttributeError")
 
     def test_connections_snapshot_marks_fresh_payload_when_runner_responds(self):
         args = _admin_args()
