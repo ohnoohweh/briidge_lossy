@@ -83,6 +83,8 @@ REQ-OVL-007:
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
+    - tests/unit/test_connection_snapshots.py::test_ws_client_snapshot_prefers_applied_peer_over_multi_host_config
+    - tests/unit/test_connection_snapshots.py::test_quic_client_snapshot_prefers_applied_peer_over_multi_host_config
 
 # The application-vs-library functional decomposition for REQ-WSP-* is documented in
 # docs/ARCHITECTURE.md under "WebSocket proxy tunneling".
@@ -1157,6 +1159,8 @@ REQ-ADM-006:
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
     - tests/unit/test_ws_multi_peer.py::test_server_peer_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_ws_multi_peer.py::test_client_peer_snapshot_includes_last_incoming_age_seconds
+    - tests/unit/test_connection_snapshots.py::test_ws_client_snapshot_prefers_applied_peer_over_multi_host_config
+    - tests/unit/test_connection_snapshots.py::test_quic_client_snapshot_prefers_applied_peer_over_multi_host_config
     - tests/unit/test_admin_web_payloads.py::test_meta_payload_suppresses_runtime_dependency_warnings_on_ios
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
     # The dedicated TUN page also pins shared-drop totals plus ChannelMux flow

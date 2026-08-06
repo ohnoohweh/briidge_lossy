@@ -63,7 +63,8 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                             clientMode: true,
                             psk: "shared-psk",
                             randomBytes: { count in Data(repeating: 0x11, count: count) },
-                            sessionIDProvider: { 0x0102030405060708 }
+                            sessionIDProvider: { 0x0102030405060708 },
+                            unixTimeProvider: { 1700000000.0 }
                         )
                     )
                     let server = ObstacleBridgeSecureLinkPskTransportAdapter(
@@ -71,7 +72,8 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                             clientMode: false,
                             psk: "shared-psk",
                             randomBytes: { count in Data(repeating: 0x22, count: count) },
-                            sessionIDProvider: { 0 }
+                            sessionIDProvider: { 0 },
+                            unixTimeProvider: { 1700000001.0 }
                         )
                     )
 
@@ -113,6 +115,30 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                         "server_authenticated": server.statusSnapshot().authenticated,
                         "client_session_id": String(client.statusSnapshot().sessionID),
                         "server_session_id": String(server.statusSnapshot().sessionID),
+                        "client_last_event": client.statusSnapshot().lastEvent,
+                        "server_last_event": server.statusSnapshot().lastEvent,
+                        "client_last_event_unix_ts": client.statusSnapshot().lastEventUnixTs ?? 0,
+                        "server_last_event_unix_ts": server.statusSnapshot().lastEventUnixTs ?? 0,
+                        "client_authenticated_sessions_total": client.statusSnapshot().authenticatedSessionsTotal,
+                        "server_authenticated_sessions_total": server.statusSnapshot().authenticatedSessionsTotal,
+                        "client_rekey_supported": client.statusSnapshot().rekeySupported,
+                        "server_rekey_supported": server.statusSnapshot().rekeySupported,
+                        "client_rekey_in_progress": client.statusSnapshot().rekeyInProgress,
+                        "server_rekey_in_progress": server.statusSnapshot().rekeyInProgress,
+                        "client_rekeys_completed_total": client.statusSnapshot().rekeysCompletedTotal,
+                        "server_rekeys_completed_total": server.statusSnapshot().rekeysCompletedTotal,
+                        "client_last_rekey_trigger": client.statusSnapshot().lastRekeyTrigger,
+                        "server_last_rekey_trigger": server.statusSnapshot().lastRekeyTrigger,
+                        "client_disconnect_reason": client.statusSnapshot().disconnectReason,
+                        "server_disconnect_reason": server.statusSnapshot().disconnectReason,
+                        "client_disconnect_detail": client.statusSnapshot().disconnectDetail,
+                        "server_disconnect_detail": server.statusSnapshot().disconnectDetail,
+                        "client_trust_validation_state": client.statusSnapshot().trustValidationState,
+                        "server_trust_validation_state": server.statusSnapshot().trustValidationState,
+                        "client_frames_passed_total": client.statusSnapshot().framesPassedTotal,
+                        "server_frames_passed_total": server.statusSnapshot().framesPassedTotal,
+                        "client_frames_dropped_total": client.statusSnapshot().framesDroppedTotal,
+                        "server_frames_dropped_total": server.statusSnapshot().framesDroppedTotal,
                     ]
                     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
                     FileHandle.standardOutput.write(data)
@@ -140,6 +166,183 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
         "server_authenticated": True,
         "client_session_id": "72623859790382856",
         "server_session_id": "72623859790382856",
+        "client_last_event": "authenticated",
+        "server_last_event": "authenticated",
+        "client_last_event_unix_ts": 1700000000.0,
+        "server_last_event_unix_ts": 1700000001.0,
+        "client_authenticated_sessions_total": 1,
+        "server_authenticated_sessions_total": 1,
+        "client_rekey_supported": True,
+        "server_rekey_supported": True,
+        "client_rekey_in_progress": False,
+        "server_rekey_in_progress": False,
+        "client_rekeys_completed_total": 0,
+        "server_rekeys_completed_total": 0,
+        "client_last_rekey_trigger": "",
+        "server_last_rekey_trigger": "",
+        "client_disconnect_reason": "",
+        "server_disconnect_reason": "",
+        "client_disconnect_detail": "",
+        "server_disconnect_detail": "",
+        "client_trust_validation_state": "validated",
+        "server_trust_validation_state": "validated",
+        "client_frames_passed_total": 1,
+        "server_frames_passed_total": 2,
+        "client_frames_dropped_total": 0,
+        "server_frames_dropped_total": 0,
+    }
+
+
+def test_ios_secure_link_transport_adapter_operator_rekey_completes_and_updates_counters(tmp_path: Path) -> None:
+    source_path = tmp_path / "SecureLinkTransportRekeyProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-rekey-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportRekeyProbe {
+                static func main() throws {
+                    var sessionIDs: [UInt64] = [0x0102030405060708, 0x0102030405060709]
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: {
+                                if sessionIDs.isEmpty {
+                                    return 0x0102030405060710
+                                }
+                                return sessionIDs.removeFirst()
+                            },
+                            unixTimeProvider: { 1700000002.0 }
+                        )
+                    )
+                    let server = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x22, count: count) },
+                            sessionIDProvider: { 0 },
+                            unixTimeProvider: { 1700000003.0 }
+                        )
+                    )
+
+                    let clientHello = try client.handleTransportConnected().emittedFrames.first!
+                    let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
+                    let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
+                    _ = server.handleInboundFrame(clientProof)
+                    let warmupReply = try server.handleOutboundPayload(Data("reply-before-rekey".utf8)).emittedFrames.first!
+                    _ = client.handleInboundFrame(warmupReply)
+
+                    let rekeyStart = try client.requestSecureLinkRekey()
+                    guard let rekeyHello = rekeyStart.emittedFrames.first,
+                          ObstacleBridgeSecureLinkPskCodec.parseFrame(rekeyHello)?.slType == ObstacleBridgeSecureLinkPskRuntime.typeRekeyHello
+                    else {
+                        throw ProbeError.badState("missing rekey hello")
+                    }
+                    if !client.statusSnapshot().rekeyInProgress {
+                        throw ProbeError.badState("client did not enter rekey state")
+                    }
+
+                    let rekeyReply = server.handleInboundFrame(rekeyHello)
+                    guard let rekeyReplyFrame = rekeyReply.emittedFrames.first,
+                          ObstacleBridgeSecureLinkPskCodec.parseFrame(rekeyReplyFrame)?.slType == ObstacleBridgeSecureLinkPskRuntime.typeRekeyReply
+                    else {
+                        throw ProbeError.badState("missing rekey reply")
+                    }
+
+                    let rekeyCommit = client.handleInboundFrame(rekeyReplyFrame)
+                    guard let rekeyCommitFrame = rekeyCommit.emittedFrames.first,
+                          ObstacleBridgeSecureLinkPskCodec.parseFrame(rekeyCommitFrame)?.slType == ObstacleBridgeSecureLinkPskRuntime.typeRekeyCommit
+                    else {
+                        throw ProbeError.badState("missing rekey commit")
+                    }
+                    if !client.statusSnapshot().appDataSendingBlocked {
+                        throw ProbeError.badState("client did not block outbound app data after commit")
+                    }
+
+                    let rekeyDone = server.handleInboundFrame(rekeyCommitFrame)
+                    guard let rekeyDoneFrame = rekeyDone.emittedFrames.first,
+                          ObstacleBridgeSecureLinkPskCodec.parseFrame(rekeyDoneFrame)?.slType == ObstacleBridgeSecureLinkPskRuntime.typeRekeyDone
+                    else {
+                        throw ProbeError.badState("missing rekey done")
+                    }
+
+                    let postDone = client.handleInboundFrame(rekeyDoneFrame)
+                    let postReplyFrame = try server.handleOutboundPayload(Data("reply-after-rekey".utf8)).emittedFrames.first!
+                    let postReply = client.handleInboundFrame(postReplyFrame)
+
+                    let payload: [String: Any] = [
+                        "client_session_id": String(client.statusSnapshot().sessionID),
+                        "server_session_id": String(server.statusSnapshot().sessionID),
+                        "client_rekey_in_progress": client.statusSnapshot().rekeyInProgress,
+                        "server_rekey_in_progress": server.statusSnapshot().rekeyInProgress,
+                        "client_rekeys_completed_total": client.statusSnapshot().rekeysCompletedTotal,
+                        "server_rekeys_completed_total": server.statusSnapshot().rekeysCompletedTotal,
+                        "client_authenticated_sessions_total": client.statusSnapshot().authenticatedSessionsTotal,
+                        "server_authenticated_sessions_total": server.statusSnapshot().authenticatedSessionsTotal,
+                        "client_last_rekey_trigger": client.statusSnapshot().lastRekeyTrigger,
+                        "server_last_rekey_trigger": server.statusSnapshot().lastRekeyTrigger,
+                        "client_last_event": client.statusSnapshot().lastEvent,
+                        "server_last_event": server.statusSnapshot().lastEvent,
+                        "client_last_event_unix_ts": client.statusSnapshot().lastEventUnixTs ?? 0,
+                        "server_last_event_unix_ts": server.statusSnapshot().lastEventUnixTs ?? 0,
+                        "client_disconnect_reason": client.statusSnapshot().disconnectReason,
+                        "server_disconnect_reason": server.statusSnapshot().disconnectReason,
+                        "client_disconnect_detail": client.statusSnapshot().disconnectDetail,
+                        "server_disconnect_detail": server.statusSnapshot().disconnectDetail,
+                        "client_trust_validation_state": client.statusSnapshot().trustValidationState,
+                        "server_trust_validation_state": server.statusSnapshot().trustValidationState,
+                        "client_app_blocked": client.statusSnapshot().appDataSendingBlocked,
+                        "post_done_frames": postDone.emittedFrames.count,
+                        "post_reply": postReply.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" },
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "client_session_id": "72623859790382857",
+        "server_session_id": "72623859790382857",
+        "client_rekey_in_progress": False,
+        "server_rekey_in_progress": False,
+        "client_rekeys_completed_total": 1,
+        "server_rekeys_completed_total": 1,
+        "client_authenticated_sessions_total": 2,
+        "server_authenticated_sessions_total": 2,
+        "client_last_rekey_trigger": "operator",
+        "server_last_rekey_trigger": "remote",
+        "client_last_event": "rekey_completed",
+        "server_last_event": "rekey_completed",
+        "client_last_event_unix_ts": 1700000002.0,
+        "server_last_event_unix_ts": 1700000003.0,
+        "client_disconnect_reason": "",
+        "server_disconnect_reason": "",
+        "client_disconnect_detail": "",
+        "server_disconnect_detail": "",
+        "client_trust_validation_state": "validated",
+        "server_trust_validation_state": "validated",
+        "client_app_blocked": False,
+        "post_done_frames": 0,
+        "post_reply": ["reply-after-rekey"],
     }
 
 

@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession
+from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
 
 
 def _peer_endpoint(host: str, port: int) -> dict:
@@ -1102,6 +1102,40 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         self.assertEqual(peer_row["peer"], _peer_endpoint("203.0.113.20", 8443))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0.0)
+
+    def test_ws_client_snapshot_prefers_applied_peer_over_multi_host_config(self):
+        session = types.SimpleNamespace()
+        session._peer_tuple = ("37.1.192.30", 8080)
+        session._peer_name_host = "37.1.192.30,[2a00:c98:2010:a007:0:1:0:2]"
+        session._peer_name_port = 8080
+        session._peer_host = "37.1.192.30"
+        session._peer_port = 8080
+        session._rtt = types.SimpleNamespace(rtt_est_ms=1.25, _last_rx_wall_ns=time.monotonic_ns())
+        session.is_connected = lambda: True
+        session.get_connecting_timer_snapshot = lambda: {}
+        session._format_peer_endpoint = WebSocketSession._format_peer_endpoint
+
+        rows = WebSocketSession.get_overlay_peers_snapshot(session)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("37.1.192.30", 8080))
+
+    def test_quic_client_snapshot_prefers_applied_peer_over_multi_host_config(self):
+        session = types.SimpleNamespace()
+        session._peer_tuple = ("37.1.192.30", 8080)
+        session._peer_name_host = "37.1.192.30,[2a00:c98:2010:a007:0:1:0:2]"
+        session._peer_name_port = 8080
+        session._peer_host = "37.1.192.30"
+        session._peer_port = 8080
+        session._rtt = types.SimpleNamespace(rtt_est_ms=1.5, _last_rx_wall_ns=time.monotonic_ns())
+        session.is_connected = lambda: True
+        session.get_connecting_timer_snapshot = lambda: {}
+        session._format_peer_endpoint = QuicSession._format_peer_endpoint
+
+        rows = QuicSession.get_overlay_peers_snapshot(session)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("37.1.192.30", 8080))
 
 
 if __name__ == "__main__":

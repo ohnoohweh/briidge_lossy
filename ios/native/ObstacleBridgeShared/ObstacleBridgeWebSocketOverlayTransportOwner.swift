@@ -6,6 +6,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     typealias TunPacketSink = (Data) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
 
     private let peerHost: String
     private let peerPort: Int
@@ -52,6 +53,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
     private var nextReconnectAttemptDeadlineNS: UInt64?
+    private var lowerLayerFallbackWorkItem: DispatchWorkItem?
+    private var lowerLayerFallbackDeadlineNS: UInt64?
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
     private var connectedURI = ""
@@ -187,6 +190,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
         websocketTask?.cancel(with: .goingAway, reason: nil)
         websocketTask = nil
         websocketSession?.invalidateAndCancel()
@@ -270,6 +276,31 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 "transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull(),
                 "protocol_stats": protocolStats,
             ]
+        }
+    }
+
+    func requestSecureLinkRekey() -> [String: Any] {
+        withOwnerQueue {
+            guard started, overlayConnected, let adapter = overlayLayerTransportAdapter else {
+                return ["ok": false, "reason": "transport_not_connected"]
+            }
+            do {
+                let snapshot = try adapter.requestSecureLinkRekey()
+                for frame in snapshot.emittedFrames {
+                    sendOverlayTransportPayload(frame)
+                }
+                return [
+                    "ok": true,
+                    "reason": "rekey_started",
+                    "emitted_frames": snapshot.emittedFrames.count,
+                ]
+            } catch {
+                return [
+                    "ok": false,
+                    "reason": "rekey_request_failed",
+                    "detail": error.localizedDescription,
+                ]
+            }
         }
     }
 
@@ -639,6 +670,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             for delivered in snapshot.deliveredPayloads {
                 handleOverlayPayload(delivered)
             }
+            updateLowerLayerFallback()
             maybeSendStartupMuxFrames()
             return
         }
@@ -650,6 +682,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         do {
             let snapshot = try adapter.handleTransportConnected()
             secureLinkHandshakePrimed = true
+            updateLowerLayerFallback()
             eventSink?("ws_overlay_secure_link_prime", [
                 "emitted_frames": snapshot.emittedFrames.count,
             ])
@@ -664,6 +697,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private func resetOverlayTransportEpoch() {
         overlayLayerTransportAdapter?.handleTransportDisconnected()
         secureLinkHandshakePrimed = false
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
         startupMuxFramesSent = false
         pendingOutboundMessages.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
@@ -671,6 +707,48 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         lastPeerPingTxNS = 0
         lastRttOkNS = 0
         rttEstMS = nil
+    }
+
+    private func updateLowerLayerFallback() {
+        guard started, overlayConnected, !peerHost.isEmpty, peerPort > 0, let adapter = overlayLayerTransportAdapter else {
+            lowerLayerFallbackWorkItem?.cancel()
+            lowerLayerFallbackWorkItem = nil
+            lowerLayerFallbackDeadlineNS = nil
+            return
+        }
+        let status = adapter.secureLinkStatusSnapshot()
+        guard let status, status.clientMode, !status.peerConfirmedAuthenticated else {
+            lowerLayerFallbackWorkItem?.cancel()
+            lowerLayerFallbackWorkItem = nil
+            lowerLayerFallbackDeadlineNS = nil
+            return
+        }
+        if lowerLayerFallbackWorkItem != nil {
+            return
+        }
+        lowerLayerFallbackDeadlineNS = DispatchTime.now().uptimeNanoseconds + Self.lowerLayerUnavailableFallbackNS
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lowerLayerFallbackWorkItem = nil
+            self.lowerLayerFallbackDeadlineNS = nil
+            guard self.started, self.overlayConnected, let currentStatus = self.overlayLayerTransportAdapter?.secureLinkStatusSnapshot(), currentStatus.clientMode, !currentStatus.peerConfirmedAuthenticated else {
+                return
+            }
+            let reason = currentStatus.authFailCode != 0 ? "secure_link_failed" : "app_not_ready"
+            self.eventSink?("ws_overlay_lower_layer_unavailable", ["reason": reason, "auth_fail_code": currentStatus.authFailCode])
+            self.forceReconnectForUnavailableChannel()
+        }
+        lowerLayerFallbackWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.lowerLayerUnavailableFallbackNS)), execute: workItem)
+    }
+
+    private func forceReconnectForUnavailableChannel() {
+        overlayConnected = false
+        websocketTask?.cancel(with: .goingAway, reason: nil)
+        websocketTask = nil
+        websocketSession = nil
+        resetOverlayTransportEpoch()
+        scheduleReconnect()
     }
 
     private func maybeSendStartupMuxFrames() {

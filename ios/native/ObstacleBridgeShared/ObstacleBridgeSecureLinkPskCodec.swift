@@ -10,6 +10,7 @@ struct ObstacleBridgeSecureLinkPskCodec {
     static let headerSize = 20
     private static let transcriptPrefix = Data("obstaclebridge-securelink-psk-v1|".utf8)
     private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
+    private static let clientRekeyCommitProofPrefix = Data("obstaclebridge-securelink-client-rekey-commit-v1|".utf8)
 
     struct ParsedFrame: Equatable {
         var slType: Int
@@ -98,6 +99,20 @@ struct ObstacleBridgeSecureLinkPskCodec {
         serverNonce: Data
     ) -> Data {
         let message = serverProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
+        let authenticationCode = HMAC<SHA256>.authenticationCode(
+            for: message,
+            using: SymmetricKey(data: psk)
+        )
+        return Data(authenticationCode)
+    }
+
+    static func clientRekeyCommitProof(
+        psk: Data,
+        sessionID: UInt64,
+        clientNonce: Data,
+        serverNonce: Data
+    ) -> Data {
+        let message = clientRekeyCommitProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
         let authenticationCode = HMAC<SHA256>.authenticationCode(
             for: message,
             using: SymmetricKey(data: psk)

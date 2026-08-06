@@ -543,8 +543,8 @@ class WebSocketSession(ISession):
 
         if self._peer_tuple:
             # CLIENT
-            self._peer_host = self._peer_name_host or self._peer_tuple[0]
-            self._peer_port = self._peer_name_port or self._peer_tuple[1]
+            self._peer_host = self._peer_tuple[0]
+            self._peer_port = self._peer_tuple[1]
             self._log.info(
                 f"[WS-SESSION] ({self._probe_id}) start; CLIENT -> "
                 f"{self._peer_host}:{self._peer_port}{self._ws_path} "
@@ -2056,8 +2056,8 @@ class WebSocketSession(ISession):
                         except Exception:
                             pass
                 if self._peer_name_host:
-                    self._peer_host = self._peer_name_host
-                    self._peer_port = self._peer_name_port or int(port)
+                    self._peer_host = str(host)
+                    self._peer_port = int(port)
                     if callable(self._on_peer_set_cb):
                         try: self._on_peer_set_cb(self._peer_host, self._peer_port)
                         except Exception: pass

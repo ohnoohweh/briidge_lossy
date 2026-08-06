@@ -2884,7 +2884,8 @@ function renderPeerTable(rows) {
         ],
       ]);
     const securityLines = [];
-    const allowRekeyAction = String(row.state || '').toLowerCase() !== 'listening';
+    const rekeySupported = secureLink.rekey_supported !== false;
+    const allowRekeyAction = rekeySupported && String(row.state || '').toLowerCase() !== 'listening';
     if (showSecurityLifecycle) {
       securityLines.push([
         renderMetric('Status', secureLink.state, { pill: true, compact: true }),
@@ -2925,7 +2926,7 @@ function renderPeerTable(rows) {
         renderMetric('last_authenticated_unix_ts', fmtDateTime(secureLink.last_authenticated_unix_ts)),
         renderMetric('authenticated_sessions_total', fmtInteger(secureLink.authenticated_sessions_total)),
         renderMetric('rekeys_completed_total', fmtInteger(secureLink.rekeys_completed_total)),
-        renderMetric('last_rekey_trigger', secureLink.last_rekey_trigger),
+        renderMetric('last_rekey_trigger', rekeySupported ? secureLink.last_rekey_trigger : 'n/a'),
       ],
       [
         renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total)),

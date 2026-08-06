@@ -95,6 +95,7 @@ private protocol ObstacleBridgeOverlayTransportOwning: AnyObject {
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]])
     func transportSnapshot() -> [String: Any]
     func connectionLayersSnapshot() -> [[String: Any]]
+    func requestSecureLinkRekey() -> [String: Any]
     func appReady() -> Bool
     func sendLocalTunPacket(_ packet: Data)
     func acceptLocalTCPConnection(
@@ -1842,6 +1843,7 @@ final class ObstacleBridgeHostRunner {
                 "state": defaultState,
                 "authenticated": false,
                 "session_id": NSNull(),
+                "rekey_supported": false,
                 "rekey_in_progress": false,
                 "last_event": "bootstrap",
                 "last_event_unix_ts": NSNull(),
@@ -1886,28 +1888,16 @@ final class ObstacleBridgeHostRunner {
             secureLinkLastAuthenticatedUnixTs = nowUnix
         }
         let state: String
-        let lastEvent: String
-        let disconnectReason: String
         if displayAuthenticated {
             state = "authenticated"
-            lastEvent = "authenticated"
-            disconnectReason = ""
         } else if snapshot.authFailCode != 0 {
             state = "failed"
-            lastEvent = "auth_failed"
-            disconnectReason = "auth_failed"
         } else if defaultState == "listening" {
             state = "listening"
-            lastEvent = "bootstrap"
-            disconnectReason = ""
         } else if snapshot.sessionID != 0 {
             state = "handshaking"
-            lastEvent = "handshake_started"
-            disconnectReason = ""
         } else {
             state = "waiting_transport"
-            lastEvent = "bootstrap"
-            disconnectReason = ""
         }
 
         return [
@@ -1916,22 +1906,24 @@ final class ObstacleBridgeHostRunner {
             "state": state,
             "authenticated": displayAuthenticated,
             "session_id": snapshot.sessionID == 0 ? NSNull() : snapshot.sessionID,
-            "rekey_in_progress": false,
-            "last_event": lastEvent,
-            "last_event_unix_ts": NSNull(),
+            "rekey_supported": snapshot.rekeySupported,
+            "rekey_in_progress": snapshot.rekeyInProgress,
+            "last_event": snapshot.lastEvent,
+            "last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull(),
             "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTs ?? nowUnix) : NSNull(),
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTs ?? nowUnix),
-            "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
-            "rekeys_completed_total": 0,
-            "frames_passed_total": 0,
-            "frames_dropped_total": 0,
+            "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
+            "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "last_rekey_trigger": snapshot.lastRekeyTrigger,
+            "frames_passed_total": snapshot.framesPassedTotal,
+            "frames_dropped_total": snapshot.framesDroppedTotal,
             "peer_subject_id": "",
             "peer_subject_name": "",
             "peer_roles": [],
             "peer_deployment_id": "",
             "peer_serial": "",
             "issuer_id": "",
-            "trust_validation_state": displayAuthenticated ? "validated" : "n/a",
+            "trust_validation_state": snapshot.trustValidationState,
             "trust_failure_reason": snapshot.authFailCode == 0 ? "" : "psk_auth_failed",
             "trust_failure_detail": snapshot.authFailCode == 0 ? "" : "code=\(snapshot.authFailCode)",
             "active_material_generation": snapshot.sessionID == 0 ? 0 : 1,
@@ -1940,8 +1932,8 @@ final class ObstacleBridgeHostRunner {
             "last_material_reload_result": "",
             "last_material_reload_detail": "",
             "trust_enforced_unix_ts": NSNull(),
-            "disconnect_reason": disconnectReason,
-            "disconnect_detail": snapshot.authFailCode == 0 ? "" : "code=\(snapshot.authFailCode)",
+            "disconnect_reason": snapshot.disconnectReason,
+            "disconnect_detail": snapshot.disconnectDetail,
         ]
     }
 
@@ -3793,6 +3785,21 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
             return forbidden
         }
         return ObstacleBridgeAdminAPI.jsonResponse(requestReconnect())
+    }
+
+    func adminRequestSecureLinkRekey(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        let payload = withServiceStateQueue {
+            currentOverlayOwner()?.owner.requestSecureLinkRekey()
+                ?? ["ok": false, "reason": "transport_unavailable"]
+        }
+        let statusLine = (payload["ok"] as? Bool) == true ? "HTTP/1.1 200 OK" : "HTTP/1.1 400 Bad Request"
+        return ObstacleBridgeAdminAPI.jsonResponse(payload, statusLine: statusLine)
     }
 
     func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {

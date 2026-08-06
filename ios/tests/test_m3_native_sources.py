@@ -94,6 +94,16 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "private var secureLinkConnectedSinceUnixTS:" in provider
     assert '"rx_bytes_per_sec": rxRate' in provider
     assert '"connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS)' in provider
+    assert '"rekey_supported": snapshot.rekeySupported' in provider
+    assert '"rekey_in_progress": snapshot.rekeyInProgress' in provider
+    assert '"last_event": snapshot.lastEvent' in provider
+    assert '"last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull()' in provider
+    assert '"authenticated_sessions_total": snapshot.authenticatedSessionsTotal' in provider
+    assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in provider
+    assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in provider
+    assert '"trust_validation_state": snapshot.trustValidationState' in provider
+    assert '"disconnect_reason": snapshot.disconnectReason' in provider
+    assert '"disconnect_detail": snapshot.disconnectDetail' in provider
     assert '"throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections)' in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
     assert 'let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)' in snapshot_support
@@ -376,10 +386,23 @@ def test_proxy_server_source_exists() -> None:
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider
-    assert '"frames_passed_total": 0' in host_runner
-    assert '"frames_dropped_total": 0' in host_runner
-    assert '"frames_passed_total": 0' in provider
-    assert '"frames_dropped_total": 0' in provider
+    assert '"frames_passed_total": snapshot.framesPassedTotal' in host_runner
+    assert '"frames_dropped_total": snapshot.framesDroppedTotal' in host_runner
+    assert '"rekey_supported": snapshot.rekeySupported' in host_runner
+    assert '"rekey_in_progress": snapshot.rekeyInProgress' in host_runner
+    assert '"last_event": snapshot.lastEvent' in host_runner
+    assert '"last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull()' in host_runner
+    assert '"authenticated_sessions_total": snapshot.authenticatedSessionsTotal' in host_runner
+    assert '"rekeys_completed_total": snapshot.rekeysCompletedTotal' in host_runner
+    assert '"last_rekey_trigger": snapshot.lastRekeyTrigger' in host_runner
+    assert '"trust_validation_state": snapshot.trustValidationState' in host_runner
+    assert '"disconnect_reason": snapshot.disconnectReason' in host_runner
+    assert '"disconnect_detail": snapshot.disconnectDetail' in host_runner
+    assert '"frames_passed_total": snapshot.framesPassedTotal' in provider
+    assert '"frames_dropped_total": snapshot.framesDroppedTotal' in provider
+    provider_js = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
+    assert "const rekeySupported = secureLink.rekey_supported !== false;" in provider_js
+    assert "renderMetric('last_rekey_trigger', rekeySupported ? secureLink.last_rekey_trigger : 'n/a')" in provider_js
     assert "class ObstacleBridgeProxyProtocolCodec" in python_runtime
     assert "class ObstacleBridgeProxyServer" in python_runtime
     assert "parse_http_request_head" in python_runtime
