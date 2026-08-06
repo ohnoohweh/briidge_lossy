@@ -346,6 +346,383 @@ def test_ios_secure_link_transport_adapter_operator_rekey_completes_and_updates_
     }
 
 
+def test_ios_secure_link_transport_adapter_frame_threshold_rekey_matches_python_semantics(tmp_path: Path) -> None:
+    source_path = tmp_path / "SecureLinkTransportFrameThresholdProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-frame-threshold-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportFrameThresholdProbe {
+                static func main() throws {
+                    var sessionIDs: [UInt64] = [0x0102030405060708, 0x0102030405060709]
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            rekeyAfterFrames: 3,
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: {
+                                if sessionIDs.isEmpty {
+                                    return 0x0102030405060710
+                                }
+                                return sessionIDs.removeFirst()
+                            },
+                            unixTimeProvider: { 1700000004.0 }
+                        )
+                    )
+                    let server = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x22, count: count) },
+                            sessionIDProvider: { 0 },
+                            unixTimeProvider: { 1700000005.0 }
+                        )
+                    )
+
+                    let clientHello = try client.handleTransportConnected().emittedFrames.first!
+                    let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
+                    let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
+                    _ = server.handleInboundFrame(clientProof)
+                    let warmupReply = try server.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
+                    _ = client.handleInboundFrame(warmupReply)
+
+                    for index in 1...2 {
+                        let outbound = try client.handleOutboundPayload(Data("payload-\(index)".utf8))
+                        if outbound.emittedFrames.count != 1 {
+                            throw ProbeError.badState("unexpected rekey before threshold")
+                        }
+                        _ = server.handleInboundFrame(outbound.emittedFrames[0])
+                    }
+
+                    let thresholdSend = try client.handleOutboundPayload(Data("payload-3".utf8))
+                    guard thresholdSend.emittedFrames.count == 2 else {
+                        throw ProbeError.badState("threshold send did not emit data plus rekey hello")
+                    }
+                    guard let dataFrame = thresholdSend.emittedFrames.first,
+                          let rekeyHello = thresholdSend.emittedFrames.dropFirst().first,
+                          ObstacleBridgeSecureLinkPskCodec.parseFrame(rekeyHello)?.slType == ObstacleBridgeSecureLinkPskRuntime.typeRekeyHello
+                    else {
+                        throw ProbeError.badState("missing rekey hello at threshold")
+                    }
+
+                    _ = server.handleInboundFrame(dataFrame)
+                    let rekeyReply = server.handleInboundFrame(rekeyHello).emittedFrames.first!
+                    let rekeyCommit = client.handleInboundFrame(rekeyReply).emittedFrames.first!
+                    let rekeyDone = server.handleInboundFrame(rekeyCommit).emittedFrames.first!
+                    _ = client.handleInboundFrame(rekeyDone)
+
+                    let payload: [String: Any] = [
+                        "client_session_id": String(client.statusSnapshot().sessionID),
+                        "server_session_id": String(server.statusSnapshot().sessionID),
+                        "client_rekeys_completed_total": client.statusSnapshot().rekeysCompletedTotal,
+                        "server_rekeys_completed_total": server.statusSnapshot().rekeysCompletedTotal,
+                        "client_last_rekey_trigger": client.statusSnapshot().lastRekeyTrigger,
+                        "server_last_rekey_trigger": server.statusSnapshot().lastRekeyTrigger,
+                        "client_authenticated_sessions_total": client.statusSnapshot().authenticatedSessionsTotal,
+                        "server_authenticated_sessions_total": server.statusSnapshot().authenticatedSessionsTotal,
+                        "client_last_event": client.statusSnapshot().lastEvent,
+                        "server_last_event": server.statusSnapshot().lastEvent,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "client_session_id": "72623859790382857",
+        "server_session_id": "72623859790382857",
+        "client_rekeys_completed_total": 1,
+        "server_rekeys_completed_total": 1,
+        "client_last_rekey_trigger": "frame_threshold",
+        "server_last_rekey_trigger": "remote",
+        "client_authenticated_sessions_total": 2,
+        "server_authenticated_sessions_total": 2,
+        "client_last_event": "rekey_completed",
+        "server_last_event": "rekey_completed",
+    }
+
+
+def test_ios_secure_link_transport_adapter_time_threshold_rekey_can_fire_while_idle(tmp_path: Path) -> None:
+    source_path = tmp_path / "SecureLinkTransportTimeThresholdProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-time-threshold-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportTimeThresholdProbe {
+                static func main() throws {
+                    var monoTime = 100.0
+                    var sessionIDs: [UInt64] = [0x0102030405060708, 0x0102030405060709]
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            rekeyAfterSeconds: 5.0,
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: {
+                                if sessionIDs.isEmpty {
+                                    return 0x0102030405060710
+                                }
+                                return sessionIDs.removeFirst()
+                            },
+                            timeProvider: { monoTime },
+                            unixTimeProvider: { 1700000006.0 }
+                        )
+                    )
+                    let server = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x22, count: count) },
+                            sessionIDProvider: { 0 },
+                            timeProvider: { monoTime },
+                            unixTimeProvider: { 1700000007.0 }
+                        )
+                    )
+
+                    let clientHello = try client.handleTransportConnected().emittedFrames.first!
+                    let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
+                    let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
+                    _ = server.handleInboundFrame(clientProof)
+                    let warmupReply = try server.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
+                    _ = client.handleInboundFrame(warmupReply)
+
+                    monoTime += 4.0
+                    if !(try client.pollDueFrames().emittedFrames.isEmpty) {
+                        throw ProbeError.badState("time-based rekey fired too early")
+                    }
+
+                    monoTime += 2.0
+                    let due = try client.pollDueFrames()
+                    guard let rekeyHello = due.emittedFrames.first,
+                          due.emittedFrames.count == 1,
+                          ObstacleBridgeSecureLinkPskCodec.parseFrame(rekeyHello)?.slType == ObstacleBridgeSecureLinkPskRuntime.typeRekeyHello
+                    else {
+                        throw ProbeError.badState("missing time-based rekey hello")
+                    }
+
+                    let rekeyReply = server.handleInboundFrame(rekeyHello).emittedFrames.first!
+                    let rekeyCommit = client.handleInboundFrame(rekeyReply).emittedFrames.first!
+                    let rekeyDone = server.handleInboundFrame(rekeyCommit).emittedFrames.first!
+                    _ = client.handleInboundFrame(rekeyDone)
+
+                    let payload: [String: Any] = [
+                        "client_session_id": String(client.statusSnapshot().sessionID),
+                        "server_session_id": String(server.statusSnapshot().sessionID),
+                        "client_rekeys_completed_total": client.statusSnapshot().rekeysCompletedTotal,
+                        "server_rekeys_completed_total": server.statusSnapshot().rekeysCompletedTotal,
+                        "client_last_rekey_trigger": client.statusSnapshot().lastRekeyTrigger,
+                        "server_last_rekey_trigger": server.statusSnapshot().lastRekeyTrigger,
+                        "client_authenticated_sessions_total": client.statusSnapshot().authenticatedSessionsTotal,
+                        "server_authenticated_sessions_total": server.statusSnapshot().authenticatedSessionsTotal,
+                        "client_last_event": client.statusSnapshot().lastEvent,
+                        "server_last_event": server.statusSnapshot().lastEvent,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "client_session_id": "72623859790382857",
+        "server_session_id": "72623859790382857",
+        "client_rekeys_completed_total": 1,
+        "server_rekeys_completed_total": 1,
+        "client_last_rekey_trigger": "time_threshold",
+        "server_last_rekey_trigger": "remote",
+        "client_authenticated_sessions_total": 2,
+        "server_authenticated_sessions_total": 2,
+        "client_last_event": "rekey_completed",
+        "server_last_event": "rekey_completed",
+    }
+
+
+def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_python_shape(tmp_path: Path) -> None:
+    source_path = tmp_path / "SecureLinkTransportRetryRecoveryProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-retry-recovery-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportRetryRecoveryProbe {
+                static func main() throws {
+                    var mono = 100.0
+                    var unix = 2000.0
+
+                    let retryClient = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: { 0x0102030405060708 },
+                            timeProvider: { mono },
+                            unixTimeProvider: { unix }
+                        ),
+                        retryBackoffInitialMS: 1000,
+                        retryBackoffMaxMS: 5000,
+                        recoverAfterFailure: true,
+                        recoverDelaySeconds: 30.0,
+                        timeProvider: { mono },
+                        unixTimeProvider: { unix }
+                    )
+
+                    let firstHandshake = try retryClient.handleTransportConnected()
+                    guard firstHandshake.emittedFrames.count == 1 else {
+                        throw ProbeError.badState("missing initial client hello")
+                    }
+                    let retryFailure = retryClient.handleInboundFrame(Data([0x00, 0x01, 0x02]))
+                    guard retryFailure.authFailCode == ObstacleBridgeSecureLinkPskRuntime.authFailDecode else {
+                        throw ProbeError.badState("expected decode failure")
+                    }
+                    let retryStatus = retryClient.statusSnapshot()
+                    if retryStatus.retryBackoffSec != 1.0 || retryStatus.nextRetryUnixTs != 2001.0 {
+                        throw ProbeError.badState("retry schedule mismatch")
+                    }
+                    if retryStatus.recoveryReconnectSec != 0.0 || retryStatus.nextRecoveryReconnectUnixTs != nil {
+                        throw ProbeError.badState("unexpected recovery schedule for unauthenticated failure")
+                    }
+
+                    mono = 101.0
+                    unix = 2001.0
+                    let retriedHandshake = try retryClient.pollDueFrames()
+                    guard retriedHandshake.emittedFrames.count == 1 else {
+                        throw ProbeError.badState("expected scheduled retry client hello")
+                    }
+                    let retryStatusAfterPoll = retryClient.statusSnapshot()
+
+                    mono = 300.0
+                    unix = 4000.0
+                    let authClient = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x33, count: count) },
+                            sessionIDProvider: { 0x1112131415161718 },
+                            timeProvider: { mono },
+                            unixTimeProvider: { unix }
+                        ),
+                        retryBackoffInitialMS: 1000,
+                        retryBackoffMaxMS: 5000,
+                        recoverAfterFailure: true,
+                        recoverDelaySeconds: 30.0,
+                        timeProvider: { mono },
+                        unixTimeProvider: { unix }
+                    )
+                    let authServer = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x44, count: count) },
+                            sessionIDProvider: { 0 },
+                            timeProvider: { mono },
+                            unixTimeProvider: { unix }
+                        )
+                    )
+
+                    let authHello = try authClient.handleTransportConnected().emittedFrames.first!
+                    let authServerHello = authServer.handleInboundFrame(authHello).emittedFrames.first!
+                    let authClientProof = authClient.handleInboundFrame(authServerHello).emittedFrames.first!
+                    _ = authServer.handleInboundFrame(authClientProof)
+                    let warmupReply = try authServer.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
+                    _ = authClient.handleInboundFrame(warmupReply)
+                    if !authClient.statusSnapshot().authenticated {
+                        throw ProbeError.badState("expected authenticated client")
+                    }
+
+                    let recoveryFailure = authClient.handleInboundFrame(Data([0x00, 0x01, 0x02]))
+                    guard recoveryFailure.authFailCode == ObstacleBridgeSecureLinkPskRuntime.authFailDecode else {
+                        throw ProbeError.badState("expected decode failure after authentication")
+                    }
+                    let recoveryStatus = authClient.statusSnapshot()
+                    if recoveryStatus.retryBackoffSec != 0.0 || recoveryStatus.nextRetryUnixTs != nil {
+                        throw ProbeError.badState("authenticated failure should not schedule retry backoff")
+                    }
+                    if recoveryStatus.recoveryReconnectSec != 30.0 || recoveryStatus.nextRecoveryReconnectUnixTs != 4030.0 {
+                        throw ProbeError.badState("recovery reconnect schedule mismatch")
+                    }
+
+                    let payload: [String: Any] = [
+                        "retry_consecutive_failures": retryStatus.consecutiveFailures,
+                        "retry_retry_backoff_sec": retryStatus.retryBackoffSec,
+                        "retry_next_retry_unix_ts": retryStatus.nextRetryUnixTs ?? NSNull(),
+                        "retry_handshake_attempts_total": retryStatusAfterPoll.handshakeAttemptsTotal,
+                        "retry_backoff_after_poll_sec": retryStatusAfterPoll.retryBackoffSec,
+                        "recovery_enabled": recoveryStatus.recoveryEnabled,
+                        "recovery_delay_sec": recoveryStatus.recoveryDelaySec,
+                        "recovery_reconnect_sec": recoveryStatus.recoveryReconnectSec,
+                        "recovery_next_reconnect_unix_ts": recoveryStatus.nextRecoveryReconnectUnixTs ?? NSNull(),
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "retry_consecutive_failures": 1,
+        "retry_retry_backoff_sec": 1.0,
+        "retry_next_retry_unix_ts": 2001.0,
+        "retry_handshake_attempts_total": 2,
+        "retry_backoff_after_poll_sec": 0.0,
+        "recovery_enabled": True,
+        "recovery_delay_sec": 30.0,
+        "recovery_reconnect_sec": 30.0,
+        "recovery_next_reconnect_unix_ts": 4030.0,
+    }
+
+
 def test_ios_secure_link_transport_adapter_can_prime_handshake_on_transport_connect(tmp_path: Path) -> None:
     source_path = tmp_path / "SecureLinkTransportConnectProbe.swift"
     binary_path = tmp_path / "secure-link-transport-connect-probe"
@@ -461,7 +838,8 @@ def test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authent
                                 }
                                 return clientSessionIDs.removeFirst()
                             }
-                        )
+                        ),
+                        recoverAfterFailure: false
                     )
                     let server = ObstacleBridgeSecureLinkPskTransportAdapter(
                         runtime: ObstacleBridgeSecureLinkPskRuntime(

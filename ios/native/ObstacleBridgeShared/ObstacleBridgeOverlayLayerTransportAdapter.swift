@@ -100,6 +100,14 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
     }
 
+    func pollSecureLinkDueFrames() throws -> OutboundSnapshot {
+        guard let secureLinkAdapter else {
+            return OutboundSnapshot(emittedFrames: [])
+        }
+        let snapshot = try secureLinkAdapter.pollDueFrames()
+        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
+    }
+
     func connectionLayersSnapshot(
         transport: String,
         transportConnected: Bool,

@@ -1107,13 +1107,31 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             if settings.secureLinkMode == "psk" {
+                let rekeyAfterFrames = ObstacleBridgeRuntimeConfig.intValue(from: payload["secure_link_rekey_after_frames"]) ?? 0
+                let rekeyAfterSeconds = ObstacleBridgeRuntimeConfig.doubleValue(from: payload["secure_link_rekey_after_seconds"]) ?? 0.0
+                let retryBackoffInitialMS = ObstacleBridgeRuntimeConfig.intValue(from: payload["secure_link_retry_backoff_initial_ms"]) ?? 1000
+                let retryBackoffMaxMS = ObstacleBridgeRuntimeConfig.intValue(from: payload["secure_link_retry_backoff_max_ms"]) ?? 5000
+                let recoverAfterFailure = ObstacleBridgeRuntimeConfig.boolValue(from: payload["secure_link_recover_after_failure"]) ?? true
+                let recoverDelaySeconds = ObstacleBridgeRuntimeConfig.doubleValue(from: payload["secure_link_recover_delay_seconds"]) ?? 30.0
                 sharedSecureLinkPskTransportAdapter = ObstacleBridgeSecureLinkPskTransportAdapter(
                     runtime: ObstacleBridgeSecureLinkPskRuntime(
                         clientMode: settings.peerHost != nil,
-                        psk: settings.secureLinkPSK
-                    )
+                        psk: settings.secureLinkPSK,
+                        rekeyAfterFrames: rekeyAfterFrames,
+                        rekeyAfterSeconds: rekeyAfterSeconds
+                    ),
+                    retryBackoffInitialMS: retryBackoffInitialMS,
+                    retryBackoffMaxMS: retryBackoffMaxMS,
+                    recoverAfterFailure: recoverAfterFailure,
+                    recoverDelaySeconds: recoverDelaySeconds
                 )
                 summary["secure_link_runtime"] = "ready"
+                summary["secure_link_rekey_after_frames"] = rekeyAfterFrames
+                summary["secure_link_rekey_after_seconds"] = rekeyAfterSeconds
+                summary["secure_link_retry_backoff_initial_ms"] = retryBackoffInitialMS
+                summary["secure_link_retry_backoff_max_ms"] = retryBackoffMaxMS
+                summary["secure_link_recover_after_failure"] = recoverAfterFailure
+                summary["secure_link_recover_delay_seconds"] = recoverDelaySeconds
             }
 
             if sharedCompressLayerRuntime != nil || sharedSecureLinkPskTransportAdapter != nil {
@@ -2513,6 +2531,14 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "connected_since_unix_ts": NSNull(),
                 "authenticated_sessions_total": 0,
                 "rekeys_completed_total": 0,
+                "handshake_attempts_total": 0,
+                "consecutive_failures": 0,
+                "retry_backoff_sec": 0.0,
+                "next_retry_unix_ts": NSNull(),
+                "recovery_enabled": false,
+                "recovery_delay_sec": 0.0,
+                "recovery_reconnect_sec": 0.0,
+                "next_recovery_reconnect_unix_ts": NSNull(),
                 "frames_passed_total": 0,
                 "frames_dropped_total": 0,
                 "peer_subject_id": "",
@@ -2582,6 +2608,14 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
             "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
             "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "handshake_attempts_total": snapshot.handshakeAttemptsTotal,
+            "consecutive_failures": snapshot.consecutiveFailures,
+            "retry_backoff_sec": snapshot.retryBackoffSec,
+            "next_retry_unix_ts": snapshot.nextRetryUnixTs ?? NSNull(),
+            "recovery_enabled": snapshot.recoveryEnabled,
+            "recovery_delay_sec": snapshot.recoveryDelaySec,
+            "recovery_reconnect_sec": snapshot.recoveryReconnectSec,
+            "next_recovery_reconnect_unix_ts": snapshot.nextRecoveryReconnectUnixTs ?? NSNull(),
             "last_rekey_trigger": snapshot.lastRekeyTrigger,
             "frames_passed_total": snapshot.framesPassedTotal,
             "frames_dropped_total": snapshot.framesDroppedTotal,

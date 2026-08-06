@@ -723,10 +723,27 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             lowerLayerFallbackDeadlineNS = nil
             return
         }
-        if lowerLayerFallbackWorkItem != nil {
+        let delayNS: UInt64
+        if status.authFailCode != 0 {
+            guard status.recoveryEnabled, status.recoveryReconnectSec > 0.0 else {
+                lowerLayerFallbackWorkItem?.cancel()
+                lowerLayerFallbackWorkItem = nil
+                lowerLayerFallbackDeadlineNS = nil
+                return
+            }
+            delayNS = UInt64(max(0.0, status.recoveryReconnectSec) * 1_000_000_000.0)
+        } else {
+            delayNS = Self.lowerLayerUnavailableFallbackNS
+        }
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        if delayNS == 0 {
+            let reason = status.authFailCode != 0 ? "secure_link_failed" : "app_not_ready"
+            eventSink?("ws_overlay_lower_layer_unavailable", ["reason": reason, "auth_fail_code": status.authFailCode])
+            forceReconnectForUnavailableChannel()
             return
         }
-        lowerLayerFallbackDeadlineNS = DispatchTime.now().uptimeNanoseconds + Self.lowerLayerUnavailableFallbackNS
+        lowerLayerFallbackDeadlineNS = DispatchTime.now().uptimeNanoseconds + delayNS
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.lowerLayerFallbackWorkItem = nil
@@ -739,7 +756,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.forceReconnectForUnavailableChannel()
         }
         lowerLayerFallbackWorkItem = workItem
-        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.lowerLayerUnavailableFallbackNS)), execute: workItem)
+        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(delayNS)), execute: workItem)
     }
 
     private func forceReconnectForUnavailableChannel() {
@@ -918,6 +935,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     private func sendRTTPingAndReschedule(for task: URLSessionWebSocketTask) {
         guard started, overlayConnected, websocketTask === task else { return }
+        flushDueSecureLinkFramesIfNeeded()
         let txNS = DispatchTime.now().uptimeNanoseconds
         do {
             let message = try overlayRuntime.encodeClientPing(txNS: txNS, echoNS: lastPeerPingTxNS)
@@ -936,6 +954,24 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         } catch {
             eventSink?("ws_overlay_control_encode_failed", ["error": error.localizedDescription])
             scheduleNextRTTPing(for: task)
+        }
+    }
+
+    private func flushDueSecureLinkFramesIfNeeded() {
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        do {
+            let snapshot = try adapter.pollSecureLinkDueFrames()
+            guard !snapshot.emittedFrames.isEmpty else {
+                return
+            }
+            for frame in snapshot.emittedFrames {
+                sendRawOverlayWire(frame)
+            }
+            updateLowerLayerFallback()
+        } catch {
+            eventSink?("ws_overlay_secure_link_due_frames_failed", ["error": error.localizedDescription])
         }
     }
 
