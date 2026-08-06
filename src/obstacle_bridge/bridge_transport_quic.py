@@ -250,8 +250,8 @@ class QuicSession(ISession):
             # Attach RTT driver; we’ll attach send_pings once we have a stream
             self._rtt_rt.attach(send_ping_fn=None, on_state_change=self._on_rtt_state_change)
             # CLIENT
-            self._peer_host = self._peer_name_host or self._peer_tuple[0]
-            self._peer_port = self._peer_name_port or self._peer_tuple[1]
+            self._peer_host = self._peer_tuple[0]
+            self._peer_port = self._peer_tuple[1]
             self._log.info(
                 f"[QUIC-SESSION] ({self._probe_id}) start; CLIENT -> "
                 f"{self._peer_host}:{self._peer_port} resolved={self._peer_tuple} "
@@ -767,8 +767,8 @@ class QuicSession(ISession):
                 self._connecting_task = None
                 self._on_accept(proto)
                 if self._peer_name_host:
-                    self._peer_host = self._peer_name_host
-                    self._peer_port = self._peer_name_port or int(port)
+                    self._peer_host = str(host)
+                    self._peer_port = int(port)
                     if callable(self._on_peer_set_cb):
                         try: self._on_peer_set_cb(self._peer_host, self._peer_port)
                         except Exception: pass

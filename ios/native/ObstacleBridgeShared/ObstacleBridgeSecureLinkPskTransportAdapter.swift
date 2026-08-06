@@ -28,6 +28,16 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         runtime.statusSnapshot()
     }
 
+    func requestSecureLinkRekey() throws -> OutboundSnapshot {
+        let snapshot = try runtime.requestClientRekey()
+        return OutboundSnapshot(
+            emittedFrames: snapshot.emittedFrames,
+            queuedPayloads: pendingPayloads.count,
+            authenticated: snapshot.authenticated,
+            sessionID: snapshot.sessionID
+        )
+    }
+
     func handleTransportDisconnected() {
         pendingPayloads.removeAll(keepingCapacity: false)
         runtime.handleTransportDisconnected()
@@ -66,6 +76,15 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
+        if status.appDataSendingBlocked {
+            pendingPayloads.append(payload)
+            return OutboundSnapshot(
+                emittedFrames: [],
+                queuedPayloads: pendingPayloads.count,
+                authenticated: status.authenticated,
+                sessionID: status.sessionID
+            )
+        }
         if status.authenticated {
             let snapshot = try runtime.sendApp(payload)
             return OutboundSnapshot(
@@ -95,13 +114,13 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         if snapshot.authFailCode != nil {
             pendingPayloads.removeAll()
         }
-        if runtime.statusSnapshot().authenticated, !pendingPayloads.isEmpty {
+        let status = runtime.statusSnapshot()
+        if status.authenticated, !status.appDataSendingBlocked, !pendingPayloads.isEmpty {
             do {
                 emittedFrames.append(contentsOf: try flushPendingPayloads())
             } catch {
             }
         }
-        let status = runtime.statusSnapshot()
         return InboundSnapshot(
             emittedFrames: emittedFrames,
             deliveredPayloads: deliveredPayloads,

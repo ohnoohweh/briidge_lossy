@@ -70,6 +70,124 @@ Design intent for `last_incoming_age_seconds`:
 The WebAdmin page renders this field as `Last Incoming` in the peer details view.
 For connecting peer rows, the page also renders `Next Address Attempt` and `Restart In` when those timers are active.
 
+## API completeness matrix
+
+This section records the current WebAdmin runtime-consumer contract as defined by `admin_web/app.js`.
+
+Scope:
+
+- runtime payload fields consumed from `/api/peers`, `/api/connections`, and `/api/status`
+- platform completeness for iOS Swift, macOS Swift, and Linux/Python
+- whether a field is sourced from live runtime state, merely present as a static/default value, or missing
+
+It does not include:
+
+- onboarding/import payload shapes
+- config-editor write payloads
+- fields only used by tests or debug-only tools
+
+Legend:
+
+- `live`: populated from real runtime state
+- `static`: present but hardcoded, defaulted, or derived from a placeholder rather than a real counter/history source
+- `missing`: required by the current WebAdmin consumer path but not provided by that platform
+- `n/a`: not applicable for the current platform/runtime mode
+
+### Current consumer contract
+
+| API property | iOS Swift | macOS Swift | Linux |
+|---|---|---|---|
+| `/api/peers[].id` | live | live | live |
+| `/api/peers[].transport` | live | live | live |
+| `/api/peers[].state` | live | live | live |
+| `/api/peers[].peer` / `.listen` | live | live | live |
+| `/api/peers[].last_incoming_age_seconds` | live | live | live |
+| `/api/peers[].next_address_attempt_in_seconds` | live on reconnecting peers | live on reconnecting peers | live |
+| `/api/peers[].restart_in_seconds` | live on reconnecting peers | live on reconnecting peers | live |
+| `/api/peers[].open_connections.{udp,tcp,tun}` | live | live | live |
+| `/api/peers[].connected_since_unix_ts` | live fallback through `secure_link.connected_since_unix_ts` | live fallback through `secure_link.connected_since_unix_ts` | live |
+| `/api/peers[].rtt_est_ms` | live | live | live |
+| `/api/peers[].transmit_delay_est_ms` | live | live | live |
+| `/api/peers[].traffic.{rx_bytes,tx_bytes,rx_bytes_per_sec,tx_bytes_per_sec}` | live | live | live |
+| `/api/peers[].decode_errors` | live | live | live |
+| `/api/peers[].inflight` | live | live | live |
+| `/api/peers[].myudp.{buffered_frames,confirmed_total,first_pass,repeated_once,repeated_multiple}` | live | live | live |
+| `/api/peers[].throttle.{applicable,active,stalled,budget_bytes,used_bytes,remaining_bytes,aggregate.remaining_bytes,scope.remaining_bytes}` | live | live | live |
+| `/api/peers[].secure_link.enabled` | live | live | live |
+| `/api/peers[].secure_link.mode` | live | live | live |
+| `/api/peers[].secure_link.state` | live | live | live |
+| `/api/peers[].secure_link.session_id` | live | live | live |
+| `/api/peers[].secure_link.rekey_in_progress` | static `false` | static `false` | live |
+| `/api/peers[].secure_link.last_event` | live but simplified | live but simplified | live |
+| `/api/peers[].secure_link.last_event_unix_ts` | static `null` | static `null` | live |
+| `/api/peers[].secure_link.last_authenticated_unix_ts` | live | live | live |
+| `/api/peers[].secure_link.authenticated_sessions_total` | static `1/0` from current auth state | static `1/0` from current auth state | live counter |
+| `/api/peers[].secure_link.rekeys_completed_total` | static `0` | static `0` | live counter |
+| `/api/peers[].secure_link.last_rekey_trigger` | missing | missing | live |
+| `/api/peers[].secure_link.frames_passed_total` | live after the Swift counter-parity fix; stale builds may still report static `0` | live after the Swift counter-parity fix | live |
+| `/api/peers[].secure_link.frames_dropped_total` | live after the Swift counter-parity fix; stale builds may still report static `0` | live after the Swift counter-parity fix | live |
+| `/api/peers[].secure_link.peer_subject_id` | static empty in PSK mode | static empty in PSK mode | live in cert mode |
+| `/api/peers[].secure_link.peer_subject_name` | static empty in PSK mode | static empty in PSK mode | live in cert mode |
+| `/api/peers[].secure_link.peer_roles` | static empty in PSK mode | static empty in PSK mode | live in cert mode |
+| `/api/peers[].secure_link.peer_deployment_id` | static empty in PSK mode | static empty in PSK mode | live in cert mode |
+| `/api/peers[].secure_link.peer_serial` | static empty in PSK mode | static empty in PSK mode | live in cert mode |
+| `/api/peers[].secure_link.issuer_id` | static empty in PSK mode | static empty in PSK mode | live in cert mode |
+| `/api/peers[].secure_link.trust_validation_state` | live but simplified | live but simplified | live |
+| `/api/peers[].secure_link.trust_anchor_id` | missing | missing | live |
+| `/api/peers[].secure_link.trust_failure_reason` | live on auth fail, empty otherwise | live on auth fail, empty otherwise | live |
+| `/api/peers[].secure_link.trust_failure_detail` | live on auth fail, empty otherwise | live on auth fail, empty otherwise | live |
+| `/api/peers[].secure_link.active_material_generation` | static derived `0/1` | static derived `0/1` | live |
+| `/api/peers[].secure_link.last_material_reload_unix_ts` | static `null` | static `null` | live |
+| `/api/peers[].secure_link.last_material_reload_scope` | static empty | static empty | live |
+| `/api/peers[].secure_link.last_material_reload_result` | static empty | static empty | live |
+| `/api/peers[].secure_link.last_material_reload_detail` | static empty | static empty | live |
+| `/api/peers[].secure_link.trust_enforced_unix_ts` | static `null` | static `null` | live |
+| `/api/peers[].secure_link.disconnect_reason` | simplified, mostly empty except auth fail | simplified, mostly empty except auth fail | live |
+| `/api/peers[].secure_link.disconnect_detail` | simplified, mostly empty except auth fail code | simplified, mostly empty except auth fail code | live |
+| `/api/peers[].compress_layer.enabled` | live | live | live |
+| `/api/peers[].compress_layer.{compress_input_bytes_total,compress_output_bytes_total,compress_attempts_total,compress_applied_total,decompress_ok_total,decompress_fail_total}` | live | live | live |
+| `/api/connections[]` core fields (`peer_id`, `chan_id`, `svc_id`, `service_name`, `role`, `source`, `local_port`, `remote_destination`, `state`, `stats.*`, `throttle.*`) | mostly live | mostly live | live |
+| `/api/status.admin_ui.first_tab` | live | live | live |
+| `/api/status.admin_ui.security_advisor_startup_enabled` | live | live | live |
+| `/api/status.proxy_provider.{enabled,listeners}` | live | live | live |
+| `/api/status.build.{available,commit,build_timestamp_utc,tainted,tracked_changes,untracked_changes}` | live, but `commit` may remain `unknown` in some iOS builds | live | live |
+| `/api/status.tun_helper.*` | n/a on iOS | live where helper mode is active | live |
+
+### Properties currently provided but not consumed by the page
+
+The current WebAdmin page does not read every field exposed by the runtime APIs. The following groups are candidates for removal from the runtime payload, or for future UI work if they are intentionally retained.
+
+#### iOS Swift
+
+- `/api/peers[].resolved_peer*`
+- `/api/peers[].runtime.*`
+- `/api/status.bootstrap_state`
+- `/api/status.shared_overlay_bootstrap_state`
+- `/api/status.bridge_state`
+- `/api/status.swift_udp_bridge_state`
+- `/api/status.transport_runtime`
+- `/api/status.effective_tunnel_network_settings`
+- `/api/status.heartbeat_tick_count`
+- `/api/status.provider_state_update_count`
+- `/api/status.{resident_size, phys_footprint, virtual_size, reusable_bytes, internal_bytes, resident_size_mb, phys_footprint_mb, virtual_size_mb}`
+
+#### macOS Swift
+
+- host-runner runtime/debug snapshot families that mirror internal service state but are not rendered in the current page
+- detailed local build/log helper internals that are exposed for support work but not consumed by `app.js`
+
+#### Linux/Python
+
+- richer debug/build/runtime status fields not rendered on the current page
+- helper and TUN verification detail objects beyond the currently visible cards
+
+### Interpretation
+
+- Linux/Python is the reference-complete implementation for the current WebAdmin SecureLink contract.
+- iOS Swift and macOS Swift are broadly aligned on connection, traffic, myUDP, throttle, and compression fields.
+- iOS Swift and macOS Swift still lag Linux/Python on several SecureLink lifecycle and certificate-oriented fields, especially true counters/history (`authenticated_sessions_total`, `rekeys_completed_total`, `last_event_unix_ts`, `last_rekey_trigger`) and certificate-trust metadata (`trust_anchor_id`, material-reload and trust-enforcement timestamps/results).
+- A field should not be considered complete merely because it is present in JSON. If it is permanently `0`, empty, or `null` while the corresponding runtime state is active on Linux/Python, it is incomplete for parity purposes.
+
 It does not own:
 
 - transport socket lifecycle for overlay peers

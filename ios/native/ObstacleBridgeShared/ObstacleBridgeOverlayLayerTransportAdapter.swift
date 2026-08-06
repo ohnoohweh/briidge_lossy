@@ -92,6 +92,14 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         secureLinkAdapter?.statusSnapshot()
     }
 
+    func requestSecureLinkRekey() throws -> OutboundSnapshot {
+        guard let secureLinkAdapter else {
+            return OutboundSnapshot(emittedFrames: [])
+        }
+        let snapshot = try secureLinkAdapter.requestSecureLinkRekey()
+        return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
+    }
+
     func connectionLayersSnapshot(
         transport: String,
         transportConnected: Bool,

@@ -1953,6 +1953,23 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         return ObstacleBridgeAdminAPI.jsonResponse(adminRequestReconnect())
     }
 
+    func adminRequestSecureLinkRekey(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        if let forbidden = adminAuth.validateBearer(headers: request.headers) {
+            return forbidden
+        }
+        guard let payload = swiftSimpleUDPPeerBridge?.requestSecureLinkRekey() else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "reason": "runtime_unavailable",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let statusLine = (payload["ok"] as? Bool) == true ? "HTTP/1.1 200 OK" : "HTTP/1.1 400 Bad Request"
+        return ObstacleBridgeAdminAPI.jsonResponse(payload, statusLine: statusLine)
+    }
+
     func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
         guard request.method.uppercased() == "POST" else {
             return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
@@ -2488,6 +2505,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "state": state,
                 "authenticated": false,
                 "session_id": NSNull(),
+                "rekey_supported": false,
                 "rekey_in_progress": false,
                 "last_event": "bootstrap",
                 "last_event_unix_ts": NSNull(),
@@ -2538,28 +2556,16 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             secureLinkLastAuthenticatedUnixTS = nil
         }
         let secureState: String
-        let lastEvent: String
-        let disconnectReason: String
         if displayAuthenticated {
             secureState = "authenticated"
-            lastEvent = "authenticated"
-            disconnectReason = ""
         } else if snapshot.authFailCode != 0 {
             secureState = "failed"
-            lastEvent = "auth_failed"
-            disconnectReason = "auth_failed"
         } else if state == "listening" {
             secureState = "listening"
-            lastEvent = "bootstrap"
-            disconnectReason = ""
         } else if snapshot.sessionID != 0 {
             secureState = "handshaking"
-            lastEvent = "handshake_started"
-            disconnectReason = ""
         } else {
             secureState = "waiting_transport"
-            lastEvent = "bootstrap"
-            disconnectReason = ""
         }
 
         return [
@@ -2568,22 +2574,24 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "state": secureState,
             "authenticated": displayAuthenticated,
             "session_id": snapshot.sessionID == 0 ? NSNull() : snapshot.sessionID,
-            "rekey_in_progress": false,
-            "last_event": lastEvent,
-            "last_event_unix_ts": NSNull(),
+            "rekey_supported": snapshot.rekeySupported,
+            "rekey_in_progress": snapshot.rekeyInProgress,
+            "last_event": snapshot.lastEvent,
+            "last_event_unix_ts": snapshot.lastEventUnixTs ?? NSNull(),
             "last_authenticated_unix_ts": displayAuthenticated ? (secureLinkLastAuthenticatedUnixTS ?? nowUnixTS) : NSNull(),
             "connected_since_unix_ts": snapshot.sessionID == 0 ? NSNull() : (secureLinkConnectedSinceUnixTS ?? nowUnixTS),
-            "authenticated_sessions_total": displayAuthenticated ? 1 : 0,
-            "rekeys_completed_total": 0,
-            "frames_passed_total": 0,
-            "frames_dropped_total": 0,
+            "authenticated_sessions_total": snapshot.authenticatedSessionsTotal,
+            "rekeys_completed_total": snapshot.rekeysCompletedTotal,
+            "last_rekey_trigger": snapshot.lastRekeyTrigger,
+            "frames_passed_total": snapshot.framesPassedTotal,
+            "frames_dropped_total": snapshot.framesDroppedTotal,
             "peer_subject_id": "",
             "peer_subject_name": "",
             "peer_roles": [],
             "peer_deployment_id": "",
             "peer_serial": "",
             "issuer_id": "",
-            "trust_validation_state": displayAuthenticated ? "validated" : "n/a",
+            "trust_validation_state": snapshot.trustValidationState,
             "trust_failure_reason": snapshot.authFailCode == 0 ? "" : "psk_auth_failed",
             "trust_failure_detail": snapshot.authFailCode == 0 ? "" : "code=\(snapshot.authFailCode)",
             "active_material_generation": snapshot.sessionID == 0 ? 0 : 1,
@@ -2592,8 +2600,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "last_material_reload_result": "",
             "last_material_reload_detail": "",
             "trust_enforced_unix_ts": NSNull(),
-            "disconnect_reason": disconnectReason,
-            "disconnect_detail": snapshot.authFailCode == 0 ? "" : "code=\(snapshot.authFailCode)",
+            "disconnect_reason": snapshot.disconnectReason,
+            "disconnect_detail": snapshot.disconnectDetail,
         ]
     }
 
@@ -3371,6 +3379,24 @@ private final class SwiftSimpleUDPPeerBridge {
                 "session_id": snapshot.sessionID,
                 "auth_fail_code": snapshot.authFailCode,
             ]
+        }
+    }
+
+    func requestSecureLinkRekey() -> [String: Any] {
+        withState {
+            if let udpOverlayTransportOwner {
+                return udpOverlayTransportOwner.requestSecureLinkRekey()
+            }
+            if let tcpOverlayTransportOwner {
+                return tcpOverlayTransportOwner.requestSecureLinkRekey()
+            }
+            if let wsOverlayTransportOwner {
+                return wsOverlayTransportOwner.requestSecureLinkRekey()
+            }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner {
+                return quicOverlayTransportOwner.requestSecureLinkRekey()
+            }
+            return ["ok": false, "reason": "transport_unavailable"]
         }
     }
 

@@ -497,8 +497,10 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "func resetTransportEpoch()" in peer_runtime
     assert "receiveState.reset()" in peer_runtime
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
-    assert "maybeRecoverStaleSecureLinkHandshake(nowNS:" in udp_owner
-    assert 'resetOverlayTransportEpoch(reason: "secure_link_handshake_stale")' in udp_owner
+    assert "private static let lowerLayerUnavailableFallbackNS" in udp_owner
+    assert "maybeRecoverUnavailableAppReady(nowNS:" in udp_owner
+    assert 'reason = "secure_link_handshake_stale"' in udp_owner
+    assert 'reason = "secure_link_failed"' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "peer_candidate_rotated")' in udp_owner
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
@@ -523,6 +525,15 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     assert "static func selectedTransportRuntime(" in snapshot_support
     assert "static func selectedProtocolStats(" in snapshot_support
     assert "static func peerMetric(_ key: String" in snapshot_support
+    assert "private static let lowerLayerUnavailableFallbackNS" in tcp_owner
+    assert "private static let lowerLayerUnavailableFallbackNS" in ws_owner
+    assert "private static let lowerLayerUnavailableFallbackNS" in quic_owner
+    assert "updateLowerLayerFallback()" in tcp_owner
+    assert "updateLowerLayerFallback()" in ws_owner
+    assert "updateLowerLayerFallback()" in quic_owner
+    assert 'scheduleReconnect()' in tcp_owner
+    assert 'scheduleReconnect()' in ws_owner
+    assert 'scheduleReconnect()' in quic_owner
     assert "static func peerLastIncomingAgeSeconds(" in snapshot_support
 
     for source in (tcp_owner, ws_owner, quic_owner):

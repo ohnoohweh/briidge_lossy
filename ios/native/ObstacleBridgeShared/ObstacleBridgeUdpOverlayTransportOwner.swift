@@ -12,6 +12,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
 
     private let bindHost: String
     private let bindPort: Int
@@ -274,6 +275,31 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 )
             )
             return (tcpRows, udpRows, tunRows)
+        }
+    }
+
+    func requestSecureLinkRekey() -> [String: Any] {
+        withOwnerQueue {
+            guard started, overlayConnected, let adapter = overlayLayerTransportAdapter else {
+                return ["ok": false, "reason": "transport_not_connected"]
+            }
+            do {
+                let snapshot = try adapter.requestSecureLinkRekey()
+                for frame in snapshot.emittedFrames {
+                    sendOverlayTransportPayload(frame)
+                }
+                return [
+                    "ok": true,
+                    "reason": "rekey_started",
+                    "emitted_frames": snapshot.emittedFrames.count,
+                ]
+            } catch {
+                return [
+                    "ok": false,
+                    "reason": "rekey_request_failed",
+                    "detail": error.localizedDescription,
+                ]
+            }
         }
     }
 
@@ -686,7 +712,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         lastOverlayConnectedState = connected
         if connected {
-            if maybeRecoverStaleSecureLinkHandshake(nowNS: nowNS) {
+            if maybeRecoverUnavailableAppReady(nowNS: nowNS) {
                 lastOverlayConnectedState = false
                 sendInitialIdleProbe()
                 return
@@ -704,21 +730,31 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     @discardableResult
-    private func maybeRecoverStaleSecureLinkHandshake(nowNS: UInt64) -> Bool {
+    private func maybeRecoverUnavailableAppReady(nowNS: UInt64) -> Bool {
         guard let adapter = overlayLayerTransportAdapter,
               let status = adapter.secureLinkStatusSnapshot(),
               status.clientMode,
-              !status.authenticated,
-              status.sessionID != 0,
-              status.authFailCode == 0,
+              !status.peerConfirmedAuthenticated,
               secureLinkHandshakePrimed,
               lastSecureLinkPrimeNS != 0,
               nowNS >= lastSecureLinkPrimeNS,
-              (nowNS - lastSecureLinkPrimeNS) >= Self.secureLinkHandshakeStaleNS
+              (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
         else {
             return false
         }
-        resetOverlayTransportEpoch(reason: "secure_link_handshake_stale")
+        let reason: String
+        if status.authFailCode != 0 {
+            reason = "secure_link_failed"
+        } else if status.sessionID != 0 {
+            reason = "secure_link_handshake_stale"
+        } else {
+            reason = "app_not_ready"
+        }
+        if peerCandidates.count > 1 {
+            rotateToNextPeerCandidate(nowNS: nowNS, reason: reason)
+        } else {
+            resetOverlayTransportEpoch(reason: reason)
+        }
         return true
     }
 

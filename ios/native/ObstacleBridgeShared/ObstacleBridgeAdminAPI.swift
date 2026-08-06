@@ -20,6 +20,7 @@ protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
     func adminAuthLogout(method: String, headers: [String: String]) -> ObstacleBridgeAdminAPIResponse
     func adminRequestRestart(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminRequestReconnect(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
+    func adminRequestSecureLinkRekey(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminLogLines(limit: Int) -> [String]
     func adminOnboardingConnectionProfiles() -> [[String: Any]]
@@ -158,6 +159,14 @@ extension ObstacleBridgeAdminAPIStateProvider {
         return ObstacleBridgeAdminAPI.jsonResponse(adminRequestReconnect())
     }
 
+    func adminRequestSecureLinkRekey(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        _ = request
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "reason": "secure_link_rekey_unsupported",
+        ], statusLine: "HTTP/1.1 400 Bad Request")
+    }
+
     func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
         _ = request
         return ObstacleBridgeAdminAPI.jsonResponse(adminRequestShutdown())
@@ -273,6 +282,8 @@ enum ObstacleBridgeAdminAPI {
             return provider.adminRequestRestart(request: request)
         case ("POST", "/api/reconnect"):
             return provider.adminRequestReconnect(request: request)
+        case ("POST", "/api/secure-link/rekey"):
+            return provider.adminRequestSecureLinkRekey(request: request)
         case ("POST", "/api/shutdown"):
             return provider.adminRequestShutdown(request: request)
         case ("GET", "/api/auth/challenge"):

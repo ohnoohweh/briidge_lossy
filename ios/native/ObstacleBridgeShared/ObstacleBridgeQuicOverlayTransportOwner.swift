@@ -7,6 +7,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias TunPacketSink = (Data) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
 
     // Keep Swift QUIC writes capped at 1024 bytes. Network.framework has been
     // observed to stall larger single stream writes in the mixed Swift/Python
@@ -58,6 +59,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
     private var nextReconnectAttemptDeadlineNS: UInt64?
+    private var lowerLayerFallbackWorkItem: DispatchWorkItem?
+    private var lowerLayerFallbackDeadlineNS: UInt64?
     private var startupMuxFramesSent = false
     private var resolvedPeerHost = ""
     private var resolvedPeerPort = 0
@@ -182,6 +185,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
         overlayConnection?.cancel()
         overlayConnection = nil
         tcpTransportOwner.stop()
@@ -248,6 +254,29 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 "transmit_delay_est_ms": protocolStats["transmit_delay_est_ms"] ?? 0.0,
                 "protocol_stats": protocolStats,
             ]
+        }
+    }
+
+    func requestSecureLinkRekey() -> [String: Any] {
+        withOwnerQueue {
+            guard started, overlayConnected, let adapter = overlayLayerTransportAdapter else {
+                return ["ok": false, "reason": "transport_not_connected"]
+            }
+            do {
+                let snapshot = try adapter.requestSecureLinkRekey()
+                sendTransportFrames(snapshot.emittedFrames)
+                return [
+                    "ok": true,
+                    "reason": "rekey_started",
+                    "emitted_frames": snapshot.emittedFrames.count,
+                ]
+            } catch {
+                return [
+                    "ok": false,
+                    "reason": "rekey_request_failed",
+                    "detail": error.localizedDescription,
+                ]
+            }
         }
     }
 
@@ -449,6 +478,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             do {
                 if let adapter = overlayLayerTransportAdapter {
                     let adapterSnapshot = try adapter.handleTransportConnected()
+                    updateLowerLayerFallback()
                     sendTransportFrames(adapterSnapshot.emittedFrames)
                 }
                 flushStartupMuxFramesIfNeeded()
@@ -477,6 +507,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         if let adapter = overlayLayerTransportAdapter {
             adapter.handleTransportDisconnected()
         }
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
         if schedule {
             scheduleReconnect()
         }
@@ -553,6 +586,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 if !adapterSnapshot.emittedFrames.isEmpty {
                     sendTransportFrames(adapterSnapshot.emittedFrames)
                 }
+                updateLowerLayerFallback()
             } else {
                 inboundPayloads = [payload]
             }
@@ -577,6 +611,56 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func currentTunPeerID() -> Int? {
         appReady() ? 1 : nil
+    }
+
+    private func updateLowerLayerFallback() {
+        guard started, overlayConnected, !peerHost.isEmpty, peerPort > 0, let adapter = overlayLayerTransportAdapter else {
+            lowerLayerFallbackWorkItem?.cancel()
+            lowerLayerFallbackWorkItem = nil
+            lowerLayerFallbackDeadlineNS = nil
+            return
+        }
+        let status = adapter.secureLinkStatusSnapshot()
+        guard let status, status.clientMode, !status.peerConfirmedAuthenticated else {
+            lowerLayerFallbackWorkItem?.cancel()
+            lowerLayerFallbackWorkItem = nil
+            lowerLayerFallbackDeadlineNS = nil
+            return
+        }
+        if lowerLayerFallbackWorkItem != nil {
+            return
+        }
+        lowerLayerFallbackDeadlineNS = DispatchTime.now().uptimeNanoseconds + Self.lowerLayerUnavailableFallbackNS
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.lowerLayerFallbackWorkItem = nil
+            self.lowerLayerFallbackDeadlineNS = nil
+            guard self.started, self.overlayConnected, let currentStatus = self.overlayLayerTransportAdapter?.secureLinkStatusSnapshot(), currentStatus.clientMode, !currentStatus.peerConfirmedAuthenticated else {
+                return
+            }
+            let reason = currentStatus.authFailCode != 0 ? "secure_link_failed" : "app_not_ready"
+            self.eventSink?("quic_overlay_lower_layer_unavailable", ["reason": reason, "auth_fail_code": currentStatus.authFailCode])
+            self.forceReconnectForUnavailableChannel()
+        }
+        lowerLayerFallbackWorkItem = workItem
+        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.lowerLayerUnavailableFallbackNS)), execute: workItem)
+    }
+
+    private func forceReconnectForUnavailableChannel() {
+        overlayConnected = false
+        overlayConnection?.cancel()
+        overlayConnection = nil
+        receiveBuffer.removeAll(keepingCapacity: false)
+        pendingOutboundWires.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
+        overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+        if let adapter = overlayLayerTransportAdapter {
+            adapter.handleTransportDisconnected()
+        }
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        lowerLayerFallbackDeadlineNS = nil
+        scheduleReconnect()
     }
 
     private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
