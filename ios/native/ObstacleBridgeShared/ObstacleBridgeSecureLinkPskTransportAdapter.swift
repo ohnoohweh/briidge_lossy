@@ -18,14 +18,51 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     }
 
     private let runtime: ObstacleBridgeSecureLinkPskRuntime
+    private let retryBackoffInitialSec: TimeInterval
+    private let retryBackoffMaxSec: TimeInterval
+    private let recoverAfterFailure: Bool
+    private let recoverDelaySec: TimeInterval
+    private let timeProvider: () -> TimeInterval
+    private let unixTimeProvider: () -> TimeInterval
     private var pendingPayloads: [Data] = []
+    private var transportConnected = false
+    private var handshakeAttemptsTotal = 0
+    private var consecutiveFailures = 0
+    private var retryNotBeforeMono: TimeInterval = 0.0
+    private var retryNotBeforeUnixTs: TimeInterval?
+    private var recoveryNotBeforeMono: TimeInterval = 0.0
+    private var recoveryNotBeforeUnixTs: TimeInterval?
 
-    init(runtime: ObstacleBridgeSecureLinkPskRuntime) {
+    init(
+        runtime: ObstacleBridgeSecureLinkPskRuntime,
+        retryBackoffInitialMS: Int = 1000,
+        retryBackoffMaxMS: Int = 5000,
+        recoverAfterFailure: Bool = true,
+        recoverDelaySeconds: TimeInterval = 30.0,
+        timeProvider: (() -> TimeInterval)? = nil,
+        unixTimeProvider: (() -> TimeInterval)? = nil
+    ) {
         self.runtime = runtime
+        self.retryBackoffInitialSec = max(0.0, Double(max(0, retryBackoffInitialMS)) / 1000.0)
+        self.retryBackoffMaxSec = max(self.retryBackoffInitialSec, Double(max(0, retryBackoffMaxMS)) / 1000.0)
+        self.recoverAfterFailure = recoverAfterFailure
+        self.recoverDelaySec = max(0.0, recoverDelaySeconds)
+        self.timeProvider = timeProvider ?? { ProcessInfo.processInfo.systemUptime }
+        self.unixTimeProvider = unixTimeProvider ?? { Date().timeIntervalSince1970 }
     }
 
     func statusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot {
-        runtime.statusSnapshot()
+        var snapshot = runtime.statusSnapshot()
+        let nowMono = timeProvider()
+        snapshot.handshakeAttemptsTotal = handshakeAttemptsTotal
+        snapshot.consecutiveFailures = consecutiveFailures
+        snapshot.retryBackoffSec = max(0.0, retryNotBeforeMono - nowMono)
+        snapshot.nextRetryUnixTs = retryNotBeforeUnixTs
+        snapshot.recoveryEnabled = snapshot.clientMode ? recoverAfterFailure : false
+        snapshot.recoveryDelaySec = snapshot.clientMode ? recoverDelaySec : 0.0
+        snapshot.recoveryReconnectSec = max(0.0, recoveryNotBeforeMono - nowMono)
+        snapshot.nextRecoveryReconnectUnixTs = recoveryNotBeforeUnixTs
+        return snapshot
     }
 
     func requestSecureLinkRekey() throws -> OutboundSnapshot {
@@ -38,14 +75,43 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         )
     }
 
+    func pollDueFrames() throws -> OutboundSnapshot {
+        var emittedFrames = try runtime.pollDueFrames()
+        if emittedFrames.isEmpty,
+           transportConnected,
+           shouldRetryClientHandshake(nowMono: timeProvider()) {
+            let handshake = try runtime.beginClientHandshake()
+            handshakeAttemptsTotal += 1
+            clearRetrySchedule()
+            emittedFrames.append(contentsOf: handshake.emittedFrames)
+        }
+        return OutboundSnapshot(
+            emittedFrames: emittedFrames,
+            queuedPayloads: pendingPayloads.count,
+            authenticated: runtime.statusSnapshot().authenticated,
+            sessionID: runtime.statusSnapshot().sessionID
+        )
+    }
+
     func handleTransportDisconnected() {
+        transportConnected = false
         pendingPayloads.removeAll(keepingCapacity: false)
         runtime.handleTransportDisconnected()
     }
 
     func handleTransportConnected() throws -> OutboundSnapshot {
+        transportConnected = true
         let status = runtime.statusSnapshot()
         guard status.clientMode, !status.authenticated else {
+            return OutboundSnapshot(
+                emittedFrames: [],
+                queuedPayloads: pendingPayloads.count,
+                authenticated: status.authenticated,
+                sessionID: status.sessionID
+            )
+        }
+        let nowMono = timeProvider()
+        if recoveryNotBeforeMono > nowMono || retryNotBeforeMono > nowMono {
             return OutboundSnapshot(
                 emittedFrames: [],
                 queuedPayloads: pendingPayloads.count,
@@ -63,6 +129,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         }
 
         let handshake = try runtime.beginClientHandshake()
+        handshakeAttemptsTotal += 1
         let emittedFrames = handshake.emittedFrames
 
         let updatedStatus = runtime.statusSnapshot()
@@ -108,13 +175,18 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     }
 
     func handleInboundFrame(_ payload: Data) -> InboundSnapshot {
+        let previousStatus = runtime.statusSnapshot()
         let snapshot = runtime.handleInboundFrame(payload)
         var emittedFrames = snapshot.emittedFrames
         let deliveredPayloads = snapshot.deliveredPayloads
         if snapshot.authFailCode != nil {
             pendingPayloads.removeAll()
+            handleClientAuthFailure(wasAuthenticated: previousStatus.authenticated)
         }
         let status = runtime.statusSnapshot()
+        if status.authenticated {
+            resetClientRetryPolicy()
+        }
         if status.authenticated, !status.appDataSendingBlocked, !pendingPayloads.isEmpty {
             do {
                 emittedFrames.append(contentsOf: try flushPendingPayloads())
@@ -148,5 +220,64 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             pendingPayloads = payloads + pendingPayloads
             throw error
         }
+    }
+
+    private func handleClientAuthFailure(wasAuthenticated: Bool) {
+        let status = runtime.statusSnapshot()
+        guard status.clientMode else {
+            return
+        }
+        if wasAuthenticated {
+            clearRetrySchedule()
+            if transportConnected && recoverAfterFailure && recoverDelaySec > 0.0 {
+                let nowMono = timeProvider()
+                recoveryNotBeforeMono = nowMono + recoverDelaySec
+                recoveryNotBeforeUnixTs = unixTimeProvider() + recoverDelaySec
+            } else {
+                clearRecoverySchedule()
+            }
+            return
+        }
+        guard transportConnected, retryBackoffMaxSec > 0.0 else {
+            return
+        }
+        if recoveryNotBeforeMono > timeProvider() {
+            return
+        }
+        consecutiveFailures += 1
+        let exponent = max(0, consecutiveFailures - 1)
+        let delaySec = min(retryBackoffMaxSec, retryBackoffInitialSec * pow(2.0, Double(exponent)))
+        retryNotBeforeMono = timeProvider() + delaySec
+        retryNotBeforeUnixTs = unixTimeProvider() + delaySec
+    }
+
+    private func resetClientRetryPolicy() {
+        clearRetrySchedule()
+        clearRecoverySchedule()
+        consecutiveFailures = 0
+    }
+
+    private func clearRetrySchedule() {
+        retryNotBeforeMono = 0.0
+        retryNotBeforeUnixTs = nil
+    }
+
+    private func clearRecoverySchedule() {
+        recoveryNotBeforeMono = 0.0
+        recoveryNotBeforeUnixTs = nil
+    }
+
+    private func shouldRetryClientHandshake(nowMono: TimeInterval) -> Bool {
+        let status = runtime.statusSnapshot()
+        guard status.clientMode,
+              transportConnected,
+              !status.authenticated,
+              status.authFailCode != 0,
+              retryNotBeforeMono > 0.0,
+              retryNotBeforeMono <= nowMono,
+              !(recoveryNotBeforeMono > nowMono) else {
+            return false
+        }
+        return true
     }
 }

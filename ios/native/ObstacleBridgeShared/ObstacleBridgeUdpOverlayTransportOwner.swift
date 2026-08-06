@@ -547,6 +547,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         let nowNS = monotonicNowNS()
         handleTransportLiveness(nowNS: nowNS)
+        flushDueSecureLinkFramesIfNeeded()
         let snapshot = overlayRuntime.handleControlTimerTick(nowNS: nowNS, sendPortPresent: currentPeerAddress != nil)
         guard snapshot.controlShouldEmit else {
             return
@@ -556,6 +557,23 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             sendDatagram(control.frame)
         } catch {
             eventSink?("udp_overlay_control_timer_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func flushDueSecureLinkFramesIfNeeded() {
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        do {
+            let snapshot = try adapter.pollSecureLinkDueFrames()
+            guard !snapshot.emittedFrames.isEmpty else {
+                return
+            }
+            for frame in snapshot.emittedFrames {
+                sendOverlayTransportPayload(frame)
+            }
+        } catch {
+            eventSink?("udp_overlay_secure_link_due_frames_failed", ["error": error.localizedDescription])
         }
     }
 
@@ -734,13 +752,25 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard let adapter = overlayLayerTransportAdapter,
               let status = adapter.secureLinkStatusSnapshot(),
               status.clientMode,
-              !status.peerConfirmedAuthenticated,
-              secureLinkHandshakePrimed,
-              lastSecureLinkPrimeNS != 0,
-              nowNS >= lastSecureLinkPrimeNS,
-              (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
+              !status.peerConfirmedAuthenticated
         else {
             return false
+        }
+        if status.authFailCode != 0 {
+            guard status.recoveryEnabled else {
+                return false
+            }
+            if status.recoveryReconnectSec > 0.0 {
+                return false
+            }
+        } else {
+            guard secureLinkHandshakePrimed,
+                  lastSecureLinkPrimeNS != 0,
+                  nowNS >= lastSecureLinkPrimeNS,
+                  (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
+            else {
+                return false
+            }
         }
         let reason: String
         if status.authFailCode != 0 {

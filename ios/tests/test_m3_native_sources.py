@@ -105,6 +105,12 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"disconnect_reason": snapshot.disconnectReason' in provider
     assert '"disconnect_detail": snapshot.disconnectDetail' in provider
     assert '"throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections)' in provider
+    assert 'summary["secure_link_rekey_after_frames"] = rekeyAfterFrames' in provider
+    assert 'summary["secure_link_rekey_after_seconds"] = rekeyAfterSeconds' in provider
+    assert 'summary["secure_link_retry_backoff_initial_ms"] = retryBackoffInitialMS' in provider
+    assert 'summary["secure_link_retry_backoff_max_ms"] = retryBackoffMaxMS' in provider
+    assert 'summary["secure_link_recover_after_failure"] = recoverAfterFailure' in provider
+    assert 'summary["secure_link_recover_delay_seconds"] = recoverDelaySeconds' in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
     assert 'let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)' in snapshot_support
 
@@ -127,6 +133,12 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
     assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
     assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
+    assert 'schemaItem(key: "secure_link_rekey_after_frames", description: "Automatically rekey PSK sessions after this many protected data frames. 0 disables frame-triggered rekey.", defaultValue: 0)' in runtime_config
+    assert 'schemaItem(key: "secure_link_rekey_after_seconds", description: "Automatically rekey PSK sessions after this many authenticated seconds. 0 disables time-triggered rekey.", defaultValue: 0.0)' in runtime_config
+    assert 'schemaItem(key: "secure_link_retry_backoff_initial_ms", description: "Initial SecureLink client retry backoff after authentication failure, in milliseconds.", defaultValue: 1000)' in runtime_config
+    assert 'schemaItem(key: "secure_link_retry_backoff_max_ms", description: "Maximum SecureLink client retry backoff after repeated authentication failures, in milliseconds.", defaultValue: 5000)' in runtime_config
+    assert 'schemaItem(key: "secure_link_recover_after_failure", description: "Whether SecureLink client failures should trigger a delayed transport reconnect recovery.", defaultValue: true)' in runtime_config
+    assert 'schemaItem(key: "secure_link_recover_delay_seconds", description: "Seconds to wait before the SecureLink client forces a transport reconnect after persistent failure.", defaultValue: 30.0)' in runtime_config
     assert 'schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [' in runtime_config
     assert '"mode": "system"' in runtime_config
     assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
@@ -138,6 +150,12 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert 'let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [' in host_runner
     assert '"mode": "system"' in host_runner
+    assert 'let rekeyAfterFrames = Self.intValue(from: runtimeConfig["secure_link_rekey_after_frames"]) ?? 0' in host_runner
+    assert 'let rekeyAfterSeconds = Self.doubleValue(from: runtimeConfig["secure_link_rekey_after_seconds"]) ?? 0.0' in host_runner
+    assert 'let retryBackoffInitialMS = Self.intValue(from: runtimeConfig["secure_link_retry_backoff_initial_ms"]) ?? 1000' in host_runner
+    assert 'let retryBackoffMaxMS = Self.intValue(from: runtimeConfig["secure_link_retry_backoff_max_ms"]) ?? 5000' in host_runner
+    assert 'let recoverAfterFailure = Self.boolValue(from: runtimeConfig["secure_link_recover_after_failure"]) ?? true' in host_runner
+    assert 'let recoverDelaySeconds = Self.doubleValue(from: runtimeConfig["secure_link_recover_delay_seconds"]) ?? 30.0' in host_runner
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:

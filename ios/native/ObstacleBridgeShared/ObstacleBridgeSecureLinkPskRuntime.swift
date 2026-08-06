@@ -67,6 +67,14 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         var appDataSendingBlocked: Bool
         var framesPassedTotal: Int
         var framesDroppedTotal: Int
+        var handshakeAttemptsTotal: Int
+        var consecutiveFailures: Int
+        var retryBackoffSec: TimeInterval
+        var nextRetryUnixTs: TimeInterval?
+        var recoveryEnabled: Bool
+        var recoveryDelaySec: TimeInterval
+        var recoveryReconnectSec: TimeInterval
+        var nextRecoveryReconnectUnixTs: TimeInterval?
     }
 
     private let clientMode: Bool
@@ -74,6 +82,8 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private let randomBytes: (Int) -> Data
     private let sessionIDProvider: () -> UInt64
     private let timeProvider: () -> TimeInterval
+    private let rekeyAfterFrames: Int
+    private let rekeyAfterSeconds: TimeInterval
 
     private var sessionID: UInt64 = 0
     private var authenticated = false
@@ -104,10 +114,13 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private var framesPassedTotal = 0
     private var framesDroppedTotal = 0
     private let unixTimeProvider: () -> TimeInterval
+    private var rekeyDueMono: TimeInterval?
 
     init(
         clientMode: Bool,
         psk: String,
+        rekeyAfterFrames: Int = 0,
+        rekeyAfterSeconds: TimeInterval = 0.0,
         randomBytes: ((Int) -> Data)? = nil,
         sessionIDProvider: (() -> UInt64)? = nil,
         timeProvider: (() -> TimeInterval)? = nil,
@@ -115,6 +128,8 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     ) {
         self.clientMode = clientMode
         self.psk = Data(psk.utf8)
+        self.rekeyAfterFrames = max(0, rekeyAfterFrames)
+        self.rekeyAfterSeconds = max(0.0, rekeyAfterSeconds)
         self.randomBytes = randomBytes ?? { count in
             Data((0..<count).map { _ in UInt8.random(in: 0...UInt8.max) })
         }
@@ -155,7 +170,15 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             trustValidationState: trustValidationState,
             appDataSendingBlocked: clientRekeyHoldAfterCommit,
             framesPassedTotal: framesPassedTotal,
-            framesDroppedTotal: framesDroppedTotal
+            framesDroppedTotal: framesDroppedTotal,
+            handshakeAttemptsTotal: 0,
+            consecutiveFailures: 0,
+            retryBackoffSec: 0.0,
+            nextRetryUnixTs: nil,
+            recoveryEnabled: false,
+            recoveryDelaySec: 0.0,
+            recoveryReconnectSec: 0.0,
+            nextRecoveryReconnectUnixTs: nil
         )
     }
 
@@ -195,6 +218,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
 
     func sendApp(_ payload: Data) throws -> OutboundSnapshot {
         expireHandshakeIfNeeded()
+        let timeTriggeredFrames = try maybeTriggerTimeBasedRekey()
         guard !clientRekeyHoldAfterCommit else {
             throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
         }
@@ -215,9 +239,12 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         let ciphertext = try seal(payload: payload, key: outboundKey, counter: txCounter, aad: aad)
         let frame = aad + ciphertext
         txCounter &+= 1
+        var emittedFrames = timeTriggeredFrames
+        emittedFrames.append(frame)
+        emittedFrames.append(contentsOf: try maybeTriggerFrameBasedRekey())
         return OutboundSnapshot(
             sent: true,
-            emittedFrames: [frame],
+            emittedFrames: emittedFrames,
             authenticated: authenticated,
             sessionID: sessionID,
             txCounter: txCounter
@@ -226,6 +253,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
 
     func handleInboundFrame(_ payload: Data) -> InboundSnapshot {
         expireHandshakeIfNeeded()
+        _ = try? maybeTriggerTimeBasedRekey()
         guard let frame = ObstacleBridgeSecureLinkPskCodec.parseFrame(payload) else {
             return fail(sessionID: 0, code: Self.authFailDecode)
         }
@@ -281,22 +309,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         guard pendingSessionID == 0 else {
             throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
         }
-        let nextSessionID = nextSessionID()
-        let nextClientNonce = Data(randomBytes(32).prefix(32))
-        pendingSessionID = nextSessionID
-        pendingClientNonce = nextClientNonce
-        pendingServerNonce = Data()
-        pendingC2SKey = nil
-        pendingS2CKey = nil
-        lastRekeyTrigger = "operator"
-        recordEvent("rekey_started")
-        let payload = nextClientNonce + Data([UInt8(Self.capabilityPSKV1), 0])
-        let frame = ObstacleBridgeSecureLinkPskCodec.buildFrame(
-            slType: Self.typeRekeyHello,
-            sessionID: nextSessionID,
-            counter: 0,
-            payload: payload
-        )
+        let frame = try startClientRekey(trigger: "operator")
         return OutboundSnapshot(
             sent: true,
             emittedFrames: [frame],
@@ -304,6 +317,11 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             sessionID: sessionID,
             txCounter: txCounter
         )
+    }
+
+    func pollDueFrames() throws -> [Data] {
+        expireHandshakeIfNeeded()
+        return try maybeTriggerTimeBasedRekey()
     }
 
     private func handleClientHello(sessionID: UInt64, body: Data) -> InboundSnapshot {
@@ -453,6 +471,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             disconnectDetail = ""
             trustValidationState = "validated"
             recordEvent("authenticated")
+            scheduleTimeBasedRekeyIfNeeded()
         }
         framesPassedTotal &+= 1
         return InboundSnapshot(
@@ -632,6 +651,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         handshakeStartedAt = nil
         clientRekeyHoldAfterCommit = false
         clearPendingRekey()
+        clearRekeySchedule()
         disconnectReason = "auth_failed"
         disconnectDetail = "code=\(code)"
         trustValidationState = "failed"
@@ -670,6 +690,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         clientHandshakeProofSent = false
         lastAuthFailCode = 0
         clientRekeyHoldAfterCommit = false
+        clearRekeySchedule()
         lastEvent = keepSessionID ? lastEvent : "bootstrap"
         lastEventUnixTs = keepSessionID ? lastEventUnixTs : nil
         authenticatedSessionsTotal = keepSessionID ? authenticatedSessionsTotal : 0
@@ -739,6 +760,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         trustValidationState = "validated"
         recordEvent("rekey_completed")
         clearPendingRekey()
+        scheduleTimeBasedRekeyIfNeeded()
     }
 
     private func nextSessionID() -> UInt64 {
@@ -773,6 +795,66 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         default:
             return "auth_failed"
         }
+    }
+
+    private func startClientRekey(trigger: String) throws -> Data {
+        guard clientMode, authenticated, peerConfirmedAuthenticated, sessionID > 0, pendingSessionID == 0 else {
+            throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
+        }
+        let nextSessionID = nextSessionID()
+        let nextClientNonce = Data(randomBytes(32).prefix(32))
+        pendingSessionID = nextSessionID
+        pendingClientNonce = nextClientNonce
+        pendingServerNonce = Data()
+        pendingC2SKey = nil
+        pendingS2CKey = nil
+        lastRekeyTrigger = trigger
+        clearRekeySchedule()
+        recordEvent("rekey_started")
+        let payload = nextClientNonce + Data([UInt8(Self.capabilityPSKV1), 0])
+        return ObstacleBridgeSecureLinkPskCodec.buildFrame(
+            slType: Self.typeRekeyHello,
+            sessionID: nextSessionID,
+            counter: 0,
+            payload: payload
+        )
+    }
+
+    private func maybeTriggerFrameBasedRekey() throws -> [Data] {
+        guard clientMode, rekeyAfterFrames > 0, authenticated, peerConfirmedAuthenticated, pendingSessionID == 0 else {
+            return []
+        }
+        let sentFrames = max(0, Int(txCounter) - 1 - (clientHandshakeProofSent ? 1 : 0))
+        guard sentFrames >= rekeyAfterFrames else {
+            return []
+        }
+        return [try startClientRekey(trigger: "frame_threshold")]
+    }
+
+    private func maybeTriggerTimeBasedRekey() throws -> [Data] {
+        guard clientMode, rekeyAfterSeconds > 0.0, authenticated, peerConfirmedAuthenticated, pendingSessionID == 0 else {
+            return []
+        }
+        guard let rekeyDueMono else {
+            scheduleTimeBasedRekeyIfNeeded()
+            return []
+        }
+        guard timeProvider() >= rekeyDueMono else {
+            return []
+        }
+        return [try startClientRekey(trigger: "time_threshold")]
+    }
+
+    private func scheduleTimeBasedRekeyIfNeeded() {
+        guard clientMode, rekeyAfterSeconds > 0.0, authenticated, peerConfirmedAuthenticated, pendingSessionID == 0 else {
+            clearRekeySchedule()
+            return
+        }
+        rekeyDueMono = timeProvider() + rekeyAfterSeconds
+    }
+
+    private func clearRekeySchedule() {
+        rekeyDueMono = nil
     }
 
     private func seal(payload: Data, key: Data, counter: UInt64, aad: Data) throws -> Data {

@@ -58,6 +58,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
     private var nextReconnectAttemptDeadlineNS: UInt64?
+    private var secureLinkDueTimer: DispatchSourceTimer?
     private var lowerLayerFallbackWorkItem: DispatchWorkItem?
     private var lowerLayerFallbackDeadlineNS: UInt64?
     private var peerCandidates: [ResolvedAddress] = []
@@ -172,6 +173,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             return
         }
         started = true
+        startSecureLinkDueTimer()
         if !peerHost.isEmpty, peerPort > 0 {
             connectOverlay()
             return
@@ -189,6 +191,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        secureLinkDueTimer?.cancel()
+        secureLinkDueTimer = nil
         lowerLayerFallbackWorkItem?.cancel()
         lowerLayerFallbackWorkItem = nil
         lowerLayerFallbackDeadlineNS = nil
@@ -742,6 +746,44 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
     }
 
+    private func startSecureLinkDueTimer() {
+        guard secureLinkDueTimer == nil else {
+            return
+        }
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(1))
+        timer.setEventHandler { [weak self] in
+            self?.handleSecureLinkDueTimer()
+        }
+        timer.resume()
+        secureLinkDueTimer = timer
+    }
+
+    private func handleSecureLinkDueTimer() {
+        guard started, overlayConnected else {
+            return
+        }
+        flushDueSecureLinkFramesIfNeeded()
+    }
+
+    private func flushDueSecureLinkFramesIfNeeded() {
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        do {
+            let snapshot = try adapter.pollSecureLinkDueFrames()
+            guard !snapshot.emittedFrames.isEmpty else {
+                return
+            }
+            for frame in snapshot.emittedFrames {
+                sendOverlayTransportPayload(frame)
+            }
+            updateLowerLayerFallback()
+        } catch {
+            eventSink?("tcp_overlay_secure_link_due_frames_failed", ["error": error.localizedDescription])
+        }
+    }
+
     private func resetOverlayTransportEpoch() {
         overlayLayerTransportAdapter?.handleTransportDisconnected()
         secureLinkHandshakePrimed = false
@@ -768,10 +810,27 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             lowerLayerFallbackDeadlineNS = nil
             return
         }
-        if lowerLayerFallbackWorkItem != nil {
+        let delayNS: UInt64
+        if status.authFailCode != 0 {
+            guard status.recoveryEnabled, status.recoveryReconnectSec > 0.0 else {
+                lowerLayerFallbackWorkItem?.cancel()
+                lowerLayerFallbackWorkItem = nil
+                lowerLayerFallbackDeadlineNS = nil
+                return
+            }
+            delayNS = UInt64(max(0.0, status.recoveryReconnectSec) * 1_000_000_000.0)
+        } else {
+            delayNS = Self.lowerLayerUnavailableFallbackNS
+        }
+        lowerLayerFallbackWorkItem?.cancel()
+        lowerLayerFallbackWorkItem = nil
+        if delayNS == 0 {
+            let reason = status.authFailCode != 0 ? "secure_link_failed" : "app_not_ready"
+            eventSink?("tcp_overlay_lower_layer_unavailable", ["reason": reason, "auth_fail_code": status.authFailCode])
+            forceReconnectForUnavailableChannel()
             return
         }
-        let deadlineNS = DispatchTime.now().uptimeNanoseconds + Self.lowerLayerUnavailableFallbackNS
+        let deadlineNS = DispatchTime.now().uptimeNanoseconds + delayNS
         lowerLayerFallbackDeadlineNS = deadlineNS
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -785,7 +844,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             self.forceReconnectForUnavailableChannel()
         }
         lowerLayerFallbackWorkItem = workItem
-        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(Self.lowerLayerUnavailableFallbackNS)), execute: workItem)
+        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(delayNS)), execute: workItem)
     }
 
     private func forceReconnectForUnavailableChannel() {
