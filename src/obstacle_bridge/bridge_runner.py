@@ -1638,6 +1638,7 @@ class Runner:
             "ws_own_port": "ws_session",
             "ws_peer": "ws_session",
             "ws_peer_port": "ws_session",
+            "ws_peer_addresses": "ws_session",
         }
         for key, target_section in transport_key_targets.items():
             if not hasattr(self.args, key):

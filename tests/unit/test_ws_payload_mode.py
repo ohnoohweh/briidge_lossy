@@ -797,6 +797,92 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(preflight.await_args.kwargs["host_header"], "2001:db8::2")
         on_accept.assert_awaited_once_with(fake_ws)
 
+    async def test_connect_peer_address_override_keeps_logical_host_for_uri_tls_and_http(self):
+        args = _args("binary")
+        args.ws_peer = "ohnoohweh.synology.me"
+        args.ws_peer_port = 443
+        args.ws_peer_addresses = ["192.0.2.44", "2001:db8::44"]
+        args.ws_peer_resolve_family = "prefer-ipv6"
+        args.ws_bind = "::"
+        args.ws_tls = True
+
+        with mock.patch("socket.getaddrinfo", side_effect=AssertionError("DNS must not be used")):
+            session = WebSocketSession(args)
+
+        self.assertEqual(
+            session._peer_candidates,
+            [("2001:db8::44", 443, socket.AF_INET6), ("192.0.2.44", 443, socket.AF_INET)],
+        )
+        session._loop = asyncio.get_running_loop()
+        session._run_flag = True
+        fake_ws = types.SimpleNamespace(
+            local_address=("2001:db8::100", 40000),
+            remote_address=("2001:db8::44", 443),
+        )
+        seen = {}
+
+        async def fake_connect(uri, **kwargs):
+            seen["uri"] = uri
+            seen["kwargs"] = kwargs
+            return fake_ws
+
+        fake_websockets = types.SimpleNamespace(connect=fake_connect)
+        with mock.patch.dict(sys.modules, {"websockets": fake_websockets}):
+            with mock.patch.object(session, "_load_default_http_page", mock.AsyncMock()) as preflight:
+                with mock.patch.object(session, "_on_accept", mock.AsyncMock()) as on_accept:
+                    await session._connect_to("2001:db8::44", 443)
+
+        self.assertEqual(seen["uri"], "wss://ohnoohweh.synology.me:443/")
+        self.assertEqual(seen["kwargs"]["host"], "2001:db8::44")
+        self.assertEqual(seen["kwargs"]["port"], 443)
+        self.assertEqual(seen["kwargs"]["server_hostname"], "ohnoohweh.synology.me")
+        preflight.assert_awaited_once_with(
+            host="2001:db8::44",
+            port=443,
+            ssl_ctx=mock.ANY,
+            server_hostname="ohnoohweh.synology.me",
+            host_header="ohnoohweh.synology.me",
+        )
+        on_accept.assert_awaited_once_with(fake_ws)
+
+    def test_peer_address_override_rejects_dns_names(self):
+        args = _args("binary")
+        args.ws_peer = "ohnoohweh.synology.me"
+        args.ws_peer_port = 443
+        args.ws_peer_addresses = ["not-an-ip.example"]
+
+        with self.assertRaisesRegex(RuntimeError, "not an IPv4 or IPv6 literal"):
+            WebSocketSession(args)
+
+    def test_empty_peer_address_override_resolves_ws_peer_as_before(self):
+        resolved = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 6, "", ("2001:db8::55", 443, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.0.2.55", 443)),
+        ]
+        for empty_value in ([], ""):
+            with self.subTest(empty_value=empty_value):
+                args = _args("binary")
+                args.ws_bind = "::"
+                args.ws_peer = "ohnoohweh.synology.me"
+                args.ws_peer_port = 443
+                args.ws_peer_addresses = empty_value
+                args.ws_peer_resolve_family = "prefer-ipv6"
+
+                with mock.patch("socket.getaddrinfo", return_value=resolved) as getaddrinfo:
+                    session = WebSocketSession(args)
+
+                getaddrinfo.assert_called_once_with(
+                    "ohnoohweh.synology.me",
+                    443,
+                    family=socket.AF_UNSPEC,
+                    type=socket.SOCK_STREAM,
+                )
+                self.assertEqual(session._ws_peer_addresses, [])
+                self.assertEqual(
+                    session._peer_candidates,
+                    [("2001:db8::55", 443, socket.AF_INET6), ("192.0.2.55", 443, socket.AF_INET)],
+                )
+
     async def test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect(self):
         args = _args("binary")
         args.ws_peer = "37.1.192.30,[2001:db8::2]"

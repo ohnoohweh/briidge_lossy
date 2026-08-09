@@ -424,6 +424,7 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "ws_bind", description: "WebSocket overlay bind address", defaultValue: "::"),
                 schemaItem(key: "ws_own_port", description: "WebSocket overlay own port", defaultValue: 8080),
                 schemaItem(key: "ws_peer", description: "Remote WebSocket peer host", defaultValue: "bridge.example.com"),
+                schemaItem(key: "ws_peer_addresses", description: "Optional ordered IPv4/IPv6 literal connection addresses; ws_peer remains the HTTP and TLS server name.", defaultValue: []),
                 schemaItem(key: "ws_peer_port", description: "Remote WebSocket peer port", defaultValue: 8080),
                 schemaItem(key: "ws_path", description: "WebSocket HTTP path", defaultValue: "/"),
                 schemaItem(key: "ws_payload_mode", description: "WebSocket payload framing mode", defaultValue: "binary", choices: ["binary", "base64", "json-base64", "semi-text-shape"]),
@@ -714,6 +715,9 @@ enum ObstacleBridgeRuntimeConfig {
         }
         if payload["ws_peer"] == nil {
             payload["ws_peer"] = NSNull()
+        }
+        if payload["ws_peer_addresses"] == nil {
+            payload["ws_peer_addresses"] = []
         }
         if payload["ws_peer_port"] == nil {
             payload["ws_peer_port"] = 8080
@@ -1282,6 +1286,30 @@ enum ObstacleBridgeRuntimeConfig {
         }
     }
 
+    static func wsPeerAddresses(from value: Any?) -> [String] {
+        let rawValues: [Any]
+        if let values = value as? [Any] {
+            rawValues = values
+        } else if let value, !(value is NSNull) {
+            rawValues = [value]
+        } else {
+            rawValues = []
+        }
+        var addresses: [String] = []
+        for rawValue in rawValues {
+            guard let rendered = stringValue(from: rawValue) else { continue }
+            for token in rendered.replacingOccurrences(of: ";", with: ",").split(separator: ",", omittingEmptySubsequences: false) {
+                let address = ObstacleBridgePeerAddressResolver.stripBrackets(
+                    String(token).trimmingCharacters(in: .whitespacesAndNewlines)
+                )
+                if !address.isEmpty, !addresses.contains(address) {
+                    addresses.append(address)
+                }
+            }
+        }
+        return addresses
+    }
+
     static func peerHost(for transport: String, payload: [String: Any]) -> String? {
         switch transport {
         case "myudp":
@@ -1452,7 +1480,9 @@ enum ObstacleBridgeRuntimeConfig {
         let bindHost = bindHost(for: transport, payload: flat)
         var routes4: [String] = []
         var routes6: [String] = []
-        for candidateHost in splitConfiguredPeerHosts(host) {
+        let wsAddresses = transport == "ws" ? wsPeerAddresses(from: flat["ws_peer_addresses"]) : []
+        let candidateHosts = wsAddresses.isEmpty ? splitConfiguredPeerHosts(host) : wsAddresses
+        for candidateHost in candidateHosts {
             guard let family = routeHostFamily(candidateHost),
                   let route = normalizedRouteCIDR(for: candidateHost) else {
                 continue

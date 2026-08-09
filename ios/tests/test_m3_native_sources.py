@@ -120,6 +120,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "ws_bind"' in runtime_config
     assert 'schemaItem(key: "ws_own_port"' in runtime_config
     assert 'schemaItem(key: "ws_path"' in runtime_config
+    assert 'schemaItem(key: "ws_peer_addresses"' in runtime_config
     assert '"tun_execution"' in runtime_config
     assert 'schemaItem(key: "tun_execution_mode", description: "Desktop local TUN execution topology: inline current-process ownership or helper-backed ownership.", defaultValue: "inline", choices: ["inline", "helper"])' in runtime_config
     assert 'schemaItem(key: "tun_helper_backend", description: "Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.", defaultValue: "linux-native")' in runtime_config
@@ -340,6 +341,7 @@ def test_runtime_config_source_exists() -> None:
     assert "static func remoteServerSpecs(" in runtime
     assert "static func tunnelRoutingOverride(" in runtime
     assert "static func overlayPeerExcludedRoutes(" in runtime
+    assert 'let wsAddresses = transport == "ws" ? wsPeerAddresses(from: flat["ws_peer_addresses"]) : []' in runtime
     assert "static func effectiveExcludedRoutes(" in runtime
     assert "static func localTunServiceSpec(" in runtime
     assert "static func packetflowConnectorSelection(" in runtime
@@ -644,9 +646,18 @@ def test_websocket_overlay_runtime_source_exists() -> None:
 
 def test_websocket_overlay_transport_owner_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebSocketOverlayTransportOwner" in runtime
     assert "URLSessionWebSocketTask" in runtime
+    assert "NWProtocolWebSocket.Options" in runtime
+    assert "sec_protocol_options_set_tls_server_name" in runtime
+    assert 'headers.append((name: "Host"' in runtime
+    assert "peerAddresses.isEmpty" in runtime
+    assert 'peerAddresses: ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: settings.runtimeConfig["ws_peer_addresses"])' in provider
+    assert 'let peerAddresses = ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: runtimeConfig["ws_peer_addresses"])' in host_runner
+    assert "peerAddresses: peerAddresses" in host_runner
     assert "handleInboundTCPMuxFrame(" in runtime
     assert "handleInboundUDPMuxFrame(" in runtime
     assert "sendMuxFrames(" in runtime

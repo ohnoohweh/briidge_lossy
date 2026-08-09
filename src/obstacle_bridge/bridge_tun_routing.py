@@ -149,6 +149,19 @@ def auto_overlay_peer_excluded_routes(config: Mapping[str, Any] | None) -> tuple
     peer_host = str(source.get(peer_attr) or "").strip()
     if not peer_host:
         return ([], [])
+    peer_resolution_host = peer_host
+    if transport == "ws":
+        raw_addresses = source.get("ws_peer_addresses")
+        if isinstance(raw_addresses, (list, tuple)):
+            configured_addresses = [str(value or "").strip() for value in raw_addresses if str(value or "").strip()]
+        else:
+            configured_addresses = [
+                value.strip()
+                for value in str(raw_addresses or "").replace(";", ",").split(",")
+                if value.strip()
+            ]
+        if configured_addresses:
+            peer_resolution_host = ",".join(configured_addresses)
     raw_port = source.get(port_attr)
     try:
         peer_port = int(raw_port if raw_port is not None else 0)
@@ -163,7 +176,7 @@ def auto_overlay_peer_excluded_routes(config: Mapping[str, Any] | None) -> tuple
 
         socktype = 1 if transport in {"tcp", "ws"} else 2  # SOCK_STREAM / SOCK_DGRAM
         candidates = []
-        for configured_host in _split_configured_peer_hosts(peer_host):
+        for configured_host in _split_configured_peer_hosts(peer_resolution_host):
             candidates.extend(
                 _resolve_peer_candidates(
                     configured_host,

@@ -39,4 +39,22 @@ def test_swift_ws_owner_rejects_stale_receive_callbacks() -> None:
 
 def test_swift_ws_owner_flushes_only_current_task() -> None:
     source = _source()
-    assert "guard started, overlayConnected, websocketTask === task, !outboundSendInFlight, !pendingOutboundMessages.isEmpty else {" in source
+    assert "let generation = websocketTransportGeneration" in source
+    assert "guard let self, self.websocketTransportGeneration == generation else { return }" in source
+
+
+def test_swift_ws_owner_uses_literal_endpoint_with_logical_http_and_tls_name() -> None:
+    source = _source()
+    assert "let usesAddressOverride = !peerAddresses.isEmpty" in source
+    assert "peerNameHost: usesAddressOverride ? peerHost : nil" in source
+    assert "NWConnection(to: .url(physicalURL), using: parameters)" in source
+    assert 'headers.append((name: "Host", value: "\\(logicalHost):\\(peerPort)"))' in source
+    assert "peerHost.withCString { serverName in" in source
+    assert "sec_protocol_options_set_tls_server_name(tlsOptions.securityProtocolOptions, serverName)" in source
+
+
+def test_swift_ws_owner_empty_address_list_preserves_dns_resolution() -> None:
+    source = _source()
+    assert "if !peerAddresses.isEmpty {" in source
+    assert "host: peerHost," in source
+    assert "strictFamily: false," in source

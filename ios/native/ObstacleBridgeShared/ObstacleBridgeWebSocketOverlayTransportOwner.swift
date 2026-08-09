@@ -1,5 +1,7 @@
 import Foundation
 import Network
+import Security
+import Darwin
 
 final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate {
     typealias EventSink = (String, [String: Any]) -> Void
@@ -9,6 +11,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
 
     private let peerHost: String
+    private let peerAddresses: [String]
     private let peerPort: Int
     private let peerResolveFamily: String
     private let useTLS: Bool
@@ -39,6 +42,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private var websocketSession: URLSession?
     private var websocketTask: URLSessionWebSocketTask?
+    private var websocketConnection: NWConnection?
+    private var websocketTransportGeneration = 0
     private var overlayConnected = false
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
@@ -101,6 +106,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     init(
         peerHost: String,
+        peerAddresses: [String] = [],
         peerPort: Int,
         peerResolveFamily: String = "prefer-ipv6",
         useTLS: Bool = false,
@@ -128,6 +134,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         eventSink: EventSink? = nil
     ) {
         self.peerHost = peerHost
+        self.peerAddresses = peerAddresses
+            .map { ObstacleBridgePeerAddressResolver.stripBrackets($0) }
+            .filter { !$0.isEmpty }
         self.peerPort = peerPort
         self.peerResolveFamily = peerResolveFamily
         self.useTLS = useTLS
@@ -197,6 +206,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         websocketTask = nil
         websocketSession?.invalidateAndCancel()
         websocketSession = nil
+        websocketConnection?.cancel()
+        websocketConnection = nil
+        websocketTransportGeneration += 1
         tcpTransportOwner.stop()
         for connection in udpServerConnections.values { connection.cancel() }
         udpServerDrivers.removeAll()
@@ -462,20 +474,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didOpenWithProtocol protocol: String?) {
         queue.async {
             guard self.started, self.websocketTask === webSocketTask else { return }
-            self.overlayConnected = true
-            self.reconnectScheduled = false
-            self.nextReconnectAttemptDeadlineNS = nil
-            self.eventSink?("ws_overlay_connected", [
-                "peer_host": self.resolvedPeerHost,
-                "peer_port": self.resolvedPeerPort,
-                "uri": self.connectedURI,
-            ])
-            self.pendingOutboundMessages.removeAll(keepingCapacity: false)
-            self.outboundSendInFlight = false
-            self.maybePrimeSecureLinkHandshake()
-            self.maybeSendStartupMuxFrames()
-            self.scheduleNextRTTPing(for: webSocketTask)
-            self.receiveFromOverlay()
+            self.handleWebSocketTransportConnected(generation: self.websocketTransportGeneration)
         }
     }
 
@@ -486,6 +485,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.overlayConnected = false
             self.websocketTask = nil
             self.websocketSession = nil
+            self.websocketTransportGeneration += 1
             self.resetOverlayTransportEpoch()
             self.scheduleReconnect()
         }
@@ -498,6 +498,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self.overlayConnected = false
             self.websocketTask = nil
             self.websocketSession = nil
+            self.websocketTransportGeneration += 1
             self.resetOverlayTransportEpoch()
             if let error {
                 self.eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
@@ -513,13 +514,16 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
+        websocketTransportGeneration += 1
+        let generation = websocketTransportGeneration
         do {
             let resolved = try currentResolvedPeer()
+            let usesAddressOverride = !peerAddresses.isEmpty
             let plan = overlayRuntime.buildConnectPlan(
                 host: resolved.host,
                 port: resolved.port,
-                peerNameHost: nil,
-                peerNamePort: nil,
+                peerNameHost: usesAddressOverride ? peerHost : nil,
+                peerNamePort: usesAddressOverride ? peerPort : nil,
                 useTLS: useTLS,
                 wsPath: wsPath,
                 wsSubprotocol: wsSubprotocol,
@@ -529,6 +533,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             resolvedPeerPort = resolved.port
             resolvedPeerFamily = ObstacleBridgePeerAddressResolver.familyName(resolved.family)
             connectedURI = plan.uri
+            if usesAddressOverride {
+                try connectNetworkWebSocket(resolved: resolved, plan: plan, generation: generation)
+                return
+            }
             guard let url = URL(string: plan.uri) else {
                 throw URLError(.badURL)
             }
@@ -548,6 +556,105 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             eventSink?("ws_overlay_connect_failed", ["error": error.localizedDescription])
             scheduleReconnect()
         }
+    }
+
+    private func connectNetworkWebSocket(
+        resolved: ResolvedAddress,
+        plan: ObstacleBridgeWebSocketOverlayRuntime.ConnectPlan,
+        generation: Int
+    ) throws {
+        let physicalHost = resolved.host.contains(":") ? "[\(resolved.host)]" : resolved.host
+        let scheme = useTLS ? "wss" : "ws"
+        guard let physicalURL = URL(string: "\(scheme)://\(physicalHost):\(resolved.port)\(wsPath)") else {
+            throw URLError(.badURL)
+        }
+        let webSocketOptions = NWProtocolWebSocket.Options(.version13)
+        webSocketOptions.autoReplyPing = true
+        webSocketOptions.maximumMessageSize = plan.maxSize
+        var headers = plan.upgradeHeaders.map { (name: $0.key, value: $0.value) }
+        let logicalHost = peerHost.contains(":") ? "[\(peerHost)]" : peerHost
+        headers.append((name: "Host", value: "\(logicalHost):\(peerPort)"))
+        webSocketOptions.setAdditionalHeaders(headers)
+        if let subprotocols = plan.subprotocols {
+            webSocketOptions.setSubprotocols(subprotocols)
+        }
+
+        let parameters: NWParameters
+        if useTLS {
+            let tlsOptions = NWProtocolTLS.Options()
+            peerHost.withCString { serverName in
+                sec_protocol_options_set_tls_server_name(tlsOptions.securityProtocolOptions, serverName)
+            }
+            parameters = NWParameters(tls: tlsOptions, tcp: NWProtocolTCP.Options())
+        } else {
+            parameters = NWParameters.tcp
+        }
+        parameters.defaultProtocolStack.applicationProtocols.insert(webSocketOptions, at: 0)
+        let connection = NWConnection(to: .url(physicalURL), using: parameters)
+        websocketConnection = connection
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            self?.queue.async {
+                guard let self, let connection, self.websocketConnection === connection,
+                      self.websocketTransportGeneration == generation else { return }
+                switch state {
+                case .ready:
+                    self.handleWebSocketTransportConnected(generation: generation)
+                case .failed(let error):
+                    self.handleNetworkWebSocketFailure(error, connection: connection, generation: generation)
+                case .waiting(let error):
+                    self.handleNetworkWebSocketFailure(error, connection: connection, generation: generation)
+                case .cancelled:
+                    if self.started, self.overlayConnected {
+                        self.handleNetworkWebSocketFailure(
+                            NSError(
+                                domain: NSPOSIXErrorDomain,
+                                code: Int(ECANCELED),
+                                userInfo: [NSLocalizedDescriptionKey: "WebSocket connection cancelled"]
+                            ),
+                            connection: connection,
+                            generation: generation
+                        )
+                    }
+                default:
+                    break
+                }
+            }
+        }
+        connection.start(queue: queue)
+    }
+
+    private func handleWebSocketTransportConnected(generation: Int) {
+        guard started, websocketTransportGeneration == generation else { return }
+        overlayConnected = true
+        reconnectScheduled = false
+        nextReconnectAttemptDeadlineNS = nil
+        eventSink?("ws_overlay_connected", [
+            "peer_host": resolvedPeerHost,
+            "peer_port": resolvedPeerPort,
+            "uri": connectedURI,
+        ])
+        pendingOutboundMessages.removeAll(keepingCapacity: false)
+        outboundSendInFlight = false
+        maybePrimeSecureLinkHandshake()
+        maybeSendStartupMuxFrames()
+        scheduleNextRTTPing(generation: generation)
+        receiveFromOverlay()
+    }
+
+    private func handleNetworkWebSocketFailure(
+        _ error: Error,
+        connection: NWConnection,
+        generation: Int
+    ) {
+        guard websocketConnection === connection, websocketTransportGeneration == generation else { return }
+        tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
+        overlayConnected = false
+        websocketConnection = nil
+        websocketTransportGeneration += 1
+        connection.cancel()
+        resetOverlayTransportEpoch()
+        eventSink?("ws_overlay_connection_failed", ["error": error.localizedDescription])
+        scheduleReconnect()
     }
 
     private func scheduleReconnect() {
@@ -580,6 +687,35 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     private func resolvePeerCandidates() throws -> [ResolvedAddress] {
         let mode = ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)
+        if !peerAddresses.isEmpty {
+            var candidates: [ResolvedAddress] = []
+            for address in peerAddresses {
+                guard ObstacleBridgePeerAddressResolver.hostIPFamily(address) != nil else {
+                    throw NSError(
+                        domain: "ObstacleBridge.WebSocketOverlay",
+                        code: 4,
+                        userInfo: [NSLocalizedDescriptionKey: "WebSocket peer address '\(address)' is not an IPv4 or IPv6 literal"]
+                    )
+                }
+                let resolved = try ObstacleBridgePeerAddressResolver.resolvePeerCandidates(
+                    host: address,
+                    port: peerPort,
+                    mode: mode,
+                    strictFamily: false,
+                    errorDomain: "ObstacleBridge.WebSocketOverlay"
+                )
+                for candidate in resolved where !candidates.contains(where: {
+                    $0.family == candidate.family && $0.host == candidate.host && $0.port == candidate.port
+                }) {
+                    candidates.append(candidate)
+                }
+            }
+            return candidates.enumerated().sorted { lhs, rhs in
+                let lhsRank = mode.rank(for: lhs.element.family)
+                let rhsRank = mode.rank(for: rhs.element.family)
+                return lhsRank == rhsRank ? lhs.offset < rhs.offset : lhsRank < rhsRank
+            }.map(\.element)
+        }
         return try ObstacleBridgePeerAddressResolver.resolvePeerCandidates(
             host: peerHost,
             port: peerPort,
@@ -611,6 +747,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func receiveFromOverlay() {
+        if let connection = websocketConnection {
+            receiveFromNetworkWebSocket(connection: connection, generation: websocketTransportGeneration)
+            return
+        }
         guard started, let task = websocketTask else { return }
         task.receive { [weak self] result in
             self?.queue.async {
@@ -630,10 +770,57 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     self.overlayConnected = false
                     self.websocketTask = nil
                     self.websocketSession = nil
+                    self.websocketTransportGeneration += 1
                     self.resetOverlayTransportEpoch()
                     self.eventSink?("ws_overlay_receive_failed", ["error": error.localizedDescription])
                     self.scheduleReconnect()
                 }
+            }
+        }
+    }
+
+    private func receiveFromNetworkWebSocket(connection: NWConnection, generation: Int) {
+        guard started, websocketConnection === connection, websocketTransportGeneration == generation else { return }
+        connection.receiveMessage { [weak self, weak connection] content, context, _isComplete, error in
+            self?.queue.async {
+                guard let self, let connection, self.started,
+                      self.websocketConnection === connection,
+                      self.websocketTransportGeneration == generation else { return }
+                if let error {
+                    self.handleNetworkWebSocketFailure(error, connection: connection, generation: generation)
+                    return
+                }
+                guard let content,
+                      let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
+                        as? NWProtocolWebSocket.Metadata else {
+                    self.eventSink?("ws_overlay_decode_failed", ["error": "missing WebSocket message metadata"])
+                    self.receiveFromNetworkWebSocket(connection: connection, generation: generation)
+                    return
+                }
+                do {
+                    let message: URLSessionWebSocketTask.Message
+                    switch metadata.opcode {
+                    case .text:
+                        guard let text = String(data: content, encoding: .utf8) else {
+                            throw NSError(
+                                domain: "ObstacleBridge.WebSocketOverlay",
+                                code: 3,
+                                userInfo: [NSLocalizedDescriptionKey: "invalid UTF-8 WebSocket text message"]
+                            )
+                        }
+                        message = .string(text)
+                    case .binary:
+                        message = .data(content)
+                    default:
+                        self.receiveFromNetworkWebSocket(connection: connection, generation: generation)
+                        return
+                    }
+                    let frame = try self.overlayRuntime.decodeClientFrame(message)
+                    self.handleWebSocketFrame(frame)
+                } catch {
+                    self.eventSink?("ws_overlay_decode_failed", ["error": error.localizedDescription])
+                }
+                self.receiveFromNetworkWebSocket(connection: connection, generation: generation)
             }
         }
     }
@@ -764,6 +951,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         websocketTask?.cancel(with: .goingAway, reason: nil)
         websocketTask = nil
         websocketSession = nil
+        websocketConnection?.cancel()
+        websocketConnection = nil
+        websocketTransportGeneration += 1
         resetOverlayTransportEpoch()
         scheduleReconnect()
     }
@@ -904,10 +1094,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func sendWebSocketControlPong(echoTxNS: UInt64) {
-        guard started, overlayConnected, let task = websocketTask else { return }
+        guard started, overlayConnected else { return }
+        let generation = websocketTransportGeneration
         do {
             let message = try overlayRuntime.encodeClientPong(echoTxNS: echoTxNS)
-            task.send(message) { [weak self] error in
+            sendActiveWebSocketMessage(message, generation: generation) { [weak self] error in
                 self?.queue.async {
                     if let error {
                         self?.eventSink?("ws_overlay_pong_send_failed", [
@@ -926,34 +1117,34 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
     }
 
-    private func scheduleNextRTTPing(for task: URLSessionWebSocketTask) {
-        queue.asyncAfter(deadline: .now() + .seconds(1)) { [weak self, weak task] in
-            guard let self, let task else { return }
-            self.sendRTTPingAndReschedule(for: task)
+    private func scheduleNextRTTPing(generation: Int) {
+        queue.asyncAfter(deadline: .now() + .seconds(1)) { [weak self] in
+            guard let self else { return }
+            self.sendRTTPingAndReschedule(generation: generation)
         }
     }
 
-    private func sendRTTPingAndReschedule(for task: URLSessionWebSocketTask) {
-        guard started, overlayConnected, websocketTask === task else { return }
+    private func sendRTTPingAndReschedule(generation: Int) {
+        guard started, overlayConnected, websocketTransportGeneration == generation else { return }
         flushDueSecureLinkFramesIfNeeded()
         let txNS = DispatchTime.now().uptimeNanoseconds
         do {
             let message = try overlayRuntime.encodeClientPing(txNS: txNS, echoNS: lastPeerPingTxNS)
-            task.send(message) { [weak self, weak task] error in
+            sendActiveWebSocketMessage(message, generation: generation) { [weak self] error in
                 self?.queue.async {
-                    guard let self, let task, self.websocketTask === task else { return }
+                    guard let self, self.websocketTransportGeneration == generation else { return }
                     if let error {
                         self.eventSink?("ws_overlay_ping_send_failed", [
                             "tx_ns": String(txNS),
                             "error": error.localizedDescription,
                         ])
                     }
-                    self.scheduleNextRTTPing(for: task)
+                    self.scheduleNextRTTPing(generation: generation)
                 }
             }
         } catch {
             eventSink?("ws_overlay_control_encode_failed", ["error": error.localizedDescription])
-            scheduleNextRTTPing(for: task)
+            scheduleNextRTTPing(generation: generation)
         }
     }
 
@@ -994,7 +1185,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func sendRawOverlayWire(_ wire: Data) {
-        guard started, overlayConnected, let task = websocketTask else { return }
+        guard started, overlayConnected, websocketTask != nil || websocketConnection != nil else { return }
         do {
             let message = try overlayRuntime.encodeClientWire(wire)
             pendingOutboundMessages.append(message)
@@ -1002,30 +1193,75 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 bytes: wire.count,
                 state: &overlayEgressWindow
             )
-            flushNextOutboundMessageIfNeeded(task: task)
+            flushNextOutboundMessageIfNeeded()
         } catch {
             eventSink?("ws_overlay_encode_failed", ["error": error.localizedDescription])
         }
     }
 
-    private func flushNextOutboundMessageIfNeeded(task: URLSessionWebSocketTask) {
-        guard started, overlayConnected, websocketTask === task, !outboundSendInFlight, !pendingOutboundMessages.isEmpty else {
+    private func flushNextOutboundMessageIfNeeded() {
+        guard started, overlayConnected, websocketTask != nil || websocketConnection != nil,
+              !outboundSendInFlight, !pendingOutboundMessages.isEmpty else {
             return
         }
+        let generation = websocketTransportGeneration
         outboundSendInFlight = true
         let message = pendingOutboundMessages.removeFirst()
-        task.send(message) { [weak self] error in
+        sendActiveWebSocketMessage(message, generation: generation) { [weak self] error in
             self?.queue.async {
-                guard let self else { return }
+                guard let self, self.websocketTransportGeneration == generation else { return }
                 self.outboundSendInFlight = false
                 if let error {
                     self.eventSink?("ws_overlay_send_failed", ["error": error.localizedDescription])
                     self.pendingOutboundMessages.removeAll(keepingCapacity: false)
                     return
                 }
-                self.flushNextOutboundMessageIfNeeded(task: task)
+                self.flushNextOutboundMessageIfNeeded()
             }
         }
+    }
+
+    private func sendActiveWebSocketMessage(
+        _ message: URLSessionWebSocketTask.Message,
+        generation: Int,
+        completion: @escaping (Error?) -> Void
+    ) {
+        guard websocketTransportGeneration == generation else {
+            completion(URLError(.cancelled))
+            return
+        }
+        if let task = websocketTask {
+            task.send(message) { error in completion(error) }
+            return
+        }
+        guard let connection = websocketConnection else {
+            completion(URLError(.notConnectedToInternet))
+            return
+        }
+        let content: Data
+        let opcode: NWProtocolWebSocket.Opcode
+        switch message {
+        case .data(let data):
+            content = data
+            opcode = .binary
+        case .string(let text):
+            content = Data(text.utf8)
+            opcode = .text
+        @unknown default:
+            completion(URLError(.cannotDecodeContentData))
+            return
+        }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
+        let context = NWConnection.ContentContext(
+            identifier: "obstaclebridge.websocket.message",
+            metadata: [metadata]
+        )
+        connection.send(
+            content: content,
+            contentContext: context,
+            isComplete: true,
+            completion: .contentProcessed { error in completion(error) }
+        )
     }
 
     private func overlayWaitingCount() -> Int {

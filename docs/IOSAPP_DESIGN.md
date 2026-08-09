@@ -215,7 +215,8 @@ The desired product model is closer to WireGuard-style behavior:
 For ObstacleBridge, the transport-facing endpoint depends on the selected overlay transport:
 
 - `myudp` uses `udp_peer` and `udp_peer_port`
-- `ws` uses `ws_peer` and `ws_peer_port`
+- `ws` uses `ws_peer` and `ws_peer_port`; an optional `ws_peer_addresses` list
+  selects literal underlay endpoints while `ws_peer` remains the HTTP/TLS identity
 - `tcp` uses `tcp_peer` and `tcp_peer_port`
 - `quic` uses `quic_peer` and `quic_peer_port`
 

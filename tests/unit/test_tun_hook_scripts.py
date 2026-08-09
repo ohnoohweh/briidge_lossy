@@ -38,6 +38,22 @@ def test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion() -> 
     assert "::ffff:198.51.100.10/128" in routes6
 
 
+def test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns() -> None:
+    cfg = {
+        "overlay_transport": "ws",
+        "ws_peer": "ws-peer-address-override.invalid",
+        "ws_peer_addresses": ["192.0.2.80", "2001:db8::80"],
+        "ws_peer_port": 443,
+        "ws_bind": "::",
+        "ws_peer_resolve_family": "prefer-ipv6",
+    }
+
+    routes4, routes6 = auto_overlay_peer_excluded_routes(cfg)
+
+    assert routes4 == ["192.0.2.80/32"]
+    assert routes6 == ["::ffff:192.0.2.80/128", "2001:db8::80/128"]
+
+
 def test_server_tun_hook_supports_optional_tcpdump_capture() -> None:
     script = (ROOT / "scripts" / "server-tun-hook.sh").read_text(encoding="utf-8")
 

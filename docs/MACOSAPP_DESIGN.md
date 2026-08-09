@@ -304,6 +304,9 @@ route ordering and underlay preservation, not to `utun` creation itself.
 The current observed sequence is:
 
 - the Swift host runner can establish the WebSocket overlay to the peer first
+- when `ws_peer_addresses` is non-empty, that Swift owner connects through the
+  selected literal IPv4/IPv6 underlay endpoint while retaining `ws_peer` for
+  the HTTP Host header and TLS server identity
 - the privileged app bundle can create a real local `utun`
 - the hook can configure the TUN address pair, for example
   `192.168.106.3 -> 192.168.106.1`
