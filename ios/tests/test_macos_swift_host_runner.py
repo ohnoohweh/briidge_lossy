@@ -551,7 +551,7 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     assert "func encodeClientPing(txNS: UInt64, echoNS: UInt64)" in (
         SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"
     ).read_text(encoding="utf-8")
-    assert "scheduleNextRTTPing(for: webSocketTask)" in ws_owner
+    assert "scheduleNextRTTPing(generation: generation)" in ws_owner
     assert '"rtt_est_ms": rttEstMS ?? NSNull()' in ws_owner
     assert '"transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull()' in ws_owner
 
