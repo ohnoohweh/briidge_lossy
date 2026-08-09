@@ -110,6 +110,14 @@ function fmtBytesPerSecond(value) {
   return `${fmtBytes(value)}/s`;
 }
 
+function fmtThrottleRateLimit(throttle) {
+  if (!throttle) return 'n/a';
+  const budgetBytes = Math.max(0, Number(throttle.budget_bytes ?? 0));
+  const throttleWindowNs = 100000000;
+  const bytesPerSecond = budgetBytes * (1000000000 / throttleWindowNs);
+  return fmtBytesPerSecond(bytesPerSecond);
+}
+
 function fmtUptime(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
   const s = Math.max(0, Math.floor(sec));
@@ -1130,17 +1138,10 @@ function fmtThrottleSummary(throttle) {
   if (!throttle || throttle.applicable === false) {
     return 'n/a';
   }
-  const active = !!throttle.active;
-  const budget = fmtBytes(throttle.budget_bytes ?? 0);
-  const used = fmtBytes(throttle.used_bytes ?? 0);
-  const remaining = fmtBytes(throttle.remaining_bytes ?? 0);
-  const aggregateRemaining = fmtBytes(throttle.aggregate?.remaining_bytes ?? 0);
-  const scopeRemaining = throttle.scope ? fmtBytes(throttle.scope.remaining_bytes ?? 0) : null;
-  const state = throttle.stalled ? 'stalled' : (active ? 'active' : 'idle');
-  if (scopeRemaining != null) {
-    return `${state} ${used}/${budget} rem ${remaining} agg ${aggregateRemaining} scope ${scopeRemaining}`;
+  if (!throttle.active) {
+    return '-';
   }
-  return `${state} ${used}/${budget} rem ${remaining}`;
+  return fmtThrottleRateLimit(throttle);
 }
 
 function fmtTunFlowSummary(stats) {
