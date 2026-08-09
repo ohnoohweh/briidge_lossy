@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import importlib.util
 import inspect
+import ipaddress
 import json
 import logging
 import mimetypes
@@ -229,6 +230,15 @@ class WebSocketSession(ISession):
             p.add_argument('--ws-peer', default=None, help='WebSocket peer IP/FQDN')
         if not _has('--ws-peer-port'):
             p.add_argument('--ws-peer-port', type=int, default=8080, help='WebSocket peer overlay port')
+        if not _has('--ws-peer-addresses'):
+            p.add_argument(
+                '--ws-peer-addresses',
+                default=[],
+                help=(
+                    'Optional comma-separated IPv4/IPv6 connection addresses for the WebSocket peer. '
+                    '--ws-peer remains the HTTP Host and TLS server name; DNS is not used for that host.'
+                ),
+            )
         if not _has('--ws-peer-resolve-family'):
             p.add_argument(
                 '--ws-peer-resolve-family',
@@ -308,6 +318,26 @@ class WebSocketSession(ISession):
     def from_args(args: argparse.Namespace) -> "WebSocketSession":
         return WebSocketSession(args)
 
+    @staticmethod
+    def _parse_ws_peer_addresses(value: Any) -> List[str]:
+        if value is None:
+            return []
+        raw_values = value if isinstance(value, (list, tuple)) else str(value).replace(";", ",").split(",")
+        addresses: List[str] = []
+        for raw_value in raw_values:
+            address = _strip_brackets(str(raw_value or "").strip())
+            if not address:
+                continue
+            try:
+                ipaddress.ip_address(address)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"WebSocket peer address {address!r} is not an IPv4 or IPv6 literal"
+                ) from exc
+            if address not in addresses:
+                addresses.append(address)
+        return addresses
+
     def __init__(self, args: argparse.Namespace):
         self._args = args
         self._log  = logging.getLogger("ws_session")
@@ -326,9 +356,20 @@ class WebSocketSession(ISession):
         self._listen_host, self._listen_port = _strip_brackets(self._args.ws_bind), int(self._args.ws_own_port)
         self._peer_name_host = _strip_brackets(getattr(self._args, "ws_peer", None) or "")
         self._peer_name_port = int(getattr(self._args, "ws_peer_port", 0) or 0)
+        self._ws_peer_addresses = self._parse_ws_peer_addresses(
+            getattr(self._args, "ws_peer_addresses", "")
+        )
+        if self._ws_peer_addresses and len(_split_configured_peer_hosts(self._peer_name_host)) != 1:
+            raise RuntimeError("--ws-peer-addresses requires --ws-peer to contain exactly one host name")
+        candidate_args = self._args
+        candidate_attr = "ws_peer"
+        if self._ws_peer_addresses:
+            candidate_args = argparse.Namespace(**vars(self._args))
+            candidate_args.ws_peer_addresses = ",".join(self._ws_peer_addresses)
+            candidate_attr = "ws_peer_addresses"
         self._peer_candidates: List[Tuple[str, int, int]] = _resolve_cli_peer_candidates(
-            self._args,
-            peer_attr="ws_peer",
+            candidate_args,
+            peer_attr=candidate_attr,
             peer_port_attr="ws_peer_port",
             resolve_attr="ws_peer_resolve_family",
             bind_host=self._listen_host,
@@ -1898,9 +1939,13 @@ class WebSocketSession(ISession):
 
             selected_target_host = _strip_brackets(str(host or ""))
             configured_peer_hosts = _split_configured_peer_hosts(self._peer_name_host)
-            configured_peer_is_multi = len(configured_peer_hosts) > 1
+            configured_peer_is_multi = not self._ws_peer_addresses and len(configured_peer_hosts) > 1
             configured_uri_host = _strip_brackets(self._peer_name_host or "")
-            logical_target_host = selected_target_host if configured_peer_is_multi else (configured_uri_host or selected_target_host)
+            logical_target_host = (
+                configured_uri_host
+                if self._ws_peer_addresses
+                else (selected_target_host if configured_peer_is_multi else (configured_uri_host or selected_target_host))
+            )
 
             uri_host = logical_target_host
             if ":" in uri_host:
@@ -1910,7 +1955,7 @@ class WebSocketSession(ISession):
             subprotocols = [self._ws_subprotocol] if self._ws_subprotocol else None
             connect_kwargs = {}
             proxy_sock = None
-            proxy_target_host = selected_target_host if configured_peer_is_multi else logical_target_host
+            proxy_target_host = selected_target_host if (self._ws_peer_addresses or configured_peer_is_multi) else logical_target_host
             proxy_target_port = uri_port
             proxy_endpoint = None
             if self._proxy_feature_enabled():
@@ -1958,7 +2003,7 @@ class WebSocketSession(ISession):
                             self._format_connection_failure_detail(exc),
                         ) from exc
                     if ssl_ctx is not None:
-                        connect_kwargs["server_hostname"] = proxy_target_host
+                        connect_kwargs["server_hostname"] = logical_target_host
                 elif self._peer_name_host and (configured_peer_is_multi or self._peer_name_host != host or uri_port != int(port)):
                     connect_kwargs["host"] = selected_target_host
                     connect_kwargs["port"] = int(port)

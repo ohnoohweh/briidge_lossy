@@ -261,11 +261,21 @@ Solution with an ObstacleBridge WebSocket bridge:
 ```json
 {
   "overlay_transport": "ws",
-  "ws_peer": "bridge.example.com",
+  "ws_peer": "ohnoohweh.synology.me",
+  "ws_peer_addresses": ["203.0.113.20", "2001:db8::20"],
   "ws_peer_port": 443,
+  "ws_tls": true,
   "ws_own_port": 0
 }
 ```
+
+`ws_peer_addresses` is optional. When it contains addresses, every entry
+must be an IPv4 or IPv6 literal. ObstacleBridge tries those addresses directly
+without resolving `ws_peer`, while retaining `ws_peer` as the WebSocket URL host,
+HTTP `Host`, TLS SNI name, and certificate-verification name. The equivalent CLI
+form is `--ws-peer-addresses 203.0.113.20,2001:db8::20`. If the field is omitted,
+an empty list, or an empty string, ObstacleBridge resolves `ws_peer` through DNS
+exactly as before.
 
 Then use WebAdmin to add an `own_servers` entry that recreates the local WireGuard or UDP OpenVPN endpoint, for example:
 

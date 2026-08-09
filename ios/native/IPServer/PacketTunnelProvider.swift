@@ -3058,6 +3058,7 @@ private final class SwiftSimpleUDPPeerBridge {
                 )
                 self.wsOverlayTransportOwner = ObstacleBridgeWebSocketOverlayTransportOwner(
                     peerHost: settings.peerHost,
+                    peerAddresses: ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: settings.runtimeConfig["ws_peer_addresses"]),
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
                     useTLS: ObstacleBridgeRuntimeConfig.boolValue(from: settings.runtimeConfig["ws_tls"]) ?? (settings.peerPort == 443),

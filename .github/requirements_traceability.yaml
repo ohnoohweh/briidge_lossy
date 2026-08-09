@@ -504,6 +504,20 @@ REQ-WSP-012:
     - tests/unit/test_ws_payload_mode.py::test_connect_reports_proxy_negotiation_failures_as_failed
     - tests/unit/test_ws_payload_mode.py::test_connect_proxy_open_timeout_cancels_without_asyncio_callback_error
 
+REQ-WSP-013:
+  integration_tests:
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
+  unit_tests:
+    - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
+    - ios/tests/test_m3_native_sources.py::test_websocket_overlay_transport_owner_source_exists
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_ws_peer_address_list
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_uses_literal_endpoint_with_logical_http_and_tls_name
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_empty_address_list_preserves_dns_resolution
+    - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns
+    - tests/unit/test_ws_payload_mode.py::test_connect_peer_address_override_keeps_logical_host_for_uri_tls_and_http
+    - tests/unit/test_ws_payload_mode.py::test_empty_peer_address_override_resolves_ws_peer_as_before
+    - tests/unit/test_ws_payload_mode.py::test_peer_address_override_rejects_dns_names
+
 REQ-PRX-001:
   integration_tests:
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
@@ -927,6 +941,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_hook_context_prefers_live_overlay_peer_over_initial_candidate
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion
+    - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming

@@ -551,7 +551,7 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     assert "func encodeClientPing(txNS: UInt64, echoNS: UInt64)" in (
         SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"
     ).read_text(encoding="utf-8")
-    assert "scheduleNextRTTPing(for: webSocketTask)" in ws_owner
+    assert "scheduleNextRTTPing(generation: generation)" in ws_owner
     assert '"rtt_est_ms": rttEstMS ?? NSNull()' in ws_owner
     assert '"transmit_delay_est_ms": transmitDelayEstMSValue() ?? NSNull()' in ws_owner
 
@@ -5289,32 +5289,34 @@ def test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_
             "no_proxy": "127.0.0.1,localhost,::1",
         }
 
+    hostrunner_config = _mixed_overlay_hostrunner_runtime_config(
+        transport=transport,
+        overlay_port=overlay_port,
+        admin_port=hostrunner_admin_port,
+        wrapped=False,
+        own_servers=[
+            {
+                "name": f"Mixed TCP Echo {transport}",
+                "listen": {
+                    "protocol": "tcp",
+                    "bind": "127.0.0.1",
+                    "port": listen_port,
+                },
+                "target": {
+                    "protocol": "tcp",
+                    "host": "127.0.0.1",
+                    "port": target_port,
+                },
+            }
+        ],
+    )
+    if transport == "ws":
+        hostrunner_config["ws_peer"] = "ws-peer-address-override.invalid"
+        hostrunner_config["ws_peer_addresses"] = ["127.0.0.1"]
+
     runtime_config_path = tmp_path / f"runtime_remote_admin_burst_{transport}.json"
     runtime_config_path.write_text(
-        json.dumps(
-            _mixed_overlay_hostrunner_runtime_config(
-                transport=transport,
-                overlay_port=overlay_port,
-                admin_port=hostrunner_admin_port,
-                wrapped=False,
-                own_servers=[
-                    {
-                        "name": f"Mixed TCP Echo {transport}",
-                        "listen": {
-                            "protocol": "tcp",
-                            "bind": "127.0.0.1",
-                            "port": listen_port,
-                        },
-                        "target": {
-                            "protocol": "tcp",
-                            "host": "127.0.0.1",
-                            "port": target_port,
-                        },
-                    }
-                ],
-            ),
-            sort_keys=True,
-        ),
+        json.dumps(hostrunner_config, sort_keys=True),
         encoding="utf-8",
     )
 

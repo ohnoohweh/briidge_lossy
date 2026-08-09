@@ -52,6 +52,24 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertIn("tcp_peer", args._config_sections["tcp_session"])
         self.assertNotIn("tcp_peer", args._config_sections["runner"])
 
+    def test_build_runtime_args_preserves_ws_peer_address_list(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "runner": {"overlay_transport": "ws"},
+                "ws_session": {
+                    "ws_peer": "ohnoohweh.synology.me",
+                    "ws_peer_port": 443,
+                    "ws_peer_addresses": ["192.0.2.44", "2001:db8::44"],
+                    "ws_tls": True,
+                },
+            }
+        )
+
+        self.assertEqual(args.ws_peer, "ohnoohweh.synology.me")
+        self.assertEqual(args.ws_peer_addresses, ["192.0.2.44", "2001:db8::44"])
+        self.assertTrue(args.ws_tls)
+        self.assertIn("ws_peer_addresses", args._config_sections["ws_session"])
+
     def test_build_runtime_args_accepts_channel_mux_egress_alias(self) -> None:
         args = build_runtime_args_from_config(
             {

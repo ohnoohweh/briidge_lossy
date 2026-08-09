@@ -2686,6 +2686,7 @@ final class ObstacleBridgeHostRunner {
             return
         }
         let peerHost = Self.stringValue(from: runtimeConfig["ws_peer"]) ?? ""
+        let peerAddresses = ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: runtimeConfig["ws_peer_addresses"])
         let peerPort = Self.intValue(from: runtimeConfig["ws_peer_port"]) ?? 0
         let peerResolveFamily = Self.stringValue(from: runtimeConfig["ws_peer_resolve_family"]) ?? "prefer-ipv6"
         guard !peerHost.isEmpty, peerPort > 0 else {
@@ -2700,6 +2701,7 @@ final class ObstacleBridgeHostRunner {
         let muxConnectionSeq = UInt32.random(in: 1...UInt32.max)
         let owner = ObstacleBridgeWebSocketOverlayTransportOwner(
             peerHost: peerHost,
+            peerAddresses: peerAddresses,
             peerPort: peerPort,
             peerResolveFamily: peerResolveFamily,
             useTLS: useTLS,
