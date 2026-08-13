@@ -9,8 +9,9 @@ DEFAULT_CFG="${PKG_DIR}/share/defaults/ObstacleBridge.cfg"
 PID_PATH="${VAR_DIR}/run/obstaclebridge.pid"
 LOG_PATH="${VAR_DIR}/log/obstaclebridge.log"
 SERVICE_LOG="${VAR_DIR}/log/service.log"
-PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3 || true)}"
-PYTHONPATH_VALUE="${PKG_DIR}/src"
+PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3.14 || true)}"
+PYTHON_PACKAGES_DIR="${VAR_DIR}/python-packages"
+PYTHONPATH_VALUE="${PYTHON_PACKAGES_DIR}:${PKG_DIR}/src"
 HELPER_PY="${VAR_DIR}/helper-venv/bin/python3"
 
 ensure_layout() {
@@ -22,17 +23,17 @@ ensure_layout() {
 
 python_ready() {
     if [ -z "${PY_BIN}" ]; then
-        echo "python3 was not found on PATH." >&2
+        echo "python3.14 was not found on PATH." >&2
         return 1
     fi
-    "${PY_BIN}" - <<'PY'
+    PYTHONPATH="${PYTHONPATH_VALUE}${PYTHONPATH:+:${PYTHONPATH}}" "${PY_BIN}" - <<'PY'
 import importlib.util
 import sys
-if sys.version_info < (3, 8):
-    raise SystemExit("ObstacleBridge requires Python 3.8 or newer.")
+if sys.version_info < (3, 14):
+    raise SystemExit("ObstacleBridge requires Python 3.14 or newer.")
 missing = [name for name in ("aioquic", "cryptography", "websockets") if importlib.util.find_spec(name) is None]
 if missing:
-    raise SystemExit("Missing Python dependencies: " + ", ".join(missing))
+    raise SystemExit("Missing Synology runtime dependencies: " + ", ".join(missing))
 PY
 }
 

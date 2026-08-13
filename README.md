@@ -127,6 +127,11 @@ python -m obstacle_bridge --config bridge_server.json
 python -m obstacle_bridge --config bridge_client.json
 ```
 
+### iOS deployment note
+The maintained iOS deployment path should be treated as iOS 15 or newer when you plan to distribute through TestFlight.
+
+Lower deployment targets may still build locally in some environments, but they are not the supported TestFlight deployment path for this project.
+
 ### iOS full-tunnel test profile against a Fedora server
 The current iOS packet-tunnel bring-up is intended to pair an iPhone client with a Linux server that can host the remote TUN endpoint and perform internet egress/NAT.
 
@@ -1560,8 +1565,9 @@ Important caveat:
 - On each change, the focus is on test feedback and on extending the test environment to cover the functional increase.
 - Integration testing is executed on a local machine running Python 3.13.12.
 - After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
-- After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with Python 3.8.
-- The repository now also carries a first-pass Synology DSM SPK wrapper scaffold for that NAS path, plus a helper-interpreter privilege prototype that points helper-mode launches at a dedicated package-managed Python copy with best-effort `CAP_NET_ADMIN`; see [docs/synology_design.md](docs/synology_design.md), [synology/README.md](synology/README.md), and `python3 scripts/build_synology_spk.py`.
+- After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with SynoCommunity `python3.14`.
+- The currently proven Synology operator path is: install SynoCommunity `python3.14`, SSH to the NAS, run `sudo python3.14 -m pip install -e .`, then start with `sudo python3.14 -m obstacle_bridge`.
+- The repository now also carries a Synology DSM SPK wrapper for that NAS path. The SPK declares a `python314` package dependency, bootstraps Python dependencies into the package var directory, and keeps the helper-interpreter privilege prototype that points helper-mode launches at a dedicated package-managed Python copy with best-effort `CAP_NET_ADMIN`; see [docs/synology_design.md](docs/synology_design.md), [synology/README.md](synology/README.md), and `python3 scripts/build_synology_spk.py`.
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.

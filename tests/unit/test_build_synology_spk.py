@@ -11,6 +11,7 @@ def test_render_info_contains_required_synology_fields():
     assert 'version="0.1.0-1000"' in info
     assert 'arch="noarch"' in info
     assert 'startable="yes"' in info
+    assert 'install_dep_packages="python314"' in info
 
 
 def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):

@@ -21,8 +21,10 @@ The currently proven shape is:
 
 1. prepare the ObstacleBridge Python sources on another machine
 2. copy them to the Synology system
-3. log in over SSH
-4. start the Python runtime manually
+3. install SynoCommunity `python3.14`
+4. log in over SSH
+5. run `sudo python3.14 -m pip install -e .`
+6. run `sudo python3.14 -m obstacle_bridge`
 
 This proves an important product point:
 
@@ -55,8 +57,9 @@ This is intentionally a first wrapper, not the finished Synology product.
 
 Current limitations of the delivered wrapper:
 
-- it assumes a working `python3` interpreter already exists on the NAS
-- it assumes Python dependencies are already installed for that interpreter
+- it assumes SynoCommunity `python3.14` is available on the NAS
+- it bootstraps Python dependencies at install time instead of shipping
+  Synology-architecture-specific wheels inside the current `noarch` package
 - it currently prototypes the privileged-helper lane through a dedicated helper
   Python interpreter with best-effort `CAP_NET_ADMIN`, not yet through a
   narrow native Synology helper binary
@@ -95,8 +98,7 @@ The recommended package model is:
 
 - package the ObstacleBridge Python sources
 - package the required static assets such as WebAdmin files and scripts
-- package or bootstrap the required Python dependencies in a DSM-compatible
-  way
+- bootstrap the required Python dependencies in a DSM-compatible way
 - provide DSM service scripts that start and stop the runtime
 - persist runtime configuration outside the ephemeral install flow
 
@@ -127,18 +129,19 @@ This keeps Synology-specific logic at the packaging boundary.
 
 ## Runtime assumptions
 
-The current project requirement already keeps runtime compatibility aligned
-with Synology DSM Python 3.8 expectations.
+The general project requirement keeps the Python runtime broadly compatible, but
+the current proven Synology operator path is now pinned to SynoCommunity
+Python 3.14.
 
 For Synology deployment, we should continue to assume:
 
-- Python 3.8 compatibility matters
+- SynoCommunity `python3.14` is the supported DSM interpreter for this path
 - not every NAS should be expected to provide a development toolchain
 - package installation should minimize manual post-install shell work
 
-That leads to a preference for packaging a ready-to-run Python environment, or
-at least a deterministic dependency-install strategy, rather than assuming
-interactive setup after installation.
+That leads to a preference for a deterministic dependency-install strategy
+around the Synology-provided Python runtime, rather than assuming ad hoc manual
+package installation after deployment.
 
 ## Privilege boundary on Synology
 

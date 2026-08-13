@@ -51,6 +51,7 @@ def render_info(version: str) -> str:
             'startable="yes"',
             'ctl_stop="yes"',
             'ctl_preuninst="yes"',
+            'install_dep_packages="python314"',
             'silent_install="no"',
             'silent_upgrade="no"',
             'silent_uninstall="no"',

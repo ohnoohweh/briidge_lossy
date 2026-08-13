@@ -62,6 +62,8 @@ From repository root, generate or refresh the iOS Xcode project:
 This writes the Xcode project to `ios/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj`
 and reapplies the repo-owned project patching for the `IPServer` packet-tunnel target.
 
+For distribution planning, treat iOS 15 as the maintained minimum deployment target for TestFlight. Lower-version builds may still compile locally, but they are not the supported TestFlight deployment path.
+
 To build for a signed device target:
 
 ```bash
@@ -442,4 +444,3 @@ as soon it is running open 2nd shell
 ```bash  
 ./run_test_setup.sh
 ```
-
