@@ -75,6 +75,17 @@ def _copy_file(src: pathlib.Path, dst: pathlib.Path) -> None:
     shutil.copy2(src, dst)
 
 
+def _iter_archive_files(root: pathlib.Path):
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        if path.suffix == ".pyc":
+            continue
+        yield path
+
+
 def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
     staged: List[str] = []
     mappings = [
@@ -98,7 +109,7 @@ def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
 
 def make_tgz(source_dir: pathlib.Path, out_path: pathlib.Path) -> None:
     with tarfile.open(out_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
-        for path in sorted(source_dir.rglob("*")):
+        for path in _iter_archive_files(source_dir):
             relative = path.relative_to(source_dir)
             archive.add(path, arcname=str(relative))
 
@@ -143,8 +154,8 @@ def build_spk(
         make_tgz(payload_root, spk_root / "package.tgz")
         spk_name = f"{PACKAGE_ID}-{spk_version(version)}-noarch.spk"
         spk_path = output_dir / spk_name
-        with tarfile.open(spk_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
-            for path in sorted(spk_root.rglob("*")):
+        with tarfile.open(spk_path, "w", format=tarfile.PAX_FORMAT) as archive:
+            for path in _iter_archive_files(spk_root):
                 relative = path.relative_to(spk_root)
                 archive.add(path, arcname=str(relative))
         if keep_staging:

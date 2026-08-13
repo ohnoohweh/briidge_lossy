@@ -17,8 +17,9 @@ REQ-RUN-001:
     - ios/tests/test_invite_import.py::test_preview_json_config_snippet_uses_runtime_validation
 
 REQ-RUN-002:
-  # The Synology wrapper contract covers package metadata, dependency bootstrap,
-  # and helper-interpreter packaging around the maintained python314 runtime.
+  # The Synology wrapper contract covers package metadata, DSM-acceptable SPK
+  # archive layout, dependency bootstrap, and helper-interpreter packaging
+  # around the maintained python314 runtime.
   unit_tests:
     - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
     - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive

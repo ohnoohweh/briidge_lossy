@@ -206,8 +206,8 @@ ARC-CMP-004:
   # The macOS elevated scripts preserve CI identity through sudo so those
   # hosted-runner branches remain active after privilege escalation.
   # Synology wrapper coverage also pins the declared python314 package
-  # dependency and package-managed dependency-bootstrap metadata for the DSM
-  # service wrapper path.
+  # dependency, DSM-acceptable outer archive shape, and package-managed
+  # dependency-bootstrap metadata for the DSM service wrapper path.
   integration_tests:
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
