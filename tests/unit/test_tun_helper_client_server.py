@@ -109,6 +109,8 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snap["backend"], "fake")
         self.assertEqual(snap["open_calls"], 1)
         self.assertEqual(snap["written_packets"], 1)
+        self.assertIn("process_identity", snap)
+        self.assertIn("is_root", snap["process_identity"])
 
     async def test_client_apply_and_remove_network_round_trip(self) -> None:
         client = TunHelperClient(socket_path=self.socket_path, session_token="secret")

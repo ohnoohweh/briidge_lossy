@@ -66,6 +66,17 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+    def _inline_args(self):
+        return build_runtime_args_from_config(
+            {
+                "admin_web": False,
+                "status": False,
+                "tun_execution": {
+                    "mode": "inline",
+                },
+            }
+        )
+
     async def test_runner_starts_tun_helper_and_exposes_status_snapshot(self):
         args = self._helper_args()
         runner = Runner(args)
@@ -318,6 +329,70 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(bridge_runner, "_linux_native_tun_helper_can_launch_without_sudo", return_value=True) as can_launch:
             self.assertEqual(runner._tun_helper_socket_ready_timeout_s(), 2.0)
         can_launch.assert_called_once_with("/opt/ob/helper-python/bin/python3")
+
+    def test_tun_helper_snapshot_reports_main_process_identity_for_inline_mode(self):
+        args = self._inline_args()
+        runner = Runner(args)
+
+        with mock.patch.object(bridge_runner.Runner, "_current_process_identity_snapshot", return_value={
+            "uid": 270532,
+            "gid": 270532,
+            "user": "obstaclebridge",
+            "group": "obstaclebridge",
+            "is_root": False,
+        }):
+            helper_status = runner._tun_helper_snapshot()
+
+        self.assertFalse(helper_status["enabled"])
+        self.assertEqual(helper_status["mode"], "inline")
+        self.assertEqual(helper_status["process_identity"]["user"], "obstaclebridge")
+        self.assertFalse(helper_status["process_identity"]["is_root"])
+
+    async def test_runner_attaches_to_prestarted_tun_helper_from_env_config(self):
+        args = self._helper_args()
+        runner = Runner(args)
+        attach_dir = tempfile.mkdtemp(prefix="obstaclebridge-prestarted-helper-")
+        self.addCleanup(lambda: shutil.rmtree(attach_dir, ignore_errors=True))
+        attach_path = os.path.join(attach_dir, "attach.json")
+        payload = {
+            "socket_path": os.path.join(attach_dir, "helper.sock"),
+            "session_token": "prestarted-token",
+        }
+        with open(attach_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+
+        fake_client = mock.AsyncMock()
+        fake_client.connection_status.return_value = {"connected": True, "last_error": ""}
+        fake_client.cached_snapshot.return_value = {"backend": "linux-python-memory"}
+
+        with mock.patch.dict(bridge_runner.os.environ, {"OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG": attach_path}, clear=False), \
+             mock.patch.object(bridge_runner.Runner, "_reap_stale_tun_helper_processes", new=mock.AsyncMock()) as reap, \
+             mock.patch.object(bridge_runner.Runner, "_wait_for_tun_helper_socket_ready", new=mock.AsyncMock()) as wait_ready, \
+             mock.patch.object(bridge_runner, "TunHelperClient", return_value=fake_client) as client_cls, \
+             mock.patch.object(bridge_runner.Runner, "_launch_tun_helper_process", new=mock.AsyncMock()) as launch_proc:
+            await runner._start_tun_helper()
+
+        launch_proc.assert_not_awaited()
+        reap.assert_awaited_once_with(payload["socket_path"])
+        wait_ready.assert_awaited()
+        client_cls.assert_called_once()
+        self.assertTrue(runner._tun_helper_prestarted)
+        self.assertEqual(runner._tun_helper_session_token, "prestarted-token")
+        self.assertEqual(runner._tun_helper_socket_path, payload["socket_path"])
+        self.assertEqual(runner._tun_helper_lifecycle_phase, "connected")
+        self.assertIs(runner._tun_helper_client, fake_client)
+        self.assertEqual(runner._tun_helper_authenticated_client_idle_timeout_s(), 30.0)
+
+    async def test_stop_tun_helper_process_is_noop_for_prestarted_helper(self):
+        args = self._helper_args()
+        runner = Runner(args)
+        runner._tun_helper_prestarted = True
+        runner._tun_helper_config_path = "/tmp/unused-helper-launch.json"
+
+        with mock.patch.object(bridge_runner.Runner, "_cleanup_tun_helper_launch_config") as cleanup:
+            await runner._stop_tun_helper_process()
+
+        cleanup.assert_called_once_with()
 
     def test_tun_helper_socket_ready_timeout_extends_for_darwin_sudo_prompt(self):
         args = self._helper_args()

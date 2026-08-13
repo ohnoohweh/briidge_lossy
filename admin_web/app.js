@@ -1090,6 +1090,24 @@ function setText(id, value) {
   if (el) el.textContent = value;
 }
 
+function setTunHelperUserStatus(identity) {
+  const el = document.getElementById('tunHelperUser');
+  if (!el) return;
+  const info = identity && typeof identity === 'object' ? identity : {};
+  const user = String(info.user || '').trim();
+  const uid = info.uid == null || Number.isNaN(Number(info.uid)) ? null : Number(info.uid);
+  const label = user || (uid != null ? `uid:${uid}` : 'n/a');
+  el.textContent = label;
+  el.classList.remove('helper-user-root', 'helper-user-nonroot', 'helper-user-unknown');
+  if (uid === 0 || user.toLowerCase() === 'root') {
+    el.classList.add('helper-user-root');
+  } else if (label !== 'n/a') {
+    el.classList.add('helper-user-nonroot');
+  } else {
+    el.classList.add('helper-user-unknown');
+  }
+}
+
 function applyAdminInstanceName(name) {
   const trimmed = String(name || '').trim();
   const fullTitle = trimmed ? `${APP_BASE_TITLE} ${trimmed}` : APP_BASE_TITLE;
@@ -3135,12 +3153,14 @@ function applyTunRoutingDoc(j) {
   }
   const helper = j.tun_helper || {};
   const runtime = helper.runtime || {};
+  const helperIdentity = helper.process_identity || runtime.process_identity || {};
   setText('tunHelperMode', helper.enabled ? String(helper.mode || 'helper') : 'inline');
   setText('tunHelperLifecyclePhase', String(helper.lifecycle_phase || (helper.enabled ? 'unknown' : 'disabled')));
   setText('tunHelperBackend', String(helper.backend || runtime.backend || 'n/a'));
   setText('tunHelperConnected', helper.connected ? 'yes' : 'no');
   setText('tunHelperServerStarted', helper.server_started ? 'yes' : 'no');
   setText('tunHelperApplyNetwork', helper.apply_network ? 'yes' : 'no');
+  setTunHelperUserStatus(helperIdentity);
   setText('tunHelperSocket', String(helper.socket_path || 'n/a'));
   setText('tunHelperIfname', String(runtime.ifname || 'n/a'));
   setText('tunHelperMtu', fmtInteger(runtime.mtu ?? 0));

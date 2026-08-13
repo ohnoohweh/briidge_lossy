@@ -7,8 +7,13 @@ VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/${PKG_ID}/var}"
 CFG_PATH="${VAR_DIR}/ObstacleBridge.cfg"
 DEFAULT_CFG="${PKG_DIR}/share/defaults/ObstacleBridge.cfg"
 PID_PATH="${VAR_DIR}/run/obstaclebridge.pid"
+HELPER_PID_PATH="${VAR_DIR}/run/tun-helper.pid"
+HELPER_ATTACH_CONFIG="${VAR_DIR}/run/tun-helper-attach.json"
+HELPER_LAUNCH_CONFIG="${VAR_DIR}/run/tun-helper-launch.json"
 LOG_PATH="${VAR_DIR}/log/obstaclebridge.log"
 SERVICE_LOG="${VAR_DIR}/log/service.log"
+ELEVATED_PROBE="${PKG_DIR}/bin/synology_elevated_probe.sh"
+SERVICE_RUNNER="${PKG_DIR}/bin/run_synology_service.sh"
 PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3.14 || true)}"
 PYTHON_PACKAGES_DIR="${VAR_DIR}/python-packages"
 PYTHONPATH_VALUE="${PYTHON_PACKAGES_DIR}:${PKG_DIR}/src"
@@ -16,6 +21,150 @@ HELPER_PY="${VAR_DIR}/helper-venv/bin/python3"
 RESTART_EXIT_CODE_IMMEDIATE=75
 RESTART_EXIT_CODE_DELAYED=77
 RESTART_DELAY_SECONDS="${OBSTACLEBRIDGE_RESTART_DELAY_SECONDS:-30}"
+
+find_running_pid() {
+    for proc_dir in /proc/[0-9]*; do
+        [ -r "${proc_dir}/cmdline" ] || continue
+        cmdline="$(tr '\000' ' ' < "${proc_dir}/cmdline" 2>/dev/null || true)"
+        case "${cmdline}" in
+            *"${PKG_DIR}/bin/run_synology_service.sh"* )
+                basename "${proc_dir}"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+helper_running_pid() {
+    if [ ! -f "${HELPER_PID_PATH}" ]; then
+        return 1
+    fi
+    pid="$(cat "${HELPER_PID_PATH}")"
+    if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+        printf '%s\n' "${pid}"
+        return 0
+    fi
+    rm -f "${HELPER_PID_PATH}"
+    return 1
+}
+
+helper_settings_json() {
+    if [ -z "${PY_BIN}" ] || [ ! -f "${CFG_PATH}" ]; then
+        return 0
+    fi
+    CFG_PATH="${CFG_PATH}" "${PY_BIN}" - <<'PY'
+import json
+import os
+import pathlib
+
+cfg_path = pathlib.Path(os.environ["CFG_PATH"])
+try:
+    payload = json.loads(cfg_path.read_text(encoding="utf-8"))
+except Exception:
+    payload = {}
+if not isinstance(payload, dict):
+    payload = {}
+
+group = payload.get("tun_execution") if isinstance(payload.get("tun_execution"), dict) else {}
+
+def pick(*keys, default=""):
+    for key in keys:
+        if key in group:
+            value = group.get(key)
+        elif key in payload:
+            value = payload.get(key)
+        else:
+            continue
+        text = str(value or "").strip()
+        if text:
+            return text
+    return str(default or "")
+
+mode = pick("mode", "tun_execution_mode", default="inline").lower() or "inline"
+backend = pick("helper_backend", "tun_helper_backend", default="linux-native")
+log_level = pick("helper_log_level", "tun_helper_log_level", default="INFO").upper()
+apply_network = pick("helper_apply_network", "tun_helper_apply_network", default="true").lower()
+
+print(json.dumps({
+    "mode": mode,
+    "backend": backend,
+    "log_level": log_level,
+    "apply_network": apply_network in {"1", "true", "yes", "on"},
+}))
+PY
+}
+
+helper_mode_enabled() {
+    settings="$(helper_settings_json || true)"
+    case "${settings}" in
+        *'"mode": "helper"'*)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+write_helper_launch_files() {
+    settings="$(helper_settings_json || true)"
+    helper_backend="$(printf '%s' "${settings}" | "${PY_BIN}" -c 'import json,sys; print(json.load(sys.stdin).get("backend","linux-native"))')"
+    helper_log_level="$(printf '%s' "${settings}" | "${PY_BIN}" -c 'import json,sys; print(json.load(sys.stdin).get("log_level","INFO"))')"
+    helper_socket="${VAR_DIR}/run/tun-helper.sock"
+    helper_token="$("${PY_BIN}" -c 'import secrets; print(secrets.token_urlsafe(18))')"
+    pkg_user_uid="$(id -u "${PKG_ID}")"
+    pkg_user_gid="$(id -g "${PKG_ID}")"
+    cat > "${HELPER_LAUNCH_CONFIG}" <<EOF
+{"version":1,"socket_path":"${helper_socket}","session_token":"${helper_token}","backend":"${helper_backend}","log_level":"${helper_log_level}"}
+EOF
+    cat > "${HELPER_ATTACH_CONFIG}" <<EOF
+{"version":1,"socket_path":"${helper_socket}","session_token":"${helper_token}","backend":"${helper_backend}","log_level":"${helper_log_level}","launch_config_path":"${HELPER_LAUNCH_CONFIG}"}
+EOF
+    chmod 600 "${HELPER_LAUNCH_CONFIG}" "${HELPER_ATTACH_CONFIG}"
+    chown "${PKG_ID}:${PKG_ID}" "${HELPER_ATTACH_CONFIG}"
+    printf '%s\n%s\n%s\n%s\n' "${pkg_user_uid}" "${pkg_user_gid}" "${helper_backend}" "${helper_log_level}"
+}
+
+wait_for_helper_socket() {
+    socket_path="${1:?socket path required}"
+    timeout_s="${2:-10}"
+    SOCKET_PATH="${socket_path}" TIMEOUT_S="${timeout_s}" "${PY_BIN}" - <<'PY'
+import os
+import socket
+import time
+
+socket_path = os.environ["SOCKET_PATH"]
+deadline = time.monotonic() + float(os.environ.get("TIMEOUT_S") or 10.0)
+while time.monotonic() < deadline:
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            sock.connect(socket_path)
+            raise SystemExit(0)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        pass
+    time.sleep(0.05)
+raise SystemExit(1)
+PY
+}
+
+stop_helper_process() {
+    pid="$(helper_running_pid || true)"
+    if [ -n "${pid}" ]; then
+        kill "${pid}" >/dev/null 2>&1 || true
+        count=0
+        while kill -0 "${pid}" >/dev/null 2>&1; do
+            count=$((count + 1))
+            if [ "${count}" -ge 20 ]; then
+                kill -9 "${pid}" >/dev/null 2>&1 || true
+                break
+            fi
+            sleep 1
+        done
+    fi
+    rm -f "${HELPER_PID_PATH}" "${HELPER_ATTACH_CONFIG}" "${HELPER_LAUNCH_CONFIG}" "${VAR_DIR}/run/tun-helper.sock"
+}
 
 ensure_layout() {
     mkdir -p "${VAR_DIR}/run" "${VAR_DIR}/log"
@@ -41,17 +190,18 @@ PY
 }
 
 is_running() {
-    if [ ! -f "${PID_PATH}" ]; then
-        return 1
+    if [ -f "${PID_PATH}" ]; then
+        pid="$(cat "${PID_PATH}")"
+        if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+            return 0
+        fi
+        rm -f "${PID_PATH}"
     fi
-    pid="$(cat "${PID_PATH}")"
-    if [ -z "${pid}" ]; then
-        return 1
-    fi
-    if kill -0 "${pid}" >/dev/null 2>&1; then
+    pid="$(find_running_pid || true)"
+    if [ -n "${pid}" ] && kill -0 "${pid}" >/dev/null 2>&1; then
+        echo "${pid}" > "${PID_PATH}"
         return 0
     fi
-    rm -f "${PID_PATH}"
     return 1
 }
 
@@ -67,27 +217,16 @@ do_start() {
     if [ -x "${HELPER_PY}" ]; then
         export OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE="${HELPER_PY}"
     fi
-    # DSM owns install/start/stop/autostart for the package, but the bridge
-    # itself uses dedicated exit codes for operator-requested in-process
-    # restarts. Keep a tiny non-interactive restart loop here so DSM continues
-    # to see one running service while bridge restart requests are fulfilled.
-    nohup sh -c '
-        while :; do
-            "'"${PY_BIN}"'" -c "from obstacle_bridge.bridge import main; main()" --config "'"${CFG_PATH}"'" --log-file "'"${LOG_PATH}"'"
-            rc=$?
-            if [ "${rc}" -eq "'"${RESTART_EXIT_CODE_IMMEDIATE}"'" ]; then
-                echo "[synology-service] bridge requested immediate restart (rc=${rc})" >>"'"${SERVICE_LOG}"'"
-                continue
-            fi
-            if [ "${rc}" -eq "'"${RESTART_EXIT_CODE_DELAYED}"'" ]; then
-                echo "[synology-service] bridge requested delayed restart (rc=${rc}); sleeping '"${RESTART_DELAY_SECONDS}"'s" >>"'"${SERVICE_LOG}"'"
-                sleep "'"${RESTART_DELAY_SECONDS}"'"
-                continue
-            fi
-            echo "[synology-service] bridge exited rc=${rc}" >>"'"${SERVICE_LOG}"'"
-            exit "${rc}"
-        done
-    ' >>"${SERVICE_LOG}" 2>&1 &
+    if [ -f "${HELPER_ATTACH_CONFIG}" ]; then
+        export OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG="${HELPER_ATTACH_CONFIG}"
+    else
+        unset OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG
+    fi
+    if [ ! -x "${SERVICE_RUNNER}" ]; then
+        echo "ObstacleBridge service runner is not installed at ${SERVICE_RUNNER}." >&2
+        return 1
+    fi
+    nohup "${SERVICE_RUNNER}" "${PY_BIN}" "${CFG_PATH}" "${LOG_PATH}" "${SERVICE_LOG}" "${RESTART_DELAY_SECONDS}" >>"${SERVICE_LOG}" 2>&1 &
     pid="$!"
     echo "${pid}" > "${PID_PATH}"
     sleep 1
@@ -126,7 +265,57 @@ do_status() {
     return 1
 }
 
+do_prestart() {
+    ensure_layout
+    if [ ! -x "${ELEVATED_PROBE}" ]; then
+        echo "ObstacleBridge elevated probe is not installed at ${ELEVATED_PROBE}." >&2
+        return 1
+    fi
+    "${ELEVATED_PROBE}" "${PKG_ID}" "${VAR_DIR}" >>"${SERVICE_LOG}" 2>&1
+    if ! helper_mode_enabled; then
+        stop_helper_process
+        return 0
+    fi
+    stop_helper_process
+    set -- $(write_helper_launch_files)
+    pkg_user_uid="${1}"
+    pkg_user_gid="${2}"
+    helper_backend="${3}"
+    helper_log_level="${4}"
+    helper_exec="${HELPER_PY}"
+    if [ ! -x "${helper_exec}" ]; then
+        helper_exec="${PY_BIN}"
+    fi
+    if [ -z "${helper_exec}" ] || [ ! -x "${helper_exec}" ]; then
+        echo "ObstacleBridge helper python is not available for Synology helper prestart." >&2
+        return 1
+    fi
+    export PYTHONPATH="${PYTHONPATH_VALUE}${PYTHONPATH:+:${PYTHONPATH}}"
+    export SUDO_UID="${pkg_user_uid}"
+    export SUDO_GID="${pkg_user_gid}"
+    export OBSTACLEBRIDGE_TUN_HELPER_IDLE_TIMEOUT_S=120
+    nohup "${helper_exec}" -m obstacle_bridge.bridge_tun_helper_server --config-path "${HELPER_LAUNCH_CONFIG}" >>"${SERVICE_LOG}" 2>&1 &
+    helper_pid="$!"
+    echo "${helper_pid}" > "${HELPER_PID_PATH}"
+    chown "${PKG_ID}:${PKG_ID}" "${HELPER_PID_PATH}"
+    if ! wait_for_helper_socket "${VAR_DIR}/run/tun-helper.sock" 10; then
+        echo "ObstacleBridge Synology helper failed to create helper socket." >&2
+        stop_helper_process
+        return 1
+    fi
+}
+
+do_prestop() {
+    stop_helper_process
+}
+
 case "${1:-}" in
+    prestart)
+        do_prestart
+        ;;
+    prestop)
+        do_prestop
+        ;;
     start)
         do_start
         ;;
@@ -137,7 +326,7 @@ case "${1:-}" in
         do_status
         ;;
     *)
-        echo "Usage: $0 {start|stop|status}" >&2
+        echo "Usage: $0 {prestart|prestop|start|stop|status}" >&2
         exit 1
         ;;
 esac

@@ -76,11 +76,13 @@ class TunHelperServer:
         *,
         backend: TunHelperBackend,
         session_token: str,
+        authenticated_client_idle_timeout_s: float = AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._backend = backend
         self._session_token = str(session_token or "")
         self._log = logger or logging.getLogger("tun_helper_server")
+        self._authenticated_client_idle_timeout_s = max(float(authenticated_client_idle_timeout_s), 0.5)
         self._server: Optional[asyncio.AbstractServer] = None
         self._socket_path = ""
         self._active_writers: set[asyncio.StreamWriter] = set()
@@ -172,6 +174,38 @@ class TunHelperServer:
     def _mark_authenticated_client_activity(self) -> None:
         self._last_authenticated_client_at = time.monotonic()
 
+    @staticmethod
+    def _process_identity_snapshot() -> dict[str, Any]:
+        uid: Optional[int] = None
+        gid: Optional[int] = None
+        user = ""
+        group = ""
+        geteuid = getattr(os, "geteuid", None)
+        getegid = getattr(os, "getegid", None)
+        with contextlib.suppress(Exception):
+            if callable(geteuid):
+                uid = int(geteuid())
+        with contextlib.suppress(Exception):
+            if callable(getegid):
+                gid = int(getegid())
+        if uid is not None:
+            with contextlib.suppress(Exception):
+                import pwd
+
+                user = str(pwd.getpwuid(uid).pw_name or "")
+        if gid is not None:
+            with contextlib.suppress(Exception):
+                import grp
+
+                group = str(grp.getgrgid(gid).gr_name or "")
+        return {
+            "uid": uid,
+            "gid": gid,
+            "user": user,
+            "group": group,
+            "is_root": bool(uid == 0),
+        }
+
     async def _authenticated_client_watchdog(self) -> None:
         while not self._closed:
             await asyncio.sleep(0.5)
@@ -180,11 +214,11 @@ class TunHelperServer:
             if self._authenticated_writers:
                 self._mark_authenticated_client_activity()
                 continue
-            if (time.monotonic() - self._last_authenticated_client_at) < self.AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S:
+            if (time.monotonic() - self._last_authenticated_client_at) < self._authenticated_client_idle_timeout_s:
                 continue
             self._log.warning(
                 "[TUN/HELPER] no authenticated client for %.1fs; stopping helper and releasing resources",
-                self.AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
+                self._authenticated_client_idle_timeout_s,
             )
             asyncio.get_running_loop().create_task(self.stop())
             return
@@ -292,6 +326,7 @@ class TunHelperServer:
             async def _snapshot_with_server_state() -> dict[str, Any]:
                 reply = dict(await _maybe_await(self._backend.snapshot()) or {})
                 reply["active_authenticated_clients"] = int(len(self._authenticated_writers))
+                reply["process_identity"] = self._process_identity_snapshot()
                 return reply
 
             await _run_backend_call("SNAPSHOT_OK", _snapshot_with_server_state(), code="snapshot_failed")
@@ -394,12 +429,17 @@ def _load_launch_config(path: str) -> dict[str, Any]:
     return dict(payload)
 
 
-def _resolve_helper_launch_args(args: argparse.Namespace) -> dict[str, str]:
+def _resolve_helper_launch_args(args: argparse.Namespace) -> dict[str, Any]:
     payload = _load_launch_config(str(getattr(args, "config_path", "") or ""))
     socket_path = str(payload.get("socket_path") or getattr(args, "socket_path", "") or "").strip()
     session_token = str(payload.get("session_token") or getattr(args, "session_token", "") or "").strip()
     backend = str(payload.get("backend") or getattr(args, "backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip()
     log_level = str(payload.get("log_level") or getattr(args, "tun_helper_log_level", "") or "INFO").strip()
+    idle_timeout_s = payload.get("authenticated_client_idle_timeout_s")
+    if idle_timeout_s is None:
+        idle_timeout_s = payload.get("client_idle_timeout_s")
+    if idle_timeout_s is None:
+        idle_timeout_s = TunHelperServer.AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S
     if not socket_path:
         raise ValueError("helper socket path is required")
     if not session_token:
@@ -409,6 +449,7 @@ def _resolve_helper_launch_args(args: argparse.Namespace) -> dict[str, str]:
         "session_token": session_token,
         "backend": backend,
         "log_level": log_level,
+        "authenticated_client_idle_timeout_s": float(idle_timeout_s),
     }
 
 
@@ -433,12 +474,14 @@ async def run_helper_server(
     session_token: str,
     backend_name: str = DEFAULT_TUN_HELPER_BACKEND,
     log_level: str = "INFO",
+    authenticated_client_idle_timeout_s: float = TunHelperServer.AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
     stop_event: Optional[asyncio.Event] = None,
 ) -> None:
     logging.getLogger("tun_helper_server").setLevel(str(log_level or "INFO").upper())
     server = TunHelperServer(
         backend=_backend_from_name(backend_name),
         session_token=session_token,
+        authenticated_client_idle_timeout_s=authenticated_client_idle_timeout_s,
         logger=logging.getLogger("tun_helper_server"),
     )
     stopper = stop_event if stop_event is not None else asyncio.Event()
@@ -471,6 +514,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 session_token=str(launch["session_token"]),
                 backend_name=str(launch["backend"]),
                 log_level=str(launch["log_level"]),
+                authenticated_client_idle_timeout_s=float(launch["authenticated_client_idle_timeout_s"]),
                 stop_event=stop_event,
             )
         )

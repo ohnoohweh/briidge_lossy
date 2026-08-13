@@ -19,12 +19,14 @@ REQ-RUN-001:
 REQ-RUN-002:
   # The Synology wrapper contract covers package metadata, DSM-acceptable SPK
   # archive layout, dependency bootstrap, and helper-interpreter packaging
-  # around the maintained python314 runtime, including the beta-package marker
-  # and DSM service restart-exit-code handling.
+  # around the maintained python314 runtime, including the beta-package marker,
+  # package-user helper-handoff metadata, and DSM service restart-exit-code
+  # handling.
   unit_tests:
     - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
     - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive
     - tests/unit/test_build_synology_spk.py::test_start_stop_status_handles_bridge_restart_exit_codes
+    - tests/unit/test_build_synology_spk.py::test_privilege_file_keeps_package_default_only
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_checks_override_helper_executable
 
@@ -705,6 +707,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
     - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_reads_idle_timeout_from_config
     - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_darwin_native_backend
     - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
     - tests/unit/test_tun_helper_macos_backend.py::test_open_rejects_non_macos_platform
@@ -742,6 +745,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_client_server.py::test_client_rejects_wrong_session_token
     - tests/unit/test_tun_helper_client_server.py::test_client_reports_connection_closed_after_server_stop
     - tests/unit/test_runner_tun_helper.py::test_runner_starts_tun_helper_and_exposes_status_snapshot
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_snapshot_reports_main_process_identity_for_inline_mode
     - tests/unit/test_runner_tun_helper.py::test_runner_rejects_helper_mode_on_unsupported_platform
     - tests/unit/test_runner_tun_helper.py::test_runner_allows_windows_native_helper_mode_past_platform_gate
     - tests/unit/test_runner_tun_helper.py::test_windows_native_helper_uses_longer_control_timeout
@@ -749,6 +753,8 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
+    - tests/unit/test_runner_tun_helper.py::test_runner_attaches_to_prestarted_tun_helper_from_env_config
+    - tests/unit/test_runner_tun_helper.py::test_stop_tun_helper_process_is_noop_for_prestarted_helper
     - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_can_launch_without_sudo_when_file_capabilities_present
     - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_requires_sudo_without_effective_or_file_capabilities
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_extends_for_sudo_prompt

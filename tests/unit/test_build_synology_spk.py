@@ -13,7 +13,14 @@ def test_render_info_contains_required_synology_fields():
     assert 'arch="noarch"' in info
     assert 'beta="yes"' in info
     assert 'startable="yes"' in info
+    assert 'precheckstartstop="yes"' in info
     assert 'install_dep_packages="python314"' in info
+
+
+def test_render_info_accepts_custom_build_number():
+    info = render_info("0.1.0", build_number="1001")
+
+    assert 'version="0.1.0-1001"' in info
 
 
 def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
@@ -38,6 +45,13 @@ def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
         info_text = info_member.read().decode("utf-8")
         assert 'displayname="ObstacleBridge"' in info_text
 
+        privilege_member = spk_archive.extractfile("conf/privilege")
+        assert privilege_member is not None
+        privilege_text = privilege_member.read().decode("utf-8")
+        assert '"run-as": "package"' in privilege_text
+        assert '"ctrl-script"' not in privilege_text
+        assert '"action": "prestart"' not in privilege_text
+
         payload_member = spk_archive.extractfile("package.tgz")
         assert payload_member is not None
         payload_bytes = io.BytesIO(payload_member.read())
@@ -49,6 +63,12 @@ def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
             assert "admin_web/app.js" in payload_names
             assert "share/defaults/ObstacleBridge.cfg" in payload_names
             assert "bin/prepare_synology_helper_venv.sh" in payload_names
+            assert "bin/run_synology_service.sh" in payload_names
+            assert "bin/synology_elevated_probe.sh" in payload_names
+            service_runner_member = payload_archive.getmember("bin/run_synology_service.sh")
+            assert service_runner_member.mode & 0o111
+            probe_member = payload_archive.getmember("bin/synology_elevated_probe.sh")
+            assert probe_member.mode & 0o111
             assert "__pycache__/__init__.cpython-313.pyc" not in payload_names
             assert not [name for name, count in payload_counts.items() if count > 1]
 
@@ -61,3 +81,14 @@ def test_start_stop_status_handles_bridge_restart_exit_codes() -> None:
     assert 'bridge requested immediate restart' in script
     assert 'bridge requested delayed restart' in script
     assert 'sleep "${RESTART_DELAY_SECONDS}"' in script
+    assert 'ELEVATED_PROBE="${PKG_DIR}/bin/synology_elevated_probe.sh"' in script
+    assert 'SERVICE_RUNNER="${PKG_DIR}/bin/run_synology_service.sh"' in script
+    assert 'find_running_pid()' in script
+    assert 'prestart)' in script
+
+
+def test_privilege_file_keeps_package_default_only() -> None:
+    privilege = (repo_root() / "synology" / "conf" / "privilege").read_text(encoding="utf-8")
+
+    assert '"run-as": "package"' in privilege
+    assert '"ctrl-script"' not in privilege

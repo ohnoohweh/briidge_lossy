@@ -29,13 +29,58 @@ it matches the privilege level some ObstacleBridge modes need on DSM.
 - starts and stops ObstacleBridge through DSM service control
 - requests autostart through the normal DSM package lifecycle
 
+## Current elevated-execution PoC
+
+The package now includes the first runtime handoff needed to reuse the existing
+Python TUN helper, while remaining installable on DSM 7.x without Synology
+signing.
+
+Current shape:
+
+- the package default remains `run-as: package`
+- `prestart` still invokes
+  `/var/packages/obstaclebridge/target/bin/synology_elevated_probe.sh`
+- when helper mode is enabled, `prestart` also prepares helper launch metadata
+  and starts the existing Python helper server as the package user
+- `start` exports
+  `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG=/var/packages/obstaclebridge/var/run/tun-helper-attach.json`
+  so the package-user bridge runtime can attach to that helper
+- the probe writes:
+  - `/var/packages/obstaclebridge/var/log/elevated-probe.log`
+  - `/var/packages/obstaclebridge/var/elevated-probe.json`
+
+This PoC proves two things:
+
+- the Python runtime can consume a package-written helper handoff instead of
+  trying interactive `sudo`
+- the package can prestart a helper-managed control socket before the bridge
+  process attaches
+
+Expected validation after install/start:
+
+```bash
+sudo cat /var/packages/obstaclebridge/var/elevated-probe.json
+sudo tail -n 50 /var/packages/obstaclebridge/var/log/elevated-probe.log
+```
+
+The successful PoC signal is:
+
+- helper handoff files appear under `/var/packages/obstaclebridge/var/run/`
+- the package `start-stop-status` script exports
+  `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG` when helper mode is enabled
+
+On DSM 7.2.2, a package that explicitly requests root privilege is blocked from
+installation unless it is Synology-signed or covered by Synology's developer
+token program. For that reason, the current SPK intentionally keeps package
+privilege at the normal package-user level.
+
 ## Important limitation
 
 The SPK now handles the Python dependency bootstrap, but it does not yet
 replace the proven `sudo python3.14 -m obstacle_bridge` path for full
 privileged operation.
 
-In particular, the current package shape still does not solve the full DSM
+In particular, the current package shape still does not fully prove the DSM
 privilege boundary for:
 
 - local TUN creation
@@ -45,7 +90,8 @@ privilege boundary for:
   session
 
 So the current SPK should still be treated as a packaging and service-lifecycle
-scaffold, not the final privileged Synology deployment model.
+scaffold plus helper-handoff prototype, not the final privileged Synology
+deployment model.
 
 ## Build
 
