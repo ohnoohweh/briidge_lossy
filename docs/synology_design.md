@@ -64,6 +64,36 @@ Current limitations of the delivered wrapper:
   Python interpreter with best-effort `CAP_NET_ADMIN`, not yet through a
   narrow native Synology helper binary
 
+## Learned packaging details
+
+Real DSM installation attempts clarified an important SPK-format detail that is
+easy to get wrong when building packages outside the Synology toolchain.
+
+The working package shape is:
+
+- outer `.spk`: plain POSIX tar archive
+- one top-level `INFO`
+- one top-level `package.tgz`
+- lifecycle metadata files such as `scripts/preinst`,
+  `scripts/postinst`, and `conf/privilege`
+- inner `package.tgz`: the gzipped payload archive
+
+Two builder mistakes were enough to make DSM reject the package up front with
+`Invalid file format`:
+
+- writing the outer `.spk` as `tar.gz` instead of plain tar
+- adding duplicate archive members to either the outer SPK or `package.tgz`
+
+In practice that means:
+
+- only `package.tgz` should be gzip-compressed
+- the outer SPK should not contain duplicate entries
+- the payload should also avoid duplicate entries and should not include
+  transient build artifacts such as `__pycache__` or `.pyc` files
+
+This matters because DSM can reject the upload before package install scripts
+run, which means the failure may not leave package-specific runtime logs.
+
 ## Target state
 
 The desired Synology operator workflow is:
@@ -77,6 +107,16 @@ The desired Synology operator workflow is:
 
 The package should behave as a normal DSM-managed service rather than as a
 manually launched SSH session.
+
+The current observed operator flow is therefore slightly more concrete:
+
+1. build the SPK
+2. verify the SPK has the expected archive shape
+3. install it through DSM
+4. let `postinst` seed config and bootstrap Python dependencies
+5. start or restart the package service from DSM
+6. inspect package logs under `/var/packages/obstaclebridge/var/log/` when
+   service startup fails
 
 ## Non-goal
 
@@ -233,6 +273,104 @@ So the current status is:
 
 This is the main reason the current SPK wrapper should be understood as a
 first deployment scaffold, not the final productive Synology packaging story.
+
+## Service-start diagnostics
+
+When DSM reports `Failed to run package service`, the useful distinction is:
+
+1. package-format rejection before install
+2. install-time bootstrap failure
+3. runtime service-start failure
+
+The current repository has already seen both of the first two classes.
+
+### 1. Format rejection before install
+
+Typical symptom:
+
+- DSM shows `Invalid file format`
+
+In that case:
+
+- `preinst` and `postinst` usually never run
+- package runtime logs may not exist yet
+- the right debugging target is the SPK archive structure itself
+
+### 2. Install succeeds but `Run` fails
+
+For the current wrapper, `Run` failures are most likely to come from one of
+these checks in `synology/scripts/start-stop-status`:
+
+- `python3.14` not found on PATH for the package runtime
+- Python runtime dependencies missing from
+  `/var/packages/obstaclebridge/var/python-packages`
+- the runtime exits immediately after launch
+- a permission/runtime mismatch on actions that still need privilege
+
+### 3. Package-specific diagnostics to run
+
+The current package layout gives a concrete inspection checklist:
+
+```bash
+sudo /var/packages/obstaclebridge/scripts/start-stop-status status
+sudo ls -l /var/packages/obstaclebridge/target
+sudo ls -l /var/packages/obstaclebridge/var
+sudo ls -l /var/packages/obstaclebridge/var/python-packages
+sudo ls -l /var/packages/obstaclebridge/var/helper-venv/bin
+sudo cat /var/packages/obstaclebridge/var/ObstacleBridge.cfg
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/service.log
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/obstaclebridge.log
+sudo which python3.14
+python3.14 -V
+```
+
+To reproduce the package start logic more directly:
+
+```bash
+sudo /var/packages/obstaclebridge/scripts/start-stop-status start
+echo $?
+sudo /var/packages/obstaclebridge/scripts/start-stop-status status
+```
+
+The current service script starts:
+
+```bash
+python3.14 -c "from obstacle_bridge.bridge import main; main()" \
+  --config /var/packages/obstaclebridge/var/ObstacleBridge.cfg \
+  --log-file /var/packages/obstaclebridge/var/log/obstaclebridge.log
+```
+
+with:
+
+- `PYTHONPATH=/var/packages/obstaclebridge/var/python-packages:/var/packages/obstaclebridge/target/src`
+- optional `OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE=/var/packages/obstaclebridge/var/helper-venv/bin/python3`
+
+So if DSM still reports only a generic failure, the package logs above are the
+first place to look.
+
+One additional learned detail from live DSM testing:
+
+- launching the interactive `python -m obstacle_bridge.launcher` wrapper is not
+  the right default for the DSM package service
+- DSM already owns the package lifecycle and expects one long-running service
+  process
+- the direct bridge entrypoint is a better fit for the package script because
+  it stays attached to the actual runtime process instead of adding a second
+  supervisory layer intended for interactive CLI use
+
+### 4. Most likely current failure causes after successful install
+
+Given the present wrapper design, the most likely startup blockers are:
+
+- dependency bootstrap did not complete successfully during `postinst`
+- package-user runtime cannot find `python3.14`
+- runtime starts but exits immediately due to missing Python modules
+- runtime reaches privileged TUN or host-network code that still assumes the
+  manual `sudo` launch path
+
+That last point is expected for some modes. The current SPK should still be
+treated as a DSM packaging and service-lifecycle scaffold, not as the final
+privileged Synology runtime model.
 
 ## DSM-specific privileged helper options
 

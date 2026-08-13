@@ -64,7 +64,11 @@ do_start() {
     if [ -x "${HELPER_PY}" ]; then
         export OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE="${HELPER_PY}"
     fi
-    nohup "${PY_BIN}" -m obstacle_bridge.launcher --no-redirect --config "${CFG_PATH}" --log-file "${LOG_PATH}" >>"${SERVICE_LOG}" 2>&1 &
+    # DSM already owns restart/lifecycle behavior for the package service.
+    # Run the bridge entrypoint directly here instead of the interactive
+    # launcher supervisor, which can exit cleanly after bootstrap in a way
+    # that makes DSM treat the package start as failed.
+    nohup "${PY_BIN}" -c "from obstacle_bridge.bridge import main; main()" --config "${CFG_PATH}" --log-file "${LOG_PATH}" >>"${SERVICE_LOG}" 2>&1 &
     pid="$!"
     echo "${pid}" > "${PID_PATH}"
     sleep 1
