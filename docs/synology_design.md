@@ -296,6 +296,26 @@ In that case:
 - package runtime logs may not exist yet
 - the right debugging target is the SPK archive structure itself
 
+One additional learned DSM behavior from live testing:
+
+- `Invalid file format` does not always mean the new SPK archive is malformed
+- on August 13, 2026, DSM 7.2.2-72806 Update 9 rejected a rebuilt
+  ObstacleBridge SPK during manual installation until the previously installed
+  ObstacleBridge package was uninstalled first
+- after uninstalling the prior package, the exact same rebuilt SPK file
+  installed successfully
+
+So the practical recovery sequence for this error is:
+
+1. verify the SPK archive shape if the package is genuinely new
+2. if this is a reinstall or upgrade attempt and DSM still reports `Invalid
+   file format`, uninstall the previous ObstacleBridge package
+3. retry installation of the same SPK before assuming the builder output is
+   broken
+
+This is important because the DSM error text can point at package format even
+when the blocking condition is really the existing installed package state.
+
 ### 2. Install succeeds but `Run` fails
 
 For the current wrapper, `Run` failures are most likely to come from one of
@@ -371,6 +391,76 @@ Given the present wrapper design, the most likely startup blockers are:
 That last point is expected for some modes. The current SPK should still be
 treated as a DSM packaging and service-lifecycle scaffold, not as the final
 privileged Synology runtime model.
+
+## Troubleshooting: package does not autostart after installation or reboot
+
+One important DSM behavior learned during live testing is that "the package can
+be started" and "the package is enabled for DSM autostart" are not the same
+thing.
+
+The concrete observed failure mode was:
+
+- ObstacleBridge ran correctly when started manually
+- after NAS reboot, the package was stopped
+- `synopkg` reported that the package was not turned on
+
+The key checks are:
+
+```bash
+sudo synopkg status obstaclebridge
+sudo synopkg is_onoff obstaclebridge
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/obstaclebridge.log
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/service.log
+```
+
+Interpretation:
+
+- if `status` says `stop` and `is_onoff` says the package is not turned on,
+  DSM does not currently consider the package enabled for autostart
+- if the runtime log shows normal operation before reboot and no new lines
+  after boot, the failure is usually not a runtime crash; it is that DSM never
+  started the package
+- if the log shows fresh startup lines after boot followed by an error, treat
+  that as a normal service-start failure instead
+
+### Recommended recovery flow
+
+If the package was started through the raw lifecycle script during testing,
+switch back to DSM package control:
+
+```bash
+sudo /var/packages/obstaclebridge/scripts/start-stop-status stop
+sudo synopkg start obstaclebridge
+sudo synopkg status obstaclebridge
+sudo synopkg is_onoff obstaclebridge
+```
+
+Why this matters:
+
+- `start-stop-status` is useful for debugging the package wrapper directly
+- `synopkg start` is the DSM-managed path that should also mark the package as
+  enabled in the normal package lifecycle
+- validating both commands after install gives a much better signal about
+  whether reboot autostart will work
+
+### What to check after restart
+
+After a NAS reboot, verify all three layers:
+
+```bash
+sudo synopkg status obstaclebridge
+sudo synopkg is_onoff obstaclebridge
+sudo netstat -apn | grep 18090
+```
+
+Healthy signs:
+
+- `synopkg status obstaclebridge` reports the package is running
+- `synopkg is_onoff obstaclebridge` no longer reports status `262`
+- the expected listener such as `0.0.0.0:18090` is present
+
+If those checks pass, DSM autostart is working and the deployed package change
+has survived reboot in the intended service path.
 
 ## DSM-specific privileged helper options
 

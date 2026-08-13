@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import pathlib
 import re
 import shutil
@@ -48,6 +49,7 @@ def render_info(version: str) -> str:
             f'maintainer="{MAINTAINER}"',
             f'support_url="{SUPPORT_URL}"',
             'thirdparty="yes"',
+            'beta="yes"',
             'startable="yes"',
             'ctl_stop="yes"',
             'ctl_preuninst="yes"',
@@ -86,6 +88,26 @@ def _iter_archive_files(root: pathlib.Path):
         yield path
 
 
+def _tarinfo_for(path: pathlib.Path, arcname: str) -> tarfile.TarInfo:
+    stat = path.stat()
+    info = tarfile.TarInfo(name=arcname)
+    info.size = stat.st_size
+    info.mode = stat.st_mode & 0o777
+    info.mtime = int(stat.st_mtime)
+    info.type = tarfile.REGTYPE
+    info.uid = 0
+    info.gid = 0
+    info.uname = "root"
+    info.gname = "root"
+    return info
+
+
+def _add_file(archive: tarfile.TarFile, path: pathlib.Path, arcname: str) -> None:
+    info = _tarinfo_for(path, arcname)
+    with path.open("rb") as handle:
+        archive.addfile(info, handle)
+
+
 def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
     staged: List[str] = []
     mappings = [
@@ -108,10 +130,10 @@ def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
 
 
 def make_tgz(source_dir: pathlib.Path, out_path: pathlib.Path) -> None:
-    with tarfile.open(out_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+    with tarfile.open(out_path, "w:gz", format=tarfile.USTAR_FORMAT) as archive:
         for path in _iter_archive_files(source_dir):
             relative = path.relative_to(source_dir)
-            archive.add(path, arcname=str(relative))
+            _add_file(archive, path, str(relative))
 
 
 def _write_info(info_path: pathlib.Path, version: str) -> None:
@@ -154,10 +176,10 @@ def build_spk(
         make_tgz(payload_root, spk_root / "package.tgz")
         spk_name = f"{PACKAGE_ID}-{spk_version(version)}-noarch.spk"
         spk_path = output_dir / spk_name
-        with tarfile.open(spk_path, "w", format=tarfile.PAX_FORMAT) as archive:
+        with tarfile.open(spk_path, "w", format=tarfile.USTAR_FORMAT) as archive:
             for path in _iter_archive_files(spk_root):
                 relative = path.relative_to(spk_root)
-                archive.add(path, arcname=str(relative))
+                _add_file(archive, path, str(relative))
         if keep_staging:
             staging_out = output_dir / f"{PACKAGE_ID}-{spk_version(version)}-staging"
             _reset_tree(staging_out)

@@ -19,10 +19,12 @@ REQ-RUN-001:
 REQ-RUN-002:
   # The Synology wrapper contract covers package metadata, DSM-acceptable SPK
   # archive layout, dependency bootstrap, and helper-interpreter packaging
-  # around the maintained python314 runtime.
+  # around the maintained python314 runtime, including the beta-package marker
+  # and DSM service restart-exit-code handling.
   unit_tests:
     - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
     - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive
+    - tests/unit/test_build_synology_spk.py::test_start_stop_status_handles_bridge_restart_exit_codes
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_checks_override_helper_executable
 

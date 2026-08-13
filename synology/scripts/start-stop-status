@@ -13,6 +13,9 @@ PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3.14 || true)}"
 PYTHON_PACKAGES_DIR="${VAR_DIR}/python-packages"
 PYTHONPATH_VALUE="${PYTHON_PACKAGES_DIR}:${PKG_DIR}/src"
 HELPER_PY="${VAR_DIR}/helper-venv/bin/python3"
+RESTART_EXIT_CODE_IMMEDIATE=75
+RESTART_EXIT_CODE_DELAYED=77
+RESTART_DELAY_SECONDS="${OBSTACLEBRIDGE_RESTART_DELAY_SECONDS:-30}"
 
 ensure_layout() {
     mkdir -p "${VAR_DIR}/run" "${VAR_DIR}/log"
@@ -64,11 +67,27 @@ do_start() {
     if [ -x "${HELPER_PY}" ]; then
         export OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE="${HELPER_PY}"
     fi
-    # DSM already owns restart/lifecycle behavior for the package service.
-    # Run the bridge entrypoint directly here instead of the interactive
-    # launcher supervisor, which can exit cleanly after bootstrap in a way
-    # that makes DSM treat the package start as failed.
-    nohup "${PY_BIN}" -c "from obstacle_bridge.bridge import main; main()" --config "${CFG_PATH}" --log-file "${LOG_PATH}" >>"${SERVICE_LOG}" 2>&1 &
+    # DSM owns install/start/stop/autostart for the package, but the bridge
+    # itself uses dedicated exit codes for operator-requested in-process
+    # restarts. Keep a tiny non-interactive restart loop here so DSM continues
+    # to see one running service while bridge restart requests are fulfilled.
+    nohup sh -c '
+        while :; do
+            "'"${PY_BIN}"'" -c "from obstacle_bridge.bridge import main; main()" --config "'"${CFG_PATH}"'" --log-file "'"${LOG_PATH}"'"
+            rc=$?
+            if [ "${rc}" -eq "'"${RESTART_EXIT_CODE_IMMEDIATE}"'" ]; then
+                echo "[synology-service] bridge requested immediate restart (rc=${rc})" >>"'"${SERVICE_LOG}"'"
+                continue
+            fi
+            if [ "${rc}" -eq "'"${RESTART_EXIT_CODE_DELAYED}"'" ]; then
+                echo "[synology-service] bridge requested delayed restart (rc=${rc}); sleeping '"${RESTART_DELAY_SECONDS}"'s" >>"'"${SERVICE_LOG}"'"
+                sleep "'"${RESTART_DELAY_SECONDS}"'"
+                continue
+            fi
+            echo "[synology-service] bridge exited rc=${rc}" >>"'"${SERVICE_LOG}"'"
+            exit "${rc}"
+        done
+    ' >>"${SERVICE_LOG}" 2>&1 &
     pid="$!"
     echo "${pid}" > "${PID_PATH}"
     sleep 1

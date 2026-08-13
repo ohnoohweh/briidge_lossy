@@ -11,6 +11,7 @@ def test_render_info_contains_required_synology_fields():
     assert 'package="obstaclebridge"' in info
     assert 'version="0.1.0-1000"' in info
     assert 'arch="noarch"' in info
+    assert 'beta="yes"' in info
     assert 'startable="yes"' in info
     assert 'install_dep_packages="python314"' in info
 
@@ -50,3 +51,13 @@ def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
             assert "bin/prepare_synology_helper_venv.sh" in payload_names
             assert "__pycache__/__init__.cpython-313.pyc" not in payload_names
             assert not [name for name, count in payload_counts.items() if count > 1]
+
+
+def test_start_stop_status_handles_bridge_restart_exit_codes() -> None:
+    script = (repo_root() / "synology" / "scripts" / "start-stop-status").read_text(encoding="utf-8")
+
+    assert 'RESTART_EXIT_CODE_IMMEDIATE=75' in script
+    assert 'RESTART_EXIT_CODE_DELAYED=77' in script
+    assert 'bridge requested immediate restart' in script
+    assert 'bridge requested delayed restart' in script
+    assert 'sleep "${RESTART_DELAY_SECONDS}"' in script
