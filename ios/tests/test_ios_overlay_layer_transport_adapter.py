@@ -196,3 +196,90 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
         "client_received_mtype": 0,
         "client_received_bytes": 192,
     }
+
+
+def test_ios_overlay_layer_transport_adapter_distinguishes_inflow_from_app_ready_during_reauth(tmp_path: Path) -> None:
+    source_path = tmp_path / "OverlayLayerTransportAdapterReauthProbe.swift"
+    binary_path = tmp_path / "overlay-layer-transport-adapter-reauth-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct OverlayLayerTransportAdapterReauthProbe {
+                static func main() throws {
+                    let secureStatus = ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot(
+                        clientMode: true,
+                        authenticated: false,
+                        peerConfirmedAuthenticated: true,
+                        sessionID: 0x0102030405060708,
+                        txCounter: 1,
+                        rxCounter: 1,
+                        authFailCode: 0,
+                        lastEvent: "transport_peer_disconnected",
+                        lastEventUnixTs: 1700000200.0,
+                        authenticatedSessionsTotal: 1,
+                        rekeySupported: true,
+                        rekeyInProgress: false,
+                        rekeysCompletedTotal: 0,
+                        lastRekeyTrigger: "",
+                        disconnectReason: "",
+                        disconnectDetail: "",
+                        trustValidationState: "validated",
+                        appDataSendingBlocked: true,
+                        framesPassedTotal: 2,
+                        framesDroppedTotal: 0,
+                        handshakeAttemptsTotal: 1,
+                        consecutiveFailures: 0,
+                        retryBackoffSec: 0.0,
+                        nextRetryUnixTs: nil,
+                        recoveryEnabled: true,
+                        recoveryDelaySec: 30.0,
+                        recoveryReconnectSec: 0.0,
+                        nextRecoveryReconnectUnixTs: nil
+                    )
+                    let layers = ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
+                        transport: "tcp",
+                        transportConnected: true,
+                        transportEpoch: 9,
+                        compressionEnabled: false,
+                        secureLinkStatus: secureStatus,
+                        preserveConnectedDuringEpochRestart: true
+                    )
+                    let payload: [String: Any] = [
+                        "layer_count": layers.count,
+                        "transport_connected": (layers.first?["connected"] as? Bool) ?? false,
+                        "secure_state": (layers.last?["state"] as? String) ?? "",
+                        "secure_connected": (layers.last?["connected"] as? Bool) ?? false,
+                        "secure_app_ready": (layers.last?["app_ready"] as? Bool) ?? true,
+                        "preserve_connected": (layers.last?["preserve_connected_during_epoch_restart"] as? Bool) ?? false,
+                        "app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: layers),
+                        "inflow_allowed": ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: layers),
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_overlay_layer_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+    payload = json.loads(completed.stdout)
+
+    assert payload == {
+        "layer_count": 2,
+        "transport_connected": True,
+        "secure_state": "reauthenticating",
+        "secure_connected": True,
+        "secure_app_ready": False,
+        "preserve_connected": True,
+        "app_ready": False,
+        "inflow_allowed": True,
+    }

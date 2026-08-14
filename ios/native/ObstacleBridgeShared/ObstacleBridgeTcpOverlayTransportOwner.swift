@@ -87,7 +87,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             self?.handleTCPTransportEvent(event)
         },
         overlayConnectedProvider: { [weak self] in
-            self?.appReady() ?? false
+            self?.inflowAllowed() ?? false
         },
         activateClientOnReady: true
     )
@@ -287,6 +287,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
     }
 
+    func inflowAllowed() -> Bool {
+        ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
+    }
+
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
             let protocolStats = overlayProtocolStats()
@@ -341,7 +345,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                overlayConnected: appReady(),
+                overlayConnected: inflowAllowed(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,

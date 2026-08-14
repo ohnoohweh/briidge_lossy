@@ -28,6 +28,13 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         return (last["app_ready"] as? Bool) ?? false
     }
 
+    static func inflowAllowed(from layers: [[String: Any]]) -> Bool {
+        guard let last = layers.last else {
+            return false
+        }
+        return (last["connected"] as? Bool) ?? false
+    }
+
     private static func jsonEpochValue(_ value: UInt64) -> Any {
         if value <= UInt64(Int.max) {
             return Int(value)
@@ -70,6 +77,9 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
                 state = "authenticated"
             } else if secureLinkStatus.authFailCode != 0 {
                 state = "failed"
+            } else if preserveConnectedDuringEpochRestart
+                && (secureLinkStatus.authenticatedSessionsTotal > 0 || secureLinkStatus.peerConfirmedAuthenticated) {
+                state = "reauthenticating"
             } else if secureLinkStatus.sessionID != 0 {
                 state = "handshaking"
             } else {

@@ -3845,6 +3845,14 @@ private final class SwiftSimpleUDPPeerBridge {
         "\(probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(ifname)|\(target)"
     }
 
+    private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
+        [
+            "status": status,
+            "resolved_ip": resolvedIP,
+            "detail": detail,
+        ]
+    }
+
     private func tunProbeResult(
         probeKind: String,
         target: String,
@@ -3853,6 +3861,7 @@ private final class SwiftSimpleUDPPeerBridge {
         summary: String,
         detail: String,
         resolvedTarget: String = "",
+        nameResolution: [String: Any] = [:],
         valueMS: Double? = nil,
         lastSuccessAgoS: Double? = nil,
         lastSuccessRTTMS: Double? = nil
@@ -3865,6 +3874,7 @@ private final class SwiftSimpleUDPPeerBridge {
             "detail": detail,
             "target": target,
             "resolved_target": resolvedTarget,
+            "name_resolution": nameResolution,
             "method": "internal_icmp_echo",
             "checked_at_unix_ts": Date().timeIntervalSince1970,
             "value_ms": NSNull(),

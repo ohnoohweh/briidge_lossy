@@ -22,9 +22,21 @@ def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
         source = _read(*path)
         assert 'func connectionLayersSnapshot() -> [[String: Any]]' in source
         assert 'func appReady() -> Bool' in source
+        assert 'func inflowAllowed() -> Bool' in source
         assert '"connection_layers": connectionLayers' in source or 'snapshot["connection_layers"] = connectionLayers' in source
         assert '"app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)' in source or 'snapshot["app_ready"] = ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)' in source
-        assert 'self?.appReady() ?? false' in source
+        assert 'self?.inflowAllowed() ?? false' in source
+        assert 'overlayConnected: inflowAllowed()' in source
+
+
+def test_swift_layered_readiness_distinguishes_inflow_from_app_ready() -> None:
+    adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
+
+    assert "static func appReady(from layers: [[String: Any]]) -> Bool" in adapter
+    assert "static func inflowAllowed(from layers: [[String: Any]]) -> Bool" in adapter
+    assert 'state = "reauthenticating"' in adapter
+    assert 'return (last["app_ready"] as? Bool) ?? false' in adapter
+    assert 'return (last["connected"] as? Bool) ?? false' in adapter
 
 
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:

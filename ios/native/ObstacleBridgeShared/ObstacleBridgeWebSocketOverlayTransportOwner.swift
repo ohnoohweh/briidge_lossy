@@ -99,7 +99,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             self?.handleTCPTransportEvent(event)
         },
         overlayConnectedProvider: { [weak self] in
-            self?.appReady() ?? false
+            self?.inflowAllowed() ?? false
         },
         activateClientOnReady: true
     )
@@ -337,6 +337,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayersSnapshot())
     }
 
+    func inflowAllowed() -> Bool {
+        ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
+    }
+
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
         if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
             return body()
@@ -353,7 +357,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
-                overlayConnected: appReady(),
+                overlayConnected: inflowAllowed(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,
