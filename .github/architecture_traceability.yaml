@@ -108,6 +108,11 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_udp_data
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_tun_packet
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_logs_state_transition_reason
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_keeps_accepting_for_secure_link_reauthenticating
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_secure_link_handshaking
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
@@ -139,6 +144,12 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_shared_unknown_destination
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_info_level_icmp_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_overlay_tx_icmp_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_pre_send_decision_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_overlay_inactive_skip_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_to_local_tun_icmp_reply_emits_info_level_icmp_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_handle_app_payload_from_peer_emits_overlay_rx_icmp_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv6_tunnel_address
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
@@ -468,6 +479,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
@@ -524,6 +536,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
     - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake
+    - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_reports_reauthenticating_when_transport_stays_up
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled

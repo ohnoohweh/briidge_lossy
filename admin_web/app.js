@@ -3138,6 +3138,7 @@ function applyTunRoutingDoc(j) {
   const configVerification = verification.tun_config || {};
   const peerVerification = verification.tun_connectivity || {};
   const globalVerification = verification.tun_global_connectivity || {};
+  const globalNameResolution = globalVerification.name_resolution || {};
   setText('tunVerificationConfigSummary', String(configVerification.summary || 'pending'));
   setText('tunVerificationConfigDetail', String(configVerification.detail || 'n/a'));
   setText('tunVerificationPeerSummary', fmtTunVerificationValue(peerVerification));
@@ -3145,6 +3146,8 @@ function applyTunRoutingDoc(j) {
   setText('tunVerificationGlobalSummary', fmtTunVerificationValue(globalVerification));
   setText('tunVerificationGlobalDetail', fmtTunVerificationDetail(globalVerification));
   setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));
+  setText('tunVerificationGlobalResolutionSummary', fmtTunNameResolutionSummary(globalNameResolution, globalVerification));
+  setText('tunVerificationGlobalResolutionDetail', fmtTunNameResolutionDetail(globalNameResolution, globalVerification));
   const tunRoutingHealthWarning = document.getElementById('tunRoutingHealthWarning');
   if (tunRoutingHealthWarning) {
     const warningText = summarizeTunRuntimeHealth(j.tun || []);
@@ -3206,6 +3209,25 @@ function applyTunRoutingDoc(j) {
     helperRepairBtn.classList.toggle('hidden', !helperRepairAvailable);
     helperRepairBtn.disabled = !helperRepairAvailable;
   }
+}
+
+function fmtTunNameResolutionSummary(info, verification) {
+  const status = String(info?.status || '').trim().toLowerCase();
+  if (status === 'successful') return 'successful';
+  if (status === 'failed') return 'failed';
+  if (status === 'skipped') return 'skipped';
+  const resolvedTarget = String(verification?.resolved_target || '').trim();
+  if (resolvedTarget) return 'successful';
+  return 'n/a';
+}
+
+function fmtTunNameResolutionDetail(info, verification) {
+  const resolvedIP = String(info?.resolved_ip || verification?.resolved_target || '').trim();
+  const detail = String(info?.detail || '').trim();
+  if (resolvedIP && detail) return `${resolvedIP} (${detail})`;
+  if (resolvedIP) return resolvedIP;
+  if (detail) return detail;
+  return 'n/a';
 }
 
 async function loadConfig() {

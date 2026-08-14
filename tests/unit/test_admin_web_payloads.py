@@ -34,6 +34,11 @@ class _RunnerStub:
             "detail": "ICMP echo reply received from 192.168.106.1.",
             "target": "192.168.106.1",
             "resolved_target": "192.168.106.1",
+            "name_resolution": {
+                "status": "successful",
+                "resolved_ip": "192.168.106.1",
+                "detail": "Resolved 192.168.106.1 to 192.168.106.1.",
+            },
             "method": "internal_icmp_echo",
             "checked_at_unix_ts": 1700000000.0,
             "value_ms": 12.4,
@@ -1105,8 +1110,12 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunVerificationPeerSummary'", app_js)
         self.assertIn("setText('tunVerificationGlobalSummary'", app_js)
         self.assertIn("setText('tunVerificationGlobalHost'", app_js)
+        self.assertIn("setText('tunVerificationGlobalResolutionSummary'", app_js)
+        self.assertIn("setText('tunVerificationGlobalResolutionDetail'", app_js)
         self.assertIn("fmtTunVerificationValue", app_js)
         self.assertIn("fmtTunVerificationDetail", app_js)
+        self.assertIn("function fmtTunNameResolutionSummary(info, verification) {", app_js)
+        self.assertIn("function fmtTunNameResolutionDetail(info, verification) {", app_js)
         self.assertIn("last success", app_js)
         self.assertIn("apiFetch('/api/tun-helper/repair'", app_js)
         self.assertIn("Remaining findings:", app_js)
@@ -1197,6 +1206,8 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tunVerificationPeerSummary"', index_html)
         self.assertIn('id="tunVerificationGlobalSummary"', index_html)
         self.assertIn('id="tunVerificationGlobalHost"', index_html)
+        self.assertIn('id="tunVerificationGlobalResolutionSummary"', index_html)
+        self.assertIn('id="tunVerificationGlobalResolutionDetail"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes"', index_html)
         self.assertIn('id="tunRoutingExcludedRoutes"', index_html)
         self.assertIn('id="tunRoutingIncludedRoutes6"', index_html)
@@ -1212,6 +1223,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));", app_js)
         self.assertIn("const verification = j.verification || {};", app_js)
         self.assertIn("setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));", app_js)
+        self.assertIn("const globalNameResolution = globalVerification.name_resolution || {};", app_js)
+        self.assertIn("setText('tunVerificationGlobalResolutionSummary', fmtTunNameResolutionSummary(globalNameResolution, globalVerification));", app_js)
+        self.assertIn("setText('tunVerificationGlobalResolutionDetail', fmtTunNameResolutionDetail(globalNameResolution, globalVerification));", app_js)
         self.assertIn("function fmtTunFlowSummary(stats) {", app_js)
         self.assertIn("function fmtDropDiagnostics(shared) {", app_js)
         self.assertIn("<th>ChannelMux Flow</th>", index_html)

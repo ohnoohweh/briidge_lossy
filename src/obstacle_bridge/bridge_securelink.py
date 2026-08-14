@@ -2333,6 +2333,25 @@ class SecureLinkPskSession(ISession):
         any_handshaking = False
         authenticated_peers = 0
         primary_state: Optional[_SecureLinkPeerState] = None
+        rekey_in_progress = any(int(state.pending_session_id or 0) > 0 for state in self._peer_states.values())
+        reauthenticating = bool(
+            bool(getattr(self._inner, "is_connected", lambda: False)())
+            and (
+                bool(self._preserve_connected_during_epoch_restart)
+                or rekey_in_progress
+            )
+            and any(
+                int(state.authenticated_sessions_total or 0) > 0
+                or state.peer_confirmed_authenticated
+                for state in self._peer_states.values()
+            )
+        )
+        if not reauthenticating:
+            reauthenticating = bool(
+                bool(getattr(self._inner, "is_connected", lambda: False)())
+                and bool(self._preserve_connected_during_epoch_restart)
+                and int(self._authenticated_sessions_total or 0) > 0
+            )
         for state in self._peer_states.values():
             if primary_state is None:
                 primary_state = state
@@ -2346,7 +2365,9 @@ class SecureLinkPskSession(ISession):
                 failure_unix_ts = failure_unix_ts or state.auth_fail_unix_ts
             else:
                 any_handshaking = True
-        if authenticated_peers > 0:
+        if authenticated_peers > 0 and rekey_in_progress:
+            overall_state = "reauthenticating"
+        elif authenticated_peers > 0:
             overall_state = "authenticated"
         elif any_failed:
             overall_state = "failed"
@@ -2362,6 +2383,8 @@ class SecureLinkPskSession(ISession):
             failure_reason = self._last_auth_fail_reason or self._auth_fail_reason(self._last_auth_fail_code)
             failure_detail = self._last_auth_fail_detail or self._auth_fail_detail(self._last_auth_fail_code)
             failure_unix_ts = self._last_auth_fail_unix_ts
+        elif reauthenticating:
+            overall_state = "reauthenticating"
         elif any_handshaking:
             overall_state = "handshaking"
         elif bool(getattr(self._inner, "is_connected", lambda: False)()):
@@ -2375,7 +2398,7 @@ class SecureLinkPskSession(ISession):
             "state": overall_state,
             "authenticated": authenticated_peers > 0,
             "authenticated_peers": authenticated_peers,
-            "rekey_in_progress": any(int(state.pending_session_id or 0) > 0 for state in self._peer_states.values()),
+            "rekey_in_progress": rekey_in_progress,
             "last_rekey_trigger": self._last_rekey_trigger,
             "rekey_due_unix_ts": self._client_rekey_due_unix_ts if self._client_mode else None,
             "failure_code": failure_code,

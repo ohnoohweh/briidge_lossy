@@ -864,6 +864,7 @@ final class ObstacleBridgeHostRunner {
         summary: String,
         detail: String,
         resolvedTarget: String = "",
+        nameResolution: [String: Any] = [:],
         valueMS: Double? = nil,
         lastSuccessAgoS: Double? = nil,
         lastSuccessRTTMS: Double? = nil
@@ -876,6 +877,7 @@ final class ObstacleBridgeHostRunner {
             "detail": detail,
             "target": target,
             "resolved_target": resolvedTarget,
+            "name_resolution": nameResolution,
             "method": "internal_icmp_echo",
             "checked_at_unix_ts": Date().timeIntervalSince1970,
             "value_ms": NSNull(),
@@ -892,6 +894,14 @@ final class ObstacleBridgeHostRunner {
             result["last_success_ago_s"] = lastSuccessAgoS
         }
         return result
+    }
+
+    private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
+        [
+            "status": status,
+            "resolved_ip": resolvedIP,
+            "detail": detail,
+        ]
     }
 
     private static func macOSTunInterfaceAddresses(ifname: String) -> [String: Any] {
@@ -938,7 +948,11 @@ final class ObstacleBridgeHostRunner {
                 ok: false,
                 state: "skipped",
                 summary: "\(label): skipped",
-                detail: "Verification target is not configured."
+                detail: "Verification target is not configured.",
+                nameResolution: tunProbeNameResolution(
+                    status: "skipped",
+                    detail: "Verification target is not configured."
+                )
             )
         }
         if trimmedIfname.isEmpty {
@@ -948,7 +962,8 @@ final class ObstacleBridgeHostRunner {
                 ok: false,
                 state: "skipped",
                 summary: "\(label): skipped",
-                detail: "TUN interface name unavailable."
+                detail: "TUN interface name unavailable.",
+                nameResolution: tunProbeNameResolution(status: "unknown")
             )
         }
         let actualIfname = withServiceStateQueue {
@@ -961,7 +976,8 @@ final class ObstacleBridgeHostRunner {
                 ok: false,
                 state: "skipped",
                 summary: "\(label): skipped",
-                detail: "TUN interface \(trimmedIfname) is not active on this runtime."
+                detail: "TUN interface \(trimmedIfname) is not active on this runtime.",
+                nameResolution: tunProbeNameResolution(status: "unknown")
             )
         }
         guard currentOverlayOwner() != nil else {
@@ -973,6 +989,7 @@ final class ObstacleBridgeHostRunner {
                 state: "failed",
                 summary: "\(label): failed",
                 detail: "No active overlay owner is available for the TUN probe.",
+                nameResolution: tunProbeNameResolution(status: "unknown"),
                 lastSuccessAgoS: history.lastSuccessAgoS,
                 lastSuccessRTTMS: history.lastSuccessRTTMS
             )
@@ -988,10 +1005,19 @@ final class ObstacleBridgeHostRunner {
                 state: "failed",
                 summary: "\(label): failed",
                 detail: "Probe target resolution failed: \(resolved.error)",
+                nameResolution: tunProbeNameResolution(
+                    status: "failed",
+                    detail: "Probe target resolution failed: \(resolved.error)"
+                ),
                 lastSuccessAgoS: history.lastSuccessAgoS,
                 lastSuccessRTTMS: history.lastSuccessRTTMS
             )
         }
+        let nameResolution = tunProbeNameResolution(
+            status: "successful",
+            resolvedIP: resolvedTarget,
+            detail: "Resolved \(trimmedTarget) to \(resolvedTarget)."
+        )
         let family = resolved.family
         let sourceIP = sourceAddressForProbeFamily(family)
         guard !sourceIP.isEmpty else {
@@ -1004,6 +1030,7 @@ final class ObstacleBridgeHostRunner {
                 summary: "\(label): skipped",
                 detail: "No configured tunnel source address is available for \(resolvedTarget).",
                 resolvedTarget: resolvedTarget,
+                nameResolution: nameResolution,
                 lastSuccessAgoS: history.lastSuccessAgoS,
                 lastSuccessRTTMS: history.lastSuccessRTTMS
             )
@@ -1045,6 +1072,7 @@ final class ObstacleBridgeHostRunner {
                 summary: "\(label): failed",
                 detail: "Internal probe failed: unable to build ICMP echo request.",
                 resolvedTarget: resolvedTarget,
+                nameResolution: nameResolution,
                 lastSuccessAgoS: history.lastSuccessAgoS,
                 lastSuccessRTTMS: history.lastSuccessRTTMS
             )
@@ -1074,6 +1102,7 @@ final class ObstacleBridgeHostRunner {
                 summary: "\(label): failed",
                 detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", resolvedTarget, timeoutSeconds),
                 resolvedTarget: resolvedTarget,
+                nameResolution: nameResolution,
                 lastSuccessAgoS: history.lastSuccessAgoS,
                 lastSuccessRTTMS: history.lastSuccessRTTMS
             )
@@ -1089,6 +1118,7 @@ final class ObstacleBridgeHostRunner {
             summary: "\(label): verified",
             detail: "ICMP echo reply received from \(resolvedTarget).",
             resolvedTarget: resolvedTarget,
+            nameResolution: nameResolution,
             valueMS: rttMS,
             lastSuccessAgoS: 0.0,
             lastSuccessRTTMS: rttMS

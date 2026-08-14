@@ -1481,7 +1481,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, non-canonical policy-rule reuse, and non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background.
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and INFO-level ICMP decision breadcrumbs plus layered-readiness gating so SecureLink reauthentication windows can be distinguished from true overlay disconnects.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1516,6 +1516,7 @@ The supporting manifests remain shared:
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
 This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
+It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).

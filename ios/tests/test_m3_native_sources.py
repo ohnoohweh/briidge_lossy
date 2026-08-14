@@ -487,6 +487,8 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"tun_global_connectivity": cachedTunConnectivityVerificationOrProbe(' in provider
     assert '?? "google.de")' in provider
     assert 'method: "network_extension_settings"' in provider
+    assert '"name_resolution": nameResolution' in provider
+    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' in provider
     assert "} else if addressesPresent && !adminPacketProcessingActive() {" in provider
     assert '"Packet processing is not active yet."' in provider
     assert "guard adminPacketProcessingActive() else {" in provider
