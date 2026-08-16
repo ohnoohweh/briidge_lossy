@@ -241,7 +241,7 @@ enum ObstacleBridgeAdminAPI {
         let normalizedPath = request.path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? request.path
         switch (normalizedMethod, normalizedPath) {
         case ("GET", "/api/status"):
-            return jsonResponse(provider.adminStatusSnapshot())
+            return jsonResponse(statusSnapshot(status: provider.adminStatusSnapshot(), connections: provider.adminConnectionsSnapshot()))
         case ("GET", "/api/bootstrap"):
             return jsonResponse(provider.adminMetaSnapshot()["bootstrap_state"] ?? [:])
         case ("GET", "/api/auth/state"):
@@ -300,7 +300,7 @@ enum ObstacleBridgeAdminAPI {
     static func liveTopicPayload(topic: String, provider: ObstacleBridgeAdminAPIStateProvider) -> Any? {
         switch topic {
         case "status":
-            return provider.adminStatusSnapshot()
+            return statusSnapshot(status: provider.adminStatusSnapshot(), connections: provider.adminConnectionsSnapshot())
         case "connections":
             return provider.adminConnectionsSnapshot()
         case "tun_routing":
@@ -410,6 +410,13 @@ enum ObstacleBridgeAdminAPI {
                 "tun_listening": 0,
                 "shared_services": 0,
                 "shared_active_peer_bindings": 0,
+                "shared_drop_total": 0,
+                "shared_drop_by_reason": [:] as [String: Int],
+                "icmp_stage_counts": [:] as [String: Int],
+                "probe_boundary_counts": [:] as [String: Int],
+                "local_reply_stage_counts": [:] as [String: Int],
+                "probe_last_timeout_diag": [:] as [String: Any],
+                "probe_last_timeout_diag_by_transport": [:] as [String: Any],
             ],
             "app": "udp-bidirectional-mux",
             "milestone": "C",
@@ -419,6 +426,11 @@ enum ObstacleBridgeAdminAPI {
     static func tunRoutingSnapshot(fromConnections snapshot: [String: Any]) -> [String: Any] {
         let tunRows = snapshot["tun"] as? [[String: Any]] ?? []
         let sharedRows = deduplicatedSharedTunRows(from: tunRows)
+        let icmpStageCounts = snapshot["tun_icmp_stage_counts"] as? [String: Any] ?? [:]
+        let probeBoundaryCounts = snapshot["tun_probe_boundary_counts"] as? [String: Any] ?? [:]
+        let localReplyStageCounts = snapshot["tun_local_reply_stage_counts"] as? [String: Any] ?? [:]
+        let probeLastTimeoutDiag = snapshot["tun_probe_last_timeout_diag"] as? [String: Any] ?? [:]
+        let probeLastTimeoutDiagByTransport = snapshot["tun_probe_last_timeout_diag_by_transport"] as? [String: Any] ?? [:]
         let tunOpen = tunRows.reduce(into: 0) { partialResult, row in
             let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if row["chan_id"] is NSNull {
@@ -447,6 +459,15 @@ enum ObstacleBridgeAdminAPI {
             let dropCounters = ownership["drop_counters"] as? [String: Any] ?? [:]
             partialResult += (dropCounters["total"] as? Int) ?? (dropCounters["total"] as? NSNumber)?.intValue ?? 0
         }
+        let sharedDropByReason = sharedRows.reduce(into: [String: Int]()) { partialResult, row in
+            let ownership = row["shared_tun_ownership"] as? [String: Any] ?? [:]
+            let dropCounters = ownership["drop_counters"] as? [String: Any] ?? [:]
+            let byReason = dropCounters["by_reason"] as? [String: Any] ?? [:]
+            for (reason, rawCount) in byReason {
+                let count = (rawCount as? Int) ?? (rawCount as? NSNumber)?.intValue ?? 0
+                partialResult[reason] = (partialResult[reason] ?? 0) + count
+            }
+        }
         return [
             "tun": tunRows,
             "shared_tun": sharedRows,
@@ -458,10 +479,45 @@ enum ObstacleBridgeAdminAPI {
                 "shared_services": sharedRows.count,
                 "shared_active_peer_bindings": activeBindings,
                 "shared_drop_total": sharedDropTotal,
+                "shared_drop_by_reason": sharedDropByReason,
+                "icmp_stage_counts": icmpStageCounts,
+                "probe_boundary_counts": probeBoundaryCounts,
+                "local_reply_stage_counts": localReplyStageCounts,
+                "probe_last_timeout_diag": probeLastTimeoutDiag,
+                "probe_last_timeout_diag_by_transport": probeLastTimeoutDiagByTransport,
             ],
             "app": "udp-bidirectional-mux",
             "milestone": "C",
         ]
+    }
+
+    static func statusSnapshot(status: [String: Any], connections: [String: Any]) -> [String: Any] {
+        var payload = status
+        let tunRows = connections["tun"] as? [[String: Any]] ?? []
+        let helper = status["tun_helper"] as? [String: Any] ?? [:]
+        let helperRuntime = helper["runtime"] as? [String: Any] ?? [:]
+        let tunConnected = tunRows.contains { row in
+            let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard let chan = row["chan_id"], !(chan is NSNull) else { return false }
+            return state != "listening"
+        }
+        let selectedIfname: String = {
+            for row in tunRows {
+                let local = row["local"] as? [String: Any] ?? [:]
+                let candidate = String(describing: local["ifname"] ?? row["local_bind"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !candidate.isEmpty { return candidate }
+            }
+            return String(describing: helperRuntime["ifname"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }()
+        payload["tun_ifname"] = selectedIfname
+        payload["tun_connected"] = tunConnected
+        payload["tun_helper_runtime_ifname"] = String(describing: helperRuntime["ifname"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        payload["tun_icmp_stage_counts"] = connections["tun_icmp_stage_counts"] ?? [:]
+        payload["tun_probe_boundary_counts"] = connections["tun_probe_boundary_counts"] ?? [:]
+        payload["tun_local_reply_stage_counts"] = connections["tun_local_reply_stage_counts"] ?? [:]
+        payload["tun_probe_last_timeout_diag"] = connections["tun_probe_last_timeout_diag"] ?? [:]
+        payload["tun_probe_last_timeout_diag_by_transport"] = connections["tun_probe_last_timeout_diag_by_transport"] ?? [:]
+        return payload
     }
 
     private static func deduplicatedSharedTunRows(from tunRows: [[String: Any]]) -> [[String: Any]] {

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import socket
 import unittest
@@ -627,6 +628,90 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         write_tun.assert_called_once()
         send_mux.assert_not_called()
+
+    def test_local_virtual_probe_skips_when_transport_inactive(self):
+        asyncio.run(self._test_local_virtual_probe_skips_when_transport_inactive())
+
+    async def _test_local_virtual_probe_skips_when_transport_inactive(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = False
+        mux._accepting_enabled = False
+        mux.args = argparse.Namespace(
+            overlay_transport="myudp",
+            TUN_routing={
+                "tunnel_address": "192.168.106.1",
+                "global_connectivity_source_ipv4": "192.168.108.31",
+            },
+        )
+        spec = ChannelMux.ServiceSpec(
+            5,
+            'tun',
+            'obtun0',
+            1500,
+            'tun',
+            'obtun1',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 5)
+        mux._local_services[svc_key] = spec
+        dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+        mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+        with patch.object(mux, '_resolve_tun_probe_target', new=AsyncMock(return_value='192.168.106.1')), \
+             patch.object(mux, '_write_tun_packet') as write_tun, \
+             patch.object(mux, '_send_mux') as send_mux:
+            result = await mux._probe_tun_connectivity_once(
+                probe_kind='peer',
+                ifname='obtun0',
+                target='192.168.106.1',
+                timeout_s=0.5,
+            )
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['state'], 'skipped')
+        self.assertIn('inactive transport', result['detail'])
+        write_tun.assert_not_called()
+        send_mux.assert_not_called()
+
+    def test_helper_reader_handoff_cancels_previous_mux_reader_task(self):
+        asyncio.run(self._test_helper_reader_handoff_cancels_previous_mux_reader_task())
+
+    async def _test_helper_reader_handoff_cancels_previous_mux_reader_task(self):
+        loop = asyncio.get_running_loop()
+        mux1 = ChannelMux(_FakeSession(connected=True), loop)
+        mux2 = ChannelMux(_FakeSession(connected=True), loop)
+        helper_settings = argparse.Namespace(mode="helper")
+        mux1._tun_helper_settings = helper_settings
+        mux2._tun_helper_settings = helper_settings
+        mux1._tun_helper_client = object()
+        mux2._tun_helper_client = object()
+        dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=('local', 0, 5), helper_managed=True)
+
+        mux1._register_tun_reader(dev)
+        task1 = mux1._tun_helper_reader_tasks[id(dev)]
+        self.assertIs(getattr(dev, "_reader_mux", None), mux1)
+
+        mux2._register_tun_reader(dev, force_owner=True)
+        task2 = mux2._tun_helper_reader_tasks[id(dev)]
+
+        self.assertIs(getattr(dev, "_reader_mux", None), mux2)
+        self.assertNotIn(id(dev), mux1._tun_helper_reader_tasks)
+        self.assertIsNot(task1, task2)
+        self.assertGreater(task1.cancelling(), 0)
+
+        task2.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task2
 
     def test_tcp_target_connection_uses_system_proxy_egress(self):
         asyncio.run(self._test_tcp_target_connection_uses_system_proxy_egress())

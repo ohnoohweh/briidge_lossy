@@ -41,7 +41,12 @@ class RunnerMuxAggregate:
         udp_listening = 0
         tcp_listening = 0
         tun_listening = 0
-        for mux in self._muxes:
+        tun_icmp_stage_counts: dict[str, int] = {}
+        tun_probe_boundary_counts: dict[str, int] = {}
+        tun_local_reply_stage_counts: dict[str, int] = {}
+        tun_probe_last_timeout_diag: dict[str, Any] = {}
+        tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
             udp_rows.extend(snap.get("udp", []))
             tcp_rows.extend(snap.get("tcp", []))
@@ -50,6 +55,26 @@ class RunnerMuxAggregate:
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
             tun_listening += int(counts.get("tun_listening", 0) or 0)
+            for key, value in dict(snap.get("tun_icmp_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_icmp_stage_counts[stage] = int(tun_icmp_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_probe_boundary_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_probe_boundary_counts[stage] = int(tun_probe_boundary_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_local_reply_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_local_reply_stage_counts[stage] = int(tun_local_reply_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            timeout_diag = dict(snap.get("tun_probe_last_timeout_diag") or {})
+            if timeout_diag:
+                label = f"session-{idx}"
+                tun_probe_last_timeout_diag_by_transport[label] = timeout_diag
+                captured_at = float(timeout_diag.get("captured_at_unix_ts") or 0.0)
+                current_at = float(tun_probe_last_timeout_diag.get("captured_at_unix_ts") or 0.0)
+                if captured_at >= current_at:
+                    tun_probe_last_timeout_diag = timeout_diag
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
@@ -62,6 +87,11 @@ class RunnerMuxAggregate:
                 "tcp_listening": tcp_listening,
                 "tun_listening": tun_listening,
             },
+            "tun_icmp_stage_counts": tun_icmp_stage_counts,
+            "tun_probe_boundary_counts": tun_probe_boundary_counts,
+            "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
+            "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
+            "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
         }
 
     @staticmethod
@@ -1567,6 +1597,10 @@ class Runner:
                 "tcp": [],
                 "tun": [],
                 "counts": {"udp": 0, "tcp": 0, "tun": 0, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 0},
+                "tun_icmp_stage_counts": {},
+                "tun_probe_boundary_counts": {},
+                "tun_local_reply_stage_counts": {},
+                "tun_probe_last_timeout_diag": {},
             }
 
         udp_rows: list[dict] = []
@@ -1575,6 +1609,11 @@ class Runner:
         udp_listening = 0
         tcp_listening = 0
         tun_listening = 0
+        tun_icmp_stage_counts: dict[str, int] = {}
+        tun_probe_boundary_counts: dict[str, int] = {}
+        tun_local_reply_stage_counts: dict[str, int] = {}
+        tun_probe_last_timeout_diag: dict[str, Any] = {}
+        tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
@@ -1658,6 +1697,27 @@ class Runner:
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
             tun_listening += int(counts.get("tun_listening", 0) or 0)
+            for key, value in dict(snap.get("tun_icmp_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_icmp_stage_counts[stage] = int(tun_icmp_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_probe_boundary_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_probe_boundary_counts[stage] = int(tun_probe_boundary_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_local_reply_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_local_reply_stage_counts[stage] = int(tun_local_reply_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            timeout_diag = dict(snap.get("tun_probe_last_timeout_diag") or {})
+            if timeout_diag:
+                session_labels = list(getattr(self, "_session_labels", []) or [])
+                label = str(session_labels[idx] if idx < len(session_labels) else f"session-{idx}").strip()
+                tun_probe_last_timeout_diag_by_transport[label] = timeout_diag
+                captured_at = float(timeout_diag.get("captured_at_unix_ts") or 0.0)
+                current_at = float(tun_probe_last_timeout_diag.get("captured_at_unix_ts") or 0.0)
+                if captured_at >= current_at:
+                    tun_probe_last_timeout_diag = timeout_diag
 
         return {
             "udp": udp_rows,
@@ -1671,6 +1731,11 @@ class Runner:
                 "tcp_listening": tcp_listening,
                 "tun_listening": tun_listening,
             },
+            "tun_icmp_stage_counts": tun_icmp_stage_counts,
+            "tun_probe_boundary_counts": tun_probe_boundary_counts,
+            "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
+            "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
+            "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
         }
 
     def get_config_snapshot(self, include_secrets: bool = False) -> dict:

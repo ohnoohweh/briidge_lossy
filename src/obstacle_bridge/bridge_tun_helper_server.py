@@ -30,6 +30,7 @@ from .bridge_tun_helper_local_transport import (
 )
 from .bridge_tun_helper_windows import WindowsTunHelperBackend
 from .bridge_tun_helper_settings import DEFAULT_TUN_HELPER_BACKEND
+from .bridge_tun_ping import parse_internal_probe_packet
 
 
 async def _start_local_helper_server(handler: Callable[[asyncio.StreamReader, asyncio.StreamWriter], Awaitable[None]], socket_path: str) -> asyncio.AbstractServer:
@@ -92,6 +93,24 @@ class TunHelperServer:
         self._watchdog_task: Optional[asyncio.Task] = None
         self._last_authenticated_client_at = time.monotonic()
         self._backend.set_packet_sink(self.emit_packet)
+
+    def _log_probe_trace(self, *, stage: str, packet: bytes, note: str = "") -> None:
+        parsed = parse_internal_probe_packet(bytes(packet or b""))
+        if not isinstance(parsed, dict):
+            return
+        self._log.info(
+            "[TUN/HELPER/PROBE] stage=%s dir=%s kind=%s key=%s/%s/%s/%s src=%s dst=%s note=%s",
+            stage,
+            str(parsed.get("direction") or ""),
+            int(parsed.get("probe_kind") or 0),
+            int(parsed.get("family") or 0),
+            int(parsed.get("identifier") or 0),
+            int(parsed.get("sequence") or 0),
+            bytes(parsed.get("nonce") or b"").hex(),
+            str(parsed.get("source_ip") or ""),
+            str(parsed.get("destination_ip") or ""),
+            note,
+        )
 
     @staticmethod
     async def _close_writer(writer: asyncio.StreamWriter, *, timeout_s: float = 0.5) -> None:
@@ -226,6 +245,11 @@ class TunHelperServer:
     async def emit_packet(self, packet: bytes) -> None:
         if not self._active_writers:
             return
+        self._log_probe_trace(
+            stage="server_emit_packet",
+            packet=packet,
+            note=f"writers={len(self._active_writers)}",
+        )
         frame = encode_frame(TunHelperFrameKind.PACKET_FROM_HELPER, bytes(packet))
         dead: list[asyncio.StreamWriter] = []
         for writer in list(self._active_writers):
@@ -383,6 +407,11 @@ class TunHelperServer:
                             )
                             continue
                         self._mark_authenticated_client_activity()
+                        self._log_probe_trace(
+                            stage="server_recv_packet_to_helper",
+                            packet=bytes(payload),
+                            note=f"authenticated={int(state.authenticated)}",
+                        )
                         await _maybe_await(self._backend.write_packet(bytes(payload)))
                     else:
                         await self._send_response(

@@ -366,6 +366,110 @@ class _RunnerStub:
                 "tcp_listening": 0,
                 "tun_listening": 1,
             },
+            "tun_icmp_stage_counts": {
+                "from_local_tun_read": 11,
+                "overlay_tx_before_send_app": 9,
+                "overlay_rx_after_unpack": 8,
+                "from_peer_before_local_write": 8,
+                "to_local_tun_written": 7,
+                "local_reply_skip_overlay_inactive": 4,
+                "local_reply_drop_oversize": 1,
+                "local_reply_drop_throttled": 2,
+                "local_reply_drop_shared_route": 3,
+                "local_reply_virtual_probe_delivery": 5,
+                "local_reply_drop_no_channel": 0,
+                "local_reply_drop_missing_service_spec": 0,
+                "local_reply_bound_new_channel": 1,
+                "local_reply_before_overlay_send": 11,
+            },
+            "tun_probe_boundary_counts": {
+                "probe_attempt_started": 6,
+                "probe_waiter_registered": 6,
+                "probe_injected_local_virtual": 0,
+                "probe_injected_kernel": 0,
+                "probe_injected_channelmux": 6,
+                "probe_send_completed": 6,
+                "probe_reply_matched": 4,
+                "probe_reply_consumed_before_local_write": 4,
+                "probe_reply_late_after_timeout": 1,
+                "probe_reply_unmatched": 2,
+                "probe_timeout": 2,
+                "probe_exception": 0,
+                "helper_read_packet": 4,
+                "helper_read_probe_packet": 4,
+                "helper_write_packet": 4,
+                "helper_write_probe_packet": 4,
+                "helper_write_error": 0,
+            },
+            "tun_local_reply_stage_counts": {
+                "local_reply_skip_overlay_inactive": 4,
+                "local_reply_drop_oversize": 1,
+                "local_reply_drop_throttled": 2,
+                "local_reply_drop_shared_route": 3,
+                "local_reply_virtual_probe_delivery": 5,
+                "local_reply_drop_no_channel": 0,
+                "local_reply_drop_missing_service_spec": 0,
+                "local_reply_bound_new_channel": 1,
+                "local_reply_before_overlay_send": 11,
+            },
+            "tun_probe_last_timeout_diag": {
+                "captured_at_unix_ts": 1700000400.0,
+                "probe_kind": "global",
+                "ifname": "obtun0",
+                "target": "google.de",
+                "resolved_target": "142.250.185.67",
+                "timeout_s": 2.0,
+                "overlay_transport": "ws",
+                "overlay_connected": True,
+                "accepting_enabled": True,
+                "session_connected": True,
+                "session_app_ready": True,
+                "secure_link_state": "authenticated",
+                "secure_link_authenticated": True,
+                "secure_link_last_event": "authenticated",
+                "secure_link_failure_reason": "",
+                "secure_link_failure_detail": "",
+                "backpressure": {
+                    "waiting_count": 2,
+                    "inflight": 1,
+                    "max_inflight": 8,
+                    "transmit_delay_est_ms": 33.5,
+                    "prev_window_bytes": 2048,
+                    "curr_window_bytes": 256,
+                    "stalled": False,
+                    "active": False,
+                },
+            },
+            "tun_probe_last_timeout_diag_by_transport": {
+                "session-0": {
+                    "captured_at_unix_ts": 1700000400.0,
+                    "probe_kind": "global",
+                    "ifname": "obtun0",
+                    "target": "google.de",
+                    "resolved_target": "142.250.185.67",
+                    "timeout_s": 2.0,
+                    "overlay_transport": "ws",
+                    "overlay_connected": True,
+                    "accepting_enabled": True,
+                    "session_connected": True,
+                    "session_app_ready": True,
+                    "secure_link_state": "authenticated",
+                    "secure_link_authenticated": True,
+                    "secure_link_last_event": "authenticated",
+                    "secure_link_failure_reason": "",
+                    "secure_link_failure_detail": "",
+                    "backpressure": {
+                        "waiting_count": 2,
+                        "inflight": 1,
+                        "max_inflight": 8,
+                        "transmit_delay_est_ms": 33.5,
+                        "prev_window_bytes": 2048,
+                        "curr_window_bytes": 256,
+                        "stalled": False,
+                        "active": False,
+                    },
+                }
+            },
         }
 
     def _restart_requires_delay(self):
@@ -465,6 +569,168 @@ class AdminWebPayloadTests(unittest.TestCase):
     def _canonical_webadmin_paths() -> list[pathlib.Path]:
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         return [repo_root / "admin_web" / "app.js"]
+
+    def test_runner_mux_aggregate_preserves_tun_counter_maps(self):
+        class _MuxStub:
+            def __init__(self, icmp_counts, probe_counts, local_reply_counts, timeout_diag=None):
+                self._icmp_counts = icmp_counts
+                self._probe_counts = probe_counts
+                self._local_reply_counts = local_reply_counts
+                self._timeout_diag = timeout_diag
+
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "tun": [],
+                    "counts": {
+                        "udp": 0,
+                        "tcp": 0,
+                        "tun": 0,
+                        "udp_listening": 0,
+                        "tcp_listening": 0,
+                        "tun_listening": 0,
+                    },
+                    "tun_icmp_stage_counts": dict(self._icmp_counts),
+                    "tun_probe_boundary_counts": dict(self._probe_counts),
+                    "tun_local_reply_stage_counts": dict(self._local_reply_counts),
+                    "tun_probe_last_timeout_diag": dict(self._timeout_diag or {}),
+                }
+
+        aggregate = bridge_runner.RunnerMuxAggregate(
+            [
+                _MuxStub(
+                    {"from_local_tun_read": 2, "to_local_tun_written": 1},
+                    {
+                        "probe_attempt_started": 2,
+                        "probe_reply_matched": 1,
+                        "probe_reply_consumed_before_local_write": 1,
+                        "probe_reply_late_after_timeout": 1,
+                        "probe_reply_unmatched": 1,
+                    },
+                    {"local_reply_before_overlay_send": 2},
+                    {
+                        "captured_at_unix_ts": 1700000400.0,
+                        "resolved_target": "142.250.185.67",
+                    },
+                ),
+                _MuxStub(
+                    {"from_local_tun_read": 3, "overlay_rx_after_unpack": 4},
+                    {"probe_attempt_started": 3, "probe_timeout": 1},
+                    {"local_reply_before_overlay_send": 5, "local_reply_drop_throttled": 2},
+                ),
+            ]
+        )
+
+        payload = aggregate.snapshot_connections()
+
+        self.assertEqual(
+            payload["tun_icmp_stage_counts"],
+            {
+                "from_local_tun_read": 5,
+                "to_local_tun_written": 1,
+                "overlay_rx_after_unpack": 4,
+            },
+        )
+        self.assertEqual(
+            payload["tun_probe_boundary_counts"],
+            {
+                "probe_attempt_started": 5,
+                "probe_reply_matched": 1,
+                "probe_reply_consumed_before_local_write": 1,
+                "probe_reply_late_after_timeout": 1,
+                "probe_reply_unmatched": 1,
+                "probe_timeout": 1,
+            },
+        )
+        self.assertEqual(
+            payload["tun_local_reply_stage_counts"],
+            {
+                "local_reply_before_overlay_send": 7,
+                "local_reply_drop_throttled": 2,
+            },
+        )
+        self.assertEqual(
+            payload["tun_probe_last_timeout_diag"]["resolved_target"],
+            "142.250.185.67",
+        )
+        self.assertEqual(
+            payload["tun_probe_last_timeout_diag_by_transport"]["session-0"]["resolved_target"],
+            "142.250.185.67",
+        )
+
+    def test_runner_snapshot_preserves_tun_counter_maps(self):
+        class _MuxStub:
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "tun": [],
+                    "counts": {
+                        "udp": 0,
+                        "tcp": 0,
+                        "tun": 0,
+                        "udp_listening": 0,
+                        "tcp_listening": 0,
+                        "tun_listening": 0,
+                    },
+                    "tun_icmp_stage_counts": {
+                        "from_local_tun_read": 3,
+                        "to_local_tun_written": 1,
+                    },
+                    "tun_probe_boundary_counts": {
+                        "probe_attempt_started": 2,
+                        "probe_reply_matched": 1,
+                        "probe_reply_consumed_before_local_write": 1,
+                        "probe_reply_late_after_timeout": 1,
+                        "probe_reply_unmatched": 1,
+                    },
+                    "tun_local_reply_stage_counts": {
+                        "local_reply_before_overlay_send": 3,
+                    },
+                    "tun_probe_last_timeout_diag": {
+                        "captured_at_unix_ts": 1700000500.0,
+                        "resolved_target": "142.250.185.68",
+                    },
+                }
+
+        runner = bridge_runner.Runner.__new__(bridge_runner.Runner)
+        runner._muxes = [_MuxStub()]
+        runner._sessions = []
+
+        payload = runner.get_connections_snapshot()
+
+        self.assertEqual(
+            payload["tun_icmp_stage_counts"],
+            {
+                "from_local_tun_read": 3,
+                "to_local_tun_written": 1,
+            },
+        )
+        self.assertEqual(
+            payload["tun_probe_boundary_counts"],
+            {
+                "probe_attempt_started": 2,
+                "probe_reply_matched": 1,
+                "probe_reply_consumed_before_local_write": 1,
+                "probe_reply_late_after_timeout": 1,
+                "probe_reply_unmatched": 1,
+            },
+        )
+        self.assertEqual(
+            payload["tun_local_reply_stage_counts"],
+            {
+                "local_reply_before_overlay_send": 3,
+            },
+        )
+        self.assertEqual(
+            payload["tun_probe_last_timeout_diag"]["resolved_target"],
+            "142.250.185.68",
+        )
+        self.assertEqual(
+            payload["tun_probe_last_timeout_diag_by_transport"]["session-0"]["resolved_target"],
+            "142.250.185.68",
+        )
 
     def test_setup_build_stages_admin_web_assets_from_repo_root(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
@@ -664,6 +930,54 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["connection_last_event"], "connect_failed")
         self.assertEqual(payload["connection_failure_transport"], "ws")
 
+    def test_build_status_payload_exposes_tun_support_diagnostics(self):
+        args = argparse.Namespace(
+            admin_web=True,
+            admin_web_bind="127.0.0.1",
+            admin_web_port=18080,
+            admin_web_path="/",
+            admin_web_dir="./admin_web",
+            admin_web_name="Lab Node",
+            admin_web_auth_disable=True,
+            admin_web_username="",
+            admin_web_password="",
+            overlay_transport="myudp",
+            dashboard=False,
+        )
+        runner = _RunnerStub()
+        runner.get_connections_snapshot = lambda: {
+            "udp": [],
+            "tcp": [],
+            "tun": [
+                {
+                    "state": "connected",
+                    "chan_id": 11,
+                    "local": {"ifname": "obtun0", "mtu": 1600},
+                }
+            ],
+            "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 0},
+            "tun_icmp_stage_counts": {"from_local_tun_read": 3},
+            "tun_probe_boundary_counts": {"probe_reply_matched": 2},
+            "tun_local_reply_stage_counts": {"local_reply_before_overlay_send": 1},
+            "tun_probe_last_timeout_diag": {"resolved_target": "172.217.17.195"},
+            "tun_probe_last_timeout_diag_by_transport": {
+                "myudp": {"resolved_target": "172.217.17.195"}
+            },
+        }
+        ui = AdminWebUI(args, runner)
+        payload = ui._build_status_payload()
+        self.assertEqual(payload["tun_ifname"], "obtun0")
+        self.assertTrue(payload["tun_connected"])
+        self.assertEqual(payload["tun_helper_runtime_ifname"], "obtun0")
+        self.assertEqual(payload["tun_icmp_stage_counts"], {"from_local_tun_read": 3})
+        self.assertEqual(payload["tun_probe_boundary_counts"], {"probe_reply_matched": 2})
+        self.assertEqual(payload["tun_local_reply_stage_counts"], {"local_reply_before_overlay_send": 1})
+        self.assertEqual(payload["tun_probe_last_timeout_diag"]["resolved_target"], "172.217.17.195")
+        self.assertEqual(
+            payload["tun_probe_last_timeout_diag_by_transport"]["myudp"]["resolved_target"],
+            "172.217.17.195",
+        )
+
     def test_build_status_payload_prefers_admin_ui_platform_override(self):
         args = argparse.Namespace(
             admin_web=True,
@@ -710,6 +1024,80 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["summary"]["shared_services"], 1)
         self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
         self.assertEqual(payload["summary"]["shared_drop_total"], 3)
+        self.assertEqual(
+            payload["summary"]["snapshot_marker"],
+            AdminWebUI.TUN_ROUTING_SUMMARY_MARKER,
+        )
+        self.assertEqual(
+            payload["summary"]["shared_drop_by_reason"],
+            {
+                "source_not_owned_by_peer": 1,
+                "unknown_destination": 2,
+            },
+        )
+        self.assertEqual(
+            payload["summary"]["icmp_stage_counts"],
+            {
+                "from_local_tun_read": 11,
+                "overlay_tx_before_send_app": 9,
+                "overlay_rx_after_unpack": 8,
+                "from_peer_before_local_write": 8,
+                "to_local_tun_written": 7,
+                "local_reply_skip_overlay_inactive": 4,
+                "local_reply_drop_oversize": 1,
+                "local_reply_drop_throttled": 2,
+                "local_reply_drop_shared_route": 3,
+                "local_reply_virtual_probe_delivery": 5,
+                "local_reply_drop_no_channel": 0,
+                "local_reply_drop_missing_service_spec": 0,
+                "local_reply_bound_new_channel": 1,
+                "local_reply_before_overlay_send": 11,
+            },
+        )
+        self.assertEqual(
+            payload["summary"]["probe_boundary_counts"],
+            {
+                "probe_attempt_started": 6,
+                "probe_waiter_registered": 6,
+                "probe_injected_local_virtual": 0,
+                "probe_injected_kernel": 0,
+                "probe_injected_channelmux": 6,
+                "probe_send_completed": 6,
+                "probe_reply_matched": 4,
+                "probe_reply_consumed_before_local_write": 4,
+                "probe_reply_late_after_timeout": 1,
+                "probe_reply_unmatched": 2,
+                "probe_timeout": 2,
+                "probe_exception": 0,
+                "helper_read_packet": 4,
+                "helper_read_probe_packet": 4,
+                "helper_write_packet": 4,
+                "helper_write_probe_packet": 4,
+                "helper_write_error": 0,
+            },
+        )
+        self.assertEqual(
+            payload["summary"]["local_reply_stage_counts"],
+            {
+                "local_reply_skip_overlay_inactive": 4,
+                "local_reply_drop_oversize": 1,
+                "local_reply_drop_throttled": 2,
+                "local_reply_drop_shared_route": 3,
+                "local_reply_virtual_probe_delivery": 5,
+                "local_reply_drop_no_channel": 0,
+                "local_reply_drop_missing_service_spec": 0,
+                "local_reply_bound_new_channel": 1,
+                "local_reply_before_overlay_send": 11,
+            },
+        )
+        self.assertEqual(
+            payload["summary"]["probe_last_timeout_diag"]["resolved_target"],
+            "142.250.185.67",
+        )
+        self.assertEqual(
+            payload["summary"]["probe_last_timeout_diag_by_transport"]["session-0"]["resolved_target"],
+            "142.250.185.67",
+        )
         self.assertTrue(payload["tun_helper"]["enabled"])
         self.assertEqual(payload["tun_helper"]["mode"], "helper")
         self.assertEqual(payload["tun_helper"]["lifecycle_phase"], "connected")
@@ -1202,6 +1590,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('id="tunRoutingConnectionsBody"', index_html)
         self.assertIn('id="tunRoutingSharedBody"', index_html)
         self.assertIn('id="tunRoutingSharedDrops"', index_html)
+        self.assertIn('id="tunRoutingSharedDropReasons"', index_html)
+        self.assertIn('id="tunRoutingIcmpStageCounters"', index_html)
+        self.assertIn('id="tunRoutingProbeBoundaryCounters"', index_html)
+        self.assertIn('id="tunRoutingLocalReplyStageCounters"', index_html)
         self.assertIn('id="tunVerificationConfigSummary"', index_html)
         self.assertIn('id="tunVerificationPeerSummary"', index_html)
         self.assertIn('id="tunVerificationGlobalSummary"', index_html)
@@ -1217,6 +1609,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("apiFetch('/api/tun-routing/status'", app_js)
         self.assertIn("applyTunRoutingDoc(j);", app_js)
         self.assertIn("setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));", app_js)
+        self.assertIn("setText('tunRoutingSharedDropReasons', fmtDropReasonStats(j.summary || {}));", app_js)
+        self.assertIn("setText('tunRoutingIcmpStageCounters', fmtIcmpStageCounters(j.summary || {}));", app_js)
+        self.assertIn("setText('tunRoutingProbeBoundaryCounters', fmtProbeBoundaryCounters(j.summary || {}));", app_js)
+        self.assertIn("setText('tunRoutingLocalReplyStageCounters', fmtLocalReplyStageCounters(j.summary || {}));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));", app_js)
         self.assertIn("setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));", app_js)
         self.assertIn("setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));", app_js)
@@ -1228,6 +1624,10 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunVerificationGlobalResolutionDetail', fmtTunNameResolutionDetail(globalNameResolution, globalVerification));", app_js)
         self.assertIn("function fmtTunFlowSummary(stats) {", app_js)
         self.assertIn("function fmtDropDiagnostics(shared) {", app_js)
+        self.assertIn("function fmtDropReasonStats(summary) {", app_js)
+        self.assertIn("function fmtIcmpStageCounters(summary) {", app_js)
+        self.assertIn("function fmtProbeBoundaryCounters(summary) {", app_js)
+        self.assertIn("function fmtLocalReplyStageCounters(summary) {", app_js)
         self.assertIn("<th>ChannelMux Flow</th>", index_html)
         self.assertIn("<th>Drop Diagnostics</th>", index_html)
         self.assertIn("topics.push('tun_routing')", app_js)

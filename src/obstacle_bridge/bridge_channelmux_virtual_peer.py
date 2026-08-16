@@ -102,6 +102,25 @@ class ChannelMuxVirtualPeerMixin:
             if isinstance(entry, dict) and not bool(entry.get("local_virtual")) and entry.get("preferred_chan_id") is not None
         ]
         return len(active_peer_bindings) == 1
+    def _probe_uses_local_virtual_injection(
+        self,
+        dev: "ChannelMux.TunDevice",
+        *,
+        family: int,
+        source_ip: str,
+    ) -> bool:
+        svc_key = getattr(dev, "service_key", None)
+        local_virtual_peer = self._shared_tun_local_probe_binding_for_service(svc_key)
+        if not isinstance(local_virtual_peer, dict):
+            return False
+        local_virtual_ipv4 = str(next(iter(list(local_virtual_peer.get("ipv4") or [])), "") or "").strip()
+        return (
+            family == socket.AF_INET
+            and bool(local_virtual_ipv4)
+            and str(source_ip or "").strip() == local_virtual_ipv4
+        )
+    def _local_virtual_probe_transport_active(self) -> bool:
+        return bool(self._overlay_connected and self._accepting_enabled and self._session_app_ready())
     @staticmethod
     def _send_probe_packet_via_kernel_tun_blocking(
         *,
@@ -131,14 +150,12 @@ class ChannelMuxVirtualPeerMixin:
         packet: bytes,
     ) -> None:
         svc_key = getattr(dev, "service_key", None)
-        local_virtual_peer = self._shared_tun_local_probe_binding_for_service(svc_key)
-        local_virtual_ipv4 = ""
-        if isinstance(local_virtual_peer, dict):
-            local_virtual_ipv4 = str(next(iter(list(local_virtual_peer.get("ipv4") or [])), "") or "").strip()
-        if family == socket.AF_INET and local_virtual_ipv4 and str(source_ip or "").strip() == local_virtual_ipv4:
+        if self._probe_uses_local_virtual_injection(dev, family=family, source_ip=source_ip):
+            self._record_tun_probe_boundary("probe_injected_local_virtual")
             self._dispatch_local_virtual_probe_packet(dev, packet)
             return
         if self._probe_should_use_kernel_tun_injection(dev, family=family, source_ip=source_ip):
+            self._record_tun_probe_boundary("probe_injected_kernel")
             await asyncio.to_thread(
                 self._send_probe_packet_via_kernel_tun_blocking,
                 ifname=str(getattr(dev, "ifname", "") or ""),
@@ -147,6 +164,7 @@ class ChannelMuxVirtualPeerMixin:
                 packet=bytes(packet or b""),
             )
             return
+        self._record_tun_probe_boundary("probe_injected_channelmux")
         self._on_local_tun_packet(dev, packet)
     @staticmethod
     def _parse_internal_tun_probe_packet(packet: bytes) -> Optional[dict[str, Any]]:

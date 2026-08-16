@@ -1481,7 +1481,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and INFO-level ICMP decision breadcrumbs plus layered-readiness gating so SecureLink reauthentication windows can be distinguished from true overlay disconnects.
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and INFO-level ICMP decision breadcrumbs plus layered-readiness gating so SecureLink reauthentication windows can be distinguished from true overlay disconnects.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1490,17 +1490,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `53` | `827` |
+| Python CLI/runtime, including macOS Python | `54` | `868` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `24` | `155` |
+| iOS app/extension | `24` | `160` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `82/89 = 92.1%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
-| macOS Swift app | `2/89 = 2.2%` | `6/89 = 6.7%` | `8/89 = 9.0%` |
-| iOS app/extension | `10/89 = 11.2%` | `11/89 = 12.4%` | `17/89 = 19.1%` |
+| Python CLI/runtime, including macOS Python | `82/91 = 90.1%` | `89/91 = 97.8%` | `89/91 = 97.8%` |
+| macOS Swift app | `3/91 = 3.3%` | `6/91 = 6.6%` | `9/91 = 9.9%` |
+| iOS app/extension | `10/91 = 11.0%` | `12/91 = 13.2%` | `18/91 = 19.8%` |
 
 #### Architecture traceability
 

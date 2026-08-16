@@ -1190,6 +1190,86 @@ function fmtDropDiagnostics(shared) {
   return `total ${total} · ${reasons}\n${latestText}`;
 }
 
+function fmtDropReasonStats(summary) {
+  const byReason = summary?.shared_drop_by_reason;
+  if (!byReason || typeof byReason !== 'object') {
+    return 'none';
+  }
+  const rows = Object.entries(byReason)
+    .filter(([, count]) => Number(count || 0) > 0)
+    .sort((a, b) => {
+      const countDiff = Number(b[1] || 0) - Number(a[1] || 0);
+      if (countDiff) return countDiff;
+      return String(a[0]).localeCompare(String(b[0]));
+    })
+    .map(([reason, count]) => `${reason} ${fmtInteger(count)}`);
+  return rows.length ? rows.join('\n') : 'none';
+}
+
+function fmtLocalReplyStageCounters(summary) {
+  const defaults = [
+    'local_reply_skip_overlay_inactive',
+    'local_reply_drop_oversize',
+    'local_reply_drop_throttled',
+    'local_reply_drop_shared_route',
+    'local_reply_virtual_probe_delivery',
+    'local_reply_drop_no_channel',
+    'local_reply_drop_missing_service_spec',
+    'local_reply_bound_new_channel',
+    'local_reply_before_overlay_send',
+  ];
+  const counts = summary?.local_reply_stage_counts;
+  return defaults
+    .map((key) => `${key} ${fmtInteger(counts && typeof counts === 'object' ? (counts[key] ?? 0) : 0)}`)
+    .join('\n');
+}
+
+function fmtIcmpStageCounters(summary) {
+  const defaults = [
+    'from_local_tun_read',
+    'overlay_tx_before_send_app',
+    'overlay_rx_after_unpack',
+    'from_peer_before_local_write',
+    'to_local_tun_written',
+    'local_reply_skip_overlay_inactive',
+    'local_reply_drop_oversize',
+    'local_reply_drop_throttled',
+    'local_reply_drop_shared_route',
+    'local_reply_virtual_probe_delivery',
+    'local_reply_drop_no_channel',
+    'local_reply_drop_missing_service_spec',
+    'local_reply_bound_new_channel',
+    'local_reply_before_overlay_send',
+  ];
+  const counts = summary?.icmp_stage_counts;
+  return defaults
+    .map((key) => `${key} ${fmtInteger(counts && typeof counts === 'object' ? (counts[key] ?? 0) : 0)}`)
+    .join('\n');
+}
+
+function fmtProbeBoundaryCounters(summary) {
+  const defaults = [
+    'probe_attempt_started',
+    'probe_waiter_registered',
+    'probe_injected_local_virtual',
+    'probe_injected_kernel',
+    'probe_injected_channelmux',
+    'probe_send_completed',
+    'probe_reply_matched',
+    'probe_timeout',
+    'probe_exception',
+    'helper_read_packet',
+    'helper_read_probe_packet',
+    'helper_write_packet',
+    'helper_write_probe_packet',
+    'helper_write_error',
+  ];
+  const counts = summary?.probe_boundary_counts;
+  return defaults
+    .map((key) => `${key} ${fmtInteger(counts && typeof counts === 'object' ? (counts[key] ?? 0) : 0)}`)
+    .join('\n');
+}
+
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   const tbody = document.getElementById(tbodyId);
   if (!tbody) return;
@@ -3130,6 +3210,10 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
   setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));
+  setText('tunRoutingSharedDropReasons', fmtDropReasonStats(j.summary || {}));
+  setText('tunRoutingIcmpStageCounters', fmtIcmpStageCounters(j.summary || {}));
+  setText('tunRoutingProbeBoundaryCounters', fmtProbeBoundaryCounters(j.summary || {}));
+  setText('tunRoutingLocalReplyStageCounters', fmtLocalReplyStageCounters(j.summary || {}));
   setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
