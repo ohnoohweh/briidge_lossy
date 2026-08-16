@@ -30,6 +30,7 @@ from .bridge_tun_ping import (
     PROBE_MAGIC,
     build_ipv4_echo_request,
     build_ipv6_echo_request,
+    parse_echo_request,
     parse_internal_probe_packet,
     parse_echo_reply,
     probe_payload,
@@ -148,6 +149,46 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     ProtoName = Literal["tcp", "udp", "tun"]
     ServiceOrigin = Literal["local", "peer"]
     ServiceKey = Tuple[ServiceOrigin, int, int]  # (origin, peer_id, svc_id)
+    LOCAL_REPLY_STAGE_KEYS: tuple[str, ...] = (
+        "local_reply_skip_overlay_inactive",
+        "local_reply_drop_oversize",
+        "local_reply_drop_throttled",
+        "local_reply_drop_shared_route",
+        "local_reply_virtual_probe_delivery",
+        "local_reply_drop_no_channel",
+        "local_reply_drop_missing_service_spec",
+        "local_reply_bound_new_channel",
+        "local_reply_before_overlay_send",
+    )
+    TUN_ICMP_STAGE_KEYS: tuple[str, ...] = (
+        "from_local_tun_read",
+        "overlay_tx_before_send_app",
+        "overlay_rx_after_unpack",
+        "from_peer_before_local_write",
+        "to_local_tun_written",
+        *LOCAL_REPLY_STAGE_KEYS,
+    )
+    TUN_PROBE_BOUNDARY_KEYS: tuple[str, ...] = (
+        "probe_attempt_started",
+        "probe_waiter_registered",
+        "probe_injected_local_virtual",
+        "probe_injected_kernel",
+        "probe_injected_channelmux",
+        "probe_send_completed",
+        "probe_reply_matched",
+        "probe_reply_consumed_before_local_write",
+        "probe_reply_late_after_timeout",
+        "own_probe_reply_unmatched",
+        "foreign_probe_reply_unmatched",
+        "probe_reply_unmatched",
+        "probe_timeout",
+        "probe_exception",
+        "helper_read_packet",
+        "helper_read_probe_packet",
+        "helper_write_packet",
+        "helper_write_probe_packet",
+        "helper_write_error",
+    )
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -561,11 +602,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tun_probe_tasks: dict[tuple[str, str, str], asyncio.Task] = {}
         self._tun_probe_history: dict[tuple[str, str, str], dict[str, Any]] = {}
         self._tun_probe_waiters: dict[tuple[int, int, int, bytes], asyncio.Future] = {}
+        self._tun_probe_timed_out_waiters: dict[tuple[int, int, int, bytes], dict[str, Any]] = {}
+        self._tun_probe_last_timeout_diag: dict[str, Any] = {}
         self._tun_probe_sequence: int = 1
         self._tun_probe_identifier: int = random.getrandbits(16)
 
         # Overlay state gate
-        self._overlay_connected: bool = self._session_app_ready()
+        self._overlay_connected: bool = self._session_overlay_inflow_allowed()
         self._accepting_enabled: bool = self._overlay_connected
 
         # Services
@@ -658,6 +701,15 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tun_flow_write_ok_samples: int = 0
         self._tun_mux_tx_samples: int = 0
         self._tun_mux_rx_samples: int = 0
+        self._local_reply_stage_counts: dict[str, int] = {
+            key: 0 for key in self.LOCAL_REPLY_STAGE_KEYS
+        }
+        self._tun_icmp_stage_counts: dict[str, int] = {
+            key: 0 for key in self.TUN_ICMP_STAGE_KEYS
+        }
+        self._tun_probe_boundary_counts: dict[str, int] = {
+            key: 0 for key in self.TUN_PROBE_BOUNDARY_KEYS
+        }
 
         # Per-channel stats (readable counters + CRC)
         self._chan_stats: dict[tuple[int, ChannelMux.Proto], _ChanCtr] = {}
@@ -789,6 +841,181 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             preview,
             parse_error,
             note,
+        )
+
+    def _log_tun_icmp_packet(
+        self,
+        *,
+        stage: str,
+        packet: bytes,
+        ifname: str = "",
+        chan: Optional[int] = None,
+        peer_id: Optional[int] = None,
+        mtype: Optional["ChannelMux.MType"] = None,
+        note: str = "",
+    ) -> None:
+        payload = bytes(packet or b"")
+        if stage in self._tun_icmp_stage_counts:
+            self._tun_icmp_stage_counts[stage] = int(self._tun_icmp_stage_counts.get(stage, 0) or 0) + 1
+        if stage in self._local_reply_stage_counts:
+            self._local_reply_stage_counts[stage] = int(self._local_reply_stage_counts.get(stage, 0) or 0) + 1
+        parsed = parse_internal_probe_packet(payload)
+        packet_type = "internal_probe"
+        probe_note = ""
+        if isinstance(parsed, dict):
+            direction = str(parsed.get("direction") or "").strip()
+            packet_type = f"internal_probe_{direction or 'packet'}"
+            probe_kind = int(parsed.get("probe_kind") or 0)
+            if probe_kind == PROBE_KIND_GLOBAL:
+                probe_note = "probe_kind=global"
+            elif probe_kind == PROBE_KIND_PEER:
+                probe_note = "probe_kind=peer"
+            else:
+                probe_note = f"probe_kind={probe_kind}"
+        else:
+            parsed = parse_echo_request(payload)
+            packet_type = "echo_request"
+            if not isinstance(parsed, dict):
+                parsed = parse_echo_reply(payload)
+                packet_type = "echo_reply"
+        if not isinstance(parsed, dict):
+            return
+        family = int(parsed.get("family") or 0)
+        family_text = "ipv6" if family == socket.AF_INET6 else "ipv4"
+        note_bits: list[str] = []
+        if note:
+            note_bits.append(str(note))
+        if probe_note:
+            note_bits.append(probe_note)
+        crc32 = f"{(zlib.crc32(payload) & 0xFFFFFFFF):08x}" if payload else "00000000"
+        self.log.info(
+            "[TUN/ICMP] stage=%s type=%s family=%s if=%s chan=%s peer=%s mtype=%s len=%s src=%s dst=%s id=%s seq=%s crc32=%s note=%s",
+            stage,
+            packet_type,
+            family_text,
+            ifname,
+            "" if chan is None else chan,
+            "" if peer_id is None else peer_id,
+            "" if mtype is None else int(mtype),
+            len(payload),
+            str(parsed.get("source_ip") or ""),
+            str(parsed.get("destination_ip") or ""),
+            int(parsed.get("identifier") or 0),
+            int(parsed.get("sequence") or 0),
+            crc32,
+            "; ".join(note_bits),
+        )
+
+    def _log_tun_icmp_overlay_packet(
+        self,
+        *,
+        stage: str,
+        packet: bytes,
+        chan: int,
+        peer_id: Optional[int],
+        mtype: "ChannelMux.MType",
+        counter: Optional[int] = None,
+        note: str = "",
+    ) -> None:
+        note_bits: list[str] = []
+        if note:
+            note_bits.append(str(note))
+        if counter is not None:
+            note_bits.append(f"mux_counter={counter}")
+        self._log_tun_icmp_packet(
+            stage=stage,
+            packet=packet,
+            chan=chan,
+            peer_id=peer_id,
+            mtype=mtype,
+            note="; ".join(note_bits),
+        )
+
+    def _log_tun_probe_trace(
+        self,
+        *,
+        stage: str,
+        packet: bytes,
+        ifname: str = "",
+        chan: Optional[int] = None,
+        peer_id: Optional[int] = None,
+        mtype: Optional["ChannelMux.MType"] = None,
+        note: str = "",
+    ) -> None:
+        parsed = parse_internal_probe_packet(bytes(packet or b""))
+        if not isinstance(parsed, dict):
+            return
+        family = int(parsed.get("family") or 0)
+        identifier = int(parsed.get("identifier") or 0)
+        sequence = int(parsed.get("sequence") or 0)
+        nonce = bytes(parsed.get("nonce") or b"")
+        probe_kind = int(parsed.get("probe_kind") or 0)
+        direction = str(parsed.get("direction") or "").strip() or "unknown"
+        owner = self._tun_probe_reply_owner_label(identifier=identifier)
+        self.log.info(
+            "[TUN/PROBE/TRACE] stage=%s owner=%s dir=%s kind=%s key=%s/%s/%s/%s if=%s chan=%s peer=%s mtype=%s src=%s dst=%s note=%s",
+            stage,
+            owner,
+            direction,
+            probe_kind,
+            family,
+            identifier,
+            sequence,
+            nonce.hex(),
+            ifname,
+            "" if chan is None else chan,
+            "" if peer_id is None else peer_id,
+            "" if mtype is None else int(mtype),
+            str(parsed.get("source_ip") or ""),
+            str(parsed.get("destination_ip") or ""),
+            str(note or ""),
+        )
+
+    def _log_tun_icmp_local_decision(
+        self,
+        *,
+        stage: str,
+        dev: "ChannelMux.TunDevice",
+        packet: bytes,
+        chan: Optional[int],
+        note: str,
+    ) -> None:
+        self._log_tun_icmp_packet(
+            stage=stage,
+            packet=packet,
+            ifname=dev.ifname,
+            chan=chan,
+            peer_id=self._chan_owner_peer_id.get(int(chan)) if chan is not None else None,
+            note=note,
+        )
+
+    def _record_tun_probe_boundary(self, key: str) -> None:
+        if key in self._tun_probe_boundary_counts:
+            self._tun_probe_boundary_counts[key] = int(self._tun_probe_boundary_counts.get(key, 0) or 0) + 1
+
+    def _log_overlay_accepting_state(
+        self,
+        *,
+        reason: str,
+        connected_arg: Optional[bool] = None,
+        epoch: Optional[int] = None,
+        was_overlay_connected: Optional[bool] = None,
+        new_overlay_connected: Optional[bool] = None,
+        was_accepting_enabled: Optional[bool] = None,
+        new_accepting_enabled: Optional[bool] = None,
+    ) -> None:
+        self.log.info(
+            "[MUX/STATE] reason=%s connected_arg=%s epoch=%s was_overlay_connected=%s new_overlay_connected=%s was_accepting_enabled=%s new_accepting_enabled=%s session_connected=%s session_app_ready=%s transport=%s",
+            reason,
+            "" if connected_arg is None else int(bool(connected_arg)),
+            "" if epoch is None else int(epoch),
+            "" if was_overlay_connected is None else int(bool(was_overlay_connected)),
+            "" if new_overlay_connected is None else int(bool(new_overlay_connected)),
+            "" if was_accepting_enabled is None else int(bool(was_accepting_enabled)),
+            "" if new_accepting_enabled is None else int(bool(new_accepting_enabled)),
+            int(bool(self.session.is_connected())),
+            int(bool(self._session_app_ready())),
+            str(self._overlay_transport or ""),
         )
 
     @staticmethod
@@ -2000,13 +2227,34 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return bool(layers[-1].get("app_ready"))
         return bool(self.session.is_connected())
 
+    def _session_overlay_inflow_allowed(self) -> bool:
+        secure_status_getter = getattr(self.session, "get_secure_link_status_snapshot", None)
+        if callable(secure_status_getter):
+            with contextlib.suppress(Exception):
+                status = dict(secure_status_getter() or {})
+                state = str(status.get("state") or "").strip().lower()
+                if state in {"authenticated", "reauthenticating"}:
+                    return True
+                if state in {"handshaking", "failed", "waiting_transport", "waiting_hello", "disconnected"}:
+                    return False
+        return bool(self._session_app_ready())
+
     async def on_overlay_state(self, connected: bool):
         was_connected = self._overlay_connected
-        effective_connected = bool(self._session_app_ready())
+        was_accepting = self._accepting_enabled
+        effective_connected = bool(self._session_overlay_inflow_allowed())
         self._overlay_connected = effective_connected
         self.log.info("[MUX] overlay -> %s", "CONNECTED" if effective_connected else "DISCONNECTED")
         if not effective_connected:
             self._accepting_enabled = False
+            self._log_overlay_accepting_state(
+                reason="on_overlay_state_disconnected",
+                connected_arg=connected,
+                was_overlay_connected=was_connected,
+                new_overlay_connected=self._overlay_connected,
+                was_accepting_enabled=was_accepting,
+                new_accepting_enabled=self._accepting_enabled,
+            )
             await self._stop_all_services()
             await self._close_all_channels()
             return
@@ -2014,15 +2262,33 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not was_connected:
             self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
         self._accepting_enabled = True
+        self._log_overlay_accepting_state(
+            reason="on_overlay_state_connected",
+            connected_arg=connected,
+            was_overlay_connected=was_connected,
+            new_overlay_connected=self._overlay_connected,
+            was_accepting_enabled=was_accepting,
+            new_accepting_enabled=self._accepting_enabled,
+        )
         await self._start_all_services()
         self._send_remote_services_catalog_if_any()
 
     async def on_transport_epoch_change(self, epoch: int) -> None:
         self.log.info("[MUX] transport epoch changed -> %s (hard resync)", epoch)
+        was_connected = self._overlay_connected
+        was_accepting = self._accepting_enabled
         self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
         await self._close_all_channels()
-        self._overlay_connected = bool(self._session_app_ready())
+        self._overlay_connected = bool(self._session_overlay_inflow_allowed())
         self._accepting_enabled = self._overlay_connected
+        self._log_overlay_accepting_state(
+            reason="on_transport_epoch_change",
+            epoch=epoch,
+            was_overlay_connected=was_connected,
+            new_overlay_connected=self._overlay_connected,
+            was_accepting_enabled=was_accepting,
+            new_accepting_enabled=self._accepting_enabled,
+        )
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
         self._send_remote_services_catalog_if_any()
@@ -2796,8 +3062,27 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     payload=bytes(data),
                     note="before_session_send_app",
                 )
+                self._log_tun_probe_trace(
+                    stage="overlay_tx_before_send_app",
+                    packet=bytes(data),
+                    chan=chan_id,
+                    peer_id=self._chan_owner_peer_id.get(int(chan_id)),
+                    mtype=mtype,
+                    note="before_session_send_app",
+                )
+            counter = self._next_ctr(chan_id, proto, mtype)
+            if proto == ChannelMux.Proto.TUN and mtype in (ChannelMux.MType.DATA, ChannelMux.MType.DATA_FRAG):
+                self._log_tun_icmp_overlay_packet(
+                    stage="overlay_tx_before_send_app",
+                    packet=bytes(data),
+                    chan=chan_id,
+                    peer_id=self._chan_owner_peer_id.get(int(chan_id)),
+                    mtype=mtype,
+                    counter=counter,
+                    note="before_session_send_app",
+                )
             self._record_sync_diag("ChannelMux._send_mux:pack_mux", phase="started")
-            wire = self._pack_mux(chan_id, proto, self._next_ctr(chan_id, proto, mtype), mtype, data)
+            wire = self._pack_mux(chan_id, proto, counter, mtype, data)
             self._record_sync_diag("ChannelMux._send_mux:pack_mux", phase="finished")
             if len(wire) > self._session_max_app_payload:
                 self.log.error(
@@ -3005,6 +3290,22 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             current_owner = getattr(dev, "_reader_mux", None)
             if dev.reader_registered and current_owner is self and not force_owner:
                 return
+            if current_owner is not None and current_owner is not self:
+                old_tasks = getattr(current_owner, "_tun_helper_reader_tasks", None)
+                if isinstance(old_tasks, dict):
+                    existing_task = old_tasks.pop(id(dev), None)
+                    if existing_task is not None:
+                        existing_task.cancel()
+                current_owner_devices = getattr(current_owner, "_tun_helper_devices", None)
+                if isinstance(current_owner_devices, dict):
+                    current_owner_devices.pop(id(dev), None)
+                self.log.info(
+                    "[TUN/HELPER] reader ownership handoff if=%s from_mux=%s to_mux=%s force_owner=%s",
+                    str(getattr(dev, "ifname", "") or ""),
+                    hex(id(current_owner)),
+                    hex(id(self)),
+                    int(bool(force_owner)),
+                )
             existing_task = self._tun_helper_reader_tasks.pop(id(dev), None)
             if existing_task is not None:
                 existing_task.cancel()
@@ -3096,40 +3397,62 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         _bridge_tun_platform.close_tun_device(self, dev)
 
     def _write_tun_packet(self, dev: "ChannelMux.TunDevice", data: bytes) -> None:
+        def _log_probe_write(stage: str, note: str = "") -> None:
+            self._log_tun_probe_trace(
+                stage=stage,
+                packet=bytes(data or b""),
+                ifname=str(getattr(dev, "ifname", "") or ""),
+                chan=getattr(dev, "chan_id", None),
+                peer_id=None,
+                note=note,
+            )
+
         if self._tun_helper_manages_device(dev):
             backend = self._tun_helper_backend
             if backend is not None:
                 writer = getattr(backend, "local_write_packet", None)
                 if not callable(writer):
                     raise RuntimeError("helper TUN backend does not support local_write_packet")
+                _log_probe_write("local_kernel_inject_before", note="backend=helper-local")
                 writer(data)
+                _log_probe_write("local_kernel_inject_after", note="backend=helper-local")
                 return
             client = self._tun_helper_client
             if client is None:
                 raise RuntimeError("helper TUN client is not available for packet write")
+            _log_probe_write("local_kernel_inject_before", note="backend=helper-client-async")
             self.loop.create_task(self._tun_helper_write_packet(client, dev, data))
+            _log_probe_write("local_kernel_inject_after", note="backend=helper-client-async")
             return
         if _bridge_tun_platform is not None:
             writer = getattr(_bridge_tun_platform, "write_tun_packet", None)
             if callable(writer):
+                _log_probe_write("local_kernel_inject_before", note="backend=platform")
                 writer(self, dev, data)
+                _log_probe_write("local_kernel_inject_after", note="backend=platform")
                 return
         adapter = getattr(dev, "wintun_adapter", None)
         if adapter is not None:
             write_names = ["write", "send", "send_packet", "write_packet"]
             for name in write_names:
                 if hasattr(adapter, name):
+                    _log_probe_write("local_kernel_inject_before", note=f"backend=wintun:{name}")
                     result = getattr(adapter, name)(data)
                     if asyncio.iscoroutine(result):
                         self.loop.create_task(result)
+                    _log_probe_write("local_kernel_inject_after", note=f"backend=wintun:{name}")
                     return
             if callable(adapter):
+                _log_probe_write("local_kernel_inject_before", note="backend=wintun:callable")
                 result = adapter(data)
                 if asyncio.iscoroutine(result):
                     self.loop.create_task(result)
+                _log_probe_write("local_kernel_inject_after", note="backend=wintun:callable")
                 return
             raise RuntimeError("No write method on WinTun adapter")
+        _log_probe_write("local_kernel_inject_before", note="backend=os.write")
         os.write(dev.fd, data)
+        _log_probe_write("local_kernel_inject_after", note="backend=os.write")
 
     def _find_service_tun_device(self, ifname: str, mtu: int) -> Optional["ChannelMux.TunDevice"]:
         for dev in self._svc_tun_devices.values():
@@ -3284,6 +3607,17 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 packet = await self._tun_helper_read_packet(dev)
                 if not isinstance(packet, (bytes, bytearray)):
                     continue
+                self._record_tun_probe_boundary("helper_read_packet")
+                if self._parse_internal_tun_probe_packet(bytes(packet)) is not None:
+                    self._record_tun_probe_boundary("helper_read_probe_packet")
+                    self._log_tun_probe_trace(
+                        stage="from_local_tun_helper_read",
+                        packet=bytes(packet),
+                        ifname=dev.ifname,
+                        chan=dev.chan_id,
+                        peer_id=self._chan_owner_peer_id.get(int(dev.chan_id)) if dev.chan_id is not None else None,
+                        note="helper_read_loop",
+                    )
                 self._on_local_tun_packet(dev, bytes(packet))
         except asyncio.CancelledError:
             raise
@@ -3356,8 +3690,37 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     async def _tun_helper_write_packet(self, client: Any, dev: "ChannelMux.TunDevice", data: bytes) -> None:
         try:
+            self._record_tun_probe_boundary("helper_write_packet")
+            if self._parse_internal_tun_probe_packet(bytes(data)) is not None:
+                self._record_tun_probe_boundary("helper_write_probe_packet")
+                self._log_tun_probe_trace(
+                    stage="to_local_tun_helper_write_async_start",
+                    packet=bytes(data),
+                    ifname=dev.ifname,
+                    chan=dev.chan_id,
+                    peer_id=self._chan_owner_peer_id.get(int(dev.chan_id)) if dev.chan_id is not None else None,
+                    note="helper_write_async_start",
+                )
             await client.write_packet(data)
+            self._log_tun_icmp_packet(
+                stage="to_local_tun_helper_written",
+                packet=data,
+                ifname=dev.ifname,
+                chan=dev.chan_id,
+                peer_id=self._chan_owner_peer_id.get(int(dev.chan_id)) if dev.chan_id is not None else None,
+                note="helper_write_completed",
+            )
+            if self._parse_internal_tun_probe_packet(bytes(data)) is not None:
+                self._log_tun_probe_trace(
+                    stage="to_local_tun_helper_write_async_done",
+                    packet=bytes(data),
+                    ifname=dev.ifname,
+                    chan=dev.chan_id,
+                    peer_id=self._chan_owner_peer_id.get(int(dev.chan_id)) if dev.chan_id is not None else None,
+                    note="helper_write_async_done",
+                )
         except Exception as exc:
+            self._record_tun_probe_boundary("helper_write_error")
             self.log.warning("[TUN/HELPER] helper write failed if=%s bytes=%s err=%r", dev.ifname, len(data), exc)
 
 
@@ -4001,6 +4364,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         summary: str,
         detail: str,
         resolved_target: str = "",
+        name_resolution: Optional[dict[str, Any]] = None,
         value_ms: Optional[float] = None,
         last_success_ago_s: Optional[float] = None,
         last_success_rtt_ms: Optional[float] = None,
@@ -4013,6 +4377,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "detail": str(detail or ""),
             "target": str(target or ""),
             "resolved_target": str(resolved_target or ""),
+            "name_resolution": dict(name_resolution or {}),
             "method": "internal_icmp_echo",
             "checked_at_unix_ts": float(time.time()),
             "value_ms": None if value_ms is None else float(value_ms),
@@ -4022,6 +4387,59 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if result["value_ms"] is not None:
             result["last_success_rtt_ms"] = result["value_ms"]
         return result
+
+    @staticmethod
+    def _tun_probe_name_resolution(*, status: str, resolved_ip: str = "", detail: str = "") -> dict[str, Any]:
+        return {
+            "status": str(status or "").strip() or "unknown",
+            "resolved_ip": str(resolved_ip or "").strip(),
+            "detail": str(detail or "").strip(),
+        }
+
+    def _tun_probe_runtime_diag_snapshot(
+        self,
+        *,
+        probe_kind: str,
+        ifname: str,
+        target: str,
+        resolved_target: str,
+        timeout_s: float,
+    ) -> dict[str, Any]:
+        now_ns = time.monotonic_ns()
+        backpressure = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
+        secure_status_getter = getattr(self.session, "get_secure_link_status_snapshot", None)
+        secure_status: dict[str, Any] = {}
+        if callable(secure_status_getter):
+            with contextlib.suppress(Exception):
+                secure_status = dict(secure_status_getter() or {})
+        return {
+            "captured_at_unix_ts": float(time.time()),
+            "probe_kind": str(probe_kind or ""),
+            "ifname": str(ifname or ""),
+            "target": str(target or ""),
+            "resolved_target": str(resolved_target or ""),
+            "timeout_s": float(timeout_s or 0.0),
+            "overlay_transport": str(self._overlay_transport or ""),
+            "overlay_connected": bool(self._overlay_connected),
+            "accepting_enabled": bool(self._accepting_enabled),
+            "session_connected": bool(self.session.is_connected()),
+            "session_app_ready": bool(self._session_app_ready()),
+            "secure_link_state": str(secure_status.get("state") or ""),
+            "secure_link_authenticated": bool(secure_status.get("authenticated")),
+            "secure_link_last_event": str(secure_status.get("last_event") or ""),
+            "secure_link_failure_reason": str(secure_status.get("failure_reason") or ""),
+            "secure_link_failure_detail": str(secure_status.get("failure_detail") or ""),
+            "backpressure": {
+                "waiting_count": int(backpressure.get("waiting_count", 0) or 0),
+                "inflight": int(backpressure.get("inflight", 0) or 0),
+                "max_inflight": int(backpressure.get("max_inflight", 0) or 0),
+                "transmit_delay_est_ms": float(backpressure.get("transmit_delay_est_ms", 0.0) or 0.0),
+                "prev_window_bytes": int(backpressure.get("prev_window_bytes", 0) or 0),
+                "curr_window_bytes": int(backpressure.get("curr_window_bytes", 0) or 0),
+                "stalled": bool(backpressure.get("stalled")),
+                "active": bool(self._session_overlay_backpressure_active(backpressure)),
+            },
+        }
 
     def _find_tun_device_by_ifname(self, ifname: str) -> Optional["ChannelMux.TunDevice"]:
         text_ifname = str(ifname or "").strip()
@@ -4085,6 +4503,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         return max(0.0, float(time.monotonic()) - float(last_success_monotonic)), (
             None if last_success_rtt_ms is None else float(last_success_rtt_ms)
         )
+
+    def _prune_tun_probe_timed_out_waiters(self) -> None:
+        now = float(time.monotonic())
+        stale_keys = [
+            key
+            for key, meta in list(self._tun_probe_timed_out_waiters.items())
+            if (now - float(meta.get("timed_out_monotonic", 0.0) or 0.0)) > 30.0
+        ]
+        for key in stale_keys:
+            self._tun_probe_timed_out_waiters.pop(key, None)
+
+    def _tun_probe_reply_owner_label(self, *, identifier: int) -> str:
+        return "own" if int(identifier) == int(self._tun_probe_identifier) else "foreign"
+
     def _observe_tun_probe_reply(self, dev: "ChannelMux.TunDevice", data: bytes) -> bool:
         parsed = parse_echo_reply(data)
         if not isinstance(parsed, dict):
@@ -4093,15 +4525,83 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if len(payload) < len(PROBE_MAGIC) + 9 or not payload.startswith(PROBE_MAGIC):
             return False
         nonce = payload[5:13]
+        identifier = int(parsed.get("identifier") or 0)
+        owner_label = self._tun_probe_reply_owner_label(identifier=identifier)
         waiter_key = (
             int(parsed.get("family") or 0),
-            int(parsed.get("identifier") or 0),
+            identifier,
             int(parsed.get("sequence") or 0),
             bytes(nonce),
         )
         future = self._tun_probe_waiters.get(waiter_key)
         if future is None:
+            self._prune_tun_probe_timed_out_waiters()
+            timed_out_meta = dict(self._tun_probe_timed_out_waiters.pop(waiter_key, {}) or {})
+            if timed_out_meta:
+                self._record_tun_probe_boundary("probe_reply_late_after_timeout")
+                self._log_tun_probe_trace(
+                    stage="reply_late_after_timeout",
+                    packet=data,
+                    ifname=str(getattr(dev, "ifname", "") or ""),
+                )
+                late_count = int(self._tun_probe_boundary_counts.get("probe_reply_late_after_timeout", 0) or 0)
+                if self._should_log_tun_flow_sample(late_count):
+                    late_ms = max(
+                        0.0,
+                        (float(time.monotonic()) - float(timed_out_meta.get("timed_out_monotonic", 0.0) or 0.0)) * 1000.0,
+                    )
+                    self.log.info(
+                        "[TUN/PROBE] late_reply_after_timeout owner=%s if=%s family=%s id=%s seq=%s nonce=%s src=%s dst=%s late_ms=%.1f target=%s resolved_target=%s",
+                        owner_label,
+                        str(getattr(dev, "ifname", "") or ""),
+                        int(parsed.get("family") or 0),
+                        identifier,
+                        int(parsed.get("sequence") or 0),
+                        bytes(nonce).hex(),
+                        str(parsed.get("source_ip") or ""),
+                        str(parsed.get("destination_ip") or ""),
+                        late_ms,
+                        str(timed_out_meta.get("target") or ""),
+                        str(timed_out_meta.get("resolved_target") or ""),
+                    )
+                return False
+            self._record_tun_probe_boundary("probe_reply_unmatched")
+            self._record_tun_probe_boundary(f"{owner_label}_probe_reply_unmatched")
+            self._log_tun_probe_trace(
+                stage="reply_unmatched",
+                packet=data,
+                ifname=str(getattr(dev, "ifname", "") or ""),
+                note=f"waiters={len(self._tun_probe_waiters)}",
+            )
+            unmatched_count = int(self._tun_probe_boundary_counts.get("probe_reply_unmatched", 0) or 0)
+            if self._should_log_tun_flow_sample(unmatched_count):
+                waiter_samples: list[str] = []
+                for idx, key in enumerate(list(self._tun_probe_waiters.keys())[:4]):
+                    family_value, ident_value, seq_value, nonce_value = key
+                    waiter_samples.append(
+                        f"{idx}:{int(family_value)}/{int(ident_value)}/{int(seq_value)}/{bytes(nonce_value).hex()}"
+                    )
+                self.log.info(
+                    "[TUN/PROBE] unmatched_reply owner=%s if=%s family=%s id=%s seq=%s nonce=%s src=%s dst=%s waiters=%s waiter_samples=%s",
+                    owner_label,
+                    str(getattr(dev, "ifname", "") or ""),
+                    int(parsed.get("family") or 0),
+                    identifier,
+                    int(parsed.get("sequence") or 0),
+                    bytes(nonce).hex(),
+                    str(parsed.get("source_ip") or ""),
+                    str(parsed.get("destination_ip") or ""),
+                    len(self._tun_probe_waiters),
+                    ",".join(waiter_samples) if waiter_samples else "-",
+                )
             return False
+        self._record_tun_probe_boundary("probe_reply_matched")
+        self._log_tun_probe_trace(
+            stage="reply_matched",
+            packet=data,
+            ifname=str(getattr(dev, "ifname", "") or ""),
+            note="waiter_matched=1",
+        )
         self._tun_probe_waiters.pop(waiter_key, None)
         if not future.done():
             future.set_result(
@@ -4128,6 +4628,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     ) -> dict[str, Any]:
         cache_key = self._tun_probe_cache_key(probe_kind=probe_kind, ifname=ifname, target=target)
         label = self._tun_probe_label(probe_kind)
+        self._record_tun_probe_boundary("probe_attempt_started")
         text_target = str(target or "").strip()
         text_ifname = str(ifname or "").strip()
         if not text_target:
@@ -4138,6 +4639,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 state="skipped",
                 summary=f"{label}: skipped",
                 detail="Verification target is not configured.",
+                name_resolution=self._tun_probe_name_resolution(
+                    status="skipped",
+                    detail="Verification target is not configured.",
+                ),
             )
         if not text_ifname:
             return self._tun_probe_result(
@@ -4147,6 +4652,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 state="skipped",
                 summary=f"{label}: skipped",
                 detail="TUN interface name unavailable.",
+                name_resolution=self._tun_probe_name_resolution(status="unknown"),
             )
         dev = self._find_tun_device_by_ifname(text_ifname)
         if dev is None:
@@ -4157,6 +4663,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 state="skipped",
                 summary=f"{label}: skipped",
                 detail=f"TUN interface {text_ifname} is not active on this runtime.",
+                name_resolution=self._tun_probe_name_resolution(status="unknown"),
             )
         candidate_families: list[int] = []
         configured_v4 = str(self._tun_routing_config().tunnel_address or "").strip()
@@ -4186,9 +4693,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 state="failed",
                 summary=f"{label}: failed",
                 detail=f"Probe target resolution failed: {last_error}",
+                name_resolution=self._tun_probe_name_resolution(
+                    status="failed",
+                    detail=f"Probe target resolution failed: {last_error}",
+                ),
                 last_success_ago_s=last_success_ago_s,
                 last_success_rtt_ms=last_success_rtt_ms,
             )
+        name_resolution = self._tun_probe_name_resolution(
+            status="successful",
+            resolved_ip=resolved_target,
+            detail=f"Resolved {text_target} to {resolved_target}.",
+        )
         source_ip = self._source_address_for_probe(probe_kind=probe_kind, family=family)
         if not source_ip:
             last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
@@ -4200,9 +4716,28 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 summary=f"{label}: skipped",
                 detail=f"No configured tunnel source address is available for {resolved_target}.",
                 resolved_target=resolved_target,
+                name_resolution=name_resolution,
                 last_success_ago_s=last_success_ago_s,
                 last_success_rtt_ms=last_success_rtt_ms,
             )
+        if self._probe_uses_local_virtual_injection(dev, family=family, source_ip=source_ip):
+            if not self._local_virtual_probe_transport_active():
+                last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
+                return self._tun_probe_result(
+                    probe_kind=probe_kind,
+                    target=text_target,
+                    ok=False,
+                    state="skipped",
+                    summary=f"{label}: skipped",
+                    detail=(
+                        f"Skipped local virtual probe on inactive transport "
+                        f"{str(self._overlay_transport or '').lower() or 'unknown'}."
+                    ),
+                    resolved_target=resolved_target,
+                    name_resolution=name_resolution,
+                    last_success_ago_s=last_success_ago_s,
+                    last_success_rtt_ms=last_success_rtt_ms,
+                )
         sent_monotonic_ns = time.monotonic_ns()
         nonce = secrets.token_bytes(8)
         payload = probe_payload(
@@ -4230,6 +4765,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         future = self.loop.create_future()
         waiter_key = (family, identifier, sequence, bytes(nonce))
         self._tun_probe_waiters[waiter_key] = future
+        self._record_tun_probe_boundary("probe_waiter_registered")
+        self._log_tun_probe_trace(
+            stage="probe_waiter_registered",
+            packet=packet,
+            ifname=text_ifname,
+            note=f"target={text_target}; resolved_target={resolved_target}",
+        )
         try:
             await self._send_probe_packet_via_local_tun(
                 dev,
@@ -4238,8 +4780,42 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 destination_ip=resolved_target,
                 packet=packet,
             )
+            self._record_tun_probe_boundary("probe_send_completed")
             reply = await asyncio.wait_for(future, timeout=max(0.1, float(timeout_s or self.TUN_PROBE_TIMEOUT_S)))
         except asyncio.TimeoutError:
+            self._record_tun_probe_boundary("probe_timeout")
+            self._prune_tun_probe_timed_out_waiters()
+            self._tun_probe_timed_out_waiters[waiter_key] = {
+                "timed_out_monotonic": float(time.monotonic()),
+                "target": text_target,
+                "resolved_target": resolved_target,
+            }
+            self._tun_probe_last_timeout_diag = self._tun_probe_runtime_diag_snapshot(
+                probe_kind=probe_kind,
+                ifname=text_ifname,
+                target=text_target,
+                resolved_target=resolved_target,
+                timeout_s=float(timeout_s or self.TUN_PROBE_TIMEOUT_S),
+            )
+            timeout_diag = dict(self._tun_probe_last_timeout_diag)
+            self.log.info(
+                "[TUN/PROBE] timeout_runtime transport=%s overlay_connected=%s accepting=%s session_connected=%s app_ready=%s secure_state=%s secure_event=%s secure_failure=%s bp_waiting=%s bp_inflight=%s/%s bp_stalled=%s bp_delay_ms=%.1f target=%s resolved_target=%s",
+                str(timeout_diag.get("overlay_transport") or ""),
+                int(bool(timeout_diag.get("overlay_connected"))),
+                int(bool(timeout_diag.get("accepting_enabled"))),
+                int(bool(timeout_diag.get("session_connected"))),
+                int(bool(timeout_diag.get("session_app_ready"))),
+                str(timeout_diag.get("secure_link_state") or ""),
+                str(timeout_diag.get("secure_link_last_event") or ""),
+                str(timeout_diag.get("secure_link_failure_reason") or ""),
+                int(((timeout_diag.get("backpressure") or {}).get("waiting_count", 0) or 0)),
+                int(((timeout_diag.get("backpressure") or {}).get("inflight", 0) or 0)),
+                int(((timeout_diag.get("backpressure") or {}).get("max_inflight", 0) or 0)),
+                int(bool((timeout_diag.get("backpressure") or {}).get("stalled"))),
+                float(((timeout_diag.get("backpressure") or {}).get("transmit_delay_est_ms", 0.0) or 0.0)),
+                str(timeout_diag.get("target") or ""),
+                str(timeout_diag.get("resolved_target") or ""),
+            )
             last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
             return self._tun_probe_result(
                 probe_kind=probe_kind,
@@ -4249,10 +4825,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 summary=f"{label}: failed",
                 detail=f"No ICMP echo reply received from {resolved_target} within {float(timeout_s or self.TUN_PROBE_TIMEOUT_S):.1f}s.",
                 resolved_target=resolved_target,
+                name_resolution=name_resolution,
                 last_success_ago_s=last_success_ago_s,
                 last_success_rtt_ms=last_success_rtt_ms,
             )
         except Exception as exc:
+            self._record_tun_probe_boundary("probe_exception")
             last_success_ago_s, last_success_rtt_ms = self._tun_probe_history_snapshot(cache_key)
             return self._tun_probe_result(
                 probe_kind=probe_kind,
@@ -4262,6 +4840,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 summary=f"{label}: failed",
                 detail=f"Internal probe failed: {type(exc).__name__}: {exc}",
                 resolved_target=resolved_target,
+                name_resolution=name_resolution,
                 last_success_ago_s=last_success_ago_s,
                 last_success_rtt_ms=last_success_rtt_ms,
             )
@@ -4278,6 +4857,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             summary=f"{label}: verified",
             detail=f"ICMP echo reply received from {resolved_target}.",
             resolved_target=resolved_target,
+            name_resolution=name_resolution,
             value_ms=rtt_ms,
             last_success_ago_s=0.0,
             last_success_rtt_ms=rtt_ms,
@@ -4313,7 +4893,16 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._record_sync_diag("ChannelMux._on_local_tun_packet", phase="started")
         try:
             packet = self._normalize_local_tun_packet_source(dev, packet)
+            current_chan = dev.chan_id
             self._log_tun_packet_debug(stage="from_local_tun", packet=packet, ifname=dev.ifname, chan=dev.chan_id)
+            self._log_tun_icmp_packet(
+                stage="from_local_tun_read",
+                packet=packet,
+                ifname=dev.ifname,
+                chan=dev.chan_id,
+                peer_id=self._chan_owner_peer_id.get(int(dev.chan_id)) if dev.chan_id is not None else None,
+                note="local_tun_read",
+            )
             self._log_tun_flow_sample(
                 direction="local_to_peer",
                 packet=packet,
@@ -4322,8 +4911,22 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 note="local_tun_read",
             )
             if not (self._overlay_connected and self._accepting_enabled):
+                self._log_tun_icmp_local_decision(
+                    stage="local_reply_skip_overlay_inactive",
+                    dev=dev,
+                    packet=packet,
+                    chan=current_chan,
+                    note=f"overlay_connected={int(bool(self._overlay_connected))}; accepting_enabled={int(bool(self._accepting_enabled))}",
+                )
                 return
             if len(packet) > int(dev.mtu):
+                self._log_tun_icmp_local_decision(
+                    stage="local_reply_drop_oversize",
+                    dev=dev,
+                    packet=packet,
+                    chan=current_chan,
+                    note=f"packet_len={len(packet)}; mtu={int(dev.mtu)}",
+                )
                 self.log.warning("[TUN] if=%s drop oversize local packet len=%s mtu=%s", dev.ifname, len(packet), dev.mtu)
                 self._record_shared_tun_drop(
                     getattr(dev, "service_key", None),
@@ -4374,9 +4977,29 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     len(packet),
                     stream_overlay_stalled,
                 )
+                self._log_tun_icmp_local_decision(
+                    stage="local_reply_drop_throttled",
+                    dev=dev,
+                    packet=packet,
+                    chan=current_chan,
+                    note=(
+                        f"scope={self._tun_inflow_scope_id(scope_key)}; waiting={int(snapshot.get('waiting_count', 0) or 0)}; "
+                        f"inflight={int(snapshot.get('inflight', 0) or 0)}; stalled={int(stream_overlay_stalled)}"
+                    ),
+                )
                 return
             if shared_route is not None:
                 if not bool(shared_route.get("routed")):
+                    self._log_tun_icmp_local_decision(
+                        stage="local_reply_drop_shared_route",
+                        dev=dev,
+                        packet=packet,
+                        chan=current_chan,
+                        note=(
+                            f"route_class={shared_route.get('route_class')}; dst={shared_route.get('destination_ip')}; "
+                            f"reason={shared_route.get('drop_reason') or 'shared_route_drop'}"
+                        ),
+                    )
                     self._record_shared_tun_drop(
                         getattr(dev, "service_key", None),
                         reason=str(shared_route.get("drop_reason") or "shared_route_drop"),
@@ -4398,12 +5021,26 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 selected_chan_ids = [int(v) for v in list(shared_route.get("selected_chan_ids") or [])]
                 for chan in selected_chan_ids:
                     if self._is_local_virtual_probe_chan_id(chan):
+                        self._log_tun_icmp_local_decision(
+                            stage="local_reply_virtual_probe_delivery",
+                            dev=dev,
+                            packet=packet,
+                            chan=chan,
+                            note=f"route_class={shared_route.get('route_class') or ''}; virtual_probe=1",
+                        )
                         self._handle_local_virtual_probe_delivery(
                             dev,
                             packet,
                             route_class=str(shared_route.get("route_class") or ""),
                         )
                         continue
+                    self._log_tun_icmp_local_decision(
+                        stage="local_reply_before_overlay_send",
+                        dev=dev,
+                        packet=packet,
+                        chan=chan,
+                        note=f"route_class={shared_route.get('route_class') or ''}; selected_chan=1",
+                    )
                     ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                     ctr.msgs_in += 1
                     ctr.bytes_in += len(packet)
@@ -4414,10 +5051,24 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             if chan is None:
                 svc_key = dev.service_key
                 if svc_key is None:
+                    self._log_tun_icmp_local_decision(
+                        stage="local_reply_drop_no_channel",
+                        dev=dev,
+                        packet=packet,
+                        chan=None,
+                        note="missing_service_key",
+                    )
                     self.log.warning("[TUN] if=%s drop packet: no mux channel bound", dev.ifname)
                     return
                 spec = self._effective_services_by_id().get(svc_key)
                 if spec is None:
+                    self._log_tun_icmp_local_decision(
+                        stage="local_reply_drop_missing_service_spec",
+                        dev=dev,
+                        packet=packet,
+                        chan=None,
+                        note=f"service_key={svc_key}",
+                    )
                     self.log.warning("[TUN] if=%s drop packet: missing service spec", dev.ifname)
                     return
                 chan = self._alloc_tun_id()
@@ -4425,6 +5076,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
                 self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
                 self._send_open_for_service(chan, ChannelMux.Proto.TUN, spec)
+                self._log_tun_icmp_local_decision(
+                    stage="local_reply_bound_new_channel",
+                    dev=dev,
+                    packet=packet,
+                    chan=chan,
+                    note=f"service_key={svc_key}",
+                )
+            self._log_tun_icmp_local_decision(
+                stage="local_reply_before_overlay_send",
+                dev=dev,
+                packet=packet,
+                chan=chan,
+                note="direct_chan_send=1",
+            )
             ctr = self._ctr(ChannelMux.Proto.TUN, chan)
             ctr.msgs_in += 1
             ctr.bytes_in += len(packet)
@@ -4598,6 +5263,14 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 )
                 return
             self._log_tun_packet_debug(stage="to_local_tun", packet=data, ifname=dev.ifname, chan=chan)
+            self._log_tun_icmp_packet(
+                stage="from_peer_before_local_write",
+                packet=data,
+                ifname=dev.ifname,
+                chan=chan,
+                peer_id=self._chan_owner_peer_id.get(int(chan)),
+                note="before_local_tun_write",
+            )
             self._log_tun_flow_sample(
                 direction="peer_to_local",
                 packet=data,
@@ -4632,6 +5305,14 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         ifname=dev.ifname,
                         chan=chan,
                         peer_id=self._chan_owner_peer_id.get(int(chan)),
+                    )
+                    self._log_tun_icmp_packet(
+                        stage="to_local_tun_written",
+                        packet=data,
+                        ifname=dev.ifname,
+                        chan=chan,
+                        peer_id=self._chan_owner_peer_id.get(int(chan)),
+                        note="local_tun_write_completed",
                     )
             except Exception as e:
                 self.log.info("[TUN] chan=%s write failed if=%s: %r", chan, dev.ifname, e)
@@ -4844,6 +5525,23 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 payload=payload,
                 counter=counter,
                 note="after_on_app_payload_from_peer",
+            )
+            self._log_tun_icmp_overlay_packet(
+                stage="overlay_rx_after_unpack",
+                packet=payload,
+                chan=chan_id,
+                peer_id=peer_id,
+                mtype=mtype,
+                counter=counter,
+                note="after_on_app_payload_from_peer",
+            )
+            self._log_tun_probe_trace(
+                stage="overlay_rx_after_unpack",
+                packet=payload,
+                chan=chan_id,
+                peer_id=peer_id,
+                mtype=mtype,
+                note=f"counter={counter}",
             )
 
         # Stats (peer->local bytes count for DATA only)
@@ -6742,6 +7440,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "tcp_listening": tcp_listening,
                 "tun_listening": tun_listening,
             },
+            "tun_icmp_stage_counts": {
+                key: int(self._tun_icmp_stage_counts.get(key, 0) or 0)
+                for key in self.TUN_ICMP_STAGE_KEYS
+            },
+            "tun_probe_boundary_counts": {
+                key: int(self._tun_probe_boundary_counts.get(key, 0) or 0)
+                for key in self.TUN_PROBE_BOUNDARY_KEYS
+            },
+            "tun_local_reply_stage_counts": {
+                key: int(self._local_reply_stage_counts.get(key, 0) or 0)
+                for key in self.LOCAL_REPLY_STAGE_KEYS
+            },
+            "tun_probe_last_timeout_diag": dict(self._tun_probe_last_timeout_diag),
         }
 
 # ============================================================================

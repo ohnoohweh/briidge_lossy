@@ -69,6 +69,25 @@ class TunHelperServerEntrypointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(launch["session_token"], "secret-token")
         self.assertEqual(launch["backend"], "linux-native")
         self.assertEqual(launch["log_level"], "WARNING")
+        self.assertEqual(launch["authenticated_client_idle_timeout_s"], 5.0)
+
+    def test_resolve_helper_launch_args_reads_idle_timeout_from_config(self) -> None:
+        parser = build_arg_parser()
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = os.path.join(tmp, "helper-launch.json")
+            with open(config_path, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {
+                        "socket_path": "/tmp/obstaclebridge-helper.sock",
+                        "session_token": "secret-token",
+                        "authenticated_client_idle_timeout_s": 30,
+                    },
+                    handle,
+                )
+            args = parser.parse_args(["--config-path", config_path])
+            launch = _resolve_helper_launch_args(args)
+
+        self.assertEqual(launch["authenticated_client_idle_timeout_s"], 30.0)
 
     def test_backend_factory_rejects_unknown_backend(self) -> None:
         with self.assertRaisesRegex(ValueError, "unsupported tun helper backend"):

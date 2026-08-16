@@ -368,7 +368,38 @@
               <div class="kv-row"><span>Shared Services</span><strong id="tunRoutingSharedServices">0</strong></div>
               <div class="kv-row"><span>Active Peer Bindings</span><strong id="tunRoutingActiveBindings">0</strong></div>
               <div class="kv-row"><span>Shared Drops</span><strong id="tunRoutingSharedDrops">0</strong></div>
+              <div class="kv-row"><span>Drop Reasons</span><strong id="tunRoutingSharedDropReasons" class="mono" style="white-space:pre-wrap;">none</strong></div>
             </div>
+          </section>
+
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>ICMP Path Stage Counters</h2>
+                <p>End-to-end TUN ICMP pipeline stages counted since runtime start</p>
+              </div>
+            </div>
+            <pre id="tunRoutingIcmpStageCounters" class="meta-box">loading...</pre>
+          </section>
+
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Probe Boundary Counters</h2>
+                <p>Probe scheduling, injection mode, helper I/O, timeout, and reply-match counters</p>
+              </div>
+            </div>
+            <pre id="tunRoutingProbeBoundaryCounters" class="meta-box">loading...</pre>
+          </section>
+
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Local Reply Stage Counters</h2>
+                <p>Direct TUN reply-path decisions counted since runtime start</p>
+              </div>
+            </div>
+            <pre id="tunRoutingLocalReplyStageCounters" class="meta-box">loading...</pre>
           </section>
 
           <section class="section-block card">
@@ -401,6 +432,11 @@
                       <td>Global Host</td>
                       <td id="tunVerificationGlobalHost" colspan="2" class="mono tun-route-value">n/a</td>
                     </tr>
+                    <tr>
+                      <td>Global Host Resolution</td>
+                      <td id="tunVerificationGlobalResolutionSummary">pending</td>
+                      <td id="tunVerificationGlobalResolutionDetail" class="mono tun-route-value">n/a</td>
+                    </tr>
                   </tbody>
                 </table>
               </div>
@@ -424,6 +460,7 @@
               <div class="kv-row"><span>Connected</span><strong id="tunHelperConnected">no</strong></div>
               <div class="kv-row"><span>Server Started</span><strong id="tunHelperServerStarted">no</strong></div>
               <div class="kv-row"><span>Apply Network</span><strong id="tunHelperApplyNetwork">no</strong></div>
+              <div class="kv-row"><span>Helper User</span><strong id="tunHelperUser" class="helper-user-pill helper-user-unknown">n/a</strong></div>
               <div class="kv-row"><span>Socket</span><strong id="tunHelperSocket" class="mono">n/a</strong></div>
               <div class="kv-row"><span>Runtime Interface</span><strong id="tunHelperIfname" class="mono">n/a</strong></div>
               <div class="kv-row"><span>Runtime MTU</span><strong id="tunHelperMtu">0</strong></div>

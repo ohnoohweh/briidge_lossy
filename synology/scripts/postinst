@@ -5,7 +5,7 @@ PKG_DIR="${SYNOPKG_PKGDEST:-/var/packages/obstaclebridge/target}"
 VAR_DIR="${SYNOPKG_PKGVAR:-/var/packages/obstaclebridge/var}"
 CFG_PATH="${VAR_DIR}/ObstacleBridge.cfg"
 DEFAULT_CFG="${PKG_DIR}/share/defaults/ObstacleBridge.cfg"
-PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3 || true)}"
+PY_BIN="${OBSTACLEBRIDGE_PYTHON:-$(command -v python3.14 || true)}"
 HELPER_SETUP="${PKG_DIR}/bin/prepare_synology_helper_venv.sh"
 
 mkdir -p "${VAR_DIR}/run" "${VAR_DIR}/log"
@@ -16,6 +16,6 @@ fi
 
 if [ -n "${PY_BIN}" ] && [ -x "${HELPER_SETUP}" ]; then
     if ! "${HELPER_SETUP}" "${PKG_DIR}" "${VAR_DIR}" "${PY_BIN}" >/dev/null 2>&1; then
-        echo "ObstacleBridge: warning: failed to prepare Synology helper venv; privileged helper mode may still require manual setup." >&2
+        echo "ObstacleBridge: warning: failed to prepare Synology Python runtime; inspect /var/packages/obstaclebridge/var/log/service.log after first start." >&2
     fi
 fi

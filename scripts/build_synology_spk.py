@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import pathlib
 import re
 import shutil
@@ -32,15 +33,18 @@ def project_version(root: pathlib.Path) -> str:
     return match.group(1)
 
 
-def spk_version(version: str) -> str:
-    return f"{version}-1000"
+DEFAULT_BUILD_NUMBER = "1000"
 
 
-def render_info(version: str) -> str:
+def spk_version(version: str, *, build_number: str = DEFAULT_BUILD_NUMBER) -> str:
+    return f"{version}-{build_number}"
+
+
+def render_info(version: str, *, build_number: str = DEFAULT_BUILD_NUMBER) -> str:
     return "\n".join(
         [
             f'package="{PACKAGE_ID}"',
-            f'version="{spk_version(version)}"',
+            f'version="{spk_version(version, build_number=build_number)}"',
             f'os_min_ver="{OS_MIN_VER}"',
             f'displayname="{DISPLAY_NAME}"',
             f'description="{DESCRIPTION}"',
@@ -48,9 +52,12 @@ def render_info(version: str) -> str:
             f'maintainer="{MAINTAINER}"',
             f'support_url="{SUPPORT_URL}"',
             'thirdparty="yes"',
+            'beta="yes"',
             'startable="yes"',
             'ctl_stop="yes"',
+            'precheckstartstop="yes"',
             'ctl_preuninst="yes"',
+            'install_dep_packages="python314"',
             'silent_install="no"',
             'silent_upgrade="no"',
             'silent_uninstall="no"',
@@ -72,6 +79,37 @@ def _copy_tree(src: pathlib.Path, dst: pathlib.Path) -> None:
 def _copy_file(src: pathlib.Path, dst: pathlib.Path) -> None:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
+
+
+def _iter_archive_files(root: pathlib.Path):
+    for path in sorted(root.rglob("*")):
+        if path.is_dir():
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        if path.suffix == ".pyc":
+            continue
+        yield path
+
+
+def _tarinfo_for(path: pathlib.Path, arcname: str) -> tarfile.TarInfo:
+    stat = path.stat()
+    info = tarfile.TarInfo(name=arcname)
+    info.size = stat.st_size
+    info.mode = stat.st_mode & 0o777
+    info.mtime = int(stat.st_mtime)
+    info.type = tarfile.REGTYPE
+    info.uid = 0
+    info.gid = 0
+    info.uname = "root"
+    info.gname = "root"
+    return info
+
+
+def _add_file(archive: tarfile.TarFile, path: pathlib.Path, arcname: str) -> None:
+    info = _tarinfo_for(path, arcname)
+    with path.open("rb") as handle:
+        archive.addfile(info, handle)
 
 
 def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
@@ -96,14 +134,14 @@ def stage_payload(root: pathlib.Path, payload_root: pathlib.Path) -> List[str]:
 
 
 def make_tgz(source_dir: pathlib.Path, out_path: pathlib.Path) -> None:
-    with tarfile.open(out_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
-        for path in sorted(source_dir.rglob("*")):
+    with tarfile.open(out_path, "w:gz", format=tarfile.USTAR_FORMAT) as archive:
+        for path in _iter_archive_files(source_dir):
             relative = path.relative_to(source_dir)
-            archive.add(path, arcname=str(relative))
+            _add_file(archive, path, str(relative))
 
 
-def _write_info(info_path: pathlib.Path, version: str) -> None:
-    info_path.write_text(render_info(version), encoding="utf-8")
+def _write_info(info_path: pathlib.Path, version: str, *, build_number: str = DEFAULT_BUILD_NUMBER) -> None:
+    info_path.write_text(render_info(version, build_number=build_number), encoding="utf-8")
 
 
 def _copy_metadata(root: pathlib.Path, spk_root: pathlib.Path) -> None:
@@ -126,6 +164,7 @@ def build_spk(
     *,
     root: pathlib.Path,
     output_dir: pathlib.Path,
+    build_number: str = DEFAULT_BUILD_NUMBER,
     keep_staging: bool = False,
 ) -> pathlib.Path:
     version = project_version(root)
@@ -138,16 +177,16 @@ def build_spk(
         _reset_tree(spk_root)
         stage_payload(root, payload_root)
         _copy_metadata(root, spk_root)
-        _write_info(spk_root / "INFO", version)
+        _write_info(spk_root / "INFO", version, build_number=build_number)
         make_tgz(payload_root, spk_root / "package.tgz")
-        spk_name = f"{PACKAGE_ID}-{spk_version(version)}-noarch.spk"
+        spk_name = f"{PACKAGE_ID}-{spk_version(version, build_number=build_number)}-noarch.spk"
         spk_path = output_dir / spk_name
-        with tarfile.open(spk_path, "w:gz", format=tarfile.PAX_FORMAT) as archive:
-            for path in sorted(spk_root.rglob("*")):
+        with tarfile.open(spk_path, "w", format=tarfile.USTAR_FORMAT) as archive:
+            for path in _iter_archive_files(spk_root):
                 relative = path.relative_to(spk_root)
-                archive.add(path, arcname=str(relative))
+                _add_file(archive, path, str(relative))
         if keep_staging:
-            staging_out = output_dir / f"{PACKAGE_ID}-{spk_version(version)}-staging"
+            staging_out = output_dir / f"{PACKAGE_ID}-{spk_version(version, build_number=build_number)}-staging"
             _reset_tree(staging_out)
             shutil.copytree(spk_root, staging_out, dirs_exist_ok=True)
         return spk_path
@@ -165,6 +204,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Keep a copy of the generated SPK staging tree next to the output file.",
     )
+    parser.add_argument(
+        "--build-number",
+        default=DEFAULT_BUILD_NUMBER,
+        help="Synology package build number suffix used in the emitted SPK version.",
+    )
     return parser
 
 
@@ -172,7 +216,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     out_dir = pathlib.Path(args.output_dir).resolve()
-    built = build_spk(root=repo_root(), output_dir=out_dir, keep_staging=bool(args.keep_staging))
+    built = build_spk(
+        root=repo_root(),
+        output_dir=out_dir,
+        build_number=str(args.build_number),
+        keep_staging=bool(args.keep_staging),
+    )
     print(built)
     return 0
 

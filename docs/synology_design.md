@@ -21,8 +21,10 @@ The currently proven shape is:
 
 1. prepare the ObstacleBridge Python sources on another machine
 2. copy them to the Synology system
-3. log in over SSH
-4. start the Python runtime manually
+3. install SynoCommunity `python3.14`
+4. log in over SSH
+5. run `sudo python3.14 -m pip install -e .`
+6. run `sudo python3.14 -m obstacle_bridge`
 
 This proves an important product point:
 
@@ -55,11 +57,42 @@ This is intentionally a first wrapper, not the finished Synology product.
 
 Current limitations of the delivered wrapper:
 
-- it assumes a working `python3` interpreter already exists on the NAS
-- it assumes Python dependencies are already installed for that interpreter
+- it assumes SynoCommunity `python3.14` is available on the NAS
+- it bootstraps Python dependencies at install time instead of shipping
+  Synology-architecture-specific wheels inside the current `noarch` package
 - it currently prototypes the privileged-helper lane through a dedicated helper
   Python interpreter with best-effort `CAP_NET_ADMIN`, not yet through a
   narrow native Synology helper binary
+
+## Learned packaging details
+
+Real DSM installation attempts clarified an important SPK-format detail that is
+easy to get wrong when building packages outside the Synology toolchain.
+
+The working package shape is:
+
+- outer `.spk`: plain POSIX tar archive
+- one top-level `INFO`
+- one top-level `package.tgz`
+- lifecycle metadata files such as `scripts/preinst`,
+  `scripts/postinst`, and `conf/privilege`
+- inner `package.tgz`: the gzipped payload archive
+
+Two builder mistakes were enough to make DSM reject the package up front with
+`Invalid file format`:
+
+- writing the outer `.spk` as `tar.gz` instead of plain tar
+- adding duplicate archive members to either the outer SPK or `package.tgz`
+
+In practice that means:
+
+- only `package.tgz` should be gzip-compressed
+- the outer SPK should not contain duplicate entries
+- the payload should also avoid duplicate entries and should not include
+  transient build artifacts such as `__pycache__` or `.pyc` files
+
+This matters because DSM can reject the upload before package install scripts
+run, which means the failure may not leave package-specific runtime logs.
 
 ## Target state
 
@@ -74,6 +107,16 @@ The desired Synology operator workflow is:
 
 The package should behave as a normal DSM-managed service rather than as a
 manually launched SSH session.
+
+The current observed operator flow is therefore slightly more concrete:
+
+1. build the SPK
+2. verify the SPK has the expected archive shape
+3. install it through DSM
+4. let `postinst` seed config and bootstrap Python dependencies
+5. start or restart the package service from DSM
+6. inspect package logs under `/var/packages/obstaclebridge/var/log/` when
+   service startup fails
 
 ## Non-goal
 
@@ -95,8 +138,7 @@ The recommended package model is:
 
 - package the ObstacleBridge Python sources
 - package the required static assets such as WebAdmin files and scripts
-- package or bootstrap the required Python dependencies in a DSM-compatible
-  way
+- bootstrap the required Python dependencies in a DSM-compatible way
 - provide DSM service scripts that start and stop the runtime
 - persist runtime configuration outside the ephemeral install flow
 
@@ -127,18 +169,19 @@ This keeps Synology-specific logic at the packaging boundary.
 
 ## Runtime assumptions
 
-The current project requirement already keeps runtime compatibility aligned
-with Synology DSM Python 3.8 expectations.
+The general project requirement keeps the Python runtime broadly compatible, but
+the current proven Synology operator path is now pinned to SynoCommunity
+Python 3.14.
 
 For Synology deployment, we should continue to assume:
 
-- Python 3.8 compatibility matters
+- SynoCommunity `python3.14` is the supported DSM interpreter for this path
 - not every NAS should be expected to provide a development toolchain
 - package installation should minimize manual post-install shell work
 
-That leads to a preference for packaging a ready-to-run Python environment, or
-at least a deterministic dependency-install strategy, rather than assuming
-interactive setup after installation.
+That leads to a preference for a deterministic dependency-install strategy
+around the Synology-provided Python runtime, rather than assuming ad hoc manual
+package installation after deployment.
 
 ## Privilege boundary on Synology
 
@@ -231,6 +274,194 @@ So the current status is:
 This is the main reason the current SPK wrapper should be understood as a
 first deployment scaffold, not the final productive Synology packaging story.
 
+## Service-start diagnostics
+
+When DSM reports `Failed to run package service`, the useful distinction is:
+
+1. package-format rejection before install
+2. install-time bootstrap failure
+3. runtime service-start failure
+
+The current repository has already seen both of the first two classes.
+
+### 1. Format rejection before install
+
+Typical symptom:
+
+- DSM shows `Invalid file format`
+
+In that case:
+
+- `preinst` and `postinst` usually never run
+- package runtime logs may not exist yet
+- the right debugging target is the SPK archive structure itself
+
+One additional learned DSM behavior from live testing:
+
+- `Invalid file format` does not always mean the new SPK archive is malformed
+- on August 13, 2026, DSM 7.2.2-72806 Update 9 rejected a rebuilt
+  ObstacleBridge SPK during manual installation until the previously installed
+  ObstacleBridge package was uninstalled first
+- after uninstalling the prior package, the exact same rebuilt SPK file
+  installed successfully
+
+So the practical recovery sequence for this error is:
+
+1. verify the SPK archive shape if the package is genuinely new
+2. if this is a reinstall or upgrade attempt and DSM still reports `Invalid
+   file format`, uninstall the previous ObstacleBridge package
+3. retry installation of the same SPK before assuming the builder output is
+   broken
+
+This is important because the DSM error text can point at package format even
+when the blocking condition is really the existing installed package state.
+
+### 2. Install succeeds but `Run` fails
+
+For the current wrapper, `Run` failures are most likely to come from one of
+these checks in `synology/scripts/start-stop-status`:
+
+- `python3.14` not found on PATH for the package runtime
+- Python runtime dependencies missing from
+  `/var/packages/obstaclebridge/var/python-packages`
+- the runtime exits immediately after launch
+- a permission/runtime mismatch on actions that still need privilege
+
+### 3. Package-specific diagnostics to run
+
+The current package layout gives a concrete inspection checklist:
+
+```bash
+sudo /var/packages/obstaclebridge/scripts/start-stop-status status
+sudo ls -l /var/packages/obstaclebridge/target
+sudo ls -l /var/packages/obstaclebridge/var
+sudo ls -l /var/packages/obstaclebridge/var/python-packages
+sudo ls -l /var/packages/obstaclebridge/var/helper-venv/bin
+sudo cat /var/packages/obstaclebridge/var/ObstacleBridge.cfg
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/service.log
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/obstaclebridge.log
+sudo which python3.14
+python3.14 -V
+```
+
+To reproduce the package start logic more directly:
+
+```bash
+sudo /var/packages/obstaclebridge/scripts/start-stop-status start
+echo $?
+sudo /var/packages/obstaclebridge/scripts/start-stop-status status
+```
+
+The current service script starts:
+
+```bash
+python3.14 -c "from obstacle_bridge.bridge import main; main()" \
+  --config /var/packages/obstaclebridge/var/ObstacleBridge.cfg \
+  --log-file /var/packages/obstaclebridge/var/log/obstaclebridge.log
+```
+
+with:
+
+- `PYTHONPATH=/var/packages/obstaclebridge/var/python-packages:/var/packages/obstaclebridge/target/src`
+- optional `OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE=/var/packages/obstaclebridge/var/helper-venv/bin/python3`
+
+So if DSM still reports only a generic failure, the package logs above are the
+first place to look.
+
+One additional learned detail from live DSM testing:
+
+- launching the interactive `python -m obstacle_bridge.launcher` wrapper is not
+  the right default for the DSM package service
+- DSM already owns the package lifecycle and expects one long-running service
+  process
+- the direct bridge entrypoint is a better fit for the package script because
+  it stays attached to the actual runtime process instead of adding a second
+  supervisory layer intended for interactive CLI use
+
+### 4. Most likely current failure causes after successful install
+
+Given the present wrapper design, the most likely startup blockers are:
+
+- dependency bootstrap did not complete successfully during `postinst`
+- package-user runtime cannot find `python3.14`
+- runtime starts but exits immediately due to missing Python modules
+- runtime reaches privileged TUN or host-network code that still assumes the
+  manual `sudo` launch path
+
+That last point is expected for some modes. The current SPK should still be
+treated as a DSM packaging and service-lifecycle scaffold, not as the final
+privileged Synology runtime model.
+
+## Troubleshooting: package does not autostart after installation or reboot
+
+One important DSM behavior learned during live testing is that "the package can
+be started" and "the package is enabled for DSM autostart" are not the same
+thing.
+
+The concrete observed failure mode was:
+
+- ObstacleBridge ran correctly when started manually
+- after NAS reboot, the package was stopped
+- `synopkg` reported that the package was not turned on
+
+The key checks are:
+
+```bash
+sudo synopkg status obstaclebridge
+sudo synopkg is_onoff obstaclebridge
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/obstaclebridge.log
+sudo tail -n 100 /var/packages/obstaclebridge/var/log/service.log
+```
+
+Interpretation:
+
+- if `status` says `stop` and `is_onoff` says the package is not turned on,
+  DSM does not currently consider the package enabled for autostart
+- if the runtime log shows normal operation before reboot and no new lines
+  after boot, the failure is usually not a runtime crash; it is that DSM never
+  started the package
+- if the log shows fresh startup lines after boot followed by an error, treat
+  that as a normal service-start failure instead
+
+### Recommended recovery flow
+
+If the package was started through the raw lifecycle script during testing,
+switch back to DSM package control:
+
+```bash
+sudo /var/packages/obstaclebridge/scripts/start-stop-status stop
+sudo synopkg start obstaclebridge
+sudo synopkg status obstaclebridge
+sudo synopkg is_onoff obstaclebridge
+```
+
+Why this matters:
+
+- `start-stop-status` is useful for debugging the package wrapper directly
+- `synopkg start` is the DSM-managed path that should also mark the package as
+  enabled in the normal package lifecycle
+- validating both commands after install gives a much better signal about
+  whether reboot autostart will work
+
+### What to check after restart
+
+After a NAS reboot, verify all three layers:
+
+```bash
+sudo synopkg status obstaclebridge
+sudo synopkg is_onoff obstaclebridge
+sudo netstat -apn | grep 18090
+```
+
+Healthy signs:
+
+- `synopkg status obstaclebridge` reports the package is running
+- `synopkg is_onoff obstaclebridge` no longer reports status `262`
+- the expected listener such as `0.0.0.0:18090` is present
+
+If those checks pass, DSM autostart is working and the deployed package change
+has survived reboot in the intended service path.
+
 ## DSM-specific privileged helper options
 
 The Synology DSM 7 privilege model adds an important platform constraint for
@@ -273,7 +504,8 @@ Conclusion:
 - use resource workers where they naturally fit
 - do not expect them alone to solve ObstacleBridge local TUN privilege needs
 
-### Option 2: package-user service plus narrow native helper with Linux capabilities
+### Option 2: package-user service plus existing helper protocol with a
+Synology-specific elevated launch path
 
 This is the best architectural fit for ObstacleBridge.
 
@@ -281,18 +513,22 @@ Model:
 
 - DSM starts the main ObstacleBridge package service as the package user
 - the main service remains the Python-first runtime and WebAdmin owner
-- when privileged operations are required, the runtime talks over a local
-  authenticated socket to a tiny helper binary
-- that helper binary carries only the minimum Linux capabilities needed, most
-  likely centered on `CAP_NET_ADMIN`
+- when privileged operations are required, the runtime talks over the existing
+  local authenticated helper socket protocol
+- the Synology-specific work is then not a new helper protocol, but a
+  Synology-specific way to launch the helper side with elevated rights
+- the first practical reuse target is the existing Python helper lane, not a
+  brand-new Synology-only protocol
 
 Why this matches the project well:
 
-- it mirrors the helper split already used or planned on Linux, macOS, and
+- it reuses the helper split already implemented across Linux, macOS, and
   Windows
 - it keeps the privileged surface much smaller than the full runtime
 - it avoids running the whole Python stack permanently with elevated privilege
 - it preserves the current ObstacleBridge architecture rather than replacing it
+- it lets Synology focus on the package privilege boundary and launch
+  mechanics, which is the real missing piece today
 
 Likely privileged responsibilities for that helper:
 
@@ -304,11 +540,15 @@ Likely privileged responsibilities for that helper:
 
 Main validation questions:
 
-- whether DSM allows the helper binary to retain and use the needed file
-  capabilities after package install
-- whether `/dev/net/tun` access is available under that capability model
+- whether the existing helper server can be launched by the Synology package in
+  a root-owned `prestart` or equivalent lifecycle step and then handed off to
+  the package-user runtime
+- whether the existing helper socket and token flow work unchanged when the
+  helper is started by the package rather than by interactive `sudo`
+- whether `/dev/net/tun` access, route mutation, firewall mutation, and DNS
+  mutation all work through that package-started elevated helper on real DSM
 - whether DSM security policy or AppArmor blocks some of the needed network
-  operations even when Linux capabilities are present
+  operations even when the helper itself is running with elevated rights
 
 Conclusion:
 
@@ -374,13 +614,16 @@ Conclusion:
 The recommended order for ObstacleBridge is:
 
 1. use official DSM resource workers where they fit naturally
-2. prototype a narrow native privileged helper binary that the SPK-owned Python
-   runtime can call locally
-3. validate that helper on real DSM hardware for `/dev/net/tun`, route, and
-   firewall behavior
-4. fall back to a separately installed root daemon only if the DSM package path
-   blocks the helper-capability model
-5. avoid whole-runtime root execution except for development or tightly
+2. reuse the existing ObstacleBridge helper client/server protocol and Python
+   helper implementation, but give Synology a package-owned elevated helper
+   launch path
+3. validate that package-launched helper on real DSM hardware for
+   `/dev/net/tun`, route, firewall, and DNS behavior
+4. only introduce a narrower native Synology helper binary later if the Python
+   helper proves too broad, too fragile, or too hard to package safely
+5. fall back to a separately installed root daemon only if the DSM package path
+   blocks the helper-launch model entirely
+6. avoid whole-runtime root execution except for development or tightly
    controlled internal deployments
 
 This keeps the Synology design aligned with the existing ObstacleBridge helper
@@ -488,6 +731,157 @@ Remaining work inside phase 2:
 - define the Synology privilege boundary for TUN and host-network operations,
   most likely through a dedicated privileged helper rather than whole-runtime
   root execution
+- reuse the existing ObstacleBridge helper transport and startup contract
+  through that package-owned elevated launch path instead of introducing a new
+  Synology-only helper protocol
+
+Current package-side helper PoC:
+
+- `conf/privilege` keeps the package default at `run-as: package`
+- `prestart` calls a narrow packaged probe script,
+  `bin/synology_elevated_probe.sh`
+- that probe records:
+  - effective uid/gid and user/group
+  - whether `/dev/net/tun` exists
+  - whether `/dev/net/tun` is readable and writable
+- the probe writes its evidence to:
+  - `/var/packages/obstaclebridge/var/elevated-probe.json`
+  - `/var/packages/obstaclebridge/var/log/elevated-probe.log`
+
+The helper-handoff path is now proven on real DSM 7.2.2-72806 Update 9:
+
+- `prestart` is invoked by DSM when `precheckstartstop="yes"` is present in
+  `INFO`
+- `prestart` can generate helper launch metadata under the package var
+  directory
+- helper mode creates:
+  - `tun-helper-attach.json`
+  - `tun-helper-launch.json`
+  - `tun-helper.pid`
+  - `tun-helper.sock`
+- the package-user bridge runtime can attach through the existing helper client
+  and complete the authenticated `HELLO` handshake
+- after the package service wrapper was adjusted to use a stable runner script,
+  DSM package start, running-state detection, on/off state, PID tracking, and
+  the active listener state aligned successfully
+
+However, DSM installation policy also became clear:
+
+- on August 13, 2026, DSM 7.2.2 blocked installation of the package when the
+  SPK explicitly requested root privilege through `conf/privilege`
+- the install error said the package ran with root privileges and could
+  compromise system security
+- DSM offered no local override other than cancelling installation
+
+That means the current installable SPK must remain package-user only unless
+the package is Synology-signed or covered by a Synology developer token.
+
+This helper-handoff proof has therefore moved one step further while staying
+inside the installable DSM package policy.
+
+Practical product consequence:
+
+- the current installable SPK does not have a deployable local TUN path on
+  Synology
+- helper mode can still prestart and attach correctly, but it cannot own the
+  privileged Linux TUN and host-network operations while running as the package
+  user
+- for now, Synology deployment should be understood as an ObstacleBridge
+  transport endpoint and service wrapper rather than as a full local TUN
+  appliance
+
+That still leaves useful near-term deployment shapes:
+
+- users may run WireGuard, OpenVPN, or another VPN component separately and
+  carry that traffic over ObstacleBridge-managed ports or listeners
+- users may also use ObstacleBridge on Synology purely for TCP/UDP service
+  exposure, relay, or secure-link transport without local TUN ownership
+
+In other words, the current package is still useful even though the
+Synology-hosted TUN interface itself is effectively disabled in the
+installable package configuration.
+
+The Synology package scripts now also prepare a package-owned helper handoff:
+
+- `prestart` can generate helper launch metadata under the package var
+  directory
+- `prestart` can launch the existing Python helper server as the package user
+- `start` exports
+  `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG=/var/packages/obstaclebridge/var/run/tun-helper-attach.json`
+  for the package-user bridge runtime
+- the Python `Runner` now understands that handoff file and attaches to the
+  prestarted helper instead of trying to spawn its own helper subprocess
+- the helper launch config now carries a longer authenticated-client idle
+  timeout so the DSM `prestart` to service-start handoff does not race the
+  helper watchdog
+
+So the Python runtime now has the attach path needed for Synology-managed
+helper startup, even though the current installable SPK does not cross the DSM
+root-privilege boundary.
+
+## Reusing the existing Python TUN helper on Synology
+
+The repository already has the helper machinery needed for Synology:
+
+- helper settings, protocol, client, and server scaffolding
+- helper launch and token wiring in `Runner`
+- helper-backed TUN open/read/write/apply/remove paths in `ChannelMux`
+- helper status, diagnostics, and repair reporting in the runtime snapshots
+
+So the missing Synology work is not "build a new helper."
+
+It is:
+
+1. keep the Synology-specific helper launch mode at the package/runtime
+   boundary
+2. launch the existing helper server from the root-run package hook or a
+   root-started package-owned launcher
+3. hand the resulting helper socket path and token to the package-user bridge
+   process
+4. run the bridge runtime in `tun_execution.mode=helper` with the existing
+   helper protocol
+5. validate that the existing helper-owned Linux network apply/remove behavior
+   works unchanged on DSM
+
+The package/runtime handoff shape is now:
+
+- `prestart` remains narrow and package-owned
+- it writes helper metadata into the package var directory
+- it starts the existing Python helper server with that launch config
+- `start` exports the attach-config path to the package-user runtime
+- `Runner._start_tun_helper()` now consumes that attach config when present
+- in attach mode, the runtime waits for the prestarted helper socket and then
+  connects the existing `TunHelperClient`
+- in attach mode, the runtime does not attempt to launch or stop the helper
+  process itself
+
+What still remains to prove on real DSM is the privileged backend behavior
+rather than the handoff mechanics:
+
+- whether the helper can actually open the DSM TUN device through the existing
+  Linux helper backend
+- whether route programming works unchanged on DSM
+- whether firewall and DNS mutation work unchanged on DSM
+- whether helper-owned cleanup is reliable across package stop, restart, and
+  crash scenarios
+
+At the moment, those checks are expected to fail in the installable SPK
+configuration because the helper still runs as the package user.
+
+That makes the current implementation boundary explicit:
+
+- helper attach and helper lifecycle handoff are working
+- privileged TUN open/apply/remove on Synology are not currently available in
+  the installable SPK
+- alternative deployments such as WireGuard or OpenVPN layered over
+  ObstacleBridge remain viable and should be documented as the near-term
+  Synology use case
+
+Only after that reuse path is fully validated should the project decide
+whether Synology really needs a narrower native helper binary. The existing
+Python helper should still be treated as the first reuse target because it
+already encapsulates the privileged TUN and host-network responsibilities that
+Synology needs.
 
 ### Phase 3: hardening
 

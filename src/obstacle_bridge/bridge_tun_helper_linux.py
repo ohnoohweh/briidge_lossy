@@ -4,6 +4,7 @@ import contextlib
 import inspect
 import asyncio
 import ipaddress
+import logging
 import os
 import shlex
 import shutil
@@ -13,6 +14,8 @@ import subprocess
 import sys
 import time
 from typing import Any, Awaitable, Callable, Optional
+
+from .bridge_tun_ping import parse_internal_probe_packet
 
 try:
     import fcntl
@@ -72,6 +75,26 @@ class LinuxTunHelperBackend:
         self._applied_firewall_rules: list[str] = []
         self._last_failure: dict[str, Any] = {}
         self._test_failure_consumed: set[tuple[str, str, str]] = set()
+        self._log = logging.getLogger("tun_helper_linux")
+
+    def _log_probe_trace(self, *, stage: str, packet: bytes, note: str = "") -> None:
+        parsed = parse_internal_probe_packet(bytes(packet or b""))
+        if not isinstance(parsed, dict):
+            return
+        self._log.info(
+            "[TUN/HELPER/PROBE] stage=%s dir=%s kind=%s key=%s/%s/%s/%s if=%s src=%s dst=%s note=%s",
+            stage,
+            str(parsed.get("direction") or ""),
+            int(parsed.get("probe_kind") or 0),
+            int(parsed.get("family") or 0),
+            int(parsed.get("identifier") or 0),
+            int(parsed.get("sequence") or 0),
+            bytes(parsed.get("nonce") or b"").hex(),
+            str(self._ifname or ""),
+            str(parsed.get("source_ip") or ""),
+            str(parsed.get("destination_ip") or ""),
+            note,
+        )
 
     @staticmethod
     def _resolvectl_path() -> str:
@@ -1023,8 +1046,10 @@ class LinuxTunHelperBackend:
     async def write_packet(self, packet: bytes) -> dict[str, Any]:
         if self._fd is None:
             raise RuntimeError("Linux native TUN helper backend is not opened")
+        self._log_probe_trace(stage="backend_write_before", packet=packet, note="target=tun-fd")
         os.write(self._fd, bytes(packet))
         self._packets_from_runtime += 1
+        self._log_probe_trace(stage="backend_write_after", packet=packet, note="target=tun-fd")
         return {"accepted": True, "len": len(packet)}
 
     async def snapshot(self) -> dict[str, Any]:
@@ -1212,6 +1237,7 @@ class LinuxTunHelperBackend:
                 packet = os.read(fd, max(68, int(self._mtu or 1600) + 4))
                 if packet:
                     self._packets_to_runtime += 1
+                    self._log_probe_trace(stage="backend_read_from_tun", packet=packet, note="source=tun-fd")
                     if self._packet_sink is not None:
                         result = self._packet_sink(bytes(packet))
                         if inspect.isawaitable(result):

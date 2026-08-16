@@ -127,6 +127,11 @@ python -m obstacle_bridge --config bridge_server.json
 python -m obstacle_bridge --config bridge_client.json
 ```
 
+### iOS deployment note
+The maintained iOS deployment path should be treated as iOS 15 or newer when you plan to distribute through TestFlight.
+
+Lower deployment targets may still build locally in some environments, but they are not the supported TestFlight deployment path for this project.
+
 ### iOS full-tunnel test profile against a Fedora server
 The current iOS packet-tunnel bring-up is intended to pair an iPhone client with a Linux server that can host the remote TUN endpoint and perform internet egress/NAT.
 
@@ -1476,7 +1481,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, non-canonical policy-rule reuse, and non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background.
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and INFO-level ICMP decision breadcrumbs plus layered-readiness gating so SecureLink reauthentication windows can be distinguished from true overlay disconnects.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1485,17 +1490,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `53` | `827` |
+| Python CLI/runtime, including macOS Python | `54` | `868` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `24` | `155` |
+| iOS app/extension | `24` | `160` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `82/89 = 92.1%` | `86/89 = 96.6%` | `86/89 = 96.6%` |
-| macOS Swift app | `2/89 = 2.2%` | `6/89 = 6.7%` | `8/89 = 9.0%` |
-| iOS app/extension | `10/89 = 11.2%` | `11/89 = 12.4%` | `17/89 = 19.1%` |
+| Python CLI/runtime, including macOS Python | `82/91 = 90.1%` | `89/91 = 97.8%` | `89/91 = 97.8%` |
+| macOS Swift app | `3/91 = 3.3%` | `6/91 = 6.6%` | `9/91 = 9.9%` |
+| iOS app/extension | `10/91 = 11.0%` | `12/91 = 13.2%` | `18/91 = 19.8%` |
 
 #### Architecture traceability
 
@@ -1511,6 +1516,7 @@ The supporting manifests remain shared:
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
 This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
+It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
@@ -1560,8 +1566,9 @@ Important caveat:
 - On each change, the focus is on test feedback and on extending the test environment to cover the functional increase.
 - Integration testing is executed on a local machine running Python 3.13.12.
 - After successful local validation, deployment is tested on a VPS running Ubuntu 24.04.03 LTS with Python 3.12.3 and a Fedora 42 client system.
-- After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with Python 3.8.
-- The repository now also carries a first-pass Synology DSM SPK wrapper scaffold for that NAS path, plus a helper-interpreter privilege prototype that points helper-mode launches at a dedicated package-managed Python copy with best-effort `CAP_NET_ADMIN`; see [docs/synology_design.md](docs/synology_design.md), [synology/README.md](synology/README.md), and `python3 scripts/build_synology_spk.py`.
+- After successful validation there, deployment is also intended for the productive NAS environment running Synology DSM with SynoCommunity `python3.14`.
+- The currently proven Synology operator path is: install SynoCommunity `python3.14`, SSH to the NAS, run `sudo python3.14 -m pip install -e .`, then start with `sudo python3.14 -m obstacle_bridge`.
+- The repository now also carries a Synology DSM SPK wrapper for that NAS path. The current SPK is explicitly marked as a beta package, declares a `python314` package dependency, emits a DSM-acceptable outer SPK archive layout, bootstraps Python dependencies into the package var directory, keeps DSM-managed service restart behavior aligned with the bridge runtime's dedicated restart exit codes, and supports a package-user helper-handoff prototype that prestarts helper metadata and lets the runtime attach through `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG`. Current DSM 7.2.2 installation policy still keeps the installable package on the package-user side of the privilege boundary, so the wrapper remains suitable for transport/service relay and helper lifecycle experiments rather than a root-owned Synology TUN appliance; see [docs/synology_design.md](docs/synology_design.md), [synology/README.md](synology/README.md), and `python3 scripts/build_synology_spk.py`.
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.

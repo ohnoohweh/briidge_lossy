@@ -20,6 +20,7 @@ class AdminWebUI:
     LIVE_TOPICS = ("status", "connections", "peers", "tun_routing", "meta")
     ONBOARDING_TOKEN_PREFIX = "ob1."
     PING_VERIFICATION_CACHE_TTL_SEC = 2.0
+    TUN_ROUTING_SUMMARY_MARKER = "tun-summary-marker-2026-08-16a"
 
     @staticmethod
     def _transport_attr_prefix(transport: str) -> str:
@@ -989,6 +990,7 @@ class AdminWebUI:
         shared_rows = list(shared_rows_by_key.values())
         active_bindings_total = 0
         shared_drop_total = 0
+        shared_drop_by_reason: dict[str, int] = {}
         tun_routing_effective = {}
         with contextlib.suppress(Exception):
             extra4, extra6 = auto_overlay_peer_excluded_routes(vars(self.args))
@@ -1004,11 +1006,15 @@ class AdminWebUI:
             active_bindings_total += len(active_bindings)
             drop_counters = dict(ownership.get("drop_counters") or {})
             shared_drop_total += int(drop_counters.get("total", 0) or 0)
+            for reason, count in dict(drop_counters.get("by_reason") or {}).items():
+                reason_key = str(reason or "unknown")
+                shared_drop_by_reason[reason_key] = int(shared_drop_by_reason.get(reason_key, 0) or 0) + int(count or 0)
         payload = {
             "tun": tun_rows,
             "shared_tun": shared_rows,
             "tun_helper": dict(status_snapshot.get("tun_helper") or {}),
             "summary": {
+                "snapshot_marker": self.TUN_ROUTING_SUMMARY_MARKER,
                 "tun_total": len(tun_rows),
                 "tun_open": sum(
                     1 for row in tun_rows
@@ -1022,12 +1028,67 @@ class AdminWebUI:
                 "shared_services": len(shared_rows),
                 "shared_active_peer_bindings": int(active_bindings_total),
                 "shared_drop_total": int(shared_drop_total),
+                "shared_drop_by_reason": {
+                    key: int(shared_drop_by_reason[key] or 0)
+                    for key in sorted(shared_drop_by_reason)
+                },
+                "icmp_stage_counts": {
+                    str(key): int(value or 0)
+                    for key, value in dict(snapshot.get("tun_icmp_stage_counts") or {}).items()
+                },
+                "probe_boundary_counts": {
+                    str(key): int(value or 0)
+                    for key, value in dict(snapshot.get("tun_probe_boundary_counts") or {}).items()
+                },
+                "local_reply_stage_counts": {
+                    str(key): int(value or 0)
+                    for key, value in dict(snapshot.get("tun_local_reply_stage_counts") or {}).items()
+                },
+                "probe_last_timeout_diag": dict(snapshot.get("tun_probe_last_timeout_diag") or {}),
+                "probe_last_timeout_diag_by_transport": {
+                    str(key): dict(value or {})
+                    for key, value in dict(snapshot.get("tun_probe_last_timeout_diag_by_transport") or {}).items()
+                },
             },
             "app": "udp-bidirectional-mux",
             "milestone": "C",
         }
         payload.update(tun_routing_effective)
         return payload
+
+    @staticmethod
+    def _status_tun_support_payload(snapshot: dict, status_snapshot: dict) -> dict[str, Any]:
+        tun_rows = list(snapshot.get("tun") or [])
+        helper = dict(status_snapshot.get("tun_helper") or {})
+        helper_runtime = dict(helper.get("runtime") or {})
+        selected_ifname = AdminWebUI._selected_tun_ifname(tun_rows, {"tun_helper": helper})
+        tun_connected = any(
+            row.get("chan_id") is not None
+            and str(row.get("state", "connected")).strip().lower() != "listening"
+            for row in tun_rows
+        )
+        return {
+            "tun_ifname": str(selected_ifname or ""),
+            "tun_connected": bool(tun_connected),
+            "tun_helper_runtime_ifname": str(helper_runtime.get("ifname") or ""),
+            "tun_icmp_stage_counts": {
+                str(key): int(value or 0)
+                for key, value in dict(snapshot.get("tun_icmp_stage_counts") or {}).items()
+            },
+            "tun_probe_boundary_counts": {
+                str(key): int(value or 0)
+                for key, value in dict(snapshot.get("tun_probe_boundary_counts") or {}).items()
+            },
+            "tun_local_reply_stage_counts": {
+                str(key): int(value or 0)
+                for key, value in dict(snapshot.get("tun_local_reply_stage_counts") or {}).items()
+            },
+            "tun_probe_last_timeout_diag": dict(snapshot.get("tun_probe_last_timeout_diag") or {}),
+            "tun_probe_last_timeout_diag_by_transport": {
+                str(key): dict(value or {})
+                for key, value in dict(snapshot.get("tun_probe_last_timeout_diag_by_transport") or {}).items()
+            },
+        }
 
     def _build_tun_routing_payload(self) -> dict:
         payload = self._run_snapshot_builder("tun_routing", self._build_tun_routing_payload_now)
@@ -2412,8 +2473,10 @@ class AdminWebUI:
 
     def _build_status_payload_now(self) -> dict:
         payload = self.runner.get_status_snapshot()
+        connections_snapshot = self.runner.get_connections_snapshot() or {}
         for aggregate_key in ("open_connections", "traffic", "compress_layer"):
             payload.pop(aggregate_key, None)
+        payload.update(self._status_tun_support_payload(connections_snapshot, payload))
         payload["admin_web_name"] = str(getattr(self.runner.args, "admin_web_name", "") or "")
         payload["uptime_sec"] = int(time.monotonic() - self.started_monotonic)
         payload["app"] = "udp-bidirectional-mux"

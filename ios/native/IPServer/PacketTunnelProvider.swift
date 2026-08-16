@@ -2361,6 +2361,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         detail: String,
         target: String = "",
         method: String,
+        nameResolution: [String: Any] = [:],
         port: Int? = nil
     ) -> [String: Any] {
         var payload: [String: Any] = [
@@ -2371,12 +2372,21 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "detail": detail,
             "target": target,
             "method": method,
+            "name_resolution": nameResolution,
             "checked_at_unix_ts": Date().timeIntervalSince1970,
         ]
         if let port {
             payload["port"] = port
         }
         return payload
+    }
+
+    private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
+        [
+            "status": status,
+            "resolved_ip": resolvedIP,
+            "detail": detail,
+        ]
     }
 
     private func probeTunConnectivityVerification(
@@ -2394,7 +2404,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 summary: "\(label): skipped",
                 detail: "Swift TUN bridge is not active.",
                 target: trimmedTarget,
-                method: "internal_icmp_echo"
+                method: "internal_icmp_echo",
+                nameResolution: tunProbeNameResolution(status: "unknown")
             )
         }
         guard adminPacketProcessingActive() else {
@@ -2405,7 +2416,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 summary: "\(label): skipped",
                 detail: "Packet processing is not active yet.",
                 target: trimmedTarget,
-                method: "internal_icmp_echo"
+                method: "internal_icmp_echo",
+                nameResolution: tunProbeNameResolution(status: "unknown")
             )
         }
         return bridge.probeTunConnectivity(
@@ -3466,7 +3478,11 @@ private final class SwiftSimpleUDPPeerBridge {
                     ok: false,
                     state: "skipped",
                     summary: "\(label): skipped",
-                    detail: "Verification target is not configured."
+                    detail: "Verification target is not configured.",
+                    nameResolution: tunProbeNameResolution(
+                        status: "skipped",
+                        detail: "Verification target is not configured."
+                    )
                 ))
             }
             guard !trimmedIfname.isEmpty else {
@@ -3476,7 +3492,8 @@ private final class SwiftSimpleUDPPeerBridge {
                     ok: false,
                     state: "skipped",
                     summary: "\(label): skipped",
-                    detail: "TUN interface name unavailable."
+                    detail: "TUN interface name unavailable.",
+                    nameResolution: tunProbeNameResolution(status: "unknown")
                 ))
             }
             guard started else {
@@ -3486,7 +3503,8 @@ private final class SwiftSimpleUDPPeerBridge {
                     ok: false,
                     state: "skipped",
                     summary: "\(label): skipped",
-                    detail: "Swift TUN bridge is not active."
+                    detail: "Swift TUN bridge is not active.",
+                    nameResolution: tunProbeNameResolution(status: "unknown")
                 ))
             }
             let candidateFamilies = sourceProbeFamilies()
@@ -3500,10 +3518,19 @@ private final class SwiftSimpleUDPPeerBridge {
                     state: "failed",
                     summary: "\(label): failed",
                     detail: "Probe target resolution failed: \(resolved.error)",
+                    nameResolution: tunProbeNameResolution(
+                        status: "failed",
+                        detail: "Probe target resolution failed: \(resolved.error)"
+                    ),
                     lastSuccessAgoS: history.lastSuccessAgoS,
                     lastSuccessRTTMS: history.lastSuccessRTTMS
                 ))
             }
+            let nameResolution = tunProbeNameResolution(
+                status: "successful",
+                resolvedIP: resolvedTarget,
+                detail: "Resolved \(trimmedTarget) to \(resolvedTarget)."
+            )
             let family = resolved.family
             let sourceIP = sourceAddressForProbeFamily(family)
             guard !sourceIP.isEmpty else {
@@ -3516,6 +3543,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     summary: "\(label): skipped",
                     detail: "No configured tunnel source address is available for \(resolvedTarget).",
                     resolvedTarget: resolvedTarget,
+                    nameResolution: nameResolution,
                     lastSuccessAgoS: history.lastSuccessAgoS,
                     lastSuccessRTTMS: history.lastSuccessRTTMS
                 ))
@@ -3556,6 +3584,7 @@ private final class SwiftSimpleUDPPeerBridge {
                     summary: "\(label): failed",
                     detail: "Internal probe failed: unable to build ICMP echo request.",
                     resolvedTarget: resolvedTarget,
+                    nameResolution: nameResolution,
                     lastSuccessAgoS: history.lastSuccessAgoS,
                     lastSuccessRTTMS: history.lastSuccessRTTMS
                 ))
@@ -3603,32 +3632,42 @@ private final class SwiftSimpleUDPPeerBridge {
             tunProbeWaiters.removeValue(forKey: prepared.waiterKey)
             guard !timedOut, let reply else {
                 let history = tunProbeHistorySnapshot(cacheKey: prepared.cacheKey)
-                return tunProbeResult(
-                    probeKind: probeKind,
-                    target: prepared.trimmedTarget,
-                    ok: false,
-                    state: "failed",
-                    summary: "\(prepared.label): failed",
-                    detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", prepared.resolvedTarget, timeoutSeconds),
-                    resolvedTarget: prepared.resolvedTarget,
-                    lastSuccessAgoS: history.lastSuccessAgoS,
-                    lastSuccessRTTMS: history.lastSuccessRTTMS
-                )
-            }
-            let rttMS = max(0.0, Double(reply.receivedMonotonicNS &- prepared.sentMonotonicNS) / 1_000_000.0)
-            recordTunProbeSuccess(cacheKey: prepared.cacheKey, rttMS: rttMS)
             return tunProbeResult(
                 probeKind: probeKind,
                 target: prepared.trimmedTarget,
-                ok: true,
-                state: "verified",
-                summary: "\(prepared.label): verified",
-                detail: "ICMP echo reply received from \(prepared.resolvedTarget).",
+                ok: false,
+                state: "failed",
+                summary: "\(prepared.label): failed",
+                detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", prepared.resolvedTarget, timeoutSeconds),
                 resolvedTarget: prepared.resolvedTarget,
-                valueMS: rttMS,
-                lastSuccessAgoS: 0.0,
-                lastSuccessRTTMS: rttMS
+                nameResolution: tunProbeNameResolution(
+                    status: "successful",
+                    resolvedIP: prepared.resolvedTarget,
+                    detail: "Resolved \(prepared.trimmedTarget) to \(prepared.resolvedTarget)."
+                ),
+                lastSuccessAgoS: history.lastSuccessAgoS,
+                lastSuccessRTTMS: history.lastSuccessRTTMS
             )
+        }
+            let rttMS = max(0.0, Double(reply.receivedMonotonicNS &- prepared.sentMonotonicNS) / 1_000_000.0)
+            recordTunProbeSuccess(cacheKey: prepared.cacheKey, rttMS: rttMS)
+        return tunProbeResult(
+            probeKind: probeKind,
+            target: prepared.trimmedTarget,
+            ok: true,
+            state: "verified",
+            summary: "\(prepared.label): verified",
+            detail: "ICMP echo reply received from \(prepared.resolvedTarget).",
+            resolvedTarget: prepared.resolvedTarget,
+            nameResolution: tunProbeNameResolution(
+                status: "successful",
+                resolvedIP: prepared.resolvedTarget,
+                detail: "Resolved \(prepared.trimmedTarget) to \(prepared.resolvedTarget)."
+            ),
+            valueMS: rttMS,
+            lastSuccessAgoS: 0.0,
+            lastSuccessRTTMS: rttMS
+        )
         }
     }
 
@@ -3806,6 +3845,14 @@ private final class SwiftSimpleUDPPeerBridge {
         "\(probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(ifname)|\(target)"
     }
 
+    private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
+        [
+            "status": status,
+            "resolved_ip": resolvedIP,
+            "detail": detail,
+        ]
+    }
+
     private func tunProbeResult(
         probeKind: String,
         target: String,
@@ -3814,6 +3861,7 @@ private final class SwiftSimpleUDPPeerBridge {
         summary: String,
         detail: String,
         resolvedTarget: String = "",
+        nameResolution: [String: Any] = [:],
         valueMS: Double? = nil,
         lastSuccessAgoS: Double? = nil,
         lastSuccessRTTMS: Double? = nil
@@ -3826,6 +3874,7 @@ private final class SwiftSimpleUDPPeerBridge {
             "detail": detail,
             "target": target,
             "resolved_target": resolvedTarget,
+            "name_resolution": nameResolution,
             "method": "internal_icmp_echo",
             "checked_at_unix_ts": Date().timeIntervalSince1970,
             "value_ms": NSNull(),

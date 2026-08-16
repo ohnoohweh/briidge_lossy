@@ -41,7 +41,12 @@ class RunnerMuxAggregate:
         udp_listening = 0
         tcp_listening = 0
         tun_listening = 0
-        for mux in self._muxes:
+        tun_icmp_stage_counts: dict[str, int] = {}
+        tun_probe_boundary_counts: dict[str, int] = {}
+        tun_local_reply_stage_counts: dict[str, int] = {}
+        tun_probe_last_timeout_diag: dict[str, Any] = {}
+        tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
             udp_rows.extend(snap.get("udp", []))
             tcp_rows.extend(snap.get("tcp", []))
@@ -50,6 +55,26 @@ class RunnerMuxAggregate:
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
             tun_listening += int(counts.get("tun_listening", 0) or 0)
+            for key, value in dict(snap.get("tun_icmp_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_icmp_stage_counts[stage] = int(tun_icmp_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_probe_boundary_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_probe_boundary_counts[stage] = int(tun_probe_boundary_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_local_reply_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_local_reply_stage_counts[stage] = int(tun_local_reply_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            timeout_diag = dict(snap.get("tun_probe_last_timeout_diag") or {})
+            if timeout_diag:
+                label = f"session-{idx}"
+                tun_probe_last_timeout_diag_by_transport[label] = timeout_diag
+                captured_at = float(timeout_diag.get("captured_at_unix_ts") or 0.0)
+                current_at = float(tun_probe_last_timeout_diag.get("captured_at_unix_ts") or 0.0)
+                if captured_at >= current_at:
+                    tun_probe_last_timeout_diag = timeout_diag
         return {
             "udp": udp_rows,
             "tcp": tcp_rows,
@@ -62,6 +87,11 @@ class RunnerMuxAggregate:
                 "tcp_listening": tcp_listening,
                 "tun_listening": tun_listening,
             },
+            "tun_icmp_stage_counts": tun_icmp_stage_counts,
+            "tun_probe_boundary_counts": tun_probe_boundary_counts,
+            "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
+            "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
+            "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
         }
 
     @staticmethod
@@ -163,6 +193,7 @@ class Runner:
         self._tun_helper_client: Optional[TunHelperClient] = None
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
         self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
+        self._tun_helper_prestarted: bool = False
         self._tun_helper_session_token: str = ""
         self._tun_helper_socket_path: str = ""
         self._tun_helper_config_path: str = ""
@@ -465,16 +496,26 @@ class Runner:
         if self._tun_helper_process is not None and self._tun_helper_client is not None:
             self._tun_helper_lifecycle_phase = "connected"
             return
-        self._tun_helper_session_token = secrets.token_urlsafe(18)
-        self._tun_helper_socket_path = settings.resolved_socket_path()
+        attach_config = self._load_prestarted_tun_helper_config()
+        self._tun_helper_prestarted = bool(attach_config)
+        self._tun_helper_session_token = (
+            str(attach_config.get("session_token") or "") if attach_config else secrets.token_urlsafe(18)
+        )
+        self._tun_helper_socket_path = (
+            str(attach_config.get("socket_path") or "") if attach_config else settings.resolved_socket_path()
+        )
         self._tun_helper_backend = None
         try:
             await self._reap_stale_tun_helper_processes(self._tun_helper_socket_path)
-            self._tun_helper_lifecycle_phase = "launching_process"
-            self._tun_helper_process = await self._await_with_async_diag(
-                "tun_helper.process.start",
-                self._launch_tun_helper_process(),
-            )
+            if self._tun_helper_prestarted:
+                self._tun_helper_process = None
+                self._tun_helper_lifecycle_phase = "attaching_prestarted"
+            else:
+                self._tun_helper_lifecycle_phase = "launching_process"
+                self._tun_helper_process = await self._await_with_async_diag(
+                    "tun_helper.process.start",
+                    self._launch_tun_helper_process(),
+                )
             self._tun_helper_lifecycle_phase = "waiting_for_socket"
             await self._await_with_async_diag(
                 "tun_helper.process.ready",
@@ -507,8 +548,28 @@ class Runner:
             with contextlib.suppress(Exception):
                 await self._stop_tun_helper_process()
             self._tun_helper_process = None
+            self._tun_helper_prestarted = False
             self._tun_helper_backend = None
             raise
+
+    def _load_prestarted_tun_helper_config(self) -> dict[str, Any]:
+        config_path = str(os.environ.get("OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG") or "").strip()
+        if not config_path:
+            return {}
+        with open(config_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+        if not isinstance(payload, dict):
+            raise ValueError("prestarted tun helper config must be a JSON object")
+        socket_path = str(payload.get("socket_path") or "").strip()
+        session_token = str(payload.get("session_token") or "").strip()
+        if not socket_path:
+            raise ValueError("prestarted tun helper config is missing socket_path")
+        if not session_token:
+            raise ValueError("prestarted tun helper config is missing session_token")
+        return {
+            "socket_path": socket_path,
+            "session_token": session_token,
+        }
 
     async def _reap_stale_tun_helper_processes(self, planned_socket_path: str) -> None:
         socket_path = str(planned_socket_path or "").strip()
@@ -595,6 +656,7 @@ class Runner:
             )
         self._tun_helper_process = None
         self._tun_helper_backend = None
+        self._tun_helper_prestarted = False
         self._tun_helper_session_token = ""
         self._tun_helper_config_path = ""
         self._tun_helper_lifecycle_phase = (
@@ -621,7 +683,8 @@ class Runner:
             "apply_network": bool(settings.helper_apply_network),
             "socket_path": self._tun_helper_socket_path or settings.resolved_socket_path(),
             "connected": client_connected,
-            "server_started": bool(self._tun_helper_process is not None and process_returncode is None),
+            "server_started": bool(self._tun_helper_prestarted or (self._tun_helper_process is not None and process_returncode is None)),
+            "server_prestarted": bool(self._tun_helper_prestarted),
             "pid": None if self._tun_helper_process is None else int(self._tun_helper_process.pid or 0),
             "process_returncode": None if process_returncode is None else int(process_returncode),
             "last_error": str(self._tun_helper_last_error or client_last_error or ""),
@@ -633,6 +696,11 @@ class Runner:
                     self._tun_helper_runtime_snapshot = dict(getter() or {})
         if self._tun_helper_runtime_snapshot:
             payload["runtime"] = dict(self._tun_helper_runtime_snapshot)
+        process_identity = dict((payload.get("runtime") or {}).get("process_identity") or {})
+        if not process_identity:
+            process_identity = self._current_process_identity_snapshot()
+        if process_identity:
+            payload["process_identity"] = process_identity
         if bool(payload.get("enabled")) and not bool(payload.get("connected")):
             if bool(payload.get("server_started")):
                 payload["lifecycle_phase"] = "waiting_for_client"
@@ -644,6 +712,38 @@ class Runner:
         if self._tun_helper_last_repair_snapshot:
             payload["last_repair"] = dict(self._tun_helper_last_repair_snapshot)
         return payload
+
+    @staticmethod
+    def _current_process_identity_snapshot() -> dict[str, Any]:
+        uid: Optional[int] = None
+        gid: Optional[int] = None
+        user = ""
+        group = ""
+        geteuid = getattr(os, "geteuid", None)
+        getegid = getattr(os, "getegid", None)
+        with contextlib.suppress(Exception):
+            if callable(geteuid):
+                uid = int(geteuid())
+        with contextlib.suppress(Exception):
+            if callable(getegid):
+                gid = int(getegid())
+        if uid is not None:
+            with contextlib.suppress(Exception):
+                import pwd
+
+                user = str(pwd.getpwuid(uid).pw_name or "")
+        if gid is not None:
+            with contextlib.suppress(Exception):
+                import grp
+
+                group = str(grp.getgrgid(gid).gr_name or "")
+        return {
+            "uid": uid,
+            "gid": gid,
+            "user": user,
+            "group": group,
+            "is_root": bool(uid == 0),
+        }
 
     @staticmethod
     def _tun_helper_recovery_snapshot(helper_snapshot: dict[str, Any]) -> dict[str, Any]:
@@ -777,6 +877,7 @@ class Runner:
             "session_token": str(self._tun_helper_session_token or ""),
             "backend": str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND),
             "log_level": str(self._tun_helper_settings.helper_log_level or "INFO"),
+            "authenticated_client_idle_timeout_s": self._tun_helper_authenticated_client_idle_timeout_s(),
         }
 
     def _write_tun_helper_launch_config(self) -> str:
@@ -862,8 +963,16 @@ class Runner:
             return 20.0
         return 1.0
 
+    def _tun_helper_authenticated_client_idle_timeout_s(self) -> float:
+        if self._tun_helper_prestarted or str(os.environ.get("OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG") or "").strip():
+            return 30.0
+        return 5.0
+
     async def _stop_tun_helper_process(self) -> None:
         proc = self._tun_helper_process
+        if self._tun_helper_prestarted:
+            self._cleanup_tun_helper_launch_config()
+            return
         if proc is None:
             self._cleanup_tun_helper_launch_config()
             return
@@ -1488,6 +1597,10 @@ class Runner:
                 "tcp": [],
                 "tun": [],
                 "counts": {"udp": 0, "tcp": 0, "tun": 0, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 0},
+                "tun_icmp_stage_counts": {},
+                "tun_probe_boundary_counts": {},
+                "tun_local_reply_stage_counts": {},
+                "tun_probe_last_timeout_diag": {},
             }
 
         udp_rows: list[dict] = []
@@ -1496,6 +1609,11 @@ class Runner:
         udp_listening = 0
         tcp_listening = 0
         tun_listening = 0
+        tun_icmp_stage_counts: dict[str, int] = {}
+        tun_probe_boundary_counts: dict[str, int] = {}
+        tun_local_reply_stage_counts: dict[str, int] = {}
+        tun_probe_last_timeout_diag: dict[str, Any] = {}
+        tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
@@ -1579,6 +1697,27 @@ class Runner:
             udp_listening += int(counts.get("udp_listening", 0) or 0)
             tcp_listening += int(counts.get("tcp_listening", 0) or 0)
             tun_listening += int(counts.get("tun_listening", 0) or 0)
+            for key, value in dict(snap.get("tun_icmp_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_icmp_stage_counts[stage] = int(tun_icmp_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_probe_boundary_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_probe_boundary_counts[stage] = int(tun_probe_boundary_counts.get(stage, 0) or 0) + int(value or 0)
+            for key, value in dict(snap.get("tun_local_reply_stage_counts") or {}).items():
+                stage = str(key or "")
+                if stage:
+                    tun_local_reply_stage_counts[stage] = int(tun_local_reply_stage_counts.get(stage, 0) or 0) + int(value or 0)
+            timeout_diag = dict(snap.get("tun_probe_last_timeout_diag") or {})
+            if timeout_diag:
+                session_labels = list(getattr(self, "_session_labels", []) or [])
+                label = str(session_labels[idx] if idx < len(session_labels) else f"session-{idx}").strip()
+                tun_probe_last_timeout_diag_by_transport[label] = timeout_diag
+                captured_at = float(timeout_diag.get("captured_at_unix_ts") or 0.0)
+                current_at = float(tun_probe_last_timeout_diag.get("captured_at_unix_ts") or 0.0)
+                if captured_at >= current_at:
+                    tun_probe_last_timeout_diag = timeout_diag
 
         return {
             "udp": udp_rows,
@@ -1592,6 +1731,11 @@ class Runner:
                 "tcp_listening": tcp_listening,
                 "tun_listening": tun_listening,
             },
+            "tun_icmp_stage_counts": tun_icmp_stage_counts,
+            "tun_probe_boundary_counts": tun_probe_boundary_counts,
+            "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
+            "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
+            "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
         }
 
     def get_config_snapshot(self, include_secrets: bool = False) -> dict:

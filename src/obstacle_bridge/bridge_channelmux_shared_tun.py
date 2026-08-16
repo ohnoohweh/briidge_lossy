@@ -1033,14 +1033,34 @@ class ChannelMuxSharedTunMixin:
         source_chan_id: Optional[int],
         source_note: str,
     ) -> str:
+        def _trace_result(result: str, note: str = "") -> str:
+            self._log_tun_probe_trace(
+                stage=f"inbound_dispatch_{source_note}_result",
+                packet=data,
+                ifname=str(getattr(dev, "ifname", "") or ""),
+                chan=source_chan_id,
+                peer_id=source_peer_id,
+                note=f"result={result}" + (f"; {note}" if note else ""),
+            )
+            return result
+
+        self._log_tun_probe_trace(
+            stage=f"inbound_dispatch_{source_note}",
+            packet=data,
+            ifname=str(getattr(dev, "ifname", "") or ""),
+            chan=source_chan_id,
+            peer_id=source_peer_id,
+            note="before_probe_reply_observe",
+        )
         if self._observe_tun_probe_reply(dev, data):
+            self._record_tun_probe_boundary("probe_reply_consumed_before_local_write")
             self.log.debug(
                 "[TUN] source=%s chan=%s consumed internal probe reply if=%s",
                 source_note,
                 source_chan_id,
                 dev.ifname,
             )
-            return "consumed"
+            return _trace_result("consumed")
         parsed, _ = self._parse_tun_packet_endpoints(data)
         if len(data) > int(dev.mtu):
             self.log.warning(
@@ -1061,7 +1081,7 @@ class ChannelMuxSharedTunMixin:
                 destination_ip=None if parsed is None else parsed.get("destination_ip"),
                 packet_bytes=len(data),
             )
-            return "dropped"
+            return _trace_result("dropped", note="reason=oversize")
         shared_relay = self._shared_tun_plan_inbound_peer_relay(
             getattr(dev, "service_key", None),
             source_peer_id,
@@ -1090,10 +1110,16 @@ class ChannelMuxSharedTunMixin:
                 shared_relay.get("selected_peer_ids"),
                 shared_relay.get("selected_chan_ids"),
             )
-            return "relayed"
+            return _trace_result(
+                "relayed",
+                note=(
+                    f"route_class={shared_relay.get('route_class') or ''}; "
+                    f"selected_chans={','.join(str(v) for v in selected_chan_ids)}"
+                ),
+            )
         self._write_tun_packet(dev, data)
         if source_chan_id is not None and not self._is_local_virtual_probe_chan_id(source_chan_id):
             ctr = self._ctr(ChannelMux.Proto.TUN, source_chan_id)
             ctr.msgs_out += 1
             ctr.bytes_out += len(data)
-        return "written"
+        return _trace_result("written")

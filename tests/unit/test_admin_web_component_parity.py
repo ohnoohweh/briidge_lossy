@@ -118,6 +118,32 @@ def _python_tun_routing_payload(
     return ui._build_tun_routing_payload()
 
 
+def _python_status_payload(
+    connections_snapshot: dict[str, object],
+    status_snapshot: dict[str, object] | None = None,
+) -> dict[str, object]:
+    args = argparse.Namespace(
+        admin_web=True,
+        admin_web_bind="127.0.0.1",
+        admin_web_port=18080,
+        admin_web_path="/",
+        admin_web_landing_page_disable=False,
+        admin_web_security_advisor_disable=False,
+        admin_web_security_advisor_startup_disable=False,
+        admin_web_first_tab="home",
+        admin_web_token="",
+        admin_web_auth_disable=False,
+        admin_web_username="",
+        admin_web_password="",
+        secure_link_mode="off",
+        secure_link_psk="",
+        _first_start_detected=False,
+        _config_file_state="unknown",
+    )
+    ui = AdminWebUI(args, _PythonAdminRunnerStub(connections_snapshot, status_snapshot))
+    return ui._build_status_payload()
+
+
 @pytest.fixture(scope="session")
 def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
     swiftc = shutil.which("swiftc")
@@ -371,6 +397,49 @@ def test_swift_admin_api_live_topic_tun_routing_matches_python(swift_admin_web_c
         },
     )
     assert swift["payload"] == tun_routing
+
+
+def test_swift_admin_api_status_route_matches_python(swift_admin_web_component_runner: Path) -> None:
+    connections_snapshot = {
+        "udp": [],
+        "tcp": [],
+        "tun": [
+            {
+                "state": "connected",
+                "chan_id": 11,
+                "local": {"ifname": "obtun0", "mtu": 1600},
+            }
+        ],
+        "tun_icmp_stage_counts": {"from_local_tun_read": 3},
+        "tun_probe_boundary_counts": {"probe_reply_matched": 2},
+        "tun_local_reply_stage_counts": {"local_reply_before_overlay_send": 1},
+        "tun_probe_last_timeout_diag": {"resolved_target": "172.217.17.195"},
+        "tun_probe_last_timeout_diag_by_transport": {"myudp": {"resolved_target": "172.217.17.195"}},
+    }
+    status_snapshot = {
+        "peer_state": "CONNECTED",
+        "tun_helper": {
+            "enabled": True,
+            "mode": "helper",
+            "backend": "darwin-native",
+            "connected": True,
+            "lifecycle_phase": "connected",
+            "runtime": {"ifname": "obtun0", "mtu": 1600},
+        },
+    }
+    python = _python_status_payload(connections_snapshot, status_snapshot)
+    swift = _run_swift_component(
+        swift_admin_web_component_runner,
+        {
+            "action": "admin_api_request",
+            "request": {"method": "GET", "path": "/api/status"},
+            "connections_snapshot": connections_snapshot,
+            "status_snapshot": status_snapshot,
+        },
+    )
+    assert swift["ok"] is True
+    assert swift["status_line"] == "HTTP/1.1 200 OK"
+    assert swift["body_json"] == python
 
 
 def test_swift_admin_api_peers_payload_preserves_throttle_summary(swift_admin_web_component_runner: Path) -> None:

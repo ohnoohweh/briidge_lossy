@@ -1090,6 +1090,24 @@ function setText(id, value) {
   if (el) el.textContent = value;
 }
 
+function setTunHelperUserStatus(identity) {
+  const el = document.getElementById('tunHelperUser');
+  if (!el) return;
+  const info = identity && typeof identity === 'object' ? identity : {};
+  const user = String(info.user || '').trim();
+  const uid = info.uid == null || Number.isNaN(Number(info.uid)) ? null : Number(info.uid);
+  const label = user || (uid != null ? `uid:${uid}` : 'n/a');
+  el.textContent = label;
+  el.classList.remove('helper-user-root', 'helper-user-nonroot', 'helper-user-unknown');
+  if (uid === 0 || user.toLowerCase() === 'root') {
+    el.classList.add('helper-user-root');
+  } else if (label !== 'n/a') {
+    el.classList.add('helper-user-nonroot');
+  } else {
+    el.classList.add('helper-user-unknown');
+  }
+}
+
 function applyAdminInstanceName(name) {
   const trimmed = String(name || '').trim();
   const fullTitle = trimmed ? `${APP_BASE_TITLE} ${trimmed}` : APP_BASE_TITLE;
@@ -1170,6 +1188,86 @@ function fmtDropDiagnostics(shared) {
     ? `last ${latest.reason || 'drop'} ${latest.direction || 'unknown'}${latest.destination_ip ? ` -> ${latest.destination_ip}` : ''}`
     : 'last none';
   return `total ${total} · ${reasons}\n${latestText}`;
+}
+
+function fmtDropReasonStats(summary) {
+  const byReason = summary?.shared_drop_by_reason;
+  if (!byReason || typeof byReason !== 'object') {
+    return 'none';
+  }
+  const rows = Object.entries(byReason)
+    .filter(([, count]) => Number(count || 0) > 0)
+    .sort((a, b) => {
+      const countDiff = Number(b[1] || 0) - Number(a[1] || 0);
+      if (countDiff) return countDiff;
+      return String(a[0]).localeCompare(String(b[0]));
+    })
+    .map(([reason, count]) => `${reason} ${fmtInteger(count)}`);
+  return rows.length ? rows.join('\n') : 'none';
+}
+
+function fmtLocalReplyStageCounters(summary) {
+  const defaults = [
+    'local_reply_skip_overlay_inactive',
+    'local_reply_drop_oversize',
+    'local_reply_drop_throttled',
+    'local_reply_drop_shared_route',
+    'local_reply_virtual_probe_delivery',
+    'local_reply_drop_no_channel',
+    'local_reply_drop_missing_service_spec',
+    'local_reply_bound_new_channel',
+    'local_reply_before_overlay_send',
+  ];
+  const counts = summary?.local_reply_stage_counts;
+  return defaults
+    .map((key) => `${key} ${fmtInteger(counts && typeof counts === 'object' ? (counts[key] ?? 0) : 0)}`)
+    .join('\n');
+}
+
+function fmtIcmpStageCounters(summary) {
+  const defaults = [
+    'from_local_tun_read',
+    'overlay_tx_before_send_app',
+    'overlay_rx_after_unpack',
+    'from_peer_before_local_write',
+    'to_local_tun_written',
+    'local_reply_skip_overlay_inactive',
+    'local_reply_drop_oversize',
+    'local_reply_drop_throttled',
+    'local_reply_drop_shared_route',
+    'local_reply_virtual_probe_delivery',
+    'local_reply_drop_no_channel',
+    'local_reply_drop_missing_service_spec',
+    'local_reply_bound_new_channel',
+    'local_reply_before_overlay_send',
+  ];
+  const counts = summary?.icmp_stage_counts;
+  return defaults
+    .map((key) => `${key} ${fmtInteger(counts && typeof counts === 'object' ? (counts[key] ?? 0) : 0)}`)
+    .join('\n');
+}
+
+function fmtProbeBoundaryCounters(summary) {
+  const defaults = [
+    'probe_attempt_started',
+    'probe_waiter_registered',
+    'probe_injected_local_virtual',
+    'probe_injected_kernel',
+    'probe_injected_channelmux',
+    'probe_send_completed',
+    'probe_reply_matched',
+    'probe_timeout',
+    'probe_exception',
+    'helper_read_packet',
+    'helper_read_probe_packet',
+    'helper_write_packet',
+    'helper_write_probe_packet',
+    'helper_write_error',
+  ];
+  const counts = summary?.probe_boundary_counts;
+  return defaults
+    .map((key) => `${key} ${fmtInteger(counts && typeof counts === 'object' ? (counts[key] ?? 0) : 0)}`)
+    .join('\n');
 }
 
 function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
@@ -3112,6 +3210,10 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingSharedServices', fmtInteger(j.summary?.shared_services ?? 0));
   setText('tunRoutingActiveBindings', fmtInteger(j.summary?.shared_active_peer_bindings ?? 0));
   setText('tunRoutingSharedDrops', fmtInteger(j.summary?.shared_drop_total ?? 0));
+  setText('tunRoutingSharedDropReasons', fmtDropReasonStats(j.summary || {}));
+  setText('tunRoutingIcmpStageCounters', fmtIcmpStageCounters(j.summary || {}));
+  setText('tunRoutingProbeBoundaryCounters', fmtProbeBoundaryCounters(j.summary || {}));
+  setText('tunRoutingLocalReplyStageCounters', fmtLocalReplyStageCounters(j.summary || {}));
   setText('tunRoutingIncludedRoutes', fmtTunRoutingRouteList(j.included_routes));
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
@@ -3120,6 +3222,7 @@ function applyTunRoutingDoc(j) {
   const configVerification = verification.tun_config || {};
   const peerVerification = verification.tun_connectivity || {};
   const globalVerification = verification.tun_global_connectivity || {};
+  const globalNameResolution = globalVerification.name_resolution || {};
   setText('tunVerificationConfigSummary', String(configVerification.summary || 'pending'));
   setText('tunVerificationConfigDetail', String(configVerification.detail || 'n/a'));
   setText('tunVerificationPeerSummary', fmtTunVerificationValue(peerVerification));
@@ -3127,6 +3230,8 @@ function applyTunRoutingDoc(j) {
   setText('tunVerificationGlobalSummary', fmtTunVerificationValue(globalVerification));
   setText('tunVerificationGlobalDetail', fmtTunVerificationDetail(globalVerification));
   setText('tunVerificationGlobalHost', String(verification.global_connectivity_host || 'n/a'));
+  setText('tunVerificationGlobalResolutionSummary', fmtTunNameResolutionSummary(globalNameResolution, globalVerification));
+  setText('tunVerificationGlobalResolutionDetail', fmtTunNameResolutionDetail(globalNameResolution, globalVerification));
   const tunRoutingHealthWarning = document.getElementById('tunRoutingHealthWarning');
   if (tunRoutingHealthWarning) {
     const warningText = summarizeTunRuntimeHealth(j.tun || []);
@@ -3135,12 +3240,14 @@ function applyTunRoutingDoc(j) {
   }
   const helper = j.tun_helper || {};
   const runtime = helper.runtime || {};
+  const helperIdentity = helper.process_identity || runtime.process_identity || {};
   setText('tunHelperMode', helper.enabled ? String(helper.mode || 'helper') : 'inline');
   setText('tunHelperLifecyclePhase', String(helper.lifecycle_phase || (helper.enabled ? 'unknown' : 'disabled')));
   setText('tunHelperBackend', String(helper.backend || runtime.backend || 'n/a'));
   setText('tunHelperConnected', helper.connected ? 'yes' : 'no');
   setText('tunHelperServerStarted', helper.server_started ? 'yes' : 'no');
   setText('tunHelperApplyNetwork', helper.apply_network ? 'yes' : 'no');
+  setTunHelperUserStatus(helperIdentity);
   setText('tunHelperSocket', String(helper.socket_path || 'n/a'));
   setText('tunHelperIfname', String(runtime.ifname || 'n/a'));
   setText('tunHelperMtu', fmtInteger(runtime.mtu ?? 0));
@@ -3186,6 +3293,25 @@ function applyTunRoutingDoc(j) {
     helperRepairBtn.classList.toggle('hidden', !helperRepairAvailable);
     helperRepairBtn.disabled = !helperRepairAvailable;
   }
+}
+
+function fmtTunNameResolutionSummary(info, verification) {
+  const status = String(info?.status || '').trim().toLowerCase();
+  if (status === 'successful') return 'successful';
+  if (status === 'failed') return 'failed';
+  if (status === 'skipped') return 'skipped';
+  const resolvedTarget = String(verification?.resolved_target || '').trim();
+  if (resolvedTarget) return 'successful';
+  return 'n/a';
+}
+
+function fmtTunNameResolutionDetail(info, verification) {
+  const resolvedIP = String(info?.resolved_ip || verification?.resolved_target || '').trim();
+  const detail = String(info?.detail || '').trim();
+  if (resolvedIP && detail) return `${resolvedIP} (${detail})`;
+  if (resolvedIP) return resolvedIP;
+  if (detail) return detail;
+  return 'n/a';
 }
 
 async function loadConfig() {

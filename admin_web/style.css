@@ -1652,6 +1652,36 @@ select.config-editor option:disabled {
   border-color: rgba(148, 163, 184, 0.22);
 }
 
+.helper-user-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+}
+
+.helper-user-root {
+  background: rgba(34, 197, 94, 0.12);
+  color: #8ef0ae;
+  border-color: rgba(34, 197, 94, 0.22);
+}
+
+.helper-user-nonroot {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
+.helper-user-unknown {
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  border-color: rgba(148, 163, 184, 0.22);
+}
+
 .conn-table tbody tr.row-updated {
   background: rgba(34, 197, 94, 0.08);
   transition: background 0.6s ease;

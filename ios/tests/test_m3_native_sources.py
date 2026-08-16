@@ -444,6 +444,10 @@ def test_admin_api_source_exists() -> None:
     assert '"tun_routing"' in runtime
     assert "adminTunRoutingSnapshot()" in runtime
     assert "tunRoutingSnapshot(fromConnections:" in runtime
+    assert '"shared_drop_by_reason": sharedDropByReason' in runtime
+    assert '"icmp_stage_counts": icmpStageCounts' in runtime
+    assert '"probe_boundary_counts": probeBoundaryCounts' in runtime
+    assert '"local_reply_stage_counts": localReplyStageCounts' in runtime
     assert '"admin_api_request"' in runtime
 
 
@@ -487,6 +491,8 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"tun_global_connectivity": cachedTunConnectivityVerificationOrProbe(' in provider
     assert '?? "google.de")' in provider
     assert 'method: "network_extension_settings"' in provider
+    assert '"name_resolution": nameResolution' in provider
+    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' in provider
     assert "} else if addressesPresent && !adminPacketProcessingActive() {" in provider
     assert '"Packet processing is not active yet."' in provider
     assert "guard adminPacketProcessingActive() else {" in provider

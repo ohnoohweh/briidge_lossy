@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import argparse
 import asyncio
+import contextlib
 import ipaddress
 import socket
 import unittest
@@ -8,7 +9,12 @@ from unittest.mock import AsyncMock, patch
 
 from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, SessionMetrics
 from obstacle_bridge.bridge_proxy_server import ObstacleBridgeProxyProtocolCodec
-from obstacle_bridge.bridge_tun_ping import PROBE_KIND_GLOBAL, build_ipv4_echo_request, checksum16, probe_payload
+from obstacle_bridge.bridge_tun_ping import (
+    PROBE_KIND_GLOBAL,
+    build_ipv4_echo_request,
+    checksum16,
+    probe_payload,
+)
 from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
 
 
@@ -18,6 +24,7 @@ class _FakeSession:
         *,
         connected=False,
         connection_layers=None,
+        secure_link_status=None,
         max_app_payload_size=65535,
         transmit_delay_est_ms=None,
         waiting_count=0,
@@ -45,6 +52,7 @@ class _FakeSession:
             ]
         else:
             self.connection_layers = [dict(entry) for entry in connection_layers]
+        self.secure_link_status = dict(secure_link_status) if isinstance(secure_link_status, dict) else None
         self.max_app_payload_size = max_app_payload_size
         self._metrics = SessionMetrics(
             transmit_delay_est_ms=transmit_delay_est_ms,
@@ -62,6 +70,9 @@ class _FakeSession:
 
     def get_connection_layers_snapshot(self):
         return [dict(entry) for entry in self.connection_layers]
+
+    def get_secure_link_status_snapshot(self):
+        return dict(self.secure_link_status or {})
 
     def set_on_app_payload(self, cb):
         self.app_cb = cb
@@ -277,6 +288,160 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
                     target_server.close()
                     await target_server.wait_closed()
 
+    def test_on_overlay_state_logs_state_transition_reason(self):
+        asyncio.run(self._test_on_overlay_state_logs_state_transition_reason())
+
+    async def _test_on_overlay_state_logs_state_transition_reason(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_transport = "ws"
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+
+        with self.assertLogs('channel_mux', level='INFO') as logs:
+            await mux.on_overlay_state(False)
+
+        text = "\n".join(logs.output)
+        self.assertIn("[MUX/STATE]", text)
+        self.assertIn("reason=on_overlay_state_disconnected", text)
+        self.assertIn("connected_arg=0", text)
+        self.assertIn("was_overlay_connected=1", text)
+        self.assertIn("new_overlay_connected=0", text)
+        self.assertIn("was_accepting_enabled=1", text)
+        self.assertIn("new_accepting_enabled=0", text)
+        self.assertIn("session_connected=0", text)
+        self.assertIn("session_app_ready=0", text)
+
+    def test_on_overlay_state_keeps_accepting_for_secure_link_reauthenticating(self):
+        asyncio.run(self._test_on_overlay_state_keeps_accepting_for_secure_link_reauthenticating())
+
+    async def _test_on_overlay_state_keeps_accepting_for_secure_link_reauthenticating(self):
+        session = _FakeSession(
+            connected=True,
+            connection_layers=[
+                {
+                    "layer": "secure_link",
+                    "transport": "ws",
+                    "state": "reauthenticating",
+                    "epoch": 7,
+                    "connected": True,
+                    "app_ready": False,
+                    "preserve_connected_during_epoch_restart": True,
+                }
+            ],
+            secure_link_status={
+                "state": "reauthenticating",
+                "authenticated": False,
+                "rekey_in_progress": True,
+            },
+        )
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+
+        with self.assertLogs('channel_mux', level='INFO') as logs:
+            await mux.on_overlay_state(False)
+
+        self.assertTrue(mux._overlay_connected)
+        self.assertTrue(mux._accepting_enabled)
+        text = "\n".join(logs.output)
+        self.assertIn("reason=on_overlay_state_connected", text)
+
+    def test_on_overlay_state_blocks_secure_link_handshaking(self):
+        asyncio.run(self._test_on_overlay_state_blocks_secure_link_handshaking())
+
+    async def _test_on_overlay_state_blocks_secure_link_handshaking(self):
+        session = _FakeSession(
+            connected=True,
+            connection_layers=[
+                {
+                    "layer": "secure_link",
+                    "transport": "ws",
+                    "state": "handshaking",
+                    "epoch": 0,
+                    "connected": True,
+                    "app_ready": False,
+                    "preserve_connected_during_epoch_restart": False,
+                }
+            ],
+            secure_link_status={
+                "state": "handshaking",
+                "authenticated": False,
+                "rekey_in_progress": False,
+            },
+        )
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+
+        with self.assertLogs('channel_mux', level='INFO') as logs:
+            await mux.on_overlay_state(False)
+
+        self.assertFalse(mux._overlay_connected)
+        self.assertFalse(mux._accepting_enabled)
+        text = "\n".join(logs.output)
+        self.assertIn("reason=on_overlay_state_disconnected", text)
+
+    def test_on_overlay_state_allows_connected_non_securelink_transport(self):
+        asyncio.run(self._test_on_overlay_state_allows_connected_non_securelink_transport())
+
+    async def _test_on_overlay_state_allows_connected_non_securelink_transport(self):
+        session = _FakeSession(
+            connected=True,
+            connection_layers=[
+                {
+                    "layer": "compression",
+                    "transport": "ws",
+                    "state": "connected",
+                    "epoch": 0,
+                    "connected": True,
+                    "app_ready": True,
+                }
+            ],
+            secure_link_status=None,
+        )
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = False
+        mux._accepting_enabled = False
+
+        with self.assertLogs('channel_mux', level='INFO') as logs:
+            await mux.on_overlay_state(True)
+
+        self.assertTrue(mux._overlay_connected)
+        self.assertTrue(mux._accepting_enabled)
+        text = "\n".join(logs.output)
+        self.assertIn("reason=on_overlay_state_connected", text)
+
+    def test_on_overlay_state_blocks_disconnected_non_securelink_transport(self):
+        asyncio.run(self._test_on_overlay_state_blocks_disconnected_non_securelink_transport())
+
+    async def _test_on_overlay_state_blocks_disconnected_non_securelink_transport(self):
+        session = _FakeSession(
+            connected=False,
+            connection_layers=[
+                {
+                    "layer": "compression",
+                    "transport": "ws",
+                    "state": "disconnected",
+                    "epoch": 0,
+                    "connected": False,
+                    "app_ready": False,
+                }
+            ],
+            secure_link_status=None,
+        )
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+
+        with self.assertLogs('channel_mux', level='INFO') as logs:
+            await mux.on_overlay_state(False)
+
+        self.assertFalse(mux._overlay_connected)
+        self.assertFalse(mux._accepting_enabled)
+        text = "\n".join(logs.output)
+        self.assertIn("reason=on_overlay_state_disconnected", text)
+
     def test_tcp_target_connection_default_system_honors_no_proxy_on_linux(self):
         asyncio.run(self._test_tcp_target_connection_default_system_honors_no_proxy_on_linux())
 
@@ -463,6 +628,90 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertTrue(result['ok'])
         write_tun.assert_called_once()
         send_mux.assert_not_called()
+
+    def test_local_virtual_probe_skips_when_transport_inactive(self):
+        asyncio.run(self._test_local_virtual_probe_skips_when_transport_inactive())
+
+    async def _test_local_virtual_probe_skips_when_transport_inactive(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = False
+        mux._accepting_enabled = False
+        mux.args = argparse.Namespace(
+            overlay_transport="myudp",
+            TUN_routing={
+                "tunnel_address": "192.168.106.1",
+                "global_connectivity_source_ipv4": "192.168.108.31",
+            },
+        )
+        spec = ChannelMux.ServiceSpec(
+            5,
+            'tun',
+            'obtun0',
+            1500,
+            'tun',
+            'obtun1',
+            1500,
+            options={
+                'shared_tun_ownership': {
+                    'mode': 'server_shared',
+                    'peers': [
+                        {'peer_ref': 'linux-client', 'ipv4': ['192.168.107.2']},
+                    ],
+                }
+            },
+        )
+        svc_key = ('local', 0, 5)
+        mux._local_services[svc_key] = spec
+        dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+        mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+        with patch.object(mux, '_resolve_tun_probe_target', new=AsyncMock(return_value='192.168.106.1')), \
+             patch.object(mux, '_write_tun_packet') as write_tun, \
+             patch.object(mux, '_send_mux') as send_mux:
+            result = await mux._probe_tun_connectivity_once(
+                probe_kind='peer',
+                ifname='obtun0',
+                target='192.168.106.1',
+                timeout_s=0.5,
+            )
+
+        self.assertFalse(result['ok'])
+        self.assertEqual(result['state'], 'skipped')
+        self.assertIn('inactive transport', result['detail'])
+        write_tun.assert_not_called()
+        send_mux.assert_not_called()
+
+    def test_helper_reader_handoff_cancels_previous_mux_reader_task(self):
+        asyncio.run(self._test_helper_reader_handoff_cancels_previous_mux_reader_task())
+
+    async def _test_helper_reader_handoff_cancels_previous_mux_reader_task(self):
+        loop = asyncio.get_running_loop()
+        mux1 = ChannelMux(_FakeSession(connected=True), loop)
+        mux2 = ChannelMux(_FakeSession(connected=True), loop)
+        helper_settings = argparse.Namespace(mode="helper")
+        mux1._tun_helper_settings = helper_settings
+        mux2._tun_helper_settings = helper_settings
+        mux1._tun_helper_client = object()
+        mux2._tun_helper_client = object()
+        dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=('local', 0, 5), helper_managed=True)
+
+        mux1._register_tun_reader(dev)
+        task1 = mux1._tun_helper_reader_tasks[id(dev)]
+        self.assertIs(getattr(dev, "_reader_mux", None), mux1)
+
+        mux2._register_tun_reader(dev, force_owner=True)
+        task2 = mux2._tun_helper_reader_tasks[id(dev)]
+
+        self.assertIs(getattr(dev, "_reader_mux", None), mux2)
+        self.assertNotIn(id(dev), mux1._tun_helper_reader_tasks)
+        self.assertIsNot(task1, task2)
+        self.assertGreater(task1.cancelling(), 0)
+
+        task2.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task2
 
     def test_tcp_target_connection_uses_system_proxy_egress(self):
         asyncio.run(self._test_tcp_target_connection_uses_system_proxy_egress())
@@ -2835,6 +3084,223 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             self.assertEqual(second[3], ChannelMux.MType.DATA)
             self.assertEqual(bytes(second[4]), b'\x45hello')
             self.assertIsNotNone(dev.chan_id)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_icmp_packet_emits_info_level_icmp_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            packet = build_ipv4_echo_request(
+                source_ip="192.168.106.2",
+                destination_ip="192.168.106.1",
+                identifier=0x1234,
+                sequence=7,
+                payload=b"icmp-log-test",
+            )
+
+            with self.assertLogs('channel_mux', level='INFO') as logs:
+                mux._on_local_tun_packet(dev, packet)
+
+            text = "\n".join(logs.output)
+            self.assertIn("[TUN/ICMP]", text)
+            self.assertIn("stage=from_local_tun_read", text)
+            self.assertIn("type=echo_request", text)
+            self.assertIn("dst=192.168.106.1", text)
+            self.assertIn("id=4660", text)
+            self.assertIn("seq=7", text)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_icmp_packet_emits_overlay_tx_icmp_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            packet = build_ipv4_echo_request(
+                source_ip="192.168.106.2",
+                destination_ip="192.168.106.1",
+                identifier=0x1234,
+                sequence=7,
+                payload=b"icmp-log-test",
+            )
+
+            with self.assertLogs('channel_mux', level='INFO') as logs:
+                mux._on_local_tun_packet(dev, packet)
+
+            text = "\n".join(logs.output)
+            self.assertIn("stage=overlay_tx_before_send_app", text)
+            self.assertIn("type=echo_request", text)
+            self.assertIn("dst=192.168.106.1", text)
+            self.assertIn("id=4660", text)
+            self.assertIn("seq=7", text)
+            self.assertIn("mux_counter=", text)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_icmp_packet_emits_pre_send_decision_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            packet = _ipv4_echo_reply(
+                "192.168.106.1",
+                "192.168.106.2",
+                0x1234,
+                7,
+                b"icmp-log-test",
+            )
+
+            with self.assertLogs('channel_mux', level='INFO') as logs:
+                mux._on_local_tun_packet(dev, packet)
+
+            text = "\n".join(logs.output)
+            self.assertIn("stage=local_reply_before_overlay_send", text)
+            self.assertIn("type=echo_reply", text)
+            self.assertIn("src=192.168.106.1", text)
+            self.assertIn("dst=192.168.106.2", text)
+            self.assertIn("id=4660", text)
+            self.assertIn("seq=7", text)
+        finally:
+            mux.loop.close()
+
+    def test_local_tun_icmp_packet_emits_overlay_inactive_skip_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = False
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            packet = _ipv4_echo_reply(
+                "192.168.106.1",
+                "192.168.106.2",
+                0x1234,
+                8,
+                b"icmp-log-test",
+            )
+
+            with self.assertLogs('channel_mux', level='INFO') as logs:
+                mux._on_local_tun_packet(dev, packet)
+
+            text = "\n".join(logs.output)
+            self.assertIn("stage=local_reply_skip_overlay_inactive", text)
+            self.assertIn("type=echo_reply", text)
+            self.assertIn("overlay_connected=0", text)
+            self.assertIn("accepting_enabled=1", text)
+            self.assertNotIn("stage=overlay_tx_before_send_app", text)
+        finally:
+            mux.loop.close()
+
+    def test_peer_to_local_tun_icmp_reply_emits_info_level_icmp_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            dev.chan_id = 77
+            mux._tun_by_chan[77] = dev
+            mux._local_services[svc_key] = spec
+            mux._svc_tun_devices[svc_key] = dev
+            mux._chan_owner_peer_id[77] = 41
+            writes: list[bytes] = []
+            mux._dispatch_shared_tun_inbound_packet = lambda *_args, **_kwargs: writes.append(bytes(_args[1])) or "written"  # type: ignore[method-assign]
+
+            request = build_ipv4_echo_request(
+                source_ip="192.168.106.2",
+                destination_ip="192.168.106.1",
+                identifier=0x2345,
+                sequence=9,
+                payload=b"icmp-reply-test",
+            )
+            reply = bytearray(request)
+            reply[12:16] = ipaddress.IPv4Address("192.168.106.1").packed
+            reply[16:20] = ipaddress.IPv4Address("192.168.106.2").packed
+            ihl = (reply[0] & 0x0F) * 4
+            reply[ihl] = 0
+            reply[ihl + 1] = 0
+            reply[ihl + 2:ihl + 4] = b"\x00\x00"
+            reply[ihl + 2:ihl + 4] = checksum16(reply[ihl:]).to_bytes(2, "big")
+
+            with self.assertLogs('channel_mux', level='INFO') as logs:
+                mux._rx_tun_data(77, bytes(reply))
+
+            self.assertEqual(writes, [bytes(reply)])
+            text = "\n".join(logs.output)
+            self.assertIn("[TUN/ICMP]", text)
+            self.assertIn("stage=from_peer_before_local_write", text)
+            self.assertIn("stage=to_local_tun_written", text)
+            self.assertIn("type=echo_reply", text)
+            self.assertIn("src=192.168.106.1", text)
+            self.assertIn("dst=192.168.106.2", text)
+            self.assertIn("peer=41", text)
+            self.assertIn("id=9029", text)
+            self.assertIn("seq=9", text)
+        finally:
+            mux.loop.close()
+
+    def test_handle_app_payload_from_peer_emits_overlay_rx_icmp_diagnostic(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            svc_key = ('local', 0, 5)
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            dev.chan_id = 77
+            mux._tun_by_chan[77] = dev
+            mux._local_services[svc_key] = spec
+            mux._svc_tun_devices[svc_key] = dev
+            mux._chan_owner_peer_id[77] = 41
+            writes: list[bytes] = []
+            mux._dispatch_shared_tun_inbound_packet = lambda *_args, **_kwargs: writes.append(bytes(_args[1])) or "written"  # type: ignore[method-assign]
+
+            reply = _ipv4_echo_reply(
+                "192.168.106.1",
+                "192.168.106.2",
+                0x2345,
+                9,
+                b"icmp-reply-test",
+            )
+            wire = mux._pack_mux(77, ChannelMux.Proto.TUN, 12, ChannelMux.MType.DATA, reply)
+
+            with self.assertLogs('channel_mux', level='INFO') as logs:
+                handled = mux._handle_app_payload_from_peer(wire, peer_id=41)
+
+            self.assertTrue(handled)
+            self.assertEqual(writes, [reply])
+            text = "\n".join(logs.output)
+            self.assertIn("stage=overlay_rx_after_unpack", text)
+            self.assertIn("stage=from_peer_before_local_write", text)
+            self.assertIn("type=echo_reply", text)
+            self.assertIn("src=192.168.106.1", text)
+            self.assertIn("dst=192.168.106.2", text)
+            self.assertIn("peer=41", text)
+            self.assertIn("id=9029", text)
+            self.assertIn("seq=9", text)
+            self.assertIn("mux_counter=12", text)
         finally:
             mux.loop.close()
 

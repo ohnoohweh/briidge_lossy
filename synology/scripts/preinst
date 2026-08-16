@@ -1,13 +1,13 @@
 #!/bin/sh
 set -eu
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "ObstacleBridge requires python3 on the Synology host." >&2
+if ! command -v python3.14 >/dev/null 2>&1; then
+    echo "ObstacleBridge requires SynoCommunity python3.14 on the Synology host." >&2
     exit 1
 fi
 
-python3 - <<'PY'
+python3.14 - <<'PY'
 import sys
-if sys.version_info < (3, 8):
-    raise SystemExit("ObstacleBridge requires Python 3.8 or newer.")
+if sys.version_info < (3, 14):
+    raise SystemExit("ObstacleBridge requires Python 3.14 or newer.")
 PY

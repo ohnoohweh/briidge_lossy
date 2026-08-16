@@ -1,54 +1,97 @@
 # Synology SPK Wrapper
 
-This directory contains the first phase-2 Synology DSM package wrapper for
-ObstacleBridge.
+This directory contains the Synology DSM package wrapper for ObstacleBridge.
 
-What this slice does:
+## Proven manual install path
 
-- builds a `noarch` `.spk` around the existing Python runtime
+The currently proven Synology runtime flow is:
+
+1. Install SynoCommunity `python3.14` on the NAS.
+2. Copy or clone this repository onto the NAS.
+3. Log in over SSH.
+4. Run:
+
+```bash
+sudo python3.14 -m pip install -e .
+sudo python3.14 -m obstacle_bridge
+```
+
+That path is still the reference operator workflow for first validation because
+it matches the privilege level some ObstacleBridge modes need on DSM.
+
+## What the SPK does
+
+- builds a `noarch` `.spk` around the existing Python runtime sources
 - installs the project sources, WebAdmin assets, and helper scripts
-- seeds a persistent config file under the Synology package var directory
+- seeds a persistent config file under the package var directory
+- declares a Synology package dependency on SynoCommunity `python314`
+- bootstraps Python package dependencies into `/var/packages/obstaclebridge/var/python-packages`
 - starts and stops ObstacleBridge through DSM service control
 - requests autostart through the normal DSM package lifecycle
 
-What this slice intentionally does not do yet:
+## Current elevated-execution PoC
 
-- vendor Python dependencies into the package
-- guarantee every DSM/Python combination out of the box without a host
-  `python3` runtime and the required packages already installed
+The package now includes the first runtime handoff needed to reuse the existing
+Python TUN helper, while remaining installable on DSM 7.x without Synology
+signing.
 
-What this slice now prototypes:
+Current shape:
 
-- a package-user main service plus a dedicated helper Python under
-  `/var/packages/obstaclebridge/var/helper-venv/`
-- best-effort `CAP_NET_ADMIN` preparation on that helper Python through
-  `setcap`
-- runtime export of `OBSTACLEBRIDGE_TUN_HELPER_EXECUTABLE` so the Linux helper
-  subprocess can launch through that dedicated helper interpreter instead of
-  the main service interpreter
+- the package default remains `run-as: package`
+- `prestart` still invokes
+  `/var/packages/obstaclebridge/target/bin/synology_elevated_probe.sh`
+- when helper mode is enabled, `prestart` also prepares helper launch metadata
+  and starts the existing Python helper server as the package user
+- `start` exports
+  `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG=/var/packages/obstaclebridge/var/run/tun-helper-attach.json`
+  so the package-user bridge runtime can attach to that helper
+- the probe writes:
+  - `/var/packages/obstaclebridge/var/log/elevated-probe.log`
+  - `/var/packages/obstaclebridge/var/elevated-probe.json`
 
-## Privilege note
+This PoC proves two things:
 
-The currently proven manual Synology runtime path is started from SSH with
-`sudo`. That means some ObstacleBridge modes need elevated privilege on DSM,
-especially for TUN and host-network operations.
+- the Python runtime can consume a package-written helper handoff instead of
+  trying interactive `sudo`
+- the package can prestart a helper-managed control socket before the bridge
+  process attaches
 
-This first SPK wrapper does not solve that privilege boundary yet. It currently
-models:
+Expected validation after install/start:
 
-- DSM package installation
-- DSM service lifecycle
-- package-user runtime startup
+```bash
+sudo cat /var/packages/obstaclebridge/var/elevated-probe.json
+sudo tail -n 50 /var/packages/obstaclebridge/var/log/elevated-probe.log
+```
 
-It does not yet model:
+The successful PoC signal is:
 
-- interactive `sudo`-style privilege escalation
-- whole-runtime root execution as the default package shape
-- a narrow native Synology helper binary distinct from the current helper
-  interpreter approach
+- helper handoff files appear under `/var/packages/obstaclebridge/var/run/`
+- the package `start-stop-status` script exports
+  `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG` when helper mode is enabled
 
-So the current SPK should be treated as a packaging/autostart scaffold, not as
-the final privileged Synology deployment model for full TUN-capable operation.
+On DSM 7.2.2, a package that explicitly requests root privilege is blocked from
+installation unless it is Synology-signed or covered by Synology's developer
+token program. For that reason, the current SPK intentionally keeps package
+privilege at the normal package-user level.
+
+## Important limitation
+
+The SPK now handles the Python dependency bootstrap, but it does not yet
+replace the proven `sudo python3.14 -m obstacle_bridge` path for full
+privileged operation.
+
+In particular, the current package shape still does not fully prove the DSM
+privilege boundary for:
+
+- local TUN creation
+- route changes
+- firewall or NAT changes
+- other host-network mutations that are known to work from an SSH `sudo`
+  session
+
+So the current SPK should still be treated as a packaging and service-lifecycle
+scaffold plus helper-handoff prototype, not the final privileged Synology
+deployment model.
 
 ## Build
 
@@ -56,34 +99,29 @@ the final privileged Synology deployment model for full TUN-capable operation.
 python3 scripts/build_synology_spk.py
 ```
 
-By default the resulting package is written to:
-
-```text
-dist/synology/
-```
+By default the resulting package is written to `dist/synology/`.
 
 Use `--keep-staging` if you want the unpacked SPK staging tree for inspection.
 
-## Runtime layout assumptions
-
-The package service uses these locations on the NAS:
+## Package runtime layout
 
 - package target: `/var/packages/obstaclebridge/target`
 - persistent config: `/var/packages/obstaclebridge/var/ObstacleBridge.cfg`
+- packaged Python dependencies: `/var/packages/obstaclebridge/var/python-packages/`
+- helper interpreter: `/var/packages/obstaclebridge/var/helper-venv/bin/python3`
 - runtime logs: `/var/packages/obstaclebridge/var/log/`
 - pid file: `/var/packages/obstaclebridge/var/run/obstaclebridge.pid`
 
 ## Current operator expectations
 
-This first wrapper assumes:
-
-- DSM 7.x package installation
-- a usable `python3` executable on the NAS
-- the Python runtime dependencies `aioquic`, `cryptography`, and `websockets`
-  are already installed for that interpreter
-- `python3 -m venv --system-site-packages --copies` is available so package
+- DSM 7.x
+- SynoCommunity `python3.14` installed and available as `python3.14`
+- working `pip` support for that interpreter
+- network access during package install so `pip` can fetch `aioquic`,
+  `cryptography`, and `websockets`
+- `python3.14 -m venv --system-site-packages --copies` available so package
   install can prepare a dedicated helper interpreter copy
-- `setcap` is available if capability-based helper startup should avoid `sudo`
+- `setcap` available if capability-based helper startup should avoid `sudo`
 
-If those prerequisites are missing, install or startup will fail with an
-explicit message in the Synology package logs.
+If any prerequisite is missing, install or startup fails with an explicit
+message in the package logs.

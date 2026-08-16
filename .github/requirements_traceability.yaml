@@ -17,9 +17,16 @@ REQ-RUN-001:
     - ios/tests/test_invite_import.py::test_preview_json_config_snippet_uses_runtime_validation
 
 REQ-RUN-002:
+  # The Synology wrapper contract covers package metadata, DSM-acceptable SPK
+  # archive layout, dependency bootstrap, and helper-interpreter packaging
+  # around the maintained python314 runtime, including the beta-package marker,
+  # package-user helper-handoff metadata, and DSM service restart-exit-code
+  # handling.
   unit_tests:
     - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
     - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive
+    - tests/unit/test_build_synology_spk.py::test_start_stop_status_handles_bridge_restart_exit_codes
+    - tests/unit/test_build_synology_spk.py::test_privilege_file_keeps_package_default_only
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_checks_override_helper_executable
 
@@ -234,6 +241,7 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_psk.py::test_counter_exhaustion_fails_closed_before_nonce_wrap
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state
     - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake
+    - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_reports_reauthenticating_when_transport_stays_up
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
 
 REQ-AUT-007:
@@ -700,6 +708,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
     - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
+    - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_reads_idle_timeout_from_config
     - tests/unit/test_tun_helper_server_entrypoint.py::test_backend_factory_accepts_darwin_native_backend
     - tests/unit/test_tun_helper_macos_backend.py::test_open_write_read_and_stop_wraps_utun_frames
     - tests/unit/test_tun_helper_macos_backend.py::test_open_rejects_non_macos_platform
@@ -737,6 +746,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_client_server.py::test_client_rejects_wrong_session_token
     - tests/unit/test_tun_helper_client_server.py::test_client_reports_connection_closed_after_server_stop
     - tests/unit/test_runner_tun_helper.py::test_runner_starts_tun_helper_and_exposes_status_snapshot
+    - tests/unit/test_runner_tun_helper.py::test_tun_helper_snapshot_reports_main_process_identity_for_inline_mode
     - tests/unit/test_runner_tun_helper.py::test_runner_rejects_helper_mode_on_unsupported_platform
     - tests/unit/test_runner_tun_helper.py::test_runner_allows_windows_native_helper_mode_past_platform_gate
     - tests/unit/test_runner_tun_helper.py::test_windows_native_helper_uses_longer_control_timeout
@@ -744,6 +754,8 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
+    - tests/unit/test_runner_tun_helper.py::test_runner_attaches_to_prestarted_tun_helper_from_env_config
+    - tests/unit/test_runner_tun_helper.py::test_stop_tun_helper_process_is_noop_for_prestarted_helper
     - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_can_launch_without_sudo_when_file_capabilities_present
     - tests/unit/test_runner_tun_helper.py::test_linux_native_tun_helper_requires_sudo_without_effective_or_file_capabilities
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_socket_ready_timeout_extends_for_sudo_prompt
@@ -930,6 +942,11 @@ REQ-MUX-009:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
     - tests/unit/test_channel_mux_listener_mode.py::test_channel_mux_default_system_egress_auth_is_platform_scoped
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_logs_state_transition_reason
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_keeps_accepting_for_secure_link_reauthenticating
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_secure_link_handshaking
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
+    - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
@@ -979,6 +996,12 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_unicast_only_to_designated_peer_channel
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_routes_shared_broadcast_only_to_active_peer_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_shared_unknown_destination
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_info_level_icmp_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_overlay_tx_icmp_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_pre_send_decision_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_icmp_packet_emits_overlay_inactive_skip_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_to_local_tun_icmp_reply_emits_info_level_icmp_diagnostic
+    - tests/unit/test_channel_mux_listener_mode.py::test_handle_app_payload_from_peer_emits_overlay_rx_icmp_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalizes_to_configured_ipv6_tunnel_address
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
@@ -1019,7 +1042,10 @@ REQ-MUX-010:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - tests/unit/test_channel_mux_listener_mode.py::test_probe_tun_connectivity_uses_virtual_probe_source_for_local_shared_service
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_virtual_probe_skips_when_transport_inactive
+    - tests/unit/test_channel_mux_listener_mode.py::test_helper_reader_handoff_cancels_previous_mux_reader_task
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_runtime_snapshot_exposes_local_virtual_probe_owner
 
 REQ-MYU-001:
@@ -1184,9 +1210,11 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes
     - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
+    - tests/unit/test_admin_web_payloads.py::test_build_status_payload_exposes_tun_support_diagnostics
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python

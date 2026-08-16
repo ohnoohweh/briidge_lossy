@@ -609,6 +609,8 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
     assert '"method": "internal_icmp_echo"' in source
     assert '"resolved_target": resolvedTarget' in source
+    assert '"name_resolution": nameResolution' in source
+    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' in source
     assert '"last_success_ago_s": NSNull()' in source
     assert "let payload = ObstacleBridgeTunPing.probePayload(" in source
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
@@ -5515,6 +5517,7 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
         assert tun_status["summary"]["shared_services"] == 1
         assert tun_status["summary"]["tun_listening"] >= 1
         assert tun_status["summary"]["shared_active_peer_bindings"] == 0
+        assert tun_status["summary"]["shared_drop_by_reason"] == {}
         assert len(tun_status["shared_tun"]) == 1
         shared_row = tun_status["shared_tun"][0]
         ownership = shared_row["shared_tun_ownership"]

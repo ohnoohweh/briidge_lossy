@@ -12,8 +12,37 @@ fi
 
 HELPER_VENV="${VAR_DIR}/helper-venv"
 HELPER_PY="${HELPER_VENV}/bin/python3"
+PY_PACKAGES_DIR="${VAR_DIR}/python-packages"
 
 mkdir -p "${VAR_DIR}"
+
+"${PY_BIN}" - "${PKG_DIR}" "${PY_PACKAGES_DIR}" <<'PY'
+import pathlib
+import subprocess
+import sys
+import tomllib
+
+pkg_dir = pathlib.Path(sys.argv[1])
+target_dir = pathlib.Path(sys.argv[2])
+pyproject_path = pkg_dir / "pyproject.toml"
+data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+dependencies = list(data.get("project", {}).get("dependencies", []))
+if not dependencies:
+    raise SystemExit("no project.dependencies found in pyproject.toml")
+target_dir.mkdir(parents=True, exist_ok=True)
+subprocess.check_call(
+    [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "--upgrade",
+        "--target",
+        str(target_dir),
+        *dependencies,
+    ]
+)
+PY
 
 if [ ! -x "${HELPER_PY}" ]; then
     "${PY_BIN}" -m venv --system-site-packages --copies "${HELPER_VENV}"
