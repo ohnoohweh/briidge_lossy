@@ -65,6 +65,24 @@ def _quic_args() -> argparse.Namespace:
     )
 
 
+def _new_quic_session():
+    quic_module = importlib.import_module("obstacle_bridge.bridge_transport_quic")
+    QuicSession = quic_module.QuicSession
+    fake_symbols = {
+        "quic_serve": object(),
+        "quic_connect": object(),
+        "QuicConnectionProtocol": type("_Proto", (), {}),
+        "QuicConfiguration": type("_Cfg", (), {}),
+        "StreamDataReceived": type("_StreamDataReceived", (), {}),
+        "HandshakeCompleted": type("_HandshakeCompleted", (), {}),
+        "ConnectionTerminated": type("_ConnectionTerminated", (), {}),
+        "ProtocolNegotiated": type("_ProtocolNegotiated", (), {}),
+    }
+    with mock.patch.object(quic_module.importlib.util, "find_spec", return_value=object()), \
+         mock.patch.object(quic_module, "_load_aioquic_symbols", return_value=fake_symbols):
+        return QuicSession(_quic_args())
+
+
 class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
     async def test_tcp_reconnect_loop_rotates_peer_candidates_permanently(self) -> None:
         session = TcpStreamSession(_tcp_args())
@@ -117,21 +135,7 @@ class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
                 await session._reconnect_task
 
     async def test_quic_reconnect_loop_rotates_peer_candidates_permanently(self) -> None:
-        quic_module = importlib.import_module("obstacle_bridge.bridge_transport_quic")
-        QuicSession = quic_module.QuicSession
-        fake_symbols = {
-            "quic_serve": object(),
-            "quic_connect": object(),
-            "QuicConnectionProtocol": type("_Proto", (), {}),
-            "QuicConfiguration": type("_Cfg", (), {}),
-            "StreamDataReceived": type("_StreamDataReceived", (), {}),
-            "HandshakeCompleted": type("_HandshakeCompleted", (), {}),
-            "ConnectionTerminated": type("_ConnectionTerminated", (), {}),
-            "ProtocolNegotiated": type("_ProtocolNegotiated", (), {}),
-        }
-        with mock.patch.object(quic_module.importlib.util, "find_spec", return_value=object()), \
-             mock.patch.object(quic_module, "_load_aioquic_symbols", return_value=fake_symbols):
-            session = QuicSession(_quic_args())
+        session = _new_quic_session()
         session._loop = asyncio.get_running_loop()
         session._run_flag = True
 
@@ -154,6 +158,49 @@ class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
             session._reconnect_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await session._reconnect_task
+
+
+class StreamReconnectShutdownTests(unittest.TestCase):
+    def _assert_shutdown_does_not_query_stopped_loop(self, session, connected_attr: str) -> None:
+        loop = asyncio.new_event_loop()
+        session._loop = loop
+        session._run_flag = True
+        started = asyncio.Event()
+        blocker = asyncio.Event()
+
+        async def _fake_connect_to(host: str, port: int) -> None:
+            started.set()
+            await blocker.wait()
+
+        session._connect_to = _fake_connect_to  # type: ignore[method-assign]
+        setattr(session, connected_attr, None)
+        session._start_reconnect_loop()
+        loop.run_until_complete(started.wait())
+
+        reconnect_task = session._reconnect_task
+        self.assertIsNotNone(reconnect_task)
+        reconnect_coro = reconnect_task.get_coro()
+        loop.close()
+        try:
+            with mock.patch.object(
+                asyncio,
+                "current_task",
+                side_effect=RuntimeError("no running event loop"),
+            ):
+                reconnect_coro.close()
+        finally:
+            # The test deliberately closes the coroutine behind a pending Task
+            # after its loop has stopped, matching interpreter shutdown.
+            reconnect_task._log_destroy_pending = False  # type: ignore[attr-defined]
+
+    def test_tcp_reconnect_cleanup_survives_stopped_event_loop(self) -> None:
+        self._assert_shutdown_does_not_query_stopped_loop(TcpStreamSession(_tcp_args()), "_writer")
+
+    def test_ws_reconnect_cleanup_survives_stopped_event_loop(self) -> None:
+        self._assert_shutdown_does_not_query_stopped_loop(WebSocketSession(_ws_args()), "_ws")
+
+    def test_quic_reconnect_cleanup_survives_stopped_event_loop(self) -> None:
+        self._assert_shutdown_does_not_query_stopped_loop(_new_quic_session(), "_quic")
 
 
 if __name__ == "__main__":
