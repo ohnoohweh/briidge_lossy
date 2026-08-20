@@ -1,12 +1,13 @@
 # ObstacleBridge
 ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for barrier-resilient networking, with actively maintained Python and Swift implementations. It can run over multiple overlay transports (`myudp`, `tcp`, `quic`, `ws`), expose local TCP/UDP listener services through a reliable overlay, provide an HTTP(S)/SOCKS5 proxy server, host an admin UI for monitoring active channels, and provide TUN/full-tunnel paths on the supported operating systems.
 
-The project currently targets four platform families:
+The project currently targets five platform families:
 
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
+- **Synology DSM Python package/runtime**: the NAS target packages the Python runtime as a DSM SPK with package-managed service lifecycle, a SynoCommunity Python dependency, and a package-user helper-handoff prototype. The current DSM privilege boundary supports transport and service relay while root-owned TUN operation remains experimental.
 
 ## Reader guide
 
