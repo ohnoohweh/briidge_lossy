@@ -482,6 +482,7 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    packet_tunnel_probe_tests = (ROOT / "ios" / "tests" / "test_ios_packet_tunnel_provider_probe.py").read_text(encoding="utf-8")
 
     assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
     assert 'static let providerBuildTimestampUTC = "unknown"' in provider
@@ -583,6 +584,7 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in support
     assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
     assert "ObstacleBridgeTunPing.buildIPv6EchoRequest(" in provider
+    assert 'str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift")' in packet_tunnel_probe_tests
 
 
 def test_macos_swift_host_runner_source_exists() -> None:
