@@ -13,7 +13,7 @@ def test_check_ios_fedora_log_fit_selects_shared_epoch(tmp_path: Path) -> None:
         "\n".join(
             [
                 "2026-05-26 20:32:24,265 DEBUG udp_session: [UDP/PROTO] connection_made; local=('0.0.0.0', 63769) peername=None seeded_peer=None",
-                "2026-05-26 20:32:24,570 DEBUG udp_session: [PEER/RX/RAW-SOCKET] len=19 from=('38.180.143.5', 4433) transport_sock=('0.0.0.0', 63769) transport_peer=None",
+                "2026-05-26 20:32:24,570 DEBUG udp_session: [PEER/RX/RAW-SOCKET] len=19 from=('198.51.100.5', 4433) transport_sock=('0.0.0.0', 63769) transport_peer=None",
             ]
         ),
         encoding="utf-8",

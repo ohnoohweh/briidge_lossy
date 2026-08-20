@@ -770,7 +770,7 @@ def test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socke
             struct PeerResolutionIPv4LiteralProbeMain {
                 static func main() throws {
                     let candidates = try ObstacleBridgePeerAddressResolver.resolvePeerAddresses(
-                        host: "38.180.143.5",
+                        host: "198.51.100.5",
                         port: 8080,
                         resolveFamily: "prefer-ipv6",
                         bindHost: "::",
@@ -805,9 +805,9 @@ def test_swift_peer_resolution_prefer_ipv6_keeps_ipv4_literal_native_until_socke
     payload = json.loads(completed.stdout)
     assert payload == {
         "candidate_count": 1,
-        "candidate_host": "38.180.143.5",
+        "candidate_host": "198.51.100.5",
         "candidate_family": "ipv4",
-        "normalized_host": "::ffff:38.180.143.5",
+        "normalized_host": "::ffff:198.51.100.5",
         "normalized_family": "ipv6",
     }
 

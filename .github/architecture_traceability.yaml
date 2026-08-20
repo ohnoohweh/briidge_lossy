@@ -7,6 +7,8 @@
 # - list only active component-to-test mappings
 # - do not record rollout chronology or PR notes here
 # - keep architectural rationale in docs/ARCHITECTURE.md
+# Public documentation and test fixtures use IANA-reserved documentation
+# address ranges rather than live deployment endpoints.
 
 ARC-CMP-001:
   integration_tests:

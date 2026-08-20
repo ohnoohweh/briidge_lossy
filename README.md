@@ -138,7 +138,7 @@ The current iOS packet-tunnel bring-up is intended to pair an iPhone client with
 
 The maintained test profile uses:
 
-- public server endpoint: `38.180.143.5:4433`
+- public server endpoint: `198.51.100.5:4433`
 - inner TUN subnet: `192.168.105.0/30`
 - iPhone TUN address: `192.168.105.1/30`
 - Fedora `obtun1` address: `192.168.105.2/30`

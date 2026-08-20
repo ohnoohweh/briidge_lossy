@@ -1212,7 +1212,7 @@ class AdminWebPayloadTests(unittest.TestCase):
             admin_web_username="",
             admin_web_password="",
             overlay_transport="ws",
-            ws_peer="38.180.143.5",
+            ws_peer="198.51.100.5",
             ws_peer_port=8080,
             ws_bind="::",
             ws_peer_resolve_family="ipv4",
@@ -1235,9 +1235,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         payload = ui._build_tun_routing_payload()
 
         self.assertEqual(payload["included_routes"], ["0.0.0.0/0"])
-        self.assertEqual(payload["excluded_routes"], ["127.0.0.0/8", "38.180.143.5/32"])
+        self.assertEqual(payload["excluded_routes"], ["127.0.0.0/8", "198.51.100.5/32"])
         self.assertEqual(payload["included_routes6"], ["::/0"])
-        self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:38.180.143.5/128"])
+        self.assertEqual(payload["excluded_routes6"], ["::1/128", "::ffff:198.51.100.5/128"])
 
     def test_build_tun_routing_payload_exposes_verification_checks(self):
         args = argparse.Namespace(

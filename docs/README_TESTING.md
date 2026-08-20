@@ -45,6 +45,7 @@ The active testing focus on this branch is:
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
+- privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints
 
 Representative anchors for those areas:
 

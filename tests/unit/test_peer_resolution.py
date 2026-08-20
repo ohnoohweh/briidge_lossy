@@ -77,13 +77,13 @@ def test_resolve_multi_peer_honors_bind_family_constraint() -> None:
 
 def test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_mapping() -> None:
     host, port, family = _resolve_peer_endpoint(
-        "38.180.143.5",
+        "198.51.100.5",
         8080,
         resolve_mode="prefer-ipv6",
         bind_host="::",
         socktype=socket.SOCK_DGRAM,
     )
-    assert (host, port, family) == ("38.180.143.5", 8080, socket.AF_INET)
+    assert (host, port, family) == ("198.51.100.5", 8080, socket.AF_INET)
 
     transport = _FakeTransport()
     send_port = SendPort(
@@ -95,7 +95,7 @@ def test_resolve_prefer_ipv6_keeps_native_ipv4_literal_until_ipv6_socket_send_ma
 
     send_port.sendto(b"payload")
 
-    assert transport.sent == [(b"payload", ("::ffff:38.180.143.5", 8080, 0, 0))]
+    assert transport.sent == [(b"payload", ("::ffff:198.51.100.5", 8080, 0, 0))]
 
 
 def test_udp_session_prefer_ipv6_keeps_candidate_on_immediate_send_error() -> None:

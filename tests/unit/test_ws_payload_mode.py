@@ -764,7 +764,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight(self):
         args = _args("binary")
-        args.ws_peer = "37.1.192.30,[2001:db8::2]"
+        args.ws_peer = "203.0.113.30,[2001:db8::2]"
         args.ws_peer_port = 8080
         session = WebSocketSession(args)
         session._loop = asyncio.get_running_loop()
@@ -792,7 +792,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(seen["uri"], "ws://[2001:db8::2]:8080/")
         self.assertEqual(seen["kwargs"]["host"], "2001:db8::2")
         self.assertEqual(seen["kwargs"]["port"], 8080)
-        self.assertNotIn("37.1.192.30", seen["uri"])
+        self.assertNotIn("203.0.113.30", seen["uri"])
         self.assertEqual(preflight.await_args.kwargs["host"], "2001:db8::2")
         self.assertEqual(preflight.await_args.kwargs["host_header"], "2001:db8::2")
         on_accept.assert_awaited_once_with(fake_ws)
@@ -885,7 +885,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_proxy_multi_ws_peer_uses_resolved_candidate_for_lookup_and_connect(self):
         args = _args("binary")
-        args.ws_peer = "37.1.192.30,[2001:db8::2]"
+        args.ws_peer = "203.0.113.30,[2001:db8::2]"
         args.ws_peer_port = 8080
         args.ws_proxy_mode = "manual"
         args.ws_proxy_host = "proxy.example"
@@ -920,7 +920,7 @@ class WebSocketCompressionConfigTests(unittest.IsolatedAsyncioTestCase):
         preflight.assert_not_awaited()
         self.assertEqual(seen["uri"], "ws://[2001:db8::2]:8080/")
         self.assertIs(seen["kwargs"]["sock"], fake_sock)
-        self.assertNotIn("37.1.192.30", seen["uri"])
+        self.assertNotIn("203.0.113.30", seen["uri"])
         on_accept.assert_awaited_once_with(fake_ws)
 
     async def test_client_accept_rejects_overlapping_websocket_without_closing_active(self):

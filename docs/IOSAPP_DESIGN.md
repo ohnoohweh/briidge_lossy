@@ -557,7 +557,7 @@ This is no longer limited to:
 It now includes live routed traffic with device validation:
 
 - Safari traffic on iPhone was routed through the tunnel
-- public-IP verification reported the Fedora server address `38.180.143.5`
+- public-IP verification reported the Fedora server address `198.51.100.5`
 - Fedora-side `pcap` capture showed real internet-bound flows sourced from the iPhone tunnel address
 - dual-stack progression reached the point where iPhone-side browsing also surfaced the expected Austrian IPv6 egress
 

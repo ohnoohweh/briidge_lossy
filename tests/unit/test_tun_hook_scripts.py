@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list() -> None:
     cfg = {
         "overlay_transport": "myudp",
-        "udp_peer": "38.180.143.5,[2001:ac8:29:60:0:6:0:47]",
+        "udp_peer": "198.51.100.5,[2001:ac8:29:60:0:6:0:47]",
         "udp_peer_port": 4433,
         "udp_peer_resolve_family": "prefer-ipv6",
         "udp_bind": "::",
@@ -18,9 +18,9 @@ def test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list() -> None
 
     routes4, routes6 = auto_overlay_peer_excluded_routes(cfg)
 
-    assert "38.180.143.5/32" in routes4
+    assert "198.51.100.5/32" in routes4
     assert "2001:ac8:29:60:0:6:0:47/128" in routes6
-    assert "::ffff:38.180.143.5/128" in routes6
+    assert "::ffff:198.51.100.5/128" in routes6
 
 
 def test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion() -> None:

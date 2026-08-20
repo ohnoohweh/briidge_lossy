@@ -266,4 +266,6 @@ Repository governance update (process change): the project now documents and req
 
 Repository governance update (testability): the unit-test traceability snapshot now includes focused unit coverage for the remaining requirement IDs that were previously defended only by integration tests. The added unit coverage protects Admin Web authentication gate behavior, accepted-peer reporting identity across listener transports, UDP IPv4/IPv6 peer labeling, and core `myudp` reliability/session invariants while preserving the integration suite as the full black-box signal for end-to-end overlay behavior.
 
+Repository governance update (public endpoint privacy): documentation, design examples, and committed test fixtures use IANA-reserved documentation address ranges rather than live operator or deployment endpoints. This keeps routing and address-normalization examples reproducible without publishing infrastructure addresses.
+
 The supporting product-requirement traceability manifest is maintained in [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml). It is stored with the repository's CI/support metadata rather than in `docs/`, but it continues to trace these product requirements to their defending tests.

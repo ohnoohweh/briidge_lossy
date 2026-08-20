@@ -1469,7 +1469,7 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_empty_connector_peer_falls_b
                 static func main() throws {
                     let payload: [String: Any] = [
                         "overlay_transport": "myudp",
-                        "udp_peer": "38.180.143.5",
+                        "udp_peer": "198.51.100.5",
                         "udp_peer_port": 4433,
                         "iOS_TUN_connector": [
                             "packetflow_connector": "swift_udp",
@@ -1515,7 +1515,7 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_empty_connector_peer_falls_b
 
     payload = json.loads(completed.stdout)
     assert payload["runtime_mode"] == "swift_udp"
-    assert payload["peer_host"] == "38.180.143.5"
+    assert payload["peer_host"] == "198.51.100.5"
     assert payload["peer_port"] == 4433
     assert payload["bind_host"] == "127.0.0.1"
     assert payload["overlay_bind_host"] == "::"
@@ -1539,7 +1539,7 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_missing_connector_defaults_t
                         ],
                         "udp_session": [
                             "udp_bind": "::",
-                            "udp_peer": "[2001:ac8:29:60:0:6:0:47],38.180.143.5",
+                            "udp_peer": "[2001:ac8:29:60:0:6:0:47],198.51.100.5",
                             "udp_peer_port": 4433,
                             "udp_peer_resolve_family": "prefer-ipv6",
                         ],
@@ -1581,7 +1581,7 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_missing_connector_defaults_t
 
     payload = json.loads(completed.stdout)
     assert payload["runtime_mode"] == "swift_udp"
-    assert payload["peer_host"] == "[2001:ac8:29:60:0:6:0:47],38.180.143.5"
+    assert payload["peer_host"] == "[2001:ac8:29:60:0:6:0:47],198.51.100.5"
     assert payload["peer_port"] == 4433
     assert payload["peer_resolve_family"] == "prefer-ipv6"
     assert payload["bind_host"] == "127.0.0.1"
@@ -1833,7 +1833,7 @@ def test_ios_packet_tunnel_provider_probe_decrypts_embedded_runtime_config(tmp_p
                             "secure_link_psk": "correct horse battery staple",
                         ],
                         "udp_session": [
-                            "udp_peer": "38.180.143.5",
+                            "udp_peer": "198.51.100.5",
                             "udp_peer_port": 4433,
                         ],
                         "runner": [
@@ -1884,7 +1884,7 @@ def test_ios_packet_tunnel_provider_probe_decrypts_embedded_runtime_config(tmp_p
 
     payload = json.loads(completed.stdout)
     assert payload["psk"] == "correct horse battery staple"
-    assert payload["udp_peer"] == "38.180.143.5"
+    assert payload["udp_peer"] == "198.51.100.5"
     assert payload["udp_peer_port"] == 4433
 
 

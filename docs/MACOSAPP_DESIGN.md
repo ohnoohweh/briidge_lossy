@@ -325,7 +325,7 @@ This makes the key rule explicit:
 
 For the current server peer this means the healthy route shape is:
 
-- `38.180.143.5/32` stays on the physical interface, currently `en0` via
+- `198.51.100.5/32` stays on the physical interface, currently `en0` via
   `192.168.179.2`
 - public IPv4 destinations such as `142.251.20.94` move to `utun`
 - the same principle applies to IPv6 peer exclusion, with `/128` host routes
@@ -357,14 +357,14 @@ route immediately on overlay-connect and passes that gateway/interface into the
 macOS hook. The hook then installs the peer host route before the split
 full-tunnel routes are installed. The healthy observed route state is:
 
-- `route -n get 38.180.143.5` returns the physical underlay route on `en0`
+- `route -n get 198.51.100.5` returns the physical underlay route on `en0`
 - `route -n get <public IPv4>` returns one of the split full-tunnel routes on
   `utun`
 
 If the peer still lands on `utun`, the next diagnostic should be a route monitor
 redirected to a file across app startup, plus the hook log and the
 `/tmp/obbridge/*.excluded*` state files. The specific failure signature to look
-for is an excluded peer entry such as `38.180.143.5/32||`, which means the hook
+for is an excluded peer entry such as `198.51.100.5/32||`, which means the hook
 knows the peer should be excluded but did not receive or discover an underlay
 gateway/interface for it.
 

@@ -401,7 +401,7 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
                 "tunnel_prefix": 24,
                 "tunnel_gateway": "198.18.58.1",
                 "included_routes": ["0.0.0.0/0", "198.18.59.0/24"],
-                "excluded_routes": ["127.0.0.0/8", "38.180.143.5/32", "192.168.179.0/24"],
+                "excluded_routes": ["127.0.0.0/8", "198.51.100.5/32", "192.168.179.0/24"],
                 "tunnel_address6": "fd20:158::2",
                 "tunnel_prefix6": 64,
                 "tunnel_gateway6": "fd20:158::1",
@@ -415,22 +415,22 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
             snapshot = await backend.snapshot()
             removed = await backend.remove_network(payload)
 
-        self.assertEqual(applied["applied_excluded_ipv4_routes"], ["38.180.143.5/32", "192.168.179.0/24"])
+        self.assertEqual(applied["applied_excluded_ipv4_routes"], ["198.51.100.5/32", "192.168.179.0/24"])
         self.assertEqual(applied["applied_excluded_ipv6_routes"], ["2001:db8::5/128"])
         self.assertTrue(applied["policy_table4"] > 0)
         self.assertTrue(applied["policy_table6"] > 0)
         self.assertIn("to 0.0.0.0/0 lookup", " ".join(applied["policy_rules4"]))
         self.assertIn("to ::/0 lookup", " ".join(applied["policy_rules6"]))
-        self.assertEqual(snapshot["applied_excluded_ipv4_routes"], ["38.180.143.5/32", "192.168.179.0/24"])
+        self.assertEqual(snapshot["applied_excluded_ipv4_routes"], ["198.51.100.5/32", "192.168.179.0/24"])
         self.assertEqual(snapshot["applied_excluded_ipv6_routes"], ["2001:db8::5/128"])
         self.assertTrue(removed["removed"])
         command_only = [cmd for cmd, _check in commands]
-        self.assertIn(("-4", "route", "replace", "38.180.143.5/32", "via", "172.20.10.1", "dev", "wlp0s20f3", "src", "172.20.10.4"), command_only)
+        self.assertIn(("-4", "route", "replace", "198.51.100.5/32", "via", "172.20.10.1", "dev", "wlp0s20f3", "src", "172.20.10.4"), command_only)
         self.assertIn(("-4", "route", "replace", "192.168.179.0/24", "via", "172.20.10.1", "dev", "wlp0s20f3", "src", "172.20.10.4"), command_only)
         self.assertIn(("-6", "route", "replace", "2001:db8::5/128", "via", "fe80::1", "dev", "wlp0s20f3"), command_only)
         self.assertIn(("-4", "route", "replace", "table", str(applied["policy_table4"]), "default", "via", "198.18.58.1", "dev", "obtun7", "onlink"), command_only)
         self.assertIn(("-6", "route", "replace", "table", str(applied["policy_table6"]), "default", "via", "fd20:158::1", "dev", "obtun7", "metric", "1", "onlink"), command_only)
-        self.assertIn(("-4", "route", "del", "38.180.143.5/32"), command_only)
+        self.assertIn(("-4", "route", "del", "198.51.100.5/32"), command_only)
         self.assertIn(("-6", "route", "del", "2001:db8::5/128"), command_only)
 
     async def test_apply_network_reuses_matching_existing_policy_rules_on_restart(self) -> None:

@@ -203,7 +203,7 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
         args = build_runtime_args_from_config(
             {
                 "overlay_transport": "myudp",
-                "udp_peer": "38.180.143.5,[2001:db8::5]",
+                "udp_peer": "198.51.100.5,[2001:db8::5]",
                 "udp_peer_port": 4433,
                 "udp_peer_resolve_family": "prefer-ipv6",
                 "udp_bind": "::",
@@ -231,10 +231,10 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
         payload = mux._tun_helper_network_payload(dev)
 
         self.assertIn("127.0.0.0/8", payload["tun_routing"]["excluded_routes"])
-        self.assertIn("38.180.143.5/32", payload["tun_routing"]["excluded_routes"])
+        self.assertIn("198.51.100.5/32", payload["tun_routing"]["excluded_routes"])
         self.assertIn("::1/128", payload["tun_routing"]["excluded_routes6"])
         self.assertIn("2001:db8::5/128", payload["tun_routing"]["excluded_routes6"])
-        self.assertIn("::ffff:38.180.143.5/128", payload["tun_routing"]["excluded_routes6"])
+        self.assertIn("::ffff:198.51.100.5/128", payload["tun_routing"]["excluded_routes6"])
 
     async def test_helper_mode_network_payload_carries_listener_hook_env(self):
         args = build_runtime_args_from_config(

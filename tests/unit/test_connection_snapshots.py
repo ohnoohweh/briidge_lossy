@@ -366,7 +366,7 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.mux._local_services[("local", 0, 1)] = local_shared_tun
         self.mux._peer_installed_services[peer_key] = peer_webadmin
         self.mux._svc_tcp_servers[peer_key] = _FakeTcpServer([_FakeSocket(("0.0.0.0", 13081))])
-        self.mux._tcp_by_chan[134] = (1, _FakeWriter(("38.180.143.5", 13081), ("39.144.43.105", 23428)))
+        self.mux._tcp_by_chan[134] = (1, _FakeWriter(("198.51.100.5", 13081), ("39.144.43.105", 23428)))
         self.mux._tcp_role_by_chan[134] = "server"
         self.mux._chan_owner_peer_id[134] = 13
 
@@ -768,13 +768,13 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         session._listener_mode = True
         session._transport = _FakeDatagramTransport(("0.0.0.0", 4443))
 
-        session._dispatch_listener_datagram(b"port-scan-junk", ("38.180.143.5", 50227))
+        session._dispatch_listener_datagram(b"port-scan-junk", ("198.51.100.5", 50227))
 
         overlay_rows = session.get_overlay_peers_snapshot()
         self.assertEqual(len(overlay_rows), 2)
         peer_row = next(row for row in overlay_rows if row["peer_id"] != -1)
         self.assertFalse(peer_row["connected"])
-        self.assertEqual(peer_row["peer"], _peer_endpoint("38.180.143.5", 50227))
+        self.assertEqual(peer_row["peer"], _peer_endpoint("198.51.100.5", 50227))
         self.assertIsNotNone(peer_row["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer_row["last_incoming_age_seconds"], 0)
 
@@ -793,7 +793,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(peer["id"], f"0:{peer_row['peer_id']}")
         self.assertFalse(peer["connected"])
         self.assertEqual(peer["state"], "connecting")
-        self.assertEqual(peer["peer"], {"host": "38.180.143.5", "port": 50227})
+        self.assertEqual(peer["peer"], {"host": "198.51.100.5", "port": 50227})
         self.assertIsNotNone(peer["last_incoming_age_seconds"])
         self.assertGreaterEqual(peer["last_incoming_age_seconds"], 0)
         self.assertEqual(peer["decode_errors"], 1)
@@ -815,10 +815,10 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
                 self._args = argparse.Namespace(
                     udp_bind="::",
                     udp_own_port=0,
-                    udp_peer="38.180.143.5",
+                    udp_peer="198.51.100.5",
                     udp_peer_port=4433,
                 )
-                self._peer_host = "38.180.143.5"
+                self._peer_host = "198.51.100.5"
                 self._peer_port = 4433
                 self.peer_proto = None
 
@@ -848,7 +848,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
 
         self.assertEqual(len(out["peers"]), 1)
         self.assertEqual(out["peers"][0]["state"], "connecting")
-        self.assertEqual(out["peers"][0]["peer"], {"host": "38.180.143.5", "port": 4433})
+        self.assertEqual(out["peers"][0]["peer"], {"host": "198.51.100.5", "port": 4433})
 
     def test_peer_snapshot_formats_structured_peer_endpoint_for_webadmin(self):
         class _StructuredPeerSession:
@@ -1105,10 +1105,10 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
 
     def test_ws_client_snapshot_prefers_applied_peer_over_multi_host_config(self):
         session = types.SimpleNamespace()
-        session._peer_tuple = ("37.1.192.30", 8080)
-        session._peer_name_host = "37.1.192.30,[2a00:c98:2010:a007:0:1:0:2]"
+        session._peer_tuple = ("203.0.113.30", 8080)
+        session._peer_name_host = "203.0.113.30,[2a00:c98:2010:a007:0:1:0:2]"
         session._peer_name_port = 8080
-        session._peer_host = "37.1.192.30"
+        session._peer_host = "203.0.113.30"
         session._peer_port = 8080
         session._rtt = types.SimpleNamespace(rtt_est_ms=1.25, _last_rx_wall_ns=time.monotonic_ns())
         session.is_connected = lambda: True
@@ -1118,14 +1118,14 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = WebSocketSession.get_overlay_peers_snapshot(session)
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["peer"], _peer_endpoint("37.1.192.30", 8080))
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("203.0.113.30", 8080))
 
     def test_quic_client_snapshot_prefers_applied_peer_over_multi_host_config(self):
         session = types.SimpleNamespace()
-        session._peer_tuple = ("37.1.192.30", 8080)
-        session._peer_name_host = "37.1.192.30,[2a00:c98:2010:a007:0:1:0:2]"
+        session._peer_tuple = ("203.0.113.30", 8080)
+        session._peer_name_host = "203.0.113.30,[2a00:c98:2010:a007:0:1:0:2]"
         session._peer_name_port = 8080
-        session._peer_host = "37.1.192.30"
+        session._peer_host = "203.0.113.30"
         session._peer_port = 8080
         session._rtt = types.SimpleNamespace(rtt_est_ms=1.5, _last_rx_wall_ns=time.monotonic_ns())
         session.is_connected = lambda: True
@@ -1135,7 +1135,7 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
         rows = QuicSession.get_overlay_peers_snapshot(session)
 
         self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["peer"], _peer_endpoint("37.1.192.30", 8080))
+        self.assertEqual(rows[0]["peer"], _peer_endpoint("203.0.113.30", 8080))
 
 
 if __name__ == "__main__":
