@@ -2381,14 +2381,6 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         return payload
     }
 
-    private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
-        [
-            "status": status,
-            "resolved_ip": resolvedIP,
-            "detail": detail,
-        ]
-    }
-
     private func probeTunConnectivityVerification(
         probeKind: String,
         target: String,
@@ -2405,7 +2397,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 detail: "Swift TUN bridge is not active.",
                 target: trimmedTarget,
                 method: "internal_icmp_echo",
-                nameResolution: tunProbeNameResolution(status: "unknown")
+                nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "unknown")
             )
         }
         guard adminPacketProcessingActive() else {
@@ -2417,7 +2409,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 detail: "Packet processing is not active yet.",
                 target: trimmedTarget,
                 method: "internal_icmp_echo",
-                nameResolution: tunProbeNameResolution(status: "unknown")
+                nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "unknown")
             )
         }
         return bridge.probeTunConnectivity(
@@ -2720,6 +2712,10 @@ private enum PacketTunnelProviderAdminSnapshotBuilder {
             "udp": udpRows,
             "tcp": tcpRows,
             "tun": tunRows,
+            "tun_icmp_stage_counts": bridgeSnapshot["tun_icmp_stage_counts"] as? [String: Any] ?? [:],
+            "tun_probe_boundary_counts": bridgeSnapshot["tun_probe_boundary_counts"] as? [String: Any] ?? [:],
+            "tun_local_reply_stage_counts": bridgeSnapshot["tun_local_reply_stage_counts"] as? [String: Any] ?? [:],
+            "tun_probe_last_timeout_diag": bridgeSnapshot["tun_probe_last_timeout_diag"] as? [String: Any] ?? [:],
         ]
     }
 
@@ -2956,32 +2952,12 @@ private final class SwiftSimpleUDPPeerBridge {
     private var lastToSystemAt = 0.0
     private var tcpListenerFailures = 0
     private var tunProbeSequence: UInt16 = 1
-    private var tunProbeWaiters: [TunProbeWaiterKey: TunProbeWaiterState] = [:]
-    private var tunProbeHistory: [String: TunProbeHistory] = [:]
-
-    private struct TunProbeWaiterKey: Hashable {
-        let family: Int32
-        let identifier: UInt16
-        let sequence: UInt16
-        let nonce: Data
-    }
-
-    private final class TunProbeWaiterState {
-        let semaphore = DispatchSemaphore(value: 0)
-        var reply: TunProbeReply?
-    }
-
-    private struct TunProbeReply {
-        let sourceIP: String
-        let destinationIP: String
-        let payload: Data
-        let receivedMonotonicNS: UInt64
-    }
-
-    private struct TunProbeHistory {
-        let lastSuccessMonotonic: TimeInterval
-        let lastSuccessRTTMS: Double
-    }
+    private var tunProbeWaiters: [ObstacleBridgeTunProbeWaiterKey: ObstacleBridgeTunProbeWaiterState] = [:]
+    private var tunProbeHistory: [String: ObstacleBridgeTunProbeHistory] = [:]
+    private var tunICMPStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunICMPStageCounts()
+    private var tunProbeBoundaryCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunProbeBoundaryCounts()
+    private var localReplyStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeLocalReplyStageCounts()
+    private var tunProbeLastTimeoutDiag: [String: Any] = [:]
 
     @available(iOS 15.0, *)
     private var quicOverlayTransportOwner: ObstacleBridgeQuicOverlayTransportOwner? {
@@ -3346,6 +3322,10 @@ private final class SwiftSimpleUDPPeerBridge {
                 "last_from_system_at": lastFromSystemAt,
                 "last_to_system_at": lastToSystemAt,
                 "started_at": startedAt,
+                "tun_icmp_stage_counts": tunICMPStageCounts,
+                "tun_probe_boundary_counts": tunProbeBoundaryCounts,
+                "tun_local_reply_stage_counts": localReplyStageCounts,
+                "tun_probe_last_timeout_diag": tunProbeLastTimeoutDiag,
                 "transport_runtime": selectedRuntime,
                 "myudp_runtime": selectedTransport == "myudp" ? selectedRuntime : [:],
             ]
@@ -3454,8 +3434,8 @@ private final class SwiftSimpleUDPPeerBridge {
         probeKind: String
     ) -> [String: Any] {
         struct PreparedProbe {
-            let waiter: TunProbeWaiterState
-            let waiterKey: TunProbeWaiterKey
+            let waiter: ObstacleBridgeTunProbeWaiterState
+            let waiterKey: ObstacleBridgeTunProbeWaiterKey
             let sentMonotonicNS: UInt64
             let resolvedTarget: String
             let cacheKey: String
@@ -3469,56 +3449,67 @@ private final class SwiftSimpleUDPPeerBridge {
         (prepared, immediateResult) = withState {
             let trimmedTarget = target.trimmingCharacters(in: .whitespacesAndNewlines)
             let trimmedIfname = ifname.trimmingCharacters(in: .whitespacesAndNewlines)
-            let label = tunProbeLabel(probeKind)
-            let cacheKey = tunProbeCacheKey(probeKind: probeKind, ifname: trimmedIfname, target: trimmedTarget)
+            let label = ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeLabel(probeKind)
+            let cacheKey = ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeCacheKey(
+                probeKind: probeKind,
+                ifname: trimmedIfname,
+                target: trimmedTarget
+            )
+            recordTunProbeBoundary("probe_attempt_started")
             guard !trimmedTarget.isEmpty else {
-                return (nil, tunProbeResult(
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                     probeKind: probeKind,
                     target: trimmedTarget,
                     ok: false,
                     state: "skipped",
                     summary: "\(label): skipped",
                     detail: "Verification target is not configured.",
-                    nameResolution: tunProbeNameResolution(
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
                         status: "skipped",
                         detail: "Verification target is not configured."
                     )
                 ))
             }
             guard !trimmedIfname.isEmpty else {
-                return (nil, tunProbeResult(
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                     probeKind: probeKind,
                     target: trimmedTarget,
                     ok: false,
                     state: "skipped",
                     summary: "\(label): skipped",
                     detail: "TUN interface name unavailable.",
-                    nameResolution: tunProbeNameResolution(status: "unknown")
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "unknown")
                 ))
             }
             guard started else {
-                return (nil, tunProbeResult(
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                     probeKind: probeKind,
                     target: trimmedTarget,
                     ok: false,
                     state: "skipped",
                     summary: "\(label): skipped",
                     detail: "Swift TUN bridge is not active.",
-                    nameResolution: tunProbeNameResolution(status: "unknown")
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "unknown")
                 ))
             }
-            let candidateFamilies = sourceProbeFamilies()
-            let resolved = resolveTunProbeTarget(trimmedTarget, candidateFamilies: candidateFamilies)
+            let candidateFamilies = ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(
+                tunnelAddress: tunnelAddress,
+                tunnelAddress6: tunnelAddress6
+            )
+            let resolved = ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(
+                trimmedTarget,
+                candidateFamilies: candidateFamilies
+            )
             guard let resolvedTarget = resolved.target else {
                 let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
-                return (nil, tunProbeResult(
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                     probeKind: probeKind,
                     target: trimmedTarget,
                     ok: false,
                     state: "failed",
                     summary: "\(label): failed",
                     detail: "Probe target resolution failed: \(resolved.error)",
-                    nameResolution: tunProbeNameResolution(
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
                         status: "failed",
                         detail: "Probe target resolution failed: \(resolved.error)"
                     ),
@@ -3526,16 +3517,20 @@ private final class SwiftSimpleUDPPeerBridge {
                     lastSuccessRTTMS: history.lastSuccessRTTMS
                 ))
             }
-            let nameResolution = tunProbeNameResolution(
+            let nameResolution = ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
                 status: "successful",
                 resolvedIP: resolvedTarget,
                 detail: "Resolved \(trimmedTarget) to \(resolvedTarget)."
             )
             let family = resolved.family
-            let sourceIP = sourceAddressForProbeFamily(family)
+            let sourceIP = ObstacleBridgeTunProbeDiagnosticsSupport.sourceAddressForProbeFamily(
+                family,
+                tunnelAddress: tunnelAddress,
+                tunnelAddress6: tunnelAddress6
+            )
             guard !sourceIP.isEmpty else {
                 let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
-                return (nil, tunProbeResult(
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                     probeKind: probeKind,
                     target: trimmedTarget,
                     ok: false,
@@ -3551,7 +3546,7 @@ private final class SwiftSimpleUDPPeerBridge {
             let sentMonotonicNS = DispatchTime.now().uptimeNanoseconds
             let nonce = Data((0..<8).map { _ in UInt8.random(in: 0...255) })
             let payload = ObstacleBridgeTunPing.probePayload(
-                probeKind: tunProbeKindCode(probeKind),
+                probeKind: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeKindCode(probeKind),
                 nonce: nonce,
                 sentMonotonicNS: sentMonotonicNS
             )
@@ -3576,7 +3571,7 @@ private final class SwiftSimpleUDPPeerBridge {
             }
             guard let packet else {
                 let history = tunProbeHistorySnapshot(cacheKey: cacheKey)
-                return (nil, tunProbeResult(
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                     probeKind: probeKind,
                     target: trimmedTarget,
                     ok: false,
@@ -3589,15 +3584,21 @@ private final class SwiftSimpleUDPPeerBridge {
                     lastSuccessRTTMS: history.lastSuccessRTTMS
                 ))
             }
-            let waiter = TunProbeWaiterState()
-            let waiterKey = TunProbeWaiterKey(
+            let waiter = ObstacleBridgeTunProbeWaiterState()
+            let waiterKey = ObstacleBridgeTunProbeWaiterKey(
                 family: family,
                 identifier: identity.identifier,
                 sequence: identity.sequence,
                 nonce: nonce
             )
             tunProbeWaiters[waiterKey] = waiter
+            recordTunProbeBoundary("probe_waiter_registered")
+            recordTunProbeBoundary("probe_injected_local_virtual")
+            recordTunICMPStage("from_local_tun_read")
+            recordTunICMPStage("overlay_tx_before_send_app")
+            recordTunICMPStage("local_reply_before_overlay_send")
             sendTunPacketForProbe(packet)
+            recordTunProbeBoundary("probe_send_completed")
             return (
                 PreparedProbe(
                     waiter: waiter,
@@ -3616,12 +3617,12 @@ private final class SwiftSimpleUDPPeerBridge {
             return immediateResult
         }
         guard let prepared else {
-            return tunProbeResult(
+            return ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                 probeKind: probeKind,
                 target: target.trimmingCharacters(in: .whitespacesAndNewlines),
                 ok: false,
                 state: "failed",
-                summary: "\(tunProbeLabel(probeKind)): failed",
+                summary: "\(ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeLabel(probeKind)): failed",
                 detail: "Internal probe setup failed."
             )
         }
@@ -3631,43 +3632,52 @@ private final class SwiftSimpleUDPPeerBridge {
             let reply = prepared.waiter.reply
             tunProbeWaiters.removeValue(forKey: prepared.waiterKey)
             guard !timedOut, let reply else {
+                recordTunProbeBoundary("probe_timeout")
+                tunProbeLastTimeoutDiag = tunProbeRuntimeDiagSnapshot(
+                    probeKind: probeKind,
+                    ifname: ifname,
+                    target: prepared.trimmedTarget,
+                    resolvedTarget: prepared.resolvedTarget,
+                    timeoutSeconds: timeoutSeconds
+                )
                 let history = tunProbeHistorySnapshot(cacheKey: prepared.cacheKey)
-            return tunProbeResult(
+                return ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
+                    probeKind: probeKind,
+                    target: prepared.trimmedTarget,
+                    ok: false,
+                    state: "failed",
+                    summary: "\(prepared.label): failed",
+                    detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", prepared.resolvedTarget, timeoutSeconds),
+                    resolvedTarget: prepared.resolvedTarget,
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
+                        status: "successful",
+                        resolvedIP: prepared.resolvedTarget,
+                        detail: "Resolved \(prepared.trimmedTarget) to \(prepared.resolvedTarget)."
+                    ),
+                    lastSuccessAgoS: history.lastSuccessAgoS,
+                    lastSuccessRTTMS: history.lastSuccessRTTMS
+                )
+            }
+            tunProbeLastTimeoutDiag = [:]
+            let rttMS = max(0.0, Double(reply.receivedMonotonicNS &- prepared.sentMonotonicNS) / 1_000_000.0)
+            recordTunProbeSuccess(cacheKey: prepared.cacheKey, rttMS: rttMS)
+            return ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
                 probeKind: probeKind,
                 target: prepared.trimmedTarget,
-                ok: false,
-                state: "failed",
-                summary: "\(prepared.label): failed",
-                detail: String(format: "No ICMP echo reply received from %@ within %.1fs.", prepared.resolvedTarget, timeoutSeconds),
+                ok: true,
+                state: "verified",
+                summary: "\(prepared.label): verified",
+                detail: "ICMP echo reply received from \(prepared.resolvedTarget).",
                 resolvedTarget: prepared.resolvedTarget,
-                nameResolution: tunProbeNameResolution(
+                nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
                     status: "successful",
                     resolvedIP: prepared.resolvedTarget,
                     detail: "Resolved \(prepared.trimmedTarget) to \(prepared.resolvedTarget)."
                 ),
-                lastSuccessAgoS: history.lastSuccessAgoS,
-                lastSuccessRTTMS: history.lastSuccessRTTMS
+                valueMS: rttMS,
+                lastSuccessAgoS: 0.0,
+                lastSuccessRTTMS: rttMS
             )
-        }
-            let rttMS = max(0.0, Double(reply.receivedMonotonicNS &- prepared.sentMonotonicNS) / 1_000_000.0)
-            recordTunProbeSuccess(cacheKey: prepared.cacheKey, rttMS: rttMS)
-        return tunProbeResult(
-            probeKind: probeKind,
-            target: prepared.trimmedTarget,
-            ok: true,
-            state: "verified",
-            summary: "\(prepared.label): verified",
-            detail: "ICMP echo reply received from \(prepared.resolvedTarget).",
-            resolvedTarget: prepared.resolvedTarget,
-            nameResolution: tunProbeNameResolution(
-                status: "successful",
-                resolvedIP: prepared.resolvedTarget,
-                detail: "Resolved \(prepared.trimmedTarget) to \(prepared.resolvedTarget)."
-            ),
-            valueMS: rttMS,
-            lastSuccessAgoS: 0.0,
-            lastSuccessRTTMS: rttMS
-        )
         }
     }
 
@@ -3679,7 +3689,12 @@ private final class SwiftSimpleUDPPeerBridge {
     }
 
     private func deliverPacketToSystem(_ packet: Data) {
-        observeTunProbeReply(packet)
+        let matchedProbeReply = observeTunProbeReply(packet)
+        if matchedProbeReply {
+            recordTunProbeBoundary("probe_reply_consumed_before_local_write")
+            recordTunICMPStage("from_peer_before_local_write")
+            recordTunICMPStage("local_reply_virtual_probe_delivery")
+        }
         guard let provider else {
             return
         }
@@ -3688,6 +3703,9 @@ private final class SwiftSimpleUDPPeerBridge {
         bytesToSystem += packet.count
         writeBatches += 1
         lastToSystemAt = Date().timeIntervalSince1970
+        if matchedProbeReply {
+            recordTunICMPStage("to_local_tun_written")
+        }
     }
 
     private func beginPacketFlowReadLoop() {
@@ -3826,73 +3844,6 @@ private final class SwiftSimpleUDPPeerBridge {
         peerFallbackTimer = timer
     }
 
-    private func tunProbeLabel(_ probeKind: String) -> String {
-        switch probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "global":
-            return "TUN global connectivity verified"
-        default:
-            return "TUN connectivity verified"
-        }
-    }
-
-    private func tunProbeKindCode(_ probeKind: String) -> UInt8 {
-        probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
-            ? ObstacleBridgeTunPing.probeKindGlobal
-            : ObstacleBridgeTunPing.probeKindPeer
-    }
-
-    private func tunProbeCacheKey(probeKind: String, ifname: String, target: String) -> String {
-        "\(probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(ifname)|\(target)"
-    }
-
-    private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
-        [
-            "status": status,
-            "resolved_ip": resolvedIP,
-            "detail": detail,
-        ]
-    }
-
-    private func tunProbeResult(
-        probeKind: String,
-        target: String,
-        ok: Bool,
-        state: String,
-        summary: String,
-        detail: String,
-        resolvedTarget: String = "",
-        nameResolution: [String: Any] = [:],
-        valueMS: Double? = nil,
-        lastSuccessAgoS: Double? = nil,
-        lastSuccessRTTMS: Double? = nil
-    ) -> [String: Any] {
-        var result: [String: Any] = [
-            "label": tunProbeLabel(probeKind),
-            "ok": ok,
-            "state": state,
-            "summary": summary,
-            "detail": detail,
-            "target": target,
-            "resolved_target": resolvedTarget,
-            "name_resolution": nameResolution,
-            "method": "internal_icmp_echo",
-            "checked_at_unix_ts": Date().timeIntervalSince1970,
-            "value_ms": NSNull(),
-            "last_success_ago_s": NSNull(),
-            "last_success_rtt_ms": NSNull(),
-        ]
-        if let valueMS {
-            result["value_ms"] = valueMS
-            result["last_success_rtt_ms"] = valueMS
-        } else if let lastSuccessRTTMS {
-            result["last_success_rtt_ms"] = lastSuccessRTTMS
-        }
-        if let lastSuccessAgoS {
-            result["last_success_ago_s"] = lastSuccessAgoS
-        }
-        return result
-    }
-
     private func allocateTunProbeIdentity() -> (identifier: UInt16, sequence: UInt16) {
         let current = tunProbeSequence == 0 ? 1 : tunProbeSequence
         tunProbeSequence = current &+ 1
@@ -3902,128 +3853,84 @@ private final class SwiftSimpleUDPPeerBridge {
         return (Self.tunProbeIdentifier, current)
     }
 
-    private func sourceProbeFamilies() -> [Int32] {
-        var families: [Int32] = []
-        if !tunnelAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            families.append(AF_INET)
-        }
-        if !tunnelAddress6.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            families.append(AF_INET6)
-        }
-        if families.isEmpty {
-            families.append(AF_INET)
-        }
-        return families
-    }
-
-    private func sourceAddressForProbeFamily(_ family: Int32) -> String {
-        if family == AF_INET6 {
-            return tunnelAddress6.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return tunnelAddress.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String) {
-        var lastError = "target resolution failed"
-        for family in candidateFamilies {
-            if let directFamily = ObstacleBridgeTunPing.ipFamily(target), directFamily == family {
-                return (target, family, "")
-            }
-            if let resolved = Self.resolveHost(target, family: family) {
-                return (resolved, family, "")
-            }
-            lastError = "unable to resolve \(target) for family=\(family)"
-        }
-        return (nil, candidateFamilies.first ?? AF_INET, lastError)
-    }
-
-    private static func resolveHost(_ host: String, family: Int32) -> String? {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-        var hints = addrinfo(
-            ai_flags: AI_ADDRCONFIG,
-            ai_family: family,
-            ai_socktype: SOCK_RAW,
-            ai_protocol: family == AF_INET6 ? IPPROTO_ICMPV6 : IPPROTO_ICMP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
-        var result: UnsafeMutablePointer<addrinfo>?
-        let status = getaddrinfo(trimmed, nil, &hints, &result)
-        guard status == 0, let result else {
-            return nil
-        }
-        defer { freeaddrinfo(result) }
-        var cursor: UnsafeMutablePointer<addrinfo>? = result
-        while let info = cursor?.pointee {
-            if info.ai_family == AF_INET,
-               let addr = info.ai_addr?.withMemoryRebound(to: sockaddr_in.self, capacity: 1, { $0.pointee }) {
-                var copy = addr.sin_addr
-                var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
-                if inet_ntop(AF_INET, &copy, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil {
-                    return String(cString: buffer)
-                }
-            } else if info.ai_family == AF_INET6,
-                      let addr6 = info.ai_addr?.withMemoryRebound(to: sockaddr_in6.self, capacity: 1, { $0.pointee }) {
-                var copy = addr6.sin6_addr
-                var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-                if inet_ntop(AF_INET6, &copy, &buffer, socklen_t(INET6_ADDRSTRLEN)) != nil {
-                    return String(cString: buffer)
-                }
-            }
-            cursor = info.ai_next
-        }
-        return nil
-    }
-
     private func recordTunProbeSuccess(cacheKey: String, rttMS: Double) {
-        tunProbeHistory[cacheKey] = TunProbeHistory(
-            lastSuccessMonotonic: ProcessInfo.processInfo.systemUptime,
-            lastSuccessRTTMS: rttMS
+        ObstacleBridgeTunProbeDiagnosticsSupport.recordTunProbeSuccess(
+            cacheKey: cacheKey,
+            rttMS: rttMS,
+            tunProbeHistory: &tunProbeHistory,
+            currentUptime: ProcessInfo.processInfo.systemUptime
+        )
+    }
+
+    private func recordTunICMPStage(_ key: String) {
+        ObstacleBridgeTunProbeDiagnosticsSupport.recordTunICMPStage(
+            key,
+            tunICMPStageCounts: &tunICMPStageCounts,
+            localReplyStageCounts: &localReplyStageCounts
+        )
+    }
+
+    private func recordTunProbeBoundary(_ key: String) {
+        ObstacleBridgeTunProbeDiagnosticsSupport.recordTunProbeBoundary(
+            key,
+            tunProbeBoundaryCounts: &tunProbeBoundaryCounts
         )
     }
 
     private func tunProbeHistorySnapshot(cacheKey: String) -> (lastSuccessAgoS: Double?, lastSuccessRTTMS: Double?) {
-        guard let history = tunProbeHistory[cacheKey] else {
-            return (nil, nil)
-        }
-        return (
-            max(0.0, ProcessInfo.processInfo.systemUptime - history.lastSuccessMonotonic),
-            history.lastSuccessRTTMS
+        ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeHistorySnapshot(
+            cacheKey: cacheKey,
+            tunProbeHistory: tunProbeHistory,
+            currentUptime: ProcessInfo.processInfo.systemUptime
         )
     }
 
-    private func observeTunProbeReply(_ packet: Data) {
-        guard let parsed = ObstacleBridgeTunPing.parseEchoReply(packet) else {
-            return
-        }
-        let payload = parsed.payload
-        let minimumPayloadLength = ObstacleBridgeTunPing.probeMagic.count + 1 + 8 + 8
-        guard payload.count >= minimumPayloadLength,
-              payload.prefix(ObstacleBridgeTunPing.probeMagic.count) == ObstacleBridgeTunPing.probeMagic else {
-            return
-        }
-        let nonce = payload.subdata(in: 5..<13)
-        let key = TunProbeWaiterKey(
-            family: parsed.family,
-            identifier: parsed.identifier,
-            sequence: parsed.sequence,
-            nonce: nonce
-        )
-        guard let waiter = tunProbeWaiters.removeValue(forKey: key) else {
-            return
-        }
-        waiter.reply = TunProbeReply(
-            sourceIP: parsed.sourceIP,
-            destinationIP: parsed.destinationIP,
-            payload: payload,
+    private func observeTunProbeReply(_ packet: Data) -> Bool {
+        ObstacleBridgeTunProbeDiagnosticsSupport.observeTunProbeReply(
+            packet,
+            tunProbeWaiters: &tunProbeWaiters,
+            tunICMPStageCounts: &tunICMPStageCounts,
+            localReplyStageCounts: &localReplyStageCounts,
+            tunProbeBoundaryCounts: &tunProbeBoundaryCounts,
             receivedMonotonicNS: DispatchTime.now().uptimeNanoseconds
         )
-        waiter.semaphore.signal()
+    }
+
+    private func tunProbeRuntimeDiagSnapshot(
+        probeKind: String,
+        ifname: String,
+        target: String,
+        resolvedTarget: String,
+        timeoutSeconds: TimeInterval
+    ) -> [String: Any] {
+        let secure = secureLinkStatusForProbe()
+        let selectedRuntime =
+            udpOverlayTransportOwner?.transportSnapshot()
+            ?? tcpOverlayTransportOwner?.transportSnapshot()
+            ?? wsOverlayTransportOwner?.transportSnapshot()
+            ?? {
+                if #available(iOS 15.0, *) {
+                    return quicOverlayTransportOwner?.transportSnapshot()
+                }
+                return nil
+            }()
+            ?? [:]
+        return ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeRuntimeDiagSnapshot(
+            probeKind: probeKind,
+            ifname: ifname,
+            target: target,
+            resolvedTarget: resolvedTarget,
+            timeoutSeconds: timeoutSeconds,
+            overlayTransport: selectedTransport,
+            overlayConnected: overlayEstablishedForProbe(),
+            sessionConnected: Bool(selectedRuntime["overlay_connected"] as? Bool ?? false),
+            sessionAppReady: Bool(selectedRuntime["app_ready"] as? Bool ?? false),
+            acceptingEnabled: Bool(selectedRuntime["app_ready"] as? Bool ?? false),
+            secureLinkState: secure["authenticated"] as? Bool == true ? "authenticated" : "inactive",
+            secureLinkLastEvent: "",
+            secureLinkFailureReason: "",
+            backpressure: selectedRuntime["protocol_stats"] as? [String: Any] ?? [:]
+        )
     }
 
     private func handlePeerFallbackTimer() {

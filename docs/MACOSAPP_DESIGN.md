@@ -159,6 +159,38 @@ What still needs attention for true day-to-day parity:
 - the Swift transport path still needs routine regression testing against the
   Python reference path whenever the hook contract changes
 
+### Swift shared-first policy
+
+To keep macOS and iOS Swift drift as small as possible, changes should land in
+the shared Swift layer whenever the behavior is not inherently bound to one OS.
+
+Policy:
+
+- prefer `ios/native/ObstacleBridgeShared/` for runtime logic, payload
+  vocabulary, counters, state naming, helper structs, and Admin/API field shape
+- keep `ios/native/ObstacleBridgeApp/` focused on macOS-specific wiring such as
+  helper/XPC packaging, `utun` host integration, lifecycle ownership, and other
+  OS-bound APIs
+- treat edits in platform-specific Swift files as a last resort; when a macOS
+  platform file must change for shared runtime behavior, the corresponding iOS
+  runtime must stay in parity in the same change unless the difference is
+  intentionally platform-specific and documented
+- when a shared/runtime Swift change touches observable behavior, update the
+  Swift parity source guards in `ios/tests/test_m3_native_sources.py` and/or
+  `ios/tests/test_macos_swift_host_runner.py`
+
+Enforcement:
+
+- repository guard `scripts/check_swift_shared_parity_guard.py`
+- CI workflow `.github/workflows/swift-shared-parity-guard.yml`
+
+Practical interpretation:
+
+- if the change is about behavior, schema, counters, verification semantics, or
+  operator-visible vocabulary, start in shared Swift
+- if the change is about macOS privilege packaging or host-only OS integration,
+  keep it local to the macOS app layer
+
 ## Recommended near-term architecture
 
 The recommended next macOS app step remains:

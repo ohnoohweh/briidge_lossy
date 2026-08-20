@@ -482,6 +482,39 @@ For current product work, "Swift parity" between macOS and iOS should now mean:
 - platform-specific lifecycle and privilege differences only where the Apple
   runtime model truly requires them
 
+### Shared-first policy
+
+To keep drift between the iOS packet-tunnel runtime and the macOS app runtime
+small, Swift behavior should be implemented in shared code whenever there is no
+real platform boundary forcing the logic to live in one product.
+
+Policy:
+
+- prefer `ios/native/ObstacleBridgeShared/` for shared runtime behavior,
+  diagnostics vocabulary, snapshot field shape, counter names, helper types,
+  and other operator-visible semantics
+- keep `ios/native/IPServer/` focused on iOS-specific Network Extension wiring,
+  packet-flow ownership, and Apple-platform APIs that cannot be shared
+- touch platform-specific Swift files as little as possible for behavior that
+  also exists on the sibling Apple runtime
+- whenever an iOS-specific Swift file changes for shared runtime behavior, keep
+  the matching macOS Swift surface in parity in the same change unless the
+  difference is intentionally platform-specific and documented
+- whenever shared/runtime Swift changes land, update the Swift parity source
+  guards in `ios/tests/test_m3_native_sources.py` and/or
+  `ios/tests/test_macos_swift_host_runner.py`
+
+Enforcement:
+
+- repository guard `scripts/check_swift_shared_parity_guard.py`
+- CI workflow `.github/workflows/swift-shared-parity-guard.yml`
+
+Practical rule of thumb:
+
+- behavior and schema changes should begin in shared Swift
+- platform-only files should mainly contain boundary adapters, lifecycle glue,
+  and OS-specific ownership details
+
 ### Outcome 7: Swift Packet Adapters Differ From The Python Host-TUN Path
 
 The current product now has a concrete cross-platform lesson from shared-TUN

@@ -451,8 +451,37 @@ def test_admin_api_source_exists() -> None:
     assert '"admin_api_request"' in runtime
 
 
+def test_tun_probe_diagnostics_support_source_exists() -> None:
+    support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+
+    assert "struct ObstacleBridgeTunProbeWaiterKey: Hashable" in support
+    assert "final class ObstacleBridgeTunProbeWaiterState" in support
+    assert "struct ObstacleBridgeTunProbeReply" in support
+    assert "struct ObstacleBridgeTunProbeHistory" in support
+    assert "enum ObstacleBridgeTunProbeDiagnosticsSupport" in support
+    assert 'static let localReplyStageKeys = [' in support
+    assert 'static let tunICMPStageKeys = [' in support
+    assert 'static let tunProbeBoundaryKeys = [' in support
+    assert 'static func makeTunICMPStageCounts() -> [String: Int]' in support
+    assert 'static func makeTunProbeBoundaryCounts() -> [String: Int]' in support
+    assert 'static func makeLocalReplyStageCounts() -> [String: Int]' in support
+    assert 'static func recordTunICMPStage(' in support
+    assert 'static func recordTunProbeBoundary(_ key: String, tunProbeBoundaryCounts: inout [String: Int])' in support
+    assert 'static func tunProbeCacheKey(probeKind: String, ifname: String, target: String) -> String' in support
+    assert 'static func tunProbeLabel(_ probeKind: String) -> String' in support
+    assert 'static func tunProbeKindCode(_ probeKind: String) -> UInt8' in support
+    assert 'static func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' in support
+    assert 'static func tunProbeResult(' in support
+    assert 'static func sourceProbeFamilies(tunnelAddress: String, tunnelAddress6: String) -> [Int32]' in support
+    assert 'static func sourceAddressForProbeFamily(_ family: Int32, tunnelAddress: String, tunnelAddress6: String) -> String' in support
+    assert 'static func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' in support
+    assert 'static func observeTunProbeReply(' in support
+    assert 'static func tunProbeRuntimeDiagSnapshot(' in support
+
+
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
 
     assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
     assert 'static let providerBuildTimestampUTC = "unknown"' in provider
@@ -492,11 +521,56 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '?? "google.de")' in provider
     assert 'method: "network_extension_settings"' in provider
     assert '"name_resolution": nameResolution' in provider
-    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' in provider
+    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' not in provider
     assert "} else if addressesPresent && !adminPacketProcessingActive() {" in provider
     assert '"Packet processing is not active yet."' in provider
     assert "guard adminPacketProcessingActive() else {" in provider
     assert 'return bridge.probeTunConnectivity(' in provider
+    assert 'private var tunICMPStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunICMPStageCounts()' in provider
+    assert 'private var tunProbeBoundaryCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunProbeBoundaryCounts()' in provider
+    assert 'private var localReplyStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeLocalReplyStageCounts()' in provider
+    assert 'private var tunProbeLastTimeoutDiag: [String: Any] = [:]' in provider
+    assert 'recordTunProbeBoundary("probe_attempt_started")' in provider
+    assert 'recordTunProbeBoundary("probe_waiter_registered")' in provider
+    assert 'recordTunProbeBoundary("probe_injected_local_virtual")' in provider
+    assert 'recordTunICMPStage("from_local_tun_read")' in provider
+    assert 'recordTunICMPStage("overlay_tx_before_send_app")' in provider
+    assert 'recordTunICMPStage("local_reply_before_overlay_send")' in provider
+    assert 'recordTunProbeBoundary("probe_send_completed")' in provider
+    assert 'recordTunProbeBoundary("probe_timeout")' in provider
+    assert 'recordTunProbeBoundary("probe_reply_consumed_before_local_write")' in provider
+    assert 'recordTunICMPStage("from_peer_before_local_write")' in provider
+    assert 'recordTunICMPStage("to_local_tun_written")' in provider
+    assert 'recordTunICMPStage("local_reply_virtual_probe_delivery")' in provider
+    assert '"tun_icmp_stage_counts": tunICMPStageCounts,' in provider
+    assert '"tun_probe_boundary_counts": tunProbeBoundaryCounts,' in provider
+    assert '"tun_local_reply_stage_counts": localReplyStageCounts,' in provider
+    assert '"tun_probe_last_timeout_diag": tunProbeLastTimeoutDiag,' in provider
+    assert '"tun_icmp_stage_counts": bridgeSnapshot["tun_icmp_stage_counts"] as? [String: Any] ?? [:],' in provider
+    assert '"tun_probe_boundary_counts": bridgeSnapshot["tun_probe_boundary_counts"] as? [String: Any] ?? [:],' in provider
+    assert '"tun_local_reply_stage_counts": bridgeSnapshot["tun_local_reply_stage_counts"] as? [String: Any] ?? [:],' in provider
+    assert '"tun_probe_last_timeout_diag": bridgeSnapshot["tun_probe_last_timeout_diag"] as? [String: Any] ?? [:],' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.recordTunICMPStage(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.recordTunProbeBoundary(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeLabel(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeCacheKey(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeKindCode(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceAddressForProbeFamily(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(' in provider
+    assert 'private func sourceProbeFamilies() -> [Int32]' not in provider
+    assert 'private func sourceAddressForProbeFamily(_ family: Int32) -> String' not in provider
+    assert 'private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' not in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.observeTunProbeReply(' in provider
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeRuntimeDiagSnapshot(' in provider
+    assert 'struct PreparedProbe {' in provider
+    assert 'let waiter: ObstacleBridgeTunProbeWaiterState' in provider
+    assert 'let waiterKey: ObstacleBridgeTunProbeWaiterKey' in provider
+    assert '"probe_reply_matched"' in support
+    assert '"probe_reply_unmatched"' in support
+    assert '"overlay_rx_after_unpack"' in support
 
     app_js = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
     assert "const buildTimestampUTC = String(build.build_timestamp_utc || '').trim();" in app_js
@@ -505,8 +579,8 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "const bracketedHost = hostText.includes(':') && !hostText.startsWith('[') ? `[${hostText}]` : hostText;" in app_js
     assert "if (Array.isArray(ep) && ep.length >= 2) return fmtHostPort(ep[0], ep[1]);" in app_js
     assert "if (dest.host != null && dest.port != null) return fmtHostPort(dest.host, dest.port);" in app_js
-    assert '"method": "internal_icmp_echo"' in provider
-    assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in provider
+    assert '"method": "internal_icmp_echo"' in support
+    assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in support
     assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
     assert "ObstacleBridgeTunPing.buildIPv6EchoRequest(" in provider
 
