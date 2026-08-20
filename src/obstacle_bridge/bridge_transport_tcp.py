@@ -690,6 +690,7 @@ class TcpStreamSession(ISession):
             return
         self._reconnect_task = None
         async def _reconnect():
+            current_reconnect_task = asyncio.current_task()
             delay = self._reconnect_retry_delay_s
             try:
                 while self._run_flag:
@@ -709,7 +710,7 @@ class TcpStreamSession(ISession):
                         return
             finally:
                 self._next_reconnect_attempt_monotonic = None
-                if self._reconnect_task is asyncio.current_task():
+                if self._reconnect_task is current_reconnect_task:
                     self._reconnect_task = None
         self._reconnect_task = self._loop.create_task(_reconnect())
 

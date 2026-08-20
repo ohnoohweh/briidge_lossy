@@ -1490,7 +1490,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `54` | `868` |
+| Python CLI/runtime, including macOS Python | `54` | `871` |
 | macOS Swift app | `1` | `54` |
 | iOS app/extension | `24` | `160` |
 
@@ -1531,8 +1531,8 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `54` | `0` | `54` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `25` | `25` |
-| Total parity-oriented evidence | Sum of the lanes above | `58` | `144` | `202` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `30` | `30` |
+| Total parity-oriented evidence | Sum of the lanes above | `58` | `149` | `207` |
 
 Important caveat:
 
@@ -1585,6 +1585,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Run the regular pytest suite during normal development to cover unit, integration, and overlay harness regression paths.
 - Use the parallel overlay harness for frequent end-to-end validation when transport and socket behavior matter most.
 - Keep reconnect, listener, and concurrent multi-peer coverage in the regular regression flow instead of treating them as occasional manual checks.
+- Keep Python TCP, QUIC, and WebSocket reconnect cleanup covered through stopped-event-loop teardown so supervisor restarts do not emit secondary coroutine-close exceptions.
 - Keep UDP multi-peer resolution coverage aligned with dual-stack behavior, including `prefer-ipv6` retention across immediate send errors and IPv4 fallback through IPv4-mapped sends when the active socket is IPv6.
 - Keep the Python and Swift `prefer-ipv6` peer-resolution contract pinned for native IPv4 literals: resolution should keep the IPv4 host identity intact, while IPv4-mapped notation is reserved for IPv6 socket send compatibility.
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
