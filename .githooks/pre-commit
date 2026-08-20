@@ -3,3 +3,4 @@ set -euo pipefail
 
 python scripts/check_readme_testing_guard.py --staged
 python scripts/check_requirements_guard.py --staged
+python scripts/check_swift_shared_parity_guard.py --staged

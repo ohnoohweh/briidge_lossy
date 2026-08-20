@@ -585,6 +585,7 @@ def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -
 
 def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    shared_probe_support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
 
     assert "private let adminSnapshotQueue = DispatchQueue(label: \"ObstacleBridgeHostRunner.AdminSnapshots\")" in source
     assert "private var adminSnapshotTimer: DispatchSourceTimer?" in source
@@ -607,12 +608,52 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert 'target: peerTarget' in source
     assert 'target: globalHost' in source
     assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
-    assert '"method": "internal_icmp_echo"' in source
-    assert '"resolved_target": resolvedTarget' in source
-    assert '"name_resolution": nameResolution' in source
-    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' in source
-    assert '"last_success_ago_s": NSNull()' in source
+    assert '"method": "internal_icmp_echo"' in shared_probe_support
+    assert '"resolved_target": resolvedTarget' in shared_probe_support
+    assert '"name_resolution": nameResolution' in shared_probe_support
+    assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' not in source
+    assert '"last_success_ago_s": NSNull()' in shared_probe_support
     assert "let payload = ObstacleBridgeTunPing.probePayload(" in source
+    assert 'private var tunICMPStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunICMPStageCounts()' in source
+    assert 'private var tunProbeBoundaryCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunProbeBoundaryCounts()' in source
+    assert 'private var localReplyStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeLocalReplyStageCounts()' in source
+    assert 'private var tunProbeLastTimeoutDiag: [String: Any] = [:]' in source
+    assert '"tun_icmp_stage_counts": tunICMPStageCounts,' in source
+    assert '"tun_probe_boundary_counts": tunProbeBoundaryCounts,' in source
+    assert '"tun_local_reply_stage_counts": localReplyStageCounts,' in source
+    assert '"tun_probe_last_timeout_diag": tunProbeLastTimeoutDiag,' in source
+    assert 'recordTunProbeBoundary("probe_attempt_started")' in source
+    assert 'recordTunProbeBoundary("probe_waiter_registered")' in source
+    assert 'recordTunProbeBoundary("probe_injected_local_virtual")' in source
+    assert 'recordTunICMPStage("from_local_tun_read")' in source
+    assert 'recordTunICMPStage("overlay_tx_before_send_app")' in source
+    assert 'recordTunICMPStage("local_reply_before_overlay_send")' in source
+    assert 'recordTunProbeBoundary("probe_send_completed")' in source
+    assert 'recordTunProbeBoundary("probe_timeout")' in source
+    assert 'recordTunProbeBoundary("probe_reply_consumed_before_local_write")' in source
+    assert 'recordTunICMPStage("from_peer_before_local_write")' in source
+    assert 'recordTunICMPStage("to_local_tun_written")' in source
+    assert 'recordTunICMPStage("local_reply_virtual_probe_delivery")' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.recordTunICMPStage(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.recordTunProbeBoundary(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeLabel(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeCacheKey(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeKindCode(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceAddressForProbeFamily(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(' in source
+    assert 'private func sourceProbeFamilies() -> [Int32]' not in source
+    assert 'private func sourceAddressForProbeFamily(_ family: Int32) -> String' not in source
+    assert 'private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' not in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.observeTunProbeReply(' in source
+    assert 'ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeRuntimeDiagSnapshot(' in source
+    assert 'private var tunProbeWaiters: [ObstacleBridgeTunProbeWaiterKey: ObstacleBridgeTunProbeWaiterState] = [:]' in source
+    assert 'private var tunProbeHistory: [String: ObstacleBridgeTunProbeHistory] = [:]' in source
+    assert '"probe_reply_matched"' in shared_probe_support
+    assert '"probe_reply_unmatched"' in shared_probe_support
+    assert '"overlay_rx_after_unpack"' in shared_probe_support
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
     assert 'tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
     assert 'payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
