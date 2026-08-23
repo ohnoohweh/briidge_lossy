@@ -23,7 +23,8 @@ REQ-RUN-002:
   # archive layout, dependency bootstrap, and helper-interpreter packaging
   # around the maintained python314 runtime, including the beta-package marker,
   # package-user helper-handoff metadata, and DSM service restart-exit-code
-  # handling.
+  # handling, including wrapper-side errexit suppression around the bridge
+  # subprocess so rc=75/77 reaches the restart loop.
   unit_tests:
     - tests/unit/test_build_synology_spk.py::test_render_info_contains_required_synology_fields
     - tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive

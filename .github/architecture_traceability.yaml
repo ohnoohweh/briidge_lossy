@@ -228,8 +228,9 @@ ARC-CMP-004:
   # Synology wrapper coverage also pins the declared python314 package
   # dependency, beta-package metadata, DSM-acceptable outer archive shape,
   # restart-exit-code handling, package-managed dependency-bootstrap
-  # metadata, and package-user helper-handoff wiring for the DSM service
-  # wrapper path.
+  # metadata, package-user helper-handoff wiring, and the wrapper-side
+  # errexit relaxation needed to translate rc=75/77 into DSM-managed relaunch
+  # instead of a final service stop.
   integration_tests:
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
