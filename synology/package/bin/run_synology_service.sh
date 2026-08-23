@@ -11,10 +11,12 @@ RESTART_EXIT_CODE_IMMEDIATE=75
 RESTART_EXIT_CODE_DELAYED=77
 
 while :; do
+    set +e
     "${PY_BIN}" -c "from obstacle_bridge.bridge import main; main()" \
         --config "${CFG_PATH}" \
         --log-file "${LOG_PATH}"
     rc=$?
+    set -e
     if [ "${rc}" -eq "${RESTART_EXIT_CODE_IMMEDIATE}" ]; then
         echo "[synology-service] bridge requested immediate restart (rc=${rc})" >>"${SERVICE_LOG}"
         continue

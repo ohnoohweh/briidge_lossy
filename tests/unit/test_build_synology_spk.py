@@ -75,16 +75,19 @@ def test_build_spk_emits_info_and_payload_archive(tmp_path: pathlib.Path):
 
 def test_start_stop_status_handles_bridge_restart_exit_codes() -> None:
     script = (repo_root() / "synology" / "scripts" / "start-stop-status").read_text(encoding="utf-8")
+    service_runner = (repo_root() / "synology" / "package" / "bin" / "run_synology_service.sh").read_text(encoding="utf-8")
 
     assert 'RESTART_EXIT_CODE_IMMEDIATE=75' in script
     assert 'RESTART_EXIT_CODE_DELAYED=77' in script
-    assert 'bridge requested immediate restart' in script
-    assert 'bridge requested delayed restart' in script
-    assert 'sleep "${RESTART_DELAY_SECONDS}"' in script
     assert 'ELEVATED_PROBE="${PKG_DIR}/bin/synology_elevated_probe.sh"' in script
     assert 'SERVICE_RUNNER="${PKG_DIR}/bin/run_synology_service.sh"' in script
     assert 'find_running_pid()' in script
     assert 'prestart)' in script
+    assert "set +e" in service_runner
+    assert "set -e" in service_runner
+    assert 'bridge requested immediate restart' in service_runner
+    assert 'bridge requested delayed restart' in service_runner
+    assert 'sleep "${RESTART_DELAY_SECONDS}"' in service_runner
 
 
 def test_privilege_file_keeps_package_default_only() -> None:
