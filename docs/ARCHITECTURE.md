@@ -151,18 +151,13 @@ supervision remains unfinished.
 
 ### Rework work packages
 
-1. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
-   entering ChannelMux while its lifecycle is disconnected. Resume only after
-   the connected event for the current epoch, and add tests proving no TUN
-   frame/probe is admitted during a failed or rotating connection.
-
-2. Simplify Runner restart supervision. Runner consumes the transport's
+1. Simplify Runner restart supervision. Runner consumes the transport's
    candidate-cycle exhaustion result and requests process restart exactly once.
    Retain a separate safety watchdog only for missing lifecycle events, with a
    bounded timeout and explicit diagnostic reason. Add end-to-end tests for
    three unsuccessful cycles leading to restart.
 
-3. Complete parity, observability, and migration. Apply the same observable
+2. Complete parity, observability, and migration. Apply the same observable
    lifecycle contract to the Swift macOS/iOS implementations, expose current
    state/epoch/candidate/cycle/reason in WebAdmin, and update requirements,
    traceability, and operational documentation alongside the implementation.

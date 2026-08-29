@@ -100,6 +100,7 @@ ARC-CMP-003:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
     - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_requires_connected_lifecycle_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_channel_mux_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux

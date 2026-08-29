@@ -284,6 +284,33 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         await asyncio.sleep(0)
         self.assertEqual(session.rotation_requests, ["channelmux_disconnected", "channelmux_disconnected"])
 
+    def test_tun_admission_requires_connected_lifecycle_epoch(self):
+        asyncio.run(self._test_tun_admission_requires_connected_lifecycle_epoch())
+
+    async def _test_tun_admission_requires_connected_lifecycle_epoch(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        dev = ChannelMux.TunDevice(fd=10, ifname="obtun0", mtu=1500)
+        dev.chan_id = 7
+        sent = []
+        mux._send_mux = lambda chan, proto, mtype, payload: sent.append((chan, proto, mtype, payload))
+        packet = _ipv4_packet("192.0.2.1", "198.51.100.1")
+        mux._on_local_tun_packet(dev, packet)
+        self.assertEqual(sent, [])
+        result = await mux._probe_tun_connectivity_once(probe_kind="peer", ifname="obtun0", target="192.0.2.1", timeout_s=0.1)
+        self.assertEqual(result["state"], "skipped")
+        session.connected = True
+        session.connection_layers[-1]["connected"] = True
+        session.connection_layers[-1]["app_ready"] = True
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1, "authenticated"))
+        mux._on_local_tun_packet(dev, packet)
+        self.assertEqual(len(sent), 1)
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "failed"))
+        mux._on_local_tun_packet(dev, packet)
+        self.assertEqual(len(sent), 1)
+
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
         mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
 

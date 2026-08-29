@@ -615,6 +615,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._connection_rotation_task: Optional[asyncio.Task] = None
         self._connection_rotation_wait_epoch: Optional[int] = None
         self._connection_lifecycle_epoch: int = 0
+        # Epoch zero represents an already-ready session before its callback is
+        # attached. Any disconnected lifecycle edge clears this bootstrap grant.
+        self._tun_admission_epoch: Optional[int] = 0 if self._overlay_connected else None
 
         # Services
         self._local_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
@@ -2329,6 +2332,24 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         """Apply the outer wrapper lifecycle event to the mux connection gate."""
         self._observe_connection_epoch(event.epoch)
         await self.on_overlay_state(event.connected, epoch=event.epoch)
+        self._tun_admission_epoch = int(event.epoch) if event.connected and self._accepting_enabled else None
+        if self._tun_admission_epoch is None:
+            self._pause_tun_admission()
+        else:
+            for dev in list(self._tun_helper_devices.values()) + list(self._svc_tun_devices.values()):
+                self._register_tun_reader(dev)
+
+    def _tun_admission_allowed(self) -> bool:
+        return bool(self._overlay_connected and self._accepting_enabled and self._tun_admission_epoch == self._connection_lifecycle_epoch)
+
+    def _pause_tun_admission(self) -> None:
+        for dev in list(self._tun_helper_devices.values()) + list(self._svc_tun_devices.values()):
+            task = self._tun_helper_reader_tasks.pop(id(dev), None)
+            if task is not None:
+                task.cancel()
+            with contextlib.suppress(Exception):
+                self.loop.remove_reader(dev.fd)
+            dev.reader_registered = False
 
     async def on_transport_epoch_change(self, epoch: int) -> None:
         self._observe_connection_epoch(epoch)
@@ -3344,6 +3365,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             raise
 
     def _register_tun_reader(self, dev: "ChannelMux.TunDevice", *, force_owner: bool = False) -> None:
+        if not self._tun_admission_allowed():
+            return
         if self._tun_helper_manages_device(dev):
             current_owner = getattr(dev, "_reader_mux", None)
             if dev.reader_registered and current_owner is self and not force_owner:
@@ -4687,6 +4710,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         cache_key = self._tun_probe_cache_key(probe_kind=probe_kind, ifname=ifname, target=target)
         label = self._tun_probe_label(probe_kind)
         self._record_tun_probe_boundary("probe_attempt_started")
+        if not self._tun_admission_allowed():
+            return self._tun_probe_result(probe_kind=probe_kind, target=str(target or ""), ok=False, state="skipped", summary=f"{label}: skipped", detail="TUN admission awaits a connected lifecycle epoch.", name_resolution=self._tun_probe_name_resolution(status="skipped"))
         text_target = str(target or "").strip()
         text_ifname = str(ifname or "").strip()
         if not text_target:
@@ -4968,7 +4993,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 chan=dev.chan_id,
                 note="local_tun_read",
             )
-            if not (self._overlay_connected and self._accepting_enabled):
+            if not self._tun_admission_allowed():
                 self._log_tun_icmp_local_decision(
                     stage="local_reply_skip_overlay_inactive",
                     dev=dev,
