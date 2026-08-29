@@ -72,7 +72,7 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
         )
         self.assertEqual(session.get_connection_lifecycle_snapshot()["epoch"], 1)
 
-    def test_myudp_rotation_advances_candidate_and_publishes_disconnected(self) -> None:
+    def test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion(self) -> None:
         session = UdpSession(argparse.Namespace(max_inflight=200))
         events = []
         session.set_on_connection_lifecycle(events.append)
@@ -103,6 +103,7 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
         self.assertTrue(second_result.accepted)
         self.assertEqual(second_result.candidate_index, 0)
         self.assertEqual(second_result.candidate_cycle, 1)
+        self.assertEqual(second_result.next_epoch, 3)
         session._on_state_change(True)
         self.assertEqual(session._peer_candidate_cycle, 1)
         session.reset_connection_rotation_cycles()
@@ -122,8 +123,11 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
             [(event.state, event.epoch) for event in events],
             [
                 (ConnectionState.CONNECTED, 1),
-                (ConnectionState.DISCONNECTED, 1),
-                (ConnectionState.CONNECTED, 2),
                 (ConnectionState.DISCONNECTED, 2),
+                (ConnectionState.DISCONNECTED, 3),
+                (ConnectionState.CONNECTED, 4),
+                (ConnectionState.DISCONNECTED, 5),
+                (ConnectionState.DISCONNECTED, 6),
+                (ConnectionState.DISCONNECTED, 7),
             ],
         )

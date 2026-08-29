@@ -19,7 +19,7 @@ ARC-CMP-001:
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
-    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_candidate_and_publishes_disconnected
+    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
     - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy

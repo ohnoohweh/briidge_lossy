@@ -789,7 +789,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
-        overlayLayerTransportAdapter?.handleTransportDisconnected()
+        overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
     }
 

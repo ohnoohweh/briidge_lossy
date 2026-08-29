@@ -303,6 +303,9 @@ def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_ou
                     )
                     now = 130.0
                     let rotation = adapter.connectionRotationDue(candidateCount: 2)
+                    adapter.beginTransportEpoch(reason: "peer_candidate_rotated")
+                    now = 160.0
+                    let secondRotation = adapter.connectionRotationDue(candidateCount: 2)
                     _ = try adapter.handleTransportConnected()
                     let lifecycle = adapter.lifecycleSnapshot()
                     let payload: [String: Any] = [
@@ -310,6 +313,8 @@ def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_ou
                         "rotation_reason": rotation?.reason ?? "",
                         "rotation_epoch": rotation?.epoch ?? -1,
                         "rotation_cycle": rotation?.candidateCycle ?? -1,
+                        "second_rotation_accepted": secondRotation?.accepted ?? false,
+                        "second_rotation_epoch": secondRotation?.epoch ?? -1,
                         "restart_required": rotation?.restartRequired ?? true,
                         "state": lifecycle.state.rawValue,
                         "epoch": lifecycle.epoch,
@@ -334,6 +339,8 @@ def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_ou
         "rotation_reason": "channelmux_disconnected",
         "rotation_epoch": 0,
         "rotation_cycle": 0,
+        "second_rotation_accepted": True,
+        "second_rotation_epoch": 1,
         "restart_required": False,
         "state": "connected",
         "epoch": 1,

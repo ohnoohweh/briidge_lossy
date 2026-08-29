@@ -508,7 +508,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "peer_candidate_rotated")' in udp_owner
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
-    assert "overlayLayerTransportAdapter?.handleTransportDisconnected()" in udp_owner
+    assert "overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)" in udp_owner
     assert "runtime.handleTransportDisconnected()" in secure_adapter
 
 

@@ -557,7 +557,7 @@ REQ-LIFE-001:
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
-    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_candidate_and_publishes_disconnected
+    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
     - tests/unit/test_secure_link_psk.py::test_lifecycle_forwards_transport_epoch_and_rotation_request
     - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
     - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
@@ -583,6 +583,7 @@ REQ-LIFE-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
+    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop

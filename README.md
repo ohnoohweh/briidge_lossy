@@ -1093,6 +1093,8 @@ What the admin web shows:
 | `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
+When the outer lifecycle remains disconnected, ChannelMux rotates the lower stack every 30 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
+
 ### Compression layer
 
 Compression is now enabled by default and runs below `ChannelMux` and above secure-link/session wrappers.
@@ -1136,8 +1138,6 @@ To explicitly run without compression on both peers, set:
 | `--secure-link-mode` | `off` | Secure-link mode. Supported values are `off`, `psk`, and `cert`. |
 | `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
 | `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
-| `--secure-link-recover-after-failure` / `--no-secure-link-recover-after-failure` | `True` | Reconnect the lower client transport after an already-authenticated secure-link session fails closed. |
-| `--secure-link-recover-delay-seconds` | `30.0` | Delay before reconnecting the lower client transport for authenticated secure-link failure recovery. |
 | `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
 
 #### PSK mode parameters

@@ -2520,11 +2520,19 @@ class UdpSession(ISession):
             return ConnectionRotationResult(accepted=False, reason="transport_not_running")
         if not self._rotate_to_next_peer_candidate(count_cycle=True):
             return ConnectionRotationResult(accepted=False, reason="no_alternate_candidate")
-        self._publish_connection_lifecycle(False)
+        # Rotation starts a new connection attempt even though transport remains
+        # disconnected. The new epoch releases ChannelMux to schedule the next
+        # attempt if this candidate does not recover.
+        self._connection_lifecycle_epoch += 1
+        self._connection_lifecycle.transition(
+            ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "transport_rotation",
+        )
         return ConnectionRotationResult(
             accepted=True,
             reason=str(reason or "next_candidate"),
-            next_epoch=self._connection_lifecycle_epoch + 1,
+            next_epoch=self._connection_lifecycle_epoch,
             candidate_index=self._peer_candidate_index,
             candidate_cycle=self._peer_candidate_cycle,
             restart_required=self._peer_candidate_cycle >= 3,

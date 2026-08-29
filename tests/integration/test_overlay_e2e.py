@@ -10499,10 +10499,7 @@ def test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_rec
         bounce = None
         server_proc = client_proc = None
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
-        client_secure_args = secure_args + [
-            '--secure-link-recover-delay-seconds', '1.0',
-            '--overlay-reconnect-retry-delay-ms', '100',
-        ]
+        client_secure_args = secure_args + ['--overlay-reconnect-retry-delay-ms', '100']
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,

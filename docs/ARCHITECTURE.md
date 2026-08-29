@@ -18,7 +18,7 @@ The secure-link layer now exists as a delivered runtime slice between the transp
 
 ## Connection lifecycle propagation and rotation
 
-### Intended architecture (not yet delivered)
+### Connection lifecycle contract
 
 All client overlay stacks use one explicit, typed connection lifecycle contract.
 The contract travels upward with the wrapper stack and carries at least:
@@ -58,7 +58,8 @@ Transport (`myudp`, WebSocket, QUIC, TCP):
 - publishes `disconnected` only when that reconnect attempt fails or its local
   retry budget is exhausted
 - on a rotation request, advances to the next configured/resolved peer
-  candidate and begins a new epoch
+  candidate, begins a new disconnected epoch, and continues connection
+  attempts until a connected epoch is reported or the candidate budget ends
 
 Security:
 
@@ -111,12 +112,12 @@ layers can apply the common rotation policy.
 
 ### Current implementation boundary
 
-The runtime has typed transport lifecycle events alongside boolean compatibility
-callbacks, with transport-specific recovery paths:
+The runtime uses typed transport lifecycle events with transport-specific
+recovery paths:
 
 - `myudp`, TCP, WebSocket, QUIC, SecureLink, and Compression publish
   `ConnectionLifecycleEvent` state edges with a transport-owned epoch;
-  Runner still consumes the boolean callback
+  Runner dispatches each event to its corresponding ChannelMux
 - SecureLink converts its app-ready state to disconnected on a security
   failure, and Runner then informs ChannelMux; ChannelMux disables service
   acceptance and closes channels
@@ -125,13 +126,11 @@ callbacks, with transport-specific recovery paths:
 - SecureLink reports authentication failure as disconnected and forwards a
   rotation request only when its caller asks; ChannelMux requests one cascaded
   rotation after 30 seconds of continuous disconnection
-- WebSocket, TCP, and QUIC expose transport reconnect behavior, but `myudp`
-  lacks the standard `request_reconnect()` operation. Its peer-candidate
-  fallback is a separate startup/liveness loop and cannot satisfy the
-  SecureLink recovery request
 - ChannelMux tracks continuous outer-layer disconnection, requests one
   cascaded rotation after 30 seconds, and waits for a newer lifecycle epoch
-  before it can request another rotation
+  before it can request another rotation. An accepted myUDP rotation publishes
+  that newer disconnected epoch, so the policy continues through candidates
+  rather than remaining stalled after its first request.
 - Security reports failed authentication without scheduling a transport
   reconnect; Runner watchdog supervision is independent of Security recovery
   status
@@ -140,9 +139,8 @@ callbacks, with transport-specific recovery paths:
   app readiness, and route delayed rotation requests through each transport's
   peer-candidate reconnect path. After three exhausted candidate cycles they
   publish an explicit restart-required event for host supervision.
-- TUN packets are currently read and then dropped by ChannelMux when the
-  overlay is inactive. This protects the overlay but is weaker than the target
-  requirement to prevent TUN/probe admission before ChannelMux is connected
+- TUN ingress and internal connectivity probes are admitted only after the
+  current outer lifecycle epoch reports `connected`.
 
 SecureLink failure is observable as a disconnected lifecycle event. ChannelMux
 owns the delayed rotation decision, and Runner restarts only after transport

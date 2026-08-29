@@ -415,12 +415,12 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
         text = "\n".join(logs.output)
         self.assertIn("[MUX/STATE]", text)
-        self.assertIn("reason=on_overlay_state_disconnected", text)
-        self.assertIn("connected_arg=0", text)
+        self.assertIn("reason=on_overlay_state_connected", text)
+        self.assertIn("connected_arg=1", text)
         self.assertIn("was_overlay_connected=1", text)
-        self.assertIn("new_overlay_connected=0", text)
+        self.assertIn("new_overlay_connected=1", text)
         self.assertIn("was_accepting_enabled=1", text)
-        self.assertIn("new_accepting_enabled=0", text)
+        self.assertIn("new_accepting_enabled=1", text)
         self.assertIn("session_connected=0", text)
         self.assertIn("session_app_ready=0", text)
 
@@ -793,7 +793,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
         self.assertFalse(result['ok'])
         self.assertEqual(result['state'], 'skipped')
-        self.assertIn('inactive transport', result['detail'])
+        self.assertIn('awaits a connected lifecycle epoch', result['detail'])
         write_tun.assert_not_called()
         send_mux.assert_not_called()
 
@@ -2134,7 +2134,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
 
-    async def test_overlay_connect_requires_top_layer_app_ready(self):
+    async def test_overlay_connect_uses_reported_lifecycle_state(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=1,
             l_proto='udp',
@@ -2169,10 +2169,10 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.mux, '_start_all_services', new=AsyncMock()) as start_all, patch.object(self.mux, '_send_mux') as send_mux:
             await self.mux.on_overlay_state(True)
 
-        self.assertFalse(self.mux._overlay_connected)
-        self.assertFalse(self.mux._accepting_enabled)
-        start_all.assert_not_awaited()
-        send_mux.assert_not_called()
+        self.assertTrue(self.mux._overlay_connected)
+        self.assertTrue(self.mux._accepting_enabled)
+        start_all.assert_awaited_once()
+        send_mux.assert_called_once()
 
     async def test_overlay_connect_does_not_replay_tun_on_created_hook_for_active_tun_service(self):
         spec = ChannelMux.ServiceSpec(
@@ -2439,6 +2439,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
                     'ipv4': ['192.168.107.2'],
                     'ipv6': ['fd20:107::2'],
                     'address_count': 2,
+                    'local_virtual': False,
                     'throttle_prev_window_bytes': 0,
                     'throttle_curr_window_bytes': 0,
                     'throttle_drop_count': 0,

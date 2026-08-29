@@ -127,8 +127,6 @@ def _args(**overrides):
         secure_link_rekey_after_seconds=0.0,
         secure_link_retry_backoff_initial_ms=1000,
         secure_link_retry_backoff_max_ms=5000,
-        secure_link_recover_after_failure=True,
-        secure_link_recover_delay_seconds=30.0,
         tcp_peer=None,
     )
     base.update(overrides)

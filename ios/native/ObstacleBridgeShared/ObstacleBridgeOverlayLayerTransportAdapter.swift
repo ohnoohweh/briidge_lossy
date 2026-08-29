@@ -227,6 +227,24 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
     }
 
+    // A candidate rotation starts a new transport attempt while its reported
+    // state remains disconnected. Publish the new epoch so ChannelMux can
+    // schedule another attempt when this one does not recover.
+    func beginTransportEpoch(reason: String) {
+        secureLinkAdapter?.handleTransportDisconnected()
+        transportLifecycle = ObstacleBridgeConnectionLifecycleEvent(
+            state: .disconnected,
+            epoch: transportLifecycle.epoch + 1,
+            reason: reason,
+            changedAt: lifecycleTimeProvider()
+        )
+        if let waitingEpoch = rotationWaitingForNewEpoch,
+           transportLifecycle.epoch > waitingEpoch {
+            rotationWaitingForNewEpoch = nil
+        }
+        refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
+    }
+
     func handleTransportConnected() throws -> OutboundSnapshot {
         observeTransportState(connected: true, reason: "transport_connected")
         guard let secureLinkAdapter else {
