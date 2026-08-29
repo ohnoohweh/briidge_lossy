@@ -161,7 +161,7 @@ class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
 
 
 class StreamCandidateCycleTests(unittest.TestCase):
-    def test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_connection(self) -> None:
+    def test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery(self) -> None:
         for session in (TcpStreamSession(_tcp_args()), WebSocketSession(_ws_args()), _new_quic_session()):
             session._advance_peer_candidate(count_cycle=True)
             self.assertEqual(session._peer_candidate_index, 1)
@@ -172,6 +172,8 @@ class StreamCandidateCycleTests(unittest.TestCase):
             self.assertEqual(session._peer_candidate_cycle, 1)
 
             session._set_overlay_connected(True)
+            self.assertEqual(session._peer_candidate_cycle, 1)
+            session.reset_connection_rotation_cycles()
             self.assertEqual(session._peer_candidate_cycle, 0)
 
 

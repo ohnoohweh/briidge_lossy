@@ -2345,6 +2345,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         """Apply the outer wrapper lifecycle event to the mux connection gate."""
         self._observe_connection_epoch(event.epoch)
         await self.on_overlay_state(event.connected, epoch=event.epoch)
+        if event.connected:
+            # Only a full outer-stack recovery clears the transport's failed
+            # candidate-cycle budget. Raw transport liveness is insufficient
+            # while SecureLink or Compression still reports disconnected.
+            reset_cycles = getattr(self.session, "reset_connection_rotation_cycles", None)
+            if callable(reset_cycles):
+                reset_cycles()
         self._tun_admission_epoch = int(event.epoch) if event.connected and self._accepting_enabled else None
         if self._tun_admission_epoch is None:
             self._pause_tun_admission()

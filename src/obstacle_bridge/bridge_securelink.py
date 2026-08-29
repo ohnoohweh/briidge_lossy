@@ -1891,6 +1891,11 @@ class SecureLinkPskSession(ISession):
                 return trigger(reason)
         return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
 
+    def reset_connection_rotation_cycles(self) -> None:
+        resetter = getattr(self._inner, "reset_connection_rotation_cycles", None)
+        if callable(resetter):
+            resetter()
+
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
 

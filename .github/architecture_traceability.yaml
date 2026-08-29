@@ -20,7 +20,7 @@ ARC-CMP-001:
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_candidate_and_publishes_disconnected
-    - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_connection
+    - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser
@@ -101,6 +101,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
     - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_operator_rotation_cascades_once_and_waits_for_new_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_connected_lifecycle_resets_transport_rotation_cycles
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_requires_connected_lifecycle_epoch
     - tests/unit/test_runner_events.py::test_rotation_exhaustion_requests_restart_once
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt

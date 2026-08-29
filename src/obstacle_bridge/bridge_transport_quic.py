@@ -1253,7 +1253,6 @@ class QuicSession(ISession):
         self._overlay_connected = v
         if v:
             self._connection_lifecycle_epoch += 1
-            self._peer_candidate_cycle = 0
         self._connection_lifecycle.transition(
             ConnectionState.CONNECTED if v else ConnectionState.DISCONNECTED,
             self._connection_lifecycle_epoch,
@@ -1267,6 +1266,9 @@ class QuicSession(ISession):
         if callable(self._on_state):
             try: self._on_state(v)
             except Exception: pass
+
+    def reset_connection_rotation_cycles(self) -> None:
+        self._peer_candidate_cycle = 0
 
     async def _close_server_peer(self, peer_id: int) -> None:
         ctx = self._server_peers.pop(peer_id, None)

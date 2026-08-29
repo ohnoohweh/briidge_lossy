@@ -2690,8 +2690,6 @@ class WebSocketSession(ISession):
         if v and epoch <= 0:
             self.connection_epoch = 1
             epoch = 1
-        if v:
-            self._peer_candidate_cycle = 0
         self._connection_lifecycle.transition(
             ConnectionState.CONNECTED if v else ConnectionState.DISCONNECTED,
             epoch,
@@ -2705,6 +2703,9 @@ class WebSocketSession(ISession):
         if callable(self._on_state):
             try: self._on_state(v)
             except Exception: pass
+
+    def reset_connection_rotation_cycles(self) -> None:
+        self._peer_candidate_cycle = 0
 
 # -----------------------------------------------------------------------------
 

@@ -86,6 +86,8 @@ ChannelMux and TUN:
   `connected`
 - after receiving `disconnected` continuously for more than 30 seconds,
   `ChannelMux` requests one connection rotation through the wrapper stack
+- a raw transport `connected` event does not reset the candidate-cycle budget;
+  ChannelMux resets it only after the outer lifecycle reports `connected`
 - `TUN` ingress must not be admitted into `ChannelMux` unless ChannelMux has
   received the current `connected` state; probe generation follows the same
   gate

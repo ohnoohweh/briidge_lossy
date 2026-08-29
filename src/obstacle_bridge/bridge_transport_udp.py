@@ -2423,7 +2423,6 @@ class UdpSession(ISession):
         if connected:
             if self._connected_since_unix_ts is None:
                 self._connected_since_unix_ts = time.time()
-            self._peer_candidate_cycle = 0
         else:
             self._connected_since_unix_ts = None
 
@@ -2530,6 +2529,9 @@ class UdpSession(ISession):
             candidate_cycle=self._peer_candidate_cycle,
             restart_required=self._peer_candidate_cycle >= 3,
         )
+
+    def reset_connection_rotation_cycles(self) -> None:
+        self._peer_candidate_cycle = 0
 
     def _on_peer_send_error(self, exc: Exception) -> None:
         err = getattr(exc, "errno", None)

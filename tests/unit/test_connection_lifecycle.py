@@ -104,6 +104,8 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
         self.assertEqual(second_result.candidate_index, 0)
         self.assertEqual(second_result.candidate_cycle, 1)
         session._on_state_change(True)
+        self.assertEqual(session._peer_candidate_cycle, 1)
+        session.reset_connection_rotation_cycles()
         self.assertEqual(session._peer_candidate_cycle, 0)
 
         session._peer_candidates = [("192.0.2.10", 4433, 2)]

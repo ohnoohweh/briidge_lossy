@@ -40,6 +40,7 @@ class _FakeSession:
         self.peer_disconnect_cb = None
         self.sent = []
         self.rotation_requests = []
+        self.rotation_cycle_resets = 0
         self.connected = connected
         if connection_layers is None:
             self.connection_layers = [
@@ -89,6 +90,9 @@ class _FakeSession:
     def request_connection_rotation(self, reason=""):
         self.rotation_requests.append(str(reason))
         return {"accepted": True, "reason": str(reason)}
+
+    def reset_connection_rotation_cycles(self):
+        self.rotation_cycle_resets += 1
 
     def get_max_app_payload_size(self):
         return self.max_app_payload_size
@@ -296,6 +300,17 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux.request_connection_rotation("secure_link_material_reload")
 
         self.assertEqual(session.rotation_requests, ["secure_link_material_reload"])
+
+    def test_connected_lifecycle_resets_transport_rotation_cycles(self):
+        asyncio.run(self._test_connected_lifecycle_resets_transport_rotation_cycles())
+
+    async def _test_connected_lifecycle_resets_transport_rotation_cycles(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1, "authenticated"))
+
+        self.assertEqual(session.rotation_cycle_resets, 1)
 
     def test_tun_admission_requires_connected_lifecycle_epoch(self):
         asyncio.run(self._test_tun_admission_requires_connected_lifecycle_epoch())
