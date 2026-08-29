@@ -459,6 +459,10 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
     assert "enum ObstacleBridgeOverlayChannelCore" in core
     assert "static func sendLocalTunPacket(" in core
     assert "static func handleInboundTunMuxFrame(" in core
+    for owner in [tcp_owner, udp_owner, ws_owner, quic_owner]:
+        assert "func handleLifecycleRotationIfDue" in owner
+        assert "connectionRotationDue(candidateCount:" in owner
+        assert "lifecycle_restart_required" in owner
     assert "static func handleTCPTransportEvent(" in core
 
     for source in (tcp_owner, udp_owner, ws_owner, quic_owner):

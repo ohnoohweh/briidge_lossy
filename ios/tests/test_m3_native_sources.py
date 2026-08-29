@@ -851,6 +851,9 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "handleInboundFrame(" in runtime
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
+    assert "struct ObstacleBridgeConnectionLifecycleEvent" in runtime
+    assert "struct ObstacleBridgeConnectionRotationResult" in runtime
+    assert "func connectionRotationDue(candidateCount: Int)" in runtime
 
 
 def test_udp_overlay_codec_source_exists() -> None:
