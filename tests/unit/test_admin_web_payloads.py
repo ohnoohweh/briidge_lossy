@@ -1595,6 +1595,11 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("renderMetric('SecureLink Phase', secureLink.state", text)
                 self.assertIn("renderMetric('Reported Status', layerStatus('compression')", text)
                 self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
+                self.assertIn("const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer;", text)
+                self.assertIn("const showCompressionRow = !isListeningPeer && (compressEnabled || compressHasData);", text)
+                self.assertIn("const channelMuxMetrics = !isListeningPeer ? renderMetricStack", text)
+                self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", text)
+                self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", text)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

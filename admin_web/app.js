@@ -2927,11 +2927,11 @@ function renderPeerTable(rows) {
       || Number(compressLayer.decompress_ok_total || 0) > 0
       || Number(compressLayer.decompress_fail_total || 0) > 0
     );
-    const showCompressionRow = !isConnectingPeer && (compressEnabled || compressHasData);
+    const showCompressionRow = !isListeningPeer && (compressEnabled || compressHasData);
     const isCertMode = secureLinkMode === 'cert';
     const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
     const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
-    const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer && !isConnectingPeer;
+    const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer;
     const showMyUdpProtocolStats = isMyUdp;
     const showMyUdpDetailStats = isMyUdp;
     const stateText = String(row.state || 'unknown').toLowerCase();
@@ -2955,8 +2955,6 @@ function renderPeerTable(rows) {
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
-        renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
-        renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {
@@ -2973,7 +2971,7 @@ function renderPeerTable(rows) {
       }
       return String(layer?.state || fallback).toLowerCase();
     };
-    const channelMuxMetrics = !isListeningPeer && !isConnectingPeer ? renderMetricStack([[
+    const channelMuxMetrics = !isListeningPeer ? renderMetricStack([[
       renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
       ...peerRateMetrics(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0).slice(0, 1),
       renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
@@ -2982,13 +2980,16 @@ function renderPeerTable(rows) {
       renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
       renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
       renderMetric('TUN Open', fmtInteger(row.open_connections?.tun ?? 0)),
+    ], [
+      renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
+      renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
     ]]) : '';
-    const tunMetrics = !isListeningPeer && !isConnectingPeer ? renderMetricStack([[
+    const tunMetrics = !isListeningPeer ? renderMetricStack([[
       renderMetric('Throttle', fmtThrottleSummary(row.throttle)),
     ]]) : '';
     const connectionMetrics = renderMetricStack(connectionLines);
-    const showProtocolRow = !isListeningPeer && !isConnectingPeer;
-    const protocolBaseLines = !isListeningPeer && !isConnectingPeer ? [[
+    const showProtocolRow = !isListeningPeer;
+    const protocolBaseLines = !isListeningPeer ? [[
       renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected', { pill: true }),
       renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
       renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
@@ -3073,7 +3074,7 @@ function renderPeerTable(rows) {
       ]] : []),
     ]) : '';
     const rowSpan = 1
-      + (!isListeningPeer && !isConnectingPeer ? 2 : 0)
+      + (!isListeningPeer ? 2 : 0)
       + (showProtocolRow ? 1 : 0)
       + (showCompressionRow ? 1 : 0)
       + (showSecurityLifecycle ? 1 : 0);

@@ -178,7 +178,7 @@ Lifecycle ownership: transports, SecureLink, and Compression publish typed lifec
 
 ChannelMux admits TUN packets, TUN reader registration, and internal connectivity probes only while the current lifecycle epoch is connected. A disconnected lifecycle event withdraws admission before local packet forwarding or probe injection can enter the mux path. Runner consumes an exhausted transport candidate-cycle result and requests one process restart with the transport and cycle diagnostic reason; its watchdog is reserved for sessions that have emitted no lifecycle state.
 
-WebAdmin peer diagnostics separate connection endpoint/uptime state, protocol quality and traffic counters, ChannelMux open-channel counts, and TUN throttle state.
+WebAdmin peer diagnostics separate connection endpoint/uptime state, protocol quality and traffic counters, ChannelMux open-channel counts and candidate/restart timers, and TUN throttle state. Transport, Protocol, and ChannelMux remain visible for every non-listening peer; enabled SecureLink and Compression layers remain visible while their reported state is disconnected, failed, or reconnecting.
 
 Current lifecycle implementation note:
 
