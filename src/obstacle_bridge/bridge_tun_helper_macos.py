@@ -38,6 +38,10 @@ class DarwinTunHelperBackend:
         self._reader_task: Optional[asyncio.Task] = None
         self._read_poll_interval_s = float(read_poll_interval_s)
         self._network_applied = False
+        self._included_routes_active = False
+        self._included_routes_startup_enabled = True
+        self._suspend_calls = 0
+        self._resume_calls = 0
         self._apply_calls = 0
         self._remove_calls = 0
         self._last_apply_payload: dict[str, Any] = {}
@@ -170,6 +174,11 @@ class DarwinTunHelperBackend:
             "packets_from_runtime": self._packets_from_runtime,
             "packets_to_runtime": self._packets_to_runtime,
             "network_applied": self._network_applied,
+            "included_routes_active": self._included_routes_active,
+            "included_routes_startup_enabled": self._included_routes_startup_enabled,
+            "included_routes_toggle_supported": False,
+            "suspend_calls": self._suspend_calls,
+            "resume_calls": self._resume_calls,
             "apply_calls": self._apply_calls,
             "remove_calls": self._remove_calls,
             "last_apply_payload": dict(self._last_apply_payload),
@@ -184,6 +193,8 @@ class DarwinTunHelperBackend:
     async def apply_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._apply_calls += 1
         self._network_applied = True
+        self._included_routes_startup_enabled = bool(TunRoutingSettings.from_mapping({TUN_ROUTING_SECTION: payload.get("tun_routing") or {}}).enabled_on_startup)
+        self._included_routes_active = self._network_applied
         self._last_apply_payload = dict(payload or {})
         self._clear_last_failure()
         ifname = str(self._ifname or payload.get("ifname") or "utun")
@@ -215,6 +226,7 @@ class DarwinTunHelperBackend:
     async def remove_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._remove_calls += 1
         self._network_applied = False
+        self._included_routes_active = False
         self._last_remove_payload = dict(payload or {})
         self._clear_last_failure()
         ifname = str(self._ifname or payload.get("ifname") or "utun")
@@ -241,6 +253,9 @@ class DarwinTunHelperBackend:
             "last_failure": dict(self._last_failure),
         })
         return snapshot
+
+    async def set_tun_enabled(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raise RuntimeError("TUN enable/suspend is not supported by the darwin-native helper backend")
 
     async def stop(self) -> None:
         self._stopped = True

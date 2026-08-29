@@ -280,6 +280,55 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
             ],
         )
 
+    async def test_apply_network_can_start_with_included_routes_suspended_and_toggle_later(self) -> None:
+        backend = LinuxTunHelperBackend()
+        commands: list[tuple[tuple[str, ...], bool]] = []
+
+        def _fake_run(args, check, capture_output, text):
+            self.assertEqual(args[0], "ip")
+            commands.append((tuple(args[1:]), bool(check)))
+            stdout = ""
+            if tuple(args[1:]) == ("-4", "route", "show", "default"):
+                stdout = "default via 172.20.10.1 dev wlp0s20f3 src 172.20.10.4\n"
+            if tuple(args[1:]) == ("-6", "route", "show", "default"):
+                stdout = "default via fe80::1 dev wlp0s20f3\n"
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        payload = {
+            "ifname": "obtun12",
+            "tun_routing": {
+                "tunnel_address": "198.18.63.2",
+                "tunnel_prefix": 24,
+                "tunnel_gateway": "198.18.63.1",
+                "included_routes": ["198.18.64.0/24"],
+                "enabled_on_startup": False,
+            },
+        }
+
+        with mock.patch.object(helper_linux.subprocess, "run", side_effect=_fake_run):
+            applied = await backend.apply_network(payload)
+            suspended_snapshot = await backend.snapshot()
+            enabled = await backend.set_tun_enabled({"ifname": "obtun12", "enabled": True, "tun_routing": payload["tun_routing"]})
+            resumed_snapshot = await backend.snapshot()
+            disabled = await backend.set_tun_enabled({"ifname": "obtun12", "enabled": False, "tun_routing": payload["tun_routing"]})
+
+        self.assertTrue(applied["applied"])
+        self.assertFalse(suspended_snapshot["included_routes_active"])
+        self.assertTrue(enabled["included_routes_active"])
+        self.assertEqual(resumed_snapshot["applied_ipv4_routes"], ["198.18.64.0/24"])
+        self.assertFalse(disabled["included_routes_active"])
+        self.assertEqual(
+            commands,
+            [
+                (("-4", "addr", "replace", "198.18.63.2/24", "dev", "obtun12"), True),
+                (("-4", "route", "show", "default"), False),
+                (("-6", "route", "show", "default"), False),
+                (("-4", "route", "replace", "198.18.64.0/24", "via", "198.18.63.1", "dev", "obtun12", "onlink"), True),
+                (("-4", "route", "del", "198.18.64.0/24", "via", "198.18.63.1", "dev", "obtun12"), False),
+                (("-4", "route", "del", "198.18.64.0/24", "dev", "obtun12"), False),
+            ],
+        )
+
     async def test_apply_network_records_failure_and_rolls_back_partial_state(self) -> None:
         backend = LinuxTunHelperBackend()
         commands: list[tuple[tuple[str, ...], bool]] = []

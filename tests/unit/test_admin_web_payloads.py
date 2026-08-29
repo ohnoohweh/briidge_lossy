@@ -92,6 +92,9 @@ class _RunnerStub:
                     "firewall_manager": "",
                     "applied_firewall_rules": [],
                     "network_applied": False,
+                    "included_routes_active": True,
+                    "included_routes_startup_enabled": True,
+                    "included_routes_toggle_supported": True,
                 },
             },
         }
@@ -1104,6 +1107,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["tun_helper"]["runtime"]["ifname"], "obtun0")
         self.assertEqual(payload["tun_helper"]["runtime"]["packets_from_runtime"], 12)
         self.assertEqual(payload["tun_helper"]["runtime"]["last_failure"]["stage"], "dns_apply")
+        self.assertTrue(payload["tun_control"]["enabled"])
+        self.assertTrue(payload["tun_control"]["startup_enabled"])
+        self.assertTrue(payload["tun_control"]["supported"])
         self.assertEqual(payload["tun_helper"]["recovery"], {})
         self.assertTrue(payload["tun_helper"]["last_repair"]["attempted"])
         self.assertFalse(payload["tun_helper"]["last_repair"]["stale_state_remaining"])

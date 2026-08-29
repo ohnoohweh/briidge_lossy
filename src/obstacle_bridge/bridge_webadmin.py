@@ -551,6 +551,10 @@ class AdminWebUI:
                 await self._handle_tun_routing_status(writer)
                 return
 
+            if path == "/api/tun-routing/control":
+                await self._handle_tun_routing_control(writer, method, headers, body)
+                return
+
             if path == "/api/tun-helper/repair":
                 await self._handle_tun_helper_repair(writer, method, headers)
                 return
@@ -1013,6 +1017,7 @@ class AdminWebUI:
             "tun": tun_rows,
             "shared_tun": shared_rows,
             "tun_helper": dict(status_snapshot.get("tun_helper") or {}),
+            "tun_control": {},
             "summary": {
                 "snapshot_marker": self.TUN_ROUTING_SUMMARY_MARKER,
                 "tun_total": len(tun_rows),
@@ -1054,6 +1059,12 @@ class AdminWebUI:
             "milestone": "C",
         }
         payload.update(tun_routing_effective)
+        helper_runtime = dict((payload.get("tun_helper") or {}).get("runtime") or {})
+        payload["tun_control"] = {
+            "enabled": bool(helper_runtime.get("included_routes_active")),
+            "startup_enabled": bool(helper_runtime.get("included_routes_startup_enabled", tun_cfg.enabled_on_startup)),
+            "supported": bool(helper_runtime.get("included_routes_toggle_supported")),
+        }
         return payload
 
     @staticmethod
@@ -1104,6 +1115,41 @@ class AdminWebUI:
         payload = self._build_tun_routing_payload()
         self._log_api_response("/api/tun-routing/status", 200, payload)
         await self._send_json(writer, 200, payload)
+
+    async def _handle_tun_routing_control(self, writer, method, headers, body):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+
+        token = getattr(self.args, "admin_web_token", "") or ""
+        if token:
+            auth = headers.get("authorization", "")
+            expected = f"Bearer {token}"
+            if auth != expected:
+                await self._send(writer, 403, b"Forbidden", "text/plain; charset=utf-8")
+                return
+
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        if "enabled" not in req:
+            await self._send_json(writer, 400, {"ok": False, "error": "enabled is required"})
+            return
+        try:
+            payload = self._call_runner_coro(self.runner.request_tun_enabled(bool(req.get("enabled"))), timeout=2.0)
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
+        code = 200 if bool(payload.get("ok")) else 409
+        self._log_api_response(
+            "/api/tun-routing/control",
+            code,
+            payload,
+            summary=f"ok={payload.get('ok')} enabled={payload.get('enabled')}",
+        )
+        await self._send_json(writer, code, payload)
 
     @staticmethod
     def _sanitize_onboarding_services(value: Any) -> list[dict]:

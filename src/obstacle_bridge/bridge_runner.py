@@ -1453,6 +1453,40 @@ class Runner:
             "status": self._tun_helper_snapshot(),
         }
 
+    async def request_tun_enabled(self, enabled: bool) -> dict:
+        helper = self._tun_helper_snapshot()
+        runtime = dict(helper.get("runtime") or {})
+        if not bool(helper.get("enabled")):
+            return {"ok": False, "reason": "tun_helper_disabled"}
+        if not bool(helper.get("apply_network")):
+            return {"ok": False, "reason": "helper_apply_network_disabled"}
+        if not bool(runtime.get("included_routes_toggle_supported")):
+            return {"ok": False, "reason": "toggle_unsupported_for_helper_backend"}
+        if not bool(runtime.get("network_applied")):
+            return {"ok": False, "reason": "tun_network_not_applied"}
+
+        payload = {
+            "enabled": bool(enabled),
+            "ifname": str(runtime.get("ifname") or ""),
+            "tun_routing": dict(vars(TunRoutingSettings.from_mapping(vars(self.args)))),
+        }
+        if self._tun_helper_backend is not None:
+            setter = getattr(self._tun_helper_backend, "set_tun_enabled", None)
+            if not callable(setter):
+                return {"ok": False, "reason": "toggle_unsupported_for_helper_backend"}
+            updated = await setter(payload)
+        elif self._tun_helper_client is not None:
+            updated = await self._tun_helper_client.set_tun_enabled(payload)
+        else:
+            return {"ok": False, "reason": "tun_helper_unavailable"}
+
+        self._tun_helper_runtime_snapshot = dict(updated or {})
+        return {
+            "ok": True,
+            "enabled": bool(updated.get("included_routes_active")),
+            "status": self._tun_helper_snapshot(),
+        }
+
     async def probe_tun_connectivity_verification(
         self,
         *,

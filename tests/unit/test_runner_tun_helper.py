@@ -9,6 +9,7 @@ from unittest import mock
 
 from obstacle_bridge.bridge import Runner, SessionMetrics, build_runtime_args_from_config
 import obstacle_bridge.bridge_runner as bridge_runner
+from obstacle_bridge.bridge_tun_helper_linux import LinuxTunHelperInMemoryBackend
 
 
 class _FakeSession:
@@ -120,6 +121,33 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
              mock.patch.object(bridge_runner.Runner, "build_sessions_from_overlay", return_value=[]):
             with self.assertRaisesRegex(RuntimeError, "supported on Linux/macOS, and on Windows only for the windows-native backend"):
                 await runner.start()
+
+    async def test_runner_can_toggle_tun_enabled_state_through_helper_backend(self):
+        args = self._helper_args()
+        runner = Runner(args)
+        backend = LinuxTunHelperInMemoryBackend()
+        backend.local_open_tun({"ifname": "obtun0", "mtu": 1400})
+        backend.local_apply_network(
+            {
+                "ifname": "obtun0",
+                "tun_routing": {
+                    "enabled_on_startup": False,
+                    "included_routes": ["0.0.0.0/0"],
+                },
+            }
+        )
+        runner._tun_helper_backend = backend
+        runner._tun_helper_runtime_snapshot = backend.local_snapshot()
+
+        enabled = await runner.request_tun_enabled(True)
+        disabled = await runner.request_tun_enabled(False)
+
+        self.assertTrue(enabled["ok"])
+        self.assertTrue(enabled["enabled"])
+        self.assertTrue(enabled["status"]["runtime"]["included_routes_active"])
+        self.assertTrue(disabled["ok"])
+        self.assertFalse(disabled["enabled"])
+        self.assertFalse(disabled["status"]["runtime"]["included_routes_active"])
 
     async def test_runner_allows_windows_native_helper_mode_past_platform_gate(self):
         args = self._helper_args()

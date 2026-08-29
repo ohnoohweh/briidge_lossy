@@ -1893,6 +1893,28 @@ async function repairTunHelperState() {
   }
 }
 
+async function toggleTunRoutingEnabled() {
+  const btn = document.getElementById('tunRoutingToggleBtn');
+  const currentLabel = String(document.getElementById('tunRoutingEnabledState')?.textContent || '').trim().toLowerCase();
+  const nextEnabled = currentLabel !== 'yes';
+  try {
+    if (btn) btn.disabled = true;
+    const r = await apiFetch('/api/tun-routing/control', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: nextEnabled }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(String(j.error || j.reason || ('HTTP ' + r.status)));
+    }
+    await loadTunRouting();
+  } catch (e) {
+    window.alert(`TUN toggle failed: ${e}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 async function requestSecureLinkRekey(peerId) {
   const normalizedPeerId = String(peerId || '').trim();
   if (!normalizedPeerId) {
@@ -3218,6 +3240,11 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
   setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
+  const tunControl = j.tun_control || {};
+  const tunEnabled = Boolean(tunControl.enabled);
+  const tunToggleSupported = Boolean(tunControl.supported);
+  setText('tunRoutingEnabledState', tunEnabled ? 'yes' : 'no');
+  setText('tunRoutingStartupState', Boolean(tunControl.startup_enabled) ? 'enabled' : 'suspended');
   const verification = j.verification || {};
   const configVerification = verification.tun_config || {};
   const peerVerification = verification.tun_connectivity || {};
@@ -3292,6 +3319,12 @@ function applyTunRoutingDoc(j) {
     );
     helperRepairBtn.classList.toggle('hidden', !helperRepairAvailable);
     helperRepairBtn.disabled = !helperRepairAvailable;
+  }
+  const tunToggleBtn = document.getElementById('tunRoutingToggleBtn');
+  if (tunToggleBtn instanceof HTMLButtonElement) {
+    tunToggleBtn.classList.toggle('hidden', !tunToggleSupported);
+    tunToggleBtn.disabled = !tunToggleSupported;
+    tunToggleBtn.textContent = tunEnabled ? 'Suspend TUN' : 'Enable TUN';
   }
 }
 
@@ -4774,6 +4807,7 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('tunRoutingToggleBtn')?.addEventListener('click', toggleTunRoutingEnabled);
 document.getElementById('tunHelperRepairBtn')?.addEventListener('click', repairTunHelperState);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);

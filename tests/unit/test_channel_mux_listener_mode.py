@@ -820,6 +820,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertFalse(settings.enable_tcpmss)
         self.assertFalse(settings.enable_tun_tcpdump)
         self.assertEqual(settings.tun_tcpdump_pcap_path, "")
+        self.assertTrue(settings.enabled_on_startup)
         self.assertFalse(settings.shared_tun_disable_outgoing_normalization)
         self.assertFalse(settings.shared_tun_disable_inflow_filter)
         self.assertFalse(settings.shared_tun_disable_outflow_filter)
@@ -844,11 +845,22 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertTrue(settings.enable_tcpmss)
         self.assertTrue(settings.enable_tun_tcpdump)
         self.assertEqual(settings.tun_tcpdump_pcap_path, "/tmp/shared-tun-test.pcap")
+        self.assertTrue(settings.enabled_on_startup)
         self.assertTrue(settings.shared_tun_disable_outgoing_normalization)
         self.assertTrue(settings.shared_tun_disable_inflow_filter)
         self.assertTrue(settings.shared_tun_disable_outflow_filter)
         self.assertTrue(settings.disable_channelmux_inflow_throttle)
         self.assertTrue(settings.shared_tun_disable_scoped_throttle)
+
+    def test_tun_routing_enabled_on_startup_parses_from_mapping(self):
+        settings = TunRoutingSettings.from_mapping(
+            {
+                "TUN_routing": {
+                    "enabled_on_startup": "false",
+                }
+            }
+        )
+        self.assertFalse(settings.enabled_on_startup)
 
     def test_tun_routing_legacy_scoped_throttle_flag_enables_global_channelmux_disable(self):
         settings = TunRoutingSettings.from_mapping(

@@ -138,6 +138,12 @@ class TunHelperClient:
         self._last_runtime_snapshot.update(removed)
         return removed
 
+    async def set_tun_enabled(self, payload: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        message = await self.request("SET_TUN_ENABLED", payload or {})
+        updated = dict(message.payload)
+        self._last_runtime_snapshot.update(updated)
+        return updated
+
     async def write_packet(self, packet: bytes) -> None:
         if self._writer is None:
             raise ConnectionError("TUN helper client is not connected")

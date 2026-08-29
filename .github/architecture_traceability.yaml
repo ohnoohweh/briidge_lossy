@@ -138,6 +138,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected
     - tests/unit/test_channel_mux_listener_mode.py::test_tunnel_hook_env_defaults_follow_tun_routing_config
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_routing_explicit_empty_gateways_are_preserved
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_routing_enabled_on_startup_parses_from_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_structured_tun_service_allows_omitted_mtu
     - tests/unit/test_channel_mux_listener_mode.py::test_from_args_defaults_omitted_tun_mtu_from_tun_routing
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_supports_excluded_route_programming
@@ -251,6 +252,8 @@ ARC-CMP-004:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
   unit_tests:
+    - tests/unit/test_runner_tun_helper.py::test_runner_can_toggle_tun_enabled_state_through_helper_backend
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop

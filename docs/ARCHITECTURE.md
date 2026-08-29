@@ -16,6 +16,179 @@ The current runtime can be understood in seven layers:
 
 The secure-link layer now exists as a delivered runtime slice between the transport/session layer and the compression/reliability path. The delivered modes now include both the Phase 1 PSK slice and the Phase 2 certificate-based trust-anchor / certificate-validation slice, so the boundary itself is no longer only a reservation.
 
+## Connection lifecycle propagation and rotation
+
+### Intended architecture (not yet delivered)
+
+All client overlay stacks use one explicit, typed connection lifecycle contract.
+The contract travels upward with the wrapper stack and carries at least:
+
+- `state`: `disconnected` or `connected`
+- `epoch`: a monotonically increasing connection epoch owned by the transport
+- `reason`: a stable failure or transition category suitable for diagnostics and policy
+- `changed_at`: the transition timestamp
+
+The effective stack and propagation direction are:
+
+```text
+Transport -> Security -> Compression -> ChannelMux
+```
+
+The control direction is the reverse and must never skip a layer:
+
+```text
+ChannelMux -> Compression -> Security -> Transport
+```
+
+`ChannelMux` owns the policy decision to request a connection rotation. Each
+wrapper owns forwarding that request to its immediate inner layer, so the
+request follows the complete stack even where a wrapper has no rotation work of
+its own. The transport is the only layer that chooses the next resolved peer
+candidate and starts a new connection epoch.
+
+#### Layer rules
+
+Transport (`myudp`, WebSocket, QUIC, TCP):
+
+- starts in `disconnected`
+- publishes `connected` once its initial connection is established
+- handles a recoverable transport loss locally, such as a closed WebSocket or
+  TCP stream, without immediately changing the state reported upward
+- remains `connected` while its local reconnect loop is still making progress
+- publishes `disconnected` only when that reconnect attempt fails or its local
+  retry budget is exhausted
+- on a rotation request, advances to the next configured/resolved peer
+  candidate and begins a new epoch
+
+Security:
+
+- starts in `disconnected`
+- publishes `connected` only after the initial secure-link handshake succeeds
+- remains `disconnected` while the initial handshake is incomplete or fails
+- remains `connected` during a rekey; a rekey is not a transport disconnect
+- publishes `disconnected` when secure-link enters `failed`
+- forwards a rotation request to the transport after clearing security state
+  for the next transport epoch
+
+Compression:
+
+- is transparent and stateless for connection lifecycle purposes
+- mirrors the immediately lower layer's lifecycle state and epoch upward
+- treats a compression/decompression failure as `disconnected` for the current
+  epoch and drops affected traffic
+- may return to `connected` only after the lower layer reports `connected` in
+  a newer epoch
+- forwards rotation requests to Security
+
+ChannelMux and TUN:
+
+- `ChannelMux` admits or starts services only while the outer lifecycle state is
+  `connected`
+- after receiving `disconnected` continuously for more than 30 seconds,
+  `ChannelMux` requests one connection rotation through the wrapper stack
+- `TUN` ingress must not be admitted into `ChannelMux` unless ChannelMux has
+  received the current `connected` state; probe generation follows the same
+  gate
+- a newly reported `connected` state with a new epoch causes the normal mux
+  resynchronization and service reopening path
+
+#### Candidate budget and restart
+
+The transport maintains an ordered list of configured and resolved peer
+candidates. One rotation advances to the next candidate. After all candidates
+have been attempted three complete times without a successful connected epoch,
+the Runner requests an ObstacleBridge process restart. The cycle counter is
+transport-owned and is reset only after a successful connected epoch. The
+Runner performs the restart; neither SecureLink nor ChannelMux directly exits
+or restarts the process.
+
+This policy applies uniformly to `myudp`, WebSocket, QUIC, and TCP. A transport
+may recover a short-lived break internally, but it must ultimately report a
+definitive `disconnected` lifecycle event when it cannot recover, so the upper
+layers can apply the common rotation policy.
+
+### Former/current implementation (legacy behavior)
+
+As of 2026-08-29, the runtime does not yet implement the lifecycle contract
+above. It has partial boolean state propagation and transport-specific recovery
+paths:
+
+- state notifications are `connected: bool` callbacks without a common reason,
+  retry status, or transport epoch contract
+- SecureLink converts its app-ready state to disconnected on a security
+  failure, and Runner then informs ChannelMux; ChannelMux disables service
+  acceptance and closes channels
+- Compression forwards the lower callback but its snapshot state is
+  `enabled`/`passthrough`, not the common connection state; decompression
+  errors are counted and dropped without a lifecycle transition
+- SecureLink currently owns a delayed recovery attempt and invokes
+  `request_reconnect()` itself, rather than ChannelMux requesting a cascaded
+  rotation
+- WebSocket, TCP, and QUIC expose transport reconnect behavior, but `myudp`
+  lacks the standard `request_reconnect()` operation. Its peer-candidate
+  fallback is a separate startup/liveness loop and cannot satisfy the
+  SecureLink recovery request
+- the existing client restart watchdog can defer restart while SecureLink says
+  recovery is scheduled or started; it has no shared candidate-cycle counter
+  and no three-cycle restart rule
+- TUN packets are currently read and then dropped by ChannelMux when the
+  overlay is inactive. This protects the overlay but is weaker than the target
+  requirement to prevent TUN/probe admission before ChannelMux is connected
+
+The observed SecureLink `failed`/`recovery reconnect unavailable` condition is
+an example of this legacy split: Security requests a reconnect, but the active
+`myudp` transport does not provide the requested operation, and the watchdog
+does not own a definitive fallback decision.
+
+### Rework work packages
+
+1. Define the shared lifecycle API. Add a transport-agnostic lifecycle event,
+   state enum, epoch, transition reason, and rotation-result contract to the
+   session interfaces. Make state snapshots and WebAdmin expose the same
+   normalized fields. Add contract tests that every session wrapper preserves
+   event ordering and epochs.
+
+2. Make each transport conform. Implement the shared reconnect/rotation API in
+   `myudp`, WebSocket, QUIC, and TCP. Move peer candidate resolution, next-peer
+   selection, three-cycle accounting, and reset-on-success behavior behind the
+   transport contract. Add deterministic tests for candidate order, DNS
+   alternatives, recovery success, budget exhaustion, and emitted epochs.
+
+3. Rework SecureLink lifecycle ownership. Replace its standalone delayed
+   recovery policy with state/epoch handling driven by the inner transport and
+   cascaded rotation requests. Keep rekey connected, make terminal security
+   failure disconnected, and ensure a new transport epoch clears only the
+   correct security state. Add regression coverage for the lifecycle-invariant
+   failure seen in client logs.
+
+4. Make Compression a lifecycle-correct transparent wrapper. Forward lifecycle
+   events and rotation requests through the immediate inner layer. Record a
+   compression error as disconnected for its current epoch and reject further
+   traffic until a newer connected epoch arrives. Add compression error and
+   epoch-transition tests.
+
+5. Put the 30-second policy in ChannelMux. Track continuous outer-layer
+   disconnection, request exactly one cascaded rotation after 30 seconds, and
+   wait for a new epoch before another request. Remove duplicate reconnect
+   ownership from Security and avoid Runner watchdog suppression based on a
+   stale SecureLink recovery flag.
+
+6. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
+   entering ChannelMux while its lifecycle is disconnected. Resume only after
+   the connected event for the current epoch, and add tests proving no TUN
+   frame/probe is admitted during a failed or rotating connection.
+
+7. Simplify Runner restart supervision. Runner consumes the transport's
+   candidate-cycle exhaustion result and requests process restart exactly once.
+   Retain a separate safety watchdog only for missing lifecycle events, with a
+   bounded timeout and explicit diagnostic reason. Add end-to-end tests for
+   three unsuccessful cycles leading to restart.
+
+8. Complete parity, observability, and migration. Apply the same observable
+   lifecycle contract to the Swift macOS/iOS implementations, expose current
+   state/epoch/candidate/cycle/reason in WebAdmin, and update requirements,
+   traceability, and operational documentation alongside the implementation.
+
 ## Stable component IDs
 
 The following component IDs are intended to stay stable so requirements, tests, and future design notes can point to architecture elements without depending on section wording.

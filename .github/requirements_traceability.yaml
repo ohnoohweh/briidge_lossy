@@ -804,6 +804,13 @@ REQ-LIFE-011:
   unit_tests:
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_provider_owns_restart_without_app_process
 
+REQ-LIFE-012:
+  unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_routing_enabled_on_startup_parses_from_mapping
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later
+    - tests/unit/test_runner_tun_helper.py::test_runner_can_toggle_tun_enabled_state_through_helper_backend
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+
 REQ-LST-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
