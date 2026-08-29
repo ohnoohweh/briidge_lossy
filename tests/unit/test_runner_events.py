@@ -9,10 +9,20 @@ import unittest
 from unittest import mock
 
 from obstacle_bridge.bridge import Runner, RESTART_EXIT_CODE_DELAYED, RESTART_EXIT_CODE_IMMEDIATE
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionRotationResult
 import obstacle_bridge.bridge_runner as bridge_runner
 
 
 class RunnerEventBindingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_rotation_exhaustion_requests_restart_once(self):
+        runner = Runner.__new__(Runner)
+        runner._rotation_restart_requested = False
+        reasons = []
+        runner.request_restart = lambda reason="": reasons.append(reason)
+        exhausted = ConnectionRotationResult(accepted=True, candidate_cycle=3, restart_required=True)
+        runner._on_connection_rotation_result("tcp", exhausted)
+        runner._on_connection_rotation_result("tcp", exhausted)
+        self.assertEqual(reasons, ["transport_candidate_cycles_exhausted transport=tcp cycle=3"])
     def _make_args(self):
         return argparse.Namespace(
             no_dashboard=True,

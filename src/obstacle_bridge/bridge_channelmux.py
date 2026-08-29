@@ -613,6 +613,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._overlay_connected: bool = self._session_overlay_inflow_allowed()
         self._accepting_enabled: bool = self._overlay_connected
         self._connection_rotation_task: Optional[asyncio.Task] = None
+        self._on_connection_rotation_result = None
         self._connection_rotation_wait_epoch: Optional[int] = None
         self._connection_lifecycle_epoch: int = 0
         # Epoch zero represents an already-ready session before its callback is
@@ -2313,12 +2314,17 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     self._connection_rotation_wait_epoch = requested_epoch
                     result = request("channelmux_disconnected")
                     self.log.warning("[MUX] requested connection rotation after %.1fs epoch=%s result=%r", self.CONNECTION_ROTATION_DELAY_S, requested_epoch, result)
+                    if callable(self._on_connection_rotation_result):
+                        self._on_connection_rotation_result(result)
             except asyncio.CancelledError:
                 return
             finally:
                 self._connection_rotation_task = None
 
         self._connection_rotation_task = self.loop.create_task(_rotate_after_disconnect())
+
+    def set_on_connection_rotation_result(self, callback) -> None:
+        self._on_connection_rotation_result = callback
 
     def _observe_connection_epoch(self, epoch: int) -> None:
         observed_epoch = max(0, int(epoch))

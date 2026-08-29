@@ -211,8 +211,10 @@ class Runner:
         self._shutdown_exit_code: Optional[int] = None
         self._shutdown_reason: str = ""
         self._restart_reason: str = ""
+        self._rotation_restart_requested = False
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
+        self._last_connection_lifecycle_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -1051,6 +1053,9 @@ class Runner:
                 on_local_tx_bytes=self.stats.on_app_tx_bytes
             )
             setattr(mux, "_runner_sync_diag_cb", self.record_sync_activity)
+            mux.set_on_connection_rotation_result(
+                lambda result, transport_name=transport_name: self._on_connection_rotation_result(transport_name, result)
+            )
             mux._process_shared_tun_registry = shared_tun_registry
             session.set_on_peer_set(
                 lambda host, port, mux=mux: (
@@ -1303,6 +1308,7 @@ class Runner:
             pass
 
     def _on_connection_lifecycle(self, transport_name: str, session: ISession, mux: "ChannelMux", event) -> None:
+        self._last_connection_lifecycle_monotonic = time.monotonic()
         self.log.debug(
             "[SERVER] lifecycle transport=%s session=%x state=%s epoch=%s reason=%s",
             transport_name, id(session), event.state.value, int(event.epoch), event.reason,
@@ -1311,6 +1317,13 @@ class Runner:
             asyncio.get_running_loop().create_task(mux.on_connection_lifecycle(event))
         except RuntimeError:
             pass
+
+    def _on_connection_rotation_result(self, transport_name: str, result) -> None:
+        if not bool(getattr(result, "restart_required", False)) or self._rotation_restart_requested:
+            return
+        self._rotation_restart_requested = True
+        cycle = getattr(result, "candidate_cycle", None)
+        self.request_restart(reason=f"transport_candidate_cycles_exhausted transport={transport_name} cycle={cycle}")
 
     def _restart_requires_delay(self) -> bool:
         raw = str(getattr(self.args, "overlay_transport", "") or "")
@@ -2817,13 +2830,16 @@ class Runner:
                 down_for = time.monotonic() - self._last_disconnected_monotonic
                 if down_for < timeout_s:
                     continue
+                lifecycle_age = time.monotonic() - float(self._last_connection_lifecycle_monotonic or 0.0)
+                if self._last_connection_lifecycle_monotonic is not None and lifecycle_age < timeout_s:
+                    continue
 
                 self.log.warning(
                     "[RUNNER] client disconnected for %.1fs (threshold %.1fs); requesting restart",
                     down_for,
                     timeout_s,
                 )
-                self.request_restart(reason=f"client_restart_watchdog down_for={down_for:.3f}s timeout={timeout_s:.3f}s")
+                self.request_restart(reason=f"client_restart_watchdog_missing_lifecycle down_for={down_for:.3f}s lifecycle_age={lifecycle_age:.3f}s timeout={timeout_s:.3f}s")
                 return
 
         except asyncio.CancelledError:

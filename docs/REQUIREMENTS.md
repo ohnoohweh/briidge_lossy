@@ -176,7 +176,7 @@ Current implementation note:
 
 Lifecycle migration note: Python transports, SecureLink, and Compression publish typed lifecycle-event snapshots and report candidate-cycle exhaustion without restarting themselves. SecureLink reports authentication failure without initiating transport recovery, and ChannelMux requests one cascaded rotation after 30 seconds of continuous disconnection. Runner restart supervision remains separate work.
 
-ChannelMux admits TUN packets, TUN reader registration, and internal connectivity probes only while the current lifecycle epoch is connected. A disconnected lifecycle event withdraws admission before local packet forwarding or probe injection can enter the mux path.
+ChannelMux admits TUN packets, TUN reader registration, and internal connectivity probes only while the current lifecycle epoch is connected. A disconnected lifecycle event withdraws admission before local packet forwarding or probe injection can enter the mux path. Runner consumes an exhausted transport candidate-cycle result and requests one process restart with the transport and cycle diagnostic reason.
 
 Current lifecycle implementation note:
 
