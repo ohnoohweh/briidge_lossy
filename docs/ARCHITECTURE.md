@@ -112,16 +112,16 @@ layers can apply the common rotation policy.
 The runtime has typed transport lifecycle events alongside boolean compatibility
 callbacks, with transport-specific recovery paths:
 
-- `myudp`, TCP, WebSocket, and QUIC publish `ConnectionLifecycleEvent` state
-  edges with a transport-owned epoch; wrappers and Runner still consume the
-  boolean callback and do not yet propagate the typed event end to end
+- `myudp`, TCP, WebSocket, QUIC, and SecureLink publish
+  `ConnectionLifecycleEvent` state edges with a transport-owned epoch;
+  Compression and Runner still consume the boolean callback
 - SecureLink converts its app-ready state to disconnected on a security
   failure, and Runner then informs ChannelMux; ChannelMux disables service
   acceptance and closes channels
 - Compression forwards the lower callback but its snapshot state is
   `enabled`/`passthrough`, not the common connection state; decompression
   errors are counted and dropped without a lifecycle transition
-- SecureLink currently owns a delayed recovery attempt and invokes
+- SecureLink still owns a delayed recovery attempt and invokes
   `request_reconnect()` itself, rather than ChannelMux requesting a cascaded
   rotation
 - WebSocket, TCP, and QUIC expose transport reconnect behavior, but `myudp`

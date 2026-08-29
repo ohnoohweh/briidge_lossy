@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 from .bridge_transport_common import _has_configured_overlay_peer
 
 _bridge = export_bridge_globals(globals())
@@ -429,6 +430,8 @@ class SecureLinkPskSession(ISession):
         self._outer_on_peer_disconnect: Optional[Callable[[int], None]] = None
         self._outer_on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._outer_on_transport_epoch_change: Optional[Callable[[int], None]] = None
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
+        self._connection_lifecycle_epoch = 0
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
         self._mode = str(getattr(args, "secure_link_mode", "off") or "off").strip().lower()
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
@@ -1050,6 +1053,11 @@ class SecureLinkPskSession(ISession):
         if connected == self._last_connected:
             return
         self._last_connected = connected
+        self._connection_lifecycle.transition(
+            ConnectionState.CONNECTED if connected else ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "security_authenticated" if connected else "security_disconnected",
+        )
         if callable(self._outer_on_state):
             try:
                 self._outer_on_state(connected)
@@ -1856,12 +1864,16 @@ class SecureLinkPskSession(ISession):
 
     def set_on_app_payload(self, cb): self._outer_on_app = cb
     def set_on_state_change(self, cb): self._outer_on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._connection_lifecycle.set_callback(cb)
     def set_on_peer_rx(self, cb): self._outer_on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._outer_on_peer_tx = cb
     def set_on_peer_set(self, cb): self._outer_on_peer_set = cb
     def set_on_peer_disconnect(self, cb): self._outer_on_peer_disconnect = cb
     def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
+
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
 
     def reset_sender(self) -> None:
         resetter = getattr(self._inner, "reset_sender", None)
@@ -1908,6 +1920,9 @@ class SecureLinkPskSession(ISession):
             setter(True)
         self._inner.set_on_app_payload(self._on_inner_payload)
         self._inner.set_on_state_change(self._on_inner_state_change)
+        lifecycle_setter = getattr(self._inner, "set_on_connection_lifecycle", None)
+        if callable(lifecycle_setter):
+            lifecycle_setter(self._on_inner_connection_lifecycle)
         self._inner.set_on_peer_rx(self._outer_on_peer_rx)
         self._inner.set_on_peer_tx(self._outer_on_peer_tx)
         self._inner.set_on_peer_set(self._outer_on_peer_set)
@@ -1979,6 +1994,13 @@ class SecureLinkPskSession(ISession):
             with contextlib.suppress(Exception):
                 return bool(trigger())
         return False
+
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        trigger = getattr(self._inner, "request_connection_rotation", None)
+        if callable(trigger):
+            with contextlib.suppress(Exception):
+                return trigger(reason)
+        return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
 
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
@@ -2567,6 +2589,14 @@ class SecureLinkPskSession(ISession):
             if self._maybe_begin_client_recovery_handshake_after_reconnect():
                 return
             self._maybe_begin_client_handshake()
+
+    def _on_inner_connection_lifecycle(self, event) -> None:
+        self._connection_lifecycle_epoch = int(event.epoch)
+        if not bool(event.connected):
+            self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, event.reason)
+            self._on_inner_state_change(False)
+            return
+        self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, "security_handshaking")
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:
         self._cancel_client_retry_task(clear_schedule=False)

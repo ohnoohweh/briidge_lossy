@@ -555,6 +555,7 @@ ARC-CMP-006:
   # plus cert local-identity reload reconnect/re-authentication at the
   # secure-link layer boundary.
   unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_lifecycle_forwards_transport_epoch_and_rotation_request
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_explicit_transport_epoch_reset_forwards_to_inner_and_clears_client_state

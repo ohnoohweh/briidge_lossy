@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from obstacle_bridge.bridge import ChaCha20Poly1305, SecureLinkPskSession
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionRotationResult, ConnectionState
 
 
 class FakeInnerSession:
@@ -18,6 +19,7 @@ class FakeInnerSession:
         self._on_peer_disconnect = None
         self._on_app_from_peer_bytes = None
         self._on_transport_epoch_change = None
+        self._on_connection_lifecycle = None
         self.sent = []
         self.reconnect_requests = 0
         self._passthrough_enabled = False
@@ -48,6 +50,9 @@ class FakeInnerSession:
             self._on_state(False)
         return True
 
+    def request_connection_rotation(self, reason=""):
+        return ConnectionRotationResult(accepted=True, reason=str(reason), candidate_index=1, candidate_cycle=1)
+
     def send_app(self, payload: bytes, peer_id=None):
         self.sent.append((bytes(payload), peer_id))
         if self._peer is None or not callable(self._peer._on_app):
@@ -63,6 +68,7 @@ class FakeInnerSession:
 
     def set_on_app_payload(self, cb): self._on_app = cb
     def set_on_state_change(self, cb): self._on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._on_connection_lifecycle = cb
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set = cb
@@ -106,6 +112,10 @@ class FakeInnerSession:
         if callable(self._on_transport_epoch_change):
             self._on_transport_epoch_change(epoch)
 
+    def emit_lifecycle(self, state: ConnectionState, epoch: int, reason: str = ""):
+        if callable(self._on_connection_lifecycle):
+            self._on_connection_lifecycle(ConnectionLifecycleEvent(state=state, epoch=epoch, reason=reason))
+
 
 def _args(**overrides):
     base = dict(
@@ -126,6 +136,24 @@ def _args(**overrides):
 
 
 class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lifecycle_forwards_transport_epoch_and_rotation_request(self):
+        inner = FakeInnerSession()
+        session = SecureLinkPskSession(inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        events = []
+        session.set_on_connection_lifecycle(events.append)
+
+        await session.start()
+        inner.emit_lifecycle(ConnectionState.CONNECTED, 4, "transport_connected")
+        inner.emit_lifecycle(ConnectionState.DISCONNECTED, 4, "transport_disconnected")
+        result = session.request_connection_rotation("channelmux_disconnected")
+        await session.stop()
+
+        self.assertEqual(
+            [(event.state, event.epoch) for event in events],
+            [(ConnectionState.DISCONNECTED, 4)],
+        )
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.reason, "channelmux_disconnected")
     @staticmethod
     def _pack_mux(chan_id: int, data: bytes, *, counter: int = 1) -> bytes:
         from obstacle_bridge.bridge import ChannelMux
