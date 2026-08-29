@@ -539,6 +539,25 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
             return
         }
         flushDueSecureLinkFramesIfNeeded()
+        handleLifecycleRotationIfDue()
+    }
+
+    private func handleLifecycleRotationIfDue() {
+        guard let adapter = overlayLayerTransportAdapter,
+              let result = adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
+        else {
+            return
+        }
+        eventSink?("quic_overlay_lifecycle_rotation", [
+            "epoch": result.epoch,
+            "candidate_cycle": result.candidateCycle,
+            "restart_required": result.restartRequired,
+        ])
+        guard !result.restartRequired else {
+            eventSink?("quic_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
+            return
+        }
+        handleDisconnected(schedule: true)
     }
 
     private func flushDueSecureLinkFramesIfNeeded() {

@@ -1131,6 +1131,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private func sendRTTPingAndReschedule(generation: Int) {
         guard started, overlayConnected, websocketTransportGeneration == generation else { return }
         flushDueSecureLinkFramesIfNeeded()
+        handleLifecycleRotationIfDue()
         let txNS = DispatchTime.now().uptimeNanoseconds
         do {
             let message = try overlayRuntime.encodeClientPing(txNS: txNS, echoNS: lastPeerPingTxNS)
@@ -1168,6 +1169,28 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         } catch {
             eventSink?("ws_overlay_secure_link_due_frames_failed", ["error": error.localizedDescription])
         }
+    }
+
+    private func handleLifecycleRotationIfDue() {
+        guard let adapter = overlayLayerTransportAdapter,
+              let result = adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
+        else {
+            return
+        }
+        eventSink?("ws_overlay_lifecycle_rotation", [
+            "epoch": result.epoch,
+            "candidate_cycle": result.candidateCycle,
+            "restart_required": result.restartRequired,
+        ])
+        guard !result.restartRequired else {
+            eventSink?("ws_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
+            return
+        }
+        websocketTask?.cancel(with: .goingAway, reason: nil)
+        websocketConnection?.cancel()
+        overlayConnected = false
+        resetOverlayTransportEpoch()
+        scheduleReconnect()
     }
 
     private func recordRTTPong(echoTxNS: UInt64) {

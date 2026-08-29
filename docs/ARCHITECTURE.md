@@ -135,6 +135,11 @@ callbacks, with transport-specific recovery paths:
 - Security reports failed authentication without scheduling a transport
   reconnect; Runner watchdog supervision is independent of Security recovery
   status
+- Swift macOS/iOS overlay owners share the same lifecycle event/epoch model at
+  their transport-wrapper boundary, gate ChannelMux and TUN ingress on outer
+  app readiness, and route delayed rotation requests through each transport's
+  peer-candidate reconnect path. After three exhausted candidate cycles they
+  publish an explicit restart-required event for host supervision.
 - TUN packets are currently read and then dropped by ChannelMux when the
   overlay is inactive. This protects the overlay but is weaker than the target
   requirement to prevent TUN/probe admission before ChannelMux is connected
@@ -153,9 +158,10 @@ emitted lifecycle events.
 
 ### Rework work packages
 
-1. Swift macOS/iOS lifecycle parity package. Apply the lifecycle contract,
-   candidate-cycle restart result, TUN admission gate, and peer-view ownership
-   model to the native Swift macOS/iOS implementations. Validate on macOS.
+1. Swift macOS/iOS lifecycle parity package is delivered for the shared
+   transport-wrapper runtime: typed lifecycle events, candidate-cycle restart
+   results, TUN admission gating, and peer-layer lifecycle diagnostics are
+   applied across native UDP, TCP, WebSocket, and QUIC owners.
 
 
 ## Stable component IDs

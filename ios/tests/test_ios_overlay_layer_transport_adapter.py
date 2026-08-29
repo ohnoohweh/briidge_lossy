@@ -281,5 +281,64 @@ def test_ios_overlay_layer_transport_adapter_distinguishes_inflow_from_app_ready
         "secure_app_ready": False,
         "preserve_connected": True,
         "app_ready": False,
-        "inflow_allowed": True,
+        "inflow_allowed": False,
+    }
+
+
+def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect(tmp_path: Path) -> None:
+    source_path = tmp_path / "OverlayLayerTransportLifecycleProbe.swift"
+    binary_path = tmp_path / "overlay-layer-transport-lifecycle-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct OverlayLayerTransportLifecycleProbe {
+                static func main() throws {
+                    var now = 100.0
+                    let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                        connectionRotationDelay: 30.0,
+                        lifecycleTimeProvider: { now }
+                    )
+                    _ = adapter.connectionLayersSnapshot(
+                        transport: "tcp",
+                        transportConnected: false
+                    )
+                    now = 130.0
+                    let rotation = adapter.connectionRotationDue(candidateCount: 2)
+                    _ = try adapter.handleTransportConnected()
+                    let lifecycle = adapter.lifecycleSnapshot()
+                    let payload: [String: Any] = [
+                        "rotation_accepted": rotation?.accepted ?? false,
+                        "rotation_reason": rotation?.reason ?? "",
+                        "rotation_epoch": rotation?.epoch ?? -1,
+                        "rotation_cycle": rotation?.candidateCycle ?? -1,
+                        "restart_required": rotation?.restartRequired ?? true,
+                        "state": lifecycle.state.rawValue,
+                        "epoch": lifecycle.epoch,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_overlay_layer_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    assert json.loads(completed.stdout) == {
+        "rotation_accepted": True,
+        "rotation_reason": "channelmux_disconnected",
+        "rotation_epoch": 0,
+        "rotation_cycle": 0,
+        "restart_required": False,
+        "state": "connected",
+        "epoch": 1,
     }

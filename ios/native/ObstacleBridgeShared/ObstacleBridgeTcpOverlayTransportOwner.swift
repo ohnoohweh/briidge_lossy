@@ -768,6 +768,29 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             return
         }
         flushDueSecureLinkFramesIfNeeded()
+        handleLifecycleRotationIfDue()
+    }
+
+    private func handleLifecycleRotationIfDue() {
+        guard let adapter = overlayLayerTransportAdapter,
+              let result = adapter.connectionRotationDue(candidateCount: peerCandidates.count)
+        else {
+            return
+        }
+        eventSink?("tcp_overlay_lifecycle_rotation", [
+            "epoch": result.epoch,
+            "candidate_cycle": result.candidateCycle,
+            "restart_required": result.restartRequired,
+        ])
+        guard !result.restartRequired else {
+            eventSink?("tcp_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
+            return
+        }
+        overlayConnection?.cancel()
+        overlayConnection = nil
+        overlayConnected = false
+        resetOverlayTransportEpoch()
+        scheduleReconnect()
     }
 
     private func flushDueSecureLinkFramesIfNeeded() {
