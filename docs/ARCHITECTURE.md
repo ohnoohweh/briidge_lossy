@@ -127,9 +127,12 @@ callbacks, with transport-specific recovery paths:
   lacks the standard `request_reconnect()` operation. Its peer-candidate
   fallback is a separate startup/liveness loop and cannot satisfy the
   SecureLink recovery request
-- the existing client restart watchdog can defer restart while SecureLink says
-  recovery is scheduled or started; it has no shared candidate-cycle counter
-  and no three-cycle restart rule
+- ChannelMux tracks continuous outer-layer disconnection, requests one
+  cascaded rotation after 30 seconds, and waits for a newer lifecycle epoch
+  before it can request another rotation
+- Security reports failed authentication without scheduling a transport
+  reconnect; Runner watchdog supervision is independent of Security recovery
+  status
 - TUN packets are currently read and then dropped by ChannelMux when the
   overlay is inactive. This protects the overlay but is weaker than the target
   requirement to prevent TUN/probe admission before ChannelMux is connected
@@ -148,24 +151,18 @@ supervision remains unfinished.
 
 ### Rework work packages
 
-1. Put the 30-second policy in ChannelMux. Track continuous outer-layer
-   disconnection, request exactly one cascaded rotation after 30 seconds, and
-   wait for a new epoch before another request. Remove duplicate reconnect
-   ownership from Security and avoid Runner watchdog suppression based on a
-   stale SecureLink recovery flag.
-
-2. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
+1. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
    entering ChannelMux while its lifecycle is disconnected. Resume only after
    the connected event for the current epoch, and add tests proving no TUN
    frame/probe is admitted during a failed or rotating connection.
 
-3. Simplify Runner restart supervision. Runner consumes the transport's
+2. Simplify Runner restart supervision. Runner consumes the transport's
    candidate-cycle exhaustion result and requests process restart exactly once.
    Retain a separate safety watchdog only for missing lifecycle events, with a
    bounded timeout and explicit diagnostic reason. Add end-to-end tests for
    three unsuccessful cycles leading to restart.
 
-4. Complete parity, observability, and migration. Apply the same observable
+3. Complete parity, observability, and migration. Apply the same observable
    lifecycle contract to the Swift macOS/iOS implementations, expose current
    state/epoch/candidate/cycle/reason in WebAdmin, and update requirements,
    traceability, and operational documentation alongside the implementation.

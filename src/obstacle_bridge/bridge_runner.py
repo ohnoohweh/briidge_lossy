@@ -1065,6 +1065,12 @@ class Runner:
                 lambda epoch, transport_name=transport_name, session=session, mux=mux:
                     self._on_transport_epoch_change(transport_name, session, mux, epoch)
             )
+            set_lifecycle = getattr(session, "set_on_connection_lifecycle", None)
+            if callable(set_lifecycle):
+                set_lifecycle(
+                    lambda event, transport_name=transport_name, session=session, mux=mux:
+                    self._on_connection_lifecycle(transport_name, session, mux, event)
+                )
             await self._await_with_async_diag(f"{transport_name}.session.start", session.start())
             await self._await_with_async_diag(f"{transport_name}.mux.start", mux.start())
 
@@ -1264,7 +1270,7 @@ class Runner:
             mux = self._muxes[idx]
         except Exception:
             mux = None
-        if mux:
+        if mux and not callable(getattr(session, "set_on_connection_lifecycle", None)):
             try:
                 asyncio.get_running_loop().create_task(mux.on_overlay_state(self._session_app_ready(session)))
             except RuntimeError:
@@ -1293,6 +1299,16 @@ class Runner:
                 resetter()
         try:
             asyncio.get_running_loop().create_task(mux.on_transport_epoch_change(epoch))
+        except RuntimeError:
+            pass
+
+    def _on_connection_lifecycle(self, transport_name: str, session: ISession, mux: "ChannelMux", event) -> None:
+        self.log.debug(
+            "[SERVER] lifecycle transport=%s session=%x state=%s epoch=%s reason=%s",
+            transport_name, id(session), event.state.value, int(event.epoch), event.reason,
+        )
+        try:
+            asyncio.get_running_loop().create_task(mux.on_connection_lifecycle(event))
         except RuntimeError:
             pass
 
@@ -2057,15 +2073,6 @@ class Runner:
             and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
         ):
             return {"restart_in_seconds": None}
-        if (
-            bool(secure_link_status.get("recovery_enabled"))
-            and (
-                secure_link_status.get("next_recovery_reconnect_unix_ts") is not None
-                or str(secure_link_status.get("last_event") or "").strip().lower()
-                in {"recovery_reconnect_scheduled", "recovery_reconnect_started"}
-            )
-        ):
-            return {"restart_in_seconds": None}
         disconnected_since = getattr(self, "_last_disconnected_monotonic", None)
         if disconnected_since is None:
             return {"restart_in_seconds": timeout_s}
@@ -2802,16 +2809,6 @@ class Runner:
                     and str(secure_link_status.get("failure_reason") or "").strip().lower() == "revoked_serial"
                 ):
                     continue
-                if (
-                    bool(secure_link_status.get("recovery_enabled"))
-                    and (
-                        secure_link_status.get("next_recovery_reconnect_unix_ts") is not None
-                        or str(secure_link_status.get("last_event") or "").strip().lower()
-                        in {"recovery_reconnect_scheduled", "recovery_reconnect_started"}
-                    )
-                ):
-                    continue
-
                 # No disconnect timestamp yet -> initialize defensively
                 if self._last_disconnected_monotonic is None:
                     self._last_disconnected_monotonic = time.monotonic()

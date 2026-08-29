@@ -16,6 +16,7 @@ from obstacle_bridge.bridge_tun_ping import (
     probe_payload,
 )
 from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionState
 
 
 class _FakeSession:
@@ -262,6 +263,26 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         await asyncio.sleep(0.06)
 
         self.assertEqual(session.rotation_requests, [])
+
+    def test_rotation_waits_for_new_lifecycle_epoch(self):
+        asyncio.run(self._test_rotation_waits_for_new_lifecycle_epoch())
+
+    async def _test_rotation_waits_for_new_lifecycle_epoch(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.0
+
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "test"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "still_down"))
+        await asyncio.sleep(0)
+        self.assertEqual(session.rotation_requests, ["channelmux_disconnected"])
+
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 2, "new_epoch"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(session.rotation_requests, ["channelmux_disconnected", "channelmux_disconnected"])
 
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
         mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())

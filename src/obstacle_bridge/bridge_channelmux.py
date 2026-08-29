@@ -23,6 +23,7 @@ else:
     _bridge_tun_platform = None
 
 from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
+from .bridge_connection_lifecycle import ConnectionLifecycleEvent
 from .bridge_proxy_common import open_http_connect_tunnel, resolve_proxy_endpoint
 from .bridge_tun_ping import (
     PROBE_KIND_GLOBAL,
@@ -612,6 +613,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._overlay_connected: bool = self._session_overlay_inflow_allowed()
         self._accepting_enabled: bool = self._overlay_connected
         self._connection_rotation_task: Optional[asyncio.Task] = None
+        self._connection_rotation_wait_epoch: Optional[int] = None
+        self._connection_lifecycle_epoch: int = 0
 
         # Services
         self._local_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
@@ -2241,7 +2244,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     return False
         return bool(self._session_app_ready())
 
-    async def on_overlay_state(self, connected: bool):
+    async def on_overlay_state(self, connected: bool, *, epoch: Optional[int] = None):
+        if epoch is not None:
+            self._observe_connection_epoch(epoch)
         was_connected = self._overlay_connected
         was_accepting = self._accepting_enabled
         effective_connected = bool(self._session_overlay_inflow_allowed())
@@ -2284,18 +2289,27 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             task.cancel()
 
     def _schedule_connection_rotation(self) -> None:
+        if self._connection_rotation_wait_epoch is not None:
+            return
         if self._connection_rotation_task is not None and not self._connection_rotation_task.done():
             return
+
+        requested_epoch = self._connection_lifecycle_epoch
 
         async def _rotate_after_disconnect() -> None:
             try:
                 await asyncio.sleep(self.CONNECTION_ROTATION_DELAY_S)
                 if self._overlay_connected:
                     return
+                if self._connection_rotation_wait_epoch is not None:
+                    return
                 request = getattr(self.session, "request_connection_rotation", None)
                 if callable(request):
+                    # A rotation is consumed by this epoch. Only a new lifecycle
+                    # epoch may arm another request after a persistent outage.
+                    self._connection_rotation_wait_epoch = requested_epoch
                     result = request("channelmux_disconnected")
-                    self.log.warning("[MUX] requested connection rotation after %.1fs result=%r", self.CONNECTION_ROTATION_DELAY_S, result)
+                    self.log.warning("[MUX] requested connection rotation after %.1fs epoch=%s result=%r", self.CONNECTION_ROTATION_DELAY_S, requested_epoch, result)
             except asyncio.CancelledError:
                 return
             finally:
@@ -2303,7 +2317,21 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
         self._connection_rotation_task = self.loop.create_task(_rotate_after_disconnect())
 
+    def _observe_connection_epoch(self, epoch: int) -> None:
+        observed_epoch = max(0, int(epoch))
+        if observed_epoch <= self._connection_lifecycle_epoch:
+            return
+        self._connection_lifecycle_epoch = observed_epoch
+        if self._connection_rotation_wait_epoch is not None and observed_epoch > self._connection_rotation_wait_epoch:
+            self._connection_rotation_wait_epoch = None
+
+    async def on_connection_lifecycle(self, event: ConnectionLifecycleEvent) -> None:
+        """Apply the outer wrapper lifecycle event to the mux connection gate."""
+        self._observe_connection_epoch(event.epoch)
+        await self.on_overlay_state(event.connected, epoch=event.epoch)
+
     async def on_transport_epoch_change(self, epoch: int) -> None:
+        self._observe_connection_epoch(epoch)
         self.log.info("[MUX] transport epoch changed -> %s (hard resync)", epoch)
         was_connected = self._overlay_connected
         was_accepting = self._accepting_enabled
