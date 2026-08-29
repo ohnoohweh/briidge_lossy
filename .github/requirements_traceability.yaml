@@ -556,6 +556,8 @@ REQ-LIFE-001:
     - tests/unit/test_connection_lifecycle.py::test_event_normalizes_legacy_connected_snapshot
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
+    - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
+    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_candidate_and_publishes_disconnected
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_transport_epoch_reset_clears_receiver_gap_state
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_peer_protocol_epoch_reset_drops_queued_datagrams_and_control_state

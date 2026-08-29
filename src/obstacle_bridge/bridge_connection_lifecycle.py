@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 import time
-from typing import Any, Mapping, Optional
+from typing import Any, Callable, Mapping, Optional
 
 
 class ConnectionState(str, Enum):
@@ -73,3 +73,30 @@ class ConnectionRotationResult:
             "candidate_index": self.candidate_index,
             "candidate_cycle": self.candidate_cycle,
         }
+
+
+class ConnectionLifecycleEmitter:
+    """Publishes ordered lifecycle edges while retaining the latest snapshot."""
+
+    def __init__(self) -> None:
+        self._callback: Optional[Callable[[ConnectionLifecycleEvent], None]] = None
+        self._event = ConnectionLifecycleEvent(state=ConnectionState.DISCONNECTED, epoch=0)
+
+    @property
+    def event(self) -> ConnectionLifecycleEvent:
+        return self._event
+
+    def set_callback(self, callback: Optional[Callable[[ConnectionLifecycleEvent], None]]) -> None:
+        self._callback = callback
+
+    def transition(self, state: ConnectionState, epoch: int, reason: str = "") -> ConnectionLifecycleEvent:
+        event = ConnectionLifecycleEvent(state=state, epoch=epoch, reason=reason)
+        if event.state == self._event.state and event.epoch == self._event.epoch:
+            return self._event
+        self._event = event
+        if callable(self._callback):
+            self._callback(event)
+        return event
+
+    def snapshot(self) -> dict[str, Any]:
+        return self._event.as_snapshot()

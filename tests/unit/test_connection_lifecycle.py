@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import types
 import unittest
 
 from obstacle_bridge.bridge_connection_lifecycle import (
@@ -7,6 +9,7 @@ from obstacle_bridge.bridge_connection_lifecycle import (
     ConnectionRotationResult,
     ConnectionState,
 )
+from obstacle_bridge.bridge import UdpSession
 
 
 class ConnectionLifecycleContractTests(unittest.TestCase):
@@ -51,4 +54,48 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
                 "candidate_index": 1,
                 "candidate_cycle": 2,
             },
+        )
+
+    def test_myudp_emits_ordered_lifecycle_events_with_one_epoch(self) -> None:
+        session = UdpSession(argparse.Namespace(max_inflight=200))
+        events = []
+        session.set_on_connection_lifecycle(events.append)
+
+        session._on_state_change(True)
+        session._on_state_change(False)
+
+        self.assertEqual(
+            [(event.state, event.epoch) for event in events],
+            [(ConnectionState.CONNECTED, 1), (ConnectionState.DISCONNECTED, 1)],
+        )
+        self.assertEqual(session.get_connection_lifecycle_snapshot()["epoch"], 1)
+
+    def test_myudp_rotation_advances_candidate_and_publishes_disconnected(self) -> None:
+        session = UdpSession(argparse.Namespace(max_inflight=200))
+        events = []
+        session.set_on_connection_lifecycle(events.append)
+        session._peer_candidates = [
+            ("192.0.2.10", 4433, 2),
+            ("2001:db8::10", 4433, 10),
+        ]
+        session._peer_candidate_index = 0
+        session.inner_session = types.SimpleNamespace(reset_transport_epoch=lambda: None)
+        peer_port = types.SimpleNamespace(set_peer=lambda _peer: None)
+        proto_runtime = types.SimpleNamespace(
+            _conn_evt=types.SimpleNamespace(clear=lambda: None),
+            _conn_state=True,
+            _next_probe_due_ns=1,
+            _send_idle_probe=lambda initial: None,
+        )
+        session._proto = types.SimpleNamespace(send_port=peer_port, _proto_rt=proto_runtime)
+        session._publish_connection_lifecycle(True)
+
+        result = session.request_connection_rotation("channelmux_disconnected")
+
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.candidate_index, 1)
+        self.assertEqual(result.next_epoch, 2)
+        self.assertEqual(
+            [(event.state, event.epoch) for event in events],
+            [(ConnectionState.CONNECTED, 1), (ConnectionState.DISCONNECTED, 1)],
         )

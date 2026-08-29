@@ -107,14 +107,14 @@ may recover a short-lived break internally, but it must ultimately report a
 definitive `disconnected` lifecycle event when it cannot recover, so the upper
 layers can apply the common rotation policy.
 
-### Former/current implementation (legacy behavior)
+### Current implementation boundary
 
-As of 2026-08-29, the runtime does not yet implement the lifecycle contract
-above. It has partial boolean state propagation and transport-specific recovery
-paths:
+The runtime has typed transport lifecycle events alongside boolean compatibility
+callbacks, with transport-specific recovery paths:
 
-- state notifications are `connected: bool` callbacks without a common reason,
-  retry status, or transport epoch contract
+- `myudp`, TCP, WebSocket, and QUIC publish `ConnectionLifecycleEvent` state
+  edges with a transport-owned epoch; wrappers and Runner still consume the
+  boolean callback and do not yet propagate the typed event end to end
 - SecureLink converts its app-ready state to disconnected on a security
   failure, and Runner then informs ChannelMux; ChannelMux disables service
   acceptance and closes channels
@@ -136,61 +136,55 @@ paths:
   requirement to prevent TUN/probe admission before ChannelMux is connected
 
 The observed SecureLink `failed`/`recovery reconnect unavailable` condition is
-an example of this legacy split: Security requests a reconnect, but the active
+an example of this split: Security requests a reconnect, but the active
 `myudp` transport does not provide the requested operation, and the watchdog
 does not own a definitive fallback decision.
 
-Work package 1 foundation status: the Python runtime now declares a shared
-`ConnectionLifecycleEvent` and `ConnectionRotationResult` contract at the
-`ISession` boundary. Existing transports and wrappers still emit the legacy
-boolean callback; work packages 2 through 5 must adopt the new callback and
-rotation methods before this contract becomes the active runtime behavior.
+Shared lifecycle contract: `ISession` defines `ConnectionLifecycleEvent` and
+`ConnectionRotationResult`; all Python transports expose the lifecycle callback
+and normalized lifecycle snapshot, and accept a transport-local rotation
+request. Wrapper adoption, candidate-cycle accounting, and restart supervision
+remain unfinished.
 
 ### Rework work packages
 
-1. Complete shared lifecycle API adoption. The transport-agnostic event, state
-   enum, epoch, transition reason, and rotation-result types are declared at
-   the Python session interface. Make state snapshots and WebAdmin expose the
-   same normalized fields, and add contract tests that every session wrapper
-   emits ordered events and preserves epochs.
+1. Complete transport rotation conformance. Move peer candidate resolution,
+   next-peer selection, three-cycle accounting, and reset-on-success behavior
+   behind the shared rotation contract for `myudp`, WebSocket, QUIC, and TCP.
+   Add deterministic tests for candidate order, DNS alternatives, recovery
+   success, and budget exhaustion.
 
-2. Make each transport conform. Implement the shared reconnect/rotation API in
-   `myudp`, WebSocket, QUIC, and TCP. Move peer candidate resolution, next-peer
-   selection, three-cycle accounting, and reset-on-success behavior behind the
-   transport contract. Add deterministic tests for candidate order, DNS
-   alternatives, recovery success, budget exhaustion, and emitted epochs.
-
-3. Rework SecureLink lifecycle ownership. Replace its standalone delayed
+2. Rework SecureLink lifecycle ownership. Replace its standalone delayed
    recovery policy with state/epoch handling driven by the inner transport and
    cascaded rotation requests. Keep rekey connected, make terminal security
    failure disconnected, and ensure a new transport epoch clears only the
    correct security state. Add regression coverage for the lifecycle-invariant
    failure seen in client logs.
 
-4. Make Compression a lifecycle-correct transparent wrapper. Forward lifecycle
+3. Make Compression a lifecycle-correct transparent wrapper. Forward lifecycle
    events and rotation requests through the immediate inner layer. Record a
    compression error as disconnected for its current epoch and reject further
    traffic until a newer connected epoch arrives. Add compression error and
    epoch-transition tests.
 
-5. Put the 30-second policy in ChannelMux. Track continuous outer-layer
+4. Put the 30-second policy in ChannelMux. Track continuous outer-layer
    disconnection, request exactly one cascaded rotation after 30 seconds, and
    wait for a new epoch before another request. Remove duplicate reconnect
    ownership from Security and avoid Runner watchdog suppression based on a
    stale SecureLink recovery flag.
 
-6. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
+5. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
    entering ChannelMux while its lifecycle is disconnected. Resume only after
    the connected event for the current epoch, and add tests proving no TUN
    frame/probe is admitted during a failed or rotating connection.
 
-7. Simplify Runner restart supervision. Runner consumes the transport's
+6. Simplify Runner restart supervision. Runner consumes the transport's
    candidate-cycle exhaustion result and requests process restart exactly once.
    Retain a separate safety watchdog only for missing lifecycle events, with a
    bounded timeout and explicit diagnostic reason. Add end-to-end tests for
    three unsuccessful cycles leading to restart.
 
-8. Complete parity, observability, and migration. Apply the same observable
+7. Complete parity, observability, and migration. Apply the same observable
    lifecycle contract to the Swift macOS/iOS implementations, expose current
    state/epoch/candidate/cycle/reason in WebAdmin, and update requirements,
    traceability, and operational documentation alongside the implementation.

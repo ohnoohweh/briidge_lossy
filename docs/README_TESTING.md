@@ -41,7 +41,7 @@ This guide should describe the current testing model, not act as a dated event l
 The active testing focus on this branch is:
 
 - overlay reconnect and stale-transport recovery on Python and Swift paths
-- typed Python lifecycle-contract normalization and rotation-result metadata, before transport adoption
+- typed Python lifecycle-contract normalization, transport rotation, and myUDP event-order/epoch emission
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
 - configuration and hook-contract derivation from `TUN_routing`

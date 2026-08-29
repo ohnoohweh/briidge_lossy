@@ -174,7 +174,7 @@ Current implementation note:
 - `REQ-LIFE-011`: On iOS, operator-triggered restart and reconnect actions exposed through Admin Web, including restart-after-save flows, shall continue to work when the Network Extension is running without the ObstacleBridge app process. The restart owner for that runtime shall therefore be the extension itself rather than the foreground app.
 - `REQ-LIFE-012`: When helper-owned TUN network application is active on a supported backend, WebAdmin shall expose a TUN / Routing control that suspends or enables only the configured included routes. Suspending shall remove those included routes while retaining the interface, tunnel addresses, excluded routes, DNS, and firewall state; enabling shall reapply the configured included routes. `TUN_routing.enabled_on_startup` shall control whether included routes are applied during startup. The control shall report its current and startup state, and shall be unavailable on a backend that cannot safely provide route-only toggling.
 
-Lifecycle migration note: the Python session boundary now declares typed lifecycle-event and rotation-result contracts. Existing transports continue to use the legacy boolean callback until the planned transport-conformance work package adopts the new contract; this declaration does not change current reconnect behavior.
+Lifecycle migration note: Python transports publish typed lifecycle-event snapshots and retain the boolean callback for current wrapper and Runner compatibility. Wrapper propagation and transport rotation policy remain separate unfinished work; this event contract does not change current reconnect behavior.
 
 Current lifecycle implementation note:
 

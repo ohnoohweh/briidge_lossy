@@ -19,6 +19,7 @@ from .bridge_transport_common import (
     _resolve_cli_peer,
     _strip_brackets,
 )
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 
 _bridge = resolve_bridge_module()
 
@@ -141,6 +142,8 @@ class QuicSession(ISession):
         self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
+        self._connection_lifecycle_epoch = 0
 
         # Addressing / role
         self._listen_host, self._listen_port = _strip_brackets(args.quic_bind), int(args.quic_own_port)
@@ -225,6 +228,7 @@ class QuicSession(ISession):
     # ---- ISession callbacks ----
     def set_on_app_payload(self, cb): self._on_app = cb
     def set_on_state_change(self, cb): self._on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._connection_lifecycle.set_callback(cb)
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
@@ -329,6 +333,9 @@ class QuicSession(ISession):
             "connected": connected,
             "app_ready": connected,
         }]
+
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
 
     # ---- metrics (for dashboard) ----
     def get_metrics(self) -> SessionMetrics:
@@ -727,6 +734,18 @@ class QuicSession(ISession):
         self._set_overlay_connected(False)
         self._start_reconnect_loop()
         return True
+
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        if not self._peer_tuple or not self._run_flag:
+            return ConnectionRotationResult(accepted=False, reason="transport_not_running")
+        self._advance_peer_candidate()
+        accepted = self.request_reconnect()
+        return ConnectionRotationResult(
+            accepted=accepted,
+            reason=str(reason or "next_candidate"),
+            next_epoch=self._connection_lifecycle_epoch + 1 if accepted else None,
+            candidate_index=self._peer_candidate_index if accepted else None,
+        )
 
     async def _connect_to(self, host: str, port: int) -> None:
         """
@@ -1224,6 +1243,13 @@ class QuicSession(ISession):
         if self._overlay_connected == v:
             return
         self._overlay_connected = v
+        if v:
+            self._connection_lifecycle_epoch += 1
+        self._connection_lifecycle.transition(
+            ConnectionState.CONNECTED if v else ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "transport_connected" if v else "transport_disconnected",
+        )
         mode = "RTT" if self._peer_tuple else "peer-count"
         self._log.info(f"[QUIC-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} ({mode})")
         if v and callable(self._on_peer_set_cb):
