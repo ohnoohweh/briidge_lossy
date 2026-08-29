@@ -1651,6 +1651,14 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let configuredEndpoint = adminPeerEndpoint(runtimeConfig: runtimeConfig)
         let transportRuntime = adminTransportRuntimeSnapshot(bridgeSnapshot: bridgeSnapshot)
         let resolvedPeer = adminResolvedPeerSnapshot(transport: transport, transportRuntime: transportRuntime)
+        let connectionLayers = ObstacleBridgeAdminSnapshotSupport.connectionLayers(
+            from: transportRuntime,
+            preferredKind: transport
+        )
+        let protocolConnected = connectionLayers.first(where: {
+            ObstacleBridgeRuntimeConfig.stringValue(from: $0["layer"])?.lowercased() == "transport"
+        })?["connected"] as? Bool
+            ?? adminBoolValue(transportRuntime["overlay_connected"])
         let myudpRuntime = transportRuntime["myudp"] as? [String: Any] ?? [:]
         let protocolStats = ObstacleBridgeAdminSnapshotSupport.selectedProtocolStats(
             from: transportRuntime,
@@ -1661,6 +1669,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             "id": 1,
             "transport": transport,
             "state": state,
+            "connected": protocolConnected,
             "listen": NSNull(),
             "peer": resolvedPeer ?? configuredEndpoint,
             "resolved_peer": resolvedPeer ?? NSNull(),
@@ -1685,10 +1694,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             ),
             "traffic": traffic,
             "open_connections": openConnections,
-            "connection_layers": ObstacleBridgeAdminSnapshotSupport.connectionLayers(
-                from: transportRuntime,
-                preferredKind: transport
-            ),
+            "connection_layers": connectionLayers,
             "secure_link": adminSecureLinkSnapshot(state: state),
             "compress_layer": adminCompressLayerSnapshot() ?? NSNull(),
             "throttle": ObstacleBridgeAdminSnapshotSupport.peerThrottleSnapshot(peerID: 1, connectionsSnapshot: connections),

@@ -697,6 +697,8 @@ def test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fiel
 
     assert '"next_address_attempt_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
     assert '"restart_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
+    assert "let protocolConnected = connectionLayers.first(where:" in host_runner
+    assert '"connected": protocolConnected' in host_runner
     for source in transport_sources:
         assert "private var nextReconnectAttemptDeadlineNS: UInt64?" in source
         assert '"next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull()' in source

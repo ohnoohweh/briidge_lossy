@@ -49,6 +49,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgeTcpOverlayTransportOwner" in provider
     assert "ObstacleBridgeWebSocketOverlayTransportOwner" in provider
     assert "ObstacleBridgeQuicOverlayTransportOwner" in provider
+    assert "let protocolConnected = connectionLayers.first(where:" in provider
+    assert '"connected": protocolConnected' in provider
     assert "swift_simple_udp" in provider
     assert "swift_udp" in provider
     assert "packetflow_connector_mode_selected" in provider

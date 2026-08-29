@@ -1313,6 +1313,11 @@ final class ObstacleBridgeHostRunner {
             from: transportRuntime,
             preferredKind: transport
         )
+        let protocolConnected = connectionLayers.first(where: {
+            Self.stringValue(from: $0["layer"])?.lowercased() == "transport"
+        })?["connected"] as? Bool
+            ?? Self.boolValue(from: transportRuntime["overlay_connected"])
+            ?? overlayConnected
         let stateText: String
         if overlayConnected {
             stateText = "connected"
@@ -1325,6 +1330,7 @@ final class ObstacleBridgeHostRunner {
             "id": 1,
             "transport": transport,
             "state": stateText,
+            "connected": protocolConnected,
             "listen": NSNull(),
             "peer": resolvedPeer ?? configuredPeerEndpoint,
             "resolved_peer": resolvedPeer ?? NSNull(),
