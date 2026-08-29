@@ -579,8 +579,6 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--udp-peer-port` | `443` | peer overlay port |
 | `--peer-resolve-family` | `prefer-ipv6` | Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only. |
 | `--max-inflight` | `32767` | max DATA frames allowed in flight (1..32767). Excess frames are queued. |
-| `--peer` | alias of `--udp-peer` | backwards-compatible alias |
-| `--peer-port` | alias of `--udp-peer-port` | backwards-compatible alias |
 
 ### WebSocket overlay
 | Option(s) | Default | Description |
@@ -1308,7 +1306,7 @@ Operator notes:
 - use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
 - operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the WebAdmin action and admin API both reject the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
-- `secure_link_recover_after_failure` keeps post-authentication secure-link failures from remaining permanently stuck by closing/reconnecting the lower client transport after `secure_link_recover_delay_seconds`; leave it enabled unless you want purely manual recovery during fault investigation
+- post-authentication SecureLink failures report `Disconnected`; ChannelMux requests the lower-layer rotation after its continuous-disconnection policy expires
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
 - the delivered PSK mode remains useful for development/testing/lab bring-up, while the delivered cert mode is the deployment-rooted trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)

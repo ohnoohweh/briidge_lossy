@@ -261,9 +261,8 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_psk.py::test_auth_failure_unregisters_server_mux_routes
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
 REQ-AUT-008:
-  # The authenticated-failure recovery slice also covers preservation of the
-  # pending reconnect timer across runner disconnect resets and transport epoch
-  # callbacks, so CI catches regressions where recovery is scheduled but erased.
+  # Authenticated SecureLink failures are reported to ChannelMux, which owns
+  # the resulting lifecycle rotation through the lower layers.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
@@ -271,7 +270,7 @@ REQ-AUT-008:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window
     - tests/unit/test_secure_link_psk.py::test_reconnect_respects_remaining_retry_backoff_after_auth_failure
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
-    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_without_recovery_option
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
@@ -640,7 +639,7 @@ REQ-LIFE-007:
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_explicit_missing_config_uses_defaults
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_empty_config_is_treated_as_first_start
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
@@ -699,7 +698,7 @@ REQ-LIFE-010:
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_reports_helper_death_warning
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_repairs_stale_network_state
   unit_tests:
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
@@ -983,7 +982,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_uses_channel_mux_egress_key
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
@@ -1071,7 +1070,7 @@ REQ-MUX-010:
     - tests/unit/test_bridge_tun_ios.py::test_write_tun_packet_uses_bridge_backend
     - tests/unit/test_bridge_tun_ios.py::test_register_tun_reader_drains_bridge_queue
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
-    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
+    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_ignores_remote_tun_metadata
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
@@ -1163,6 +1162,8 @@ REQ-ADM-009:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
   unit_tests:
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_uses_channel_mux_egress_key
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
     - tests/unit/test_runner_config_persistence.py::test_cli_config_dump_discards_unregistered_effective_values
     # The persistence regression now pins the machine-derived fallback path

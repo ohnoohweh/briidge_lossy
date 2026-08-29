@@ -71,10 +71,6 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         var consecutiveFailures: Int
         var retryBackoffSec: TimeInterval
         var nextRetryUnixTs: TimeInterval?
-        var recoveryEnabled: Bool
-        var recoveryDelaySec: TimeInterval
-        var recoveryReconnectSec: TimeInterval
-        var nextRecoveryReconnectUnixTs: TimeInterval?
     }
 
     private let clientMode: Bool
@@ -175,10 +171,6 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             consecutiveFailures: 0,
             retryBackoffSec: 0.0,
             nextRetryUnixTs: nil,
-            recoveryEnabled: false,
-            recoveryDelaySec: 0.0,
-            recoveryReconnectSec: 0.0,
-            nextRecoveryReconnectUnixTs: nil
         )
     }
 

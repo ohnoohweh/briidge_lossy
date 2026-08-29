@@ -111,8 +111,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'summary["secure_link_rekey_after_seconds"] = rekeyAfterSeconds' in provider
     assert 'summary["secure_link_retry_backoff_initial_ms"] = retryBackoffInitialMS' in provider
     assert 'summary["secure_link_retry_backoff_max_ms"] = retryBackoffMaxMS' in provider
-    assert 'summary["secure_link_recover_after_failure"] = recoverAfterFailure' in provider
-    assert 'summary["secure_link_recover_delay_seconds"] = recoverDelaySeconds' in provider
+    assert 'summary["secure_link_recover_after_failure"]' not in provider
+    assert 'summary["secure_link_recover_delay_seconds"]' not in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
     assert 'let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)' in snapshot_support
 
@@ -140,8 +140,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'schemaItem(key: "secure_link_rekey_after_seconds", description: "Automatically rekey PSK sessions after this many authenticated seconds. 0 disables time-triggered rekey.", defaultValue: 0.0)' in runtime_config
     assert 'schemaItem(key: "secure_link_retry_backoff_initial_ms", description: "Initial SecureLink client retry backoff after authentication failure, in milliseconds.", defaultValue: 1000)' in runtime_config
     assert 'schemaItem(key: "secure_link_retry_backoff_max_ms", description: "Maximum SecureLink client retry backoff after repeated authentication failures, in milliseconds.", defaultValue: 5000)' in runtime_config
-    assert 'schemaItem(key: "secure_link_recover_after_failure", description: "Whether SecureLink client failures should trigger a delayed transport reconnect recovery.", defaultValue: true)' in runtime_config
-    assert 'schemaItem(key: "secure_link_recover_delay_seconds", description: "Seconds to wait before the SecureLink client forces a transport reconnect after persistent failure.", defaultValue: 30.0)' in runtime_config
+    assert 'schemaItem(key: "secure_link_recover_after_failure"' not in runtime_config
+    assert 'schemaItem(key: "secure_link_recover_delay_seconds"' not in runtime_config
     assert 'schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [' in runtime_config
     assert '"mode": "system"' in runtime_config
     assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
@@ -157,8 +157,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'let rekeyAfterSeconds = Self.doubleValue(from: runtimeConfig["secure_link_rekey_after_seconds"]) ?? 0.0' in host_runner
     assert 'let retryBackoffInitialMS = Self.intValue(from: runtimeConfig["secure_link_retry_backoff_initial_ms"]) ?? 1000' in host_runner
     assert 'let retryBackoffMaxMS = Self.intValue(from: runtimeConfig["secure_link_retry_backoff_max_ms"]) ?? 5000' in host_runner
-    assert 'let recoverAfterFailure = Self.boolValue(from: runtimeConfig["secure_link_recover_after_failure"]) ?? true' in host_runner
-    assert 'let recoverDelaySeconds = Self.doubleValue(from: runtimeConfig["secure_link_recover_delay_seconds"]) ?? 30.0' in host_runner
+    assert 'secure_link_recover_after_failure' not in host_runner
+    assert 'secure_link_recover_delay_seconds' not in host_runner
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
@@ -360,7 +360,7 @@ def test_runtime_config_source_exists() -> None:
     assert "included_routes6" in runtime
     assert "listenerHookEnvBlocks()" in runtime
     assert "derivedLocalTunnelSettings(" in runtime
-    assert "derivedRemoteTunnelSettings(" in runtime
+    assert "derivedRemoteTunnelSettings(" not in runtime
 
 
 def test_webadmin_server_source_exists() -> None:
@@ -1000,8 +1000,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "preferences_reused" in control
     assert "desiredLocalizedDescription()" in control
     assert "ObstacleBridgeGeneratedBuildStamp.providerBuildTimestampUTC" in control
-    assert 'legacyLocalizedDescription = "ObstacleBridge"' in control
-    assert 'legacyLocalizedDescriptionAlt = "AdminWeb"' in control
+    assert "legacyLocalizedDescription" not in control
     assert "applyIdentity(" in control
     assert "tunnelProtocol.providerBundleIdentifier = providerBundleIdentifier" in control
     assert '"provider_configuration_mode": "config_derived_profile_persistence"' in control

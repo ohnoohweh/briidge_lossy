@@ -345,8 +345,6 @@ Example config route all traffic through tunnel
     "secure_link_cert_sig": "",
     "secure_link_mode": "psk",
     "secure_link_private_key": "",
-    "secure_link_recover_after_failure": true,
-    "secure_link_recover_delay_seconds": 30.0,
     "secure_link_rekey_after_frames": 0,
     "secure_link_rekey_after_seconds": 60.0,
     "secure_link_require": false,

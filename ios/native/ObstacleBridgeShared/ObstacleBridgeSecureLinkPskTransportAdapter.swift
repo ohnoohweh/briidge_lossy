@@ -20,8 +20,6 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     private let runtime: ObstacleBridgeSecureLinkPskRuntime
     private let retryBackoffInitialSec: TimeInterval
     private let retryBackoffMaxSec: TimeInterval
-    private let recoverAfterFailure: Bool
-    private let recoverDelaySec: TimeInterval
     private let timeProvider: () -> TimeInterval
     private let unixTimeProvider: () -> TimeInterval
     private var pendingPayloads: [Data] = []
@@ -30,23 +28,17 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     private var consecutiveFailures = 0
     private var retryNotBeforeMono: TimeInterval = 0.0
     private var retryNotBeforeUnixTs: TimeInterval?
-    private var recoveryNotBeforeMono: TimeInterval = 0.0
-    private var recoveryNotBeforeUnixTs: TimeInterval?
 
     init(
         runtime: ObstacleBridgeSecureLinkPskRuntime,
         retryBackoffInitialMS: Int = 1000,
         retryBackoffMaxMS: Int = 5000,
-        recoverAfterFailure: Bool = true,
-        recoverDelaySeconds: TimeInterval = 30.0,
         timeProvider: (() -> TimeInterval)? = nil,
         unixTimeProvider: (() -> TimeInterval)? = nil
     ) {
         self.runtime = runtime
         self.retryBackoffInitialSec = max(0.0, Double(max(0, retryBackoffInitialMS)) / 1000.0)
         self.retryBackoffMaxSec = max(self.retryBackoffInitialSec, Double(max(0, retryBackoffMaxMS)) / 1000.0)
-        self.recoverAfterFailure = recoverAfterFailure
-        self.recoverDelaySec = max(0.0, recoverDelaySeconds)
         self.timeProvider = timeProvider ?? { ProcessInfo.processInfo.systemUptime }
         self.unixTimeProvider = unixTimeProvider ?? { Date().timeIntervalSince1970 }
     }
@@ -58,10 +50,6 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         snapshot.consecutiveFailures = consecutiveFailures
         snapshot.retryBackoffSec = max(0.0, retryNotBeforeMono - nowMono)
         snapshot.nextRetryUnixTs = retryNotBeforeUnixTs
-        snapshot.recoveryEnabled = snapshot.clientMode ? recoverAfterFailure : false
-        snapshot.recoveryDelaySec = snapshot.clientMode ? recoverDelaySec : 0.0
-        snapshot.recoveryReconnectSec = max(0.0, recoveryNotBeforeMono - nowMono)
-        snapshot.nextRecoveryReconnectUnixTs = recoveryNotBeforeUnixTs
         return snapshot
     }
 
@@ -111,7 +99,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             )
         }
         let nowMono = timeProvider()
-        if recoveryNotBeforeMono > nowMono || retryNotBeforeMono > nowMono {
+        if retryNotBeforeMono > nowMono {
             return OutboundSnapshot(
                 emittedFrames: [],
                 queuedPayloads: pendingPayloads.count,
@@ -229,19 +217,9 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         }
         if wasAuthenticated {
             clearRetrySchedule()
-            if transportConnected && recoverAfterFailure && recoverDelaySec > 0.0 {
-                let nowMono = timeProvider()
-                recoveryNotBeforeMono = nowMono + recoverDelaySec
-                recoveryNotBeforeUnixTs = unixTimeProvider() + recoverDelaySec
-            } else {
-                clearRecoverySchedule()
-            }
             return
         }
         guard transportConnected, retryBackoffMaxSec > 0.0 else {
-            return
-        }
-        if recoveryNotBeforeMono > timeProvider() {
             return
         }
         consecutiveFailures += 1
@@ -253,18 +231,12 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
 
     private func resetClientRetryPolicy() {
         clearRetrySchedule()
-        clearRecoverySchedule()
         consecutiveFailures = 0
     }
 
     private func clearRetrySchedule() {
         retryNotBeforeMono = 0.0
         retryNotBeforeUnixTs = nil
-    }
-
-    private func clearRecoverySchedule() {
-        recoveryNotBeforeMono = 0.0
-        recoveryNotBeforeUnixTs = nil
     }
 
     private func shouldRetryClientHandshake(nowMono: TimeInterval) -> Bool {
@@ -274,8 +246,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
               !status.authenticated,
               status.authFailCode != 0,
               retryNotBeforeMono > 0.0,
-              retryNotBeforeMono <= nowMono,
-              !(recoveryNotBeforeMono > nowMono) else {
+              retryNotBeforeMono <= nowMono else {
             return false
         }
         return true

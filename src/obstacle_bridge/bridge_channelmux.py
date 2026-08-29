@@ -366,10 +366,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         active_transport = str(getattr(args, "overlay_transport", "myudp") or "myudp").split(",", 1)[0].strip().lower()
         mux._overlay_transport = active_transport
         bind_attr, peer_attr, peer_port_attr, _listen_port_attr = _overlay_cli_attrs(active_transport)
-        raw_overlay_peer = str(getattr(args, peer_attr, None) or getattr(args, "peer", None) or "").strip()
+        raw_overlay_peer = str(getattr(args, peer_attr, None) or "").strip()
         raw_overlay_port = getattr(args, peer_port_attr, None)
-        if raw_overlay_port is None and peer_port_attr != "peer_port":
-            raw_overlay_port = getattr(args, "peer_port", None)
         mux._overlay_peer_name = raw_overlay_peer
         mux._overlay_peer_host = raw_overlay_peer
         mux._overlay_peer_port = int(raw_overlay_port if raw_overlay_port is not None else 443) if raw_overlay_peer else 0

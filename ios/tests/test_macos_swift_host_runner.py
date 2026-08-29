@@ -1784,16 +1784,6 @@ struct RuntimeProbe {
             defaultDNS: ["1.1.1.1"],
             fallbackMTU: 1600
         )
-        let remoteDerived = remote.first?.derivedRemoteTunnelSettings(
-            defaultTunnelPrefix: 30,
-            defaultTunnelPrefix6: 126,
-            defaultIncludedRoutes: ["0.0.0.0/0"],
-            defaultExcludedRoutes: ["127.0.0.0/8"],
-            defaultIncludedRoutes6: ["::/0"],
-            defaultExcludedRoutes6: ["::1/128"],
-            defaultDNS: ["1.1.1.1"],
-            fallbackMTU: 1600
-        )
         let overridden = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: [
             "TUN_routing": [
                 "included_routes": ["198.18.0.254/32"],
@@ -1843,9 +1833,6 @@ struct RuntimeProbe {
             "remote_target_ifname": remote.first?.targetIfname ?? "",
             "remote_mtu": remote.first?.mtu(fallback: 0) ?? -1,
             "remote_peer_addr": remote.first?.listenerHookEnvBlocks().first?["PEER_ADDR"] as? String ?? "",
-            "remote_derived_addr": remoteDerived?.tunnelAddress ?? "",
-            "remote_derived_prefix": remoteDerived?.tunnelPrefix ?? -1,
-            "remote_derived_prefix6": remoteDerived?.tunnelPrefix6 ?? -1,
             "override_dns": overridden??.dnsServers ?? [],
             "override_mtu": overridden??.mtu ?? -1,
             "override_included_routes": overridden??.includedRoutes ?? [],
@@ -1904,9 +1891,6 @@ struct RuntimeProbe {
         "override_mtu": 1600,
         "override_tun_tcpdump_pcap_path": "/tmp/swift-runtime-probe.pcap",
         "remote_count": 1,
-        "remote_derived_addr": "192.168.105.1",
-        "remote_derived_prefix": 30,
-        "remote_derived_prefix6": 126,
         "remote_mtu": 1280,
         "remote_peer_addr": "192.168.105.1",
         "remote_target_ifname": "ios-utun",

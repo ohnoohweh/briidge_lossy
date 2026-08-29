@@ -207,7 +207,7 @@ def test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env() -
     assert settings.mtu == 1400
 
 
-def test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr() -> None:
+def test_network_settings_from_runtime_config_ignores_remote_tun_metadata() -> None:
     settings = network_settings_from_runtime_config(
         {
             "channel_mux": {
@@ -236,9 +236,9 @@ def test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr()
         }
     )
 
-    assert settings.tunnel_address == "192.168.105.1"
+    assert settings.tunnel_address == "192.168.106.1"
     assert settings.tunnel_prefix == 30
-    assert settings.tunnel_address6 == "fd20:105::1"
+    assert settings.tunnel_address6 == "fd20:106::1"
     assert settings.tunnel_prefix6 == 126
     assert settings.included_routes6 == ["::/0"]
     assert settings.excluded_routes6 == ["::1/128"]

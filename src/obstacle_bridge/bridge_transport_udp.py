@@ -548,7 +548,7 @@ class SendPort:
     Model B only:
     - The overlay UDP socket is always unconnected at the OS level.
     - Current destination is owned by SendPort.peer_addr.
-    - --peer is only an initial seed; peer may later be relearned/moved.
+    - --udp-peer is only an initial seed; peer may later be relearned/moved.
     - Do not reintroduce connected-UDP behavior here unless the protocol-level
       peer learning/relearning logic is removed as well.
     """
@@ -1810,10 +1810,10 @@ class UdpSession(ISession):
         if not _has('--udp-own-port'):
             p.add_argument('--udp-own-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
         if not _has('--udp-peer'):
-            p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
+            p.add_argument('--udp-peer', dest='udp_peer', default=None,
                            help="peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])")
         if not _has('--udp-peer-port'):
-            p.add_argument('--udp-peer-port', '--peer-port', dest='udp_peer_port', type=int, default=4433, help='peer overlay port')
+            p.add_argument('--udp-peer-port', dest='udp_peer_port', type=int, default=4433, help='peer overlay port')
         if not _has('--udp-peer-resolve-family'):
             p.add_argument(
                 '--udp-peer-resolve-family',

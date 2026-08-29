@@ -761,21 +761,12 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         else {
             return false
         }
-        if status.authFailCode != 0 {
-            guard status.recoveryEnabled else {
-                return false
-            }
-            if status.recoveryReconnectSec > 0.0 {
-                return false
-            }
-        } else {
-            guard secureLinkHandshakePrimed,
-                  lastSecureLinkPrimeNS != 0,
-                  nowNS >= lastSecureLinkPrimeNS,
-                  (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
-            else {
-                return false
-            }
+        guard secureLinkHandshakePrimed,
+              lastSecureLinkPrimeNS != 0,
+              nowNS >= lastSecureLinkPrimeNS,
+              (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
+        else {
+            return false
         }
         let reason: String
         if status.authFailCode != 0 {

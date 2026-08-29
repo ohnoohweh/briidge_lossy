@@ -602,8 +602,6 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
                         ),
                         retryBackoffInitialMS: 1000,
                         retryBackoffMaxMS: 5000,
-                        recoverAfterFailure: true,
-                        recoverDelaySeconds: 30.0,
                         timeProvider: { mono },
                         unixTimeProvider: { unix }
                     )
@@ -620,10 +618,6 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
                     if retryStatus.retryBackoffSec != 1.0 || retryStatus.nextRetryUnixTs != 2001.0 {
                         throw ProbeError.badState("retry schedule mismatch")
                     }
-                    if retryStatus.recoveryReconnectSec != 0.0 || retryStatus.nextRecoveryReconnectUnixTs != nil {
-                        throw ProbeError.badState("unexpected recovery schedule for unauthenticated failure")
-                    }
-
                     mono = 101.0
                     unix = 2001.0
                     let retriedHandshake = try retryClient.pollDueFrames()
@@ -645,8 +639,6 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
                         ),
                         retryBackoffInitialMS: 1000,
                         retryBackoffMaxMS: 5000,
-                        recoverAfterFailure: true,
-                        recoverDelaySeconds: 30.0,
                         timeProvider: { mono },
                         unixTimeProvider: { unix }
                     )
@@ -679,20 +671,12 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
                     if recoveryStatus.retryBackoffSec != 0.0 || recoveryStatus.nextRetryUnixTs != nil {
                         throw ProbeError.badState("authenticated failure should not schedule retry backoff")
                     }
-                    if recoveryStatus.recoveryReconnectSec != 30.0 || recoveryStatus.nextRecoveryReconnectUnixTs != 4030.0 {
-                        throw ProbeError.badState("recovery reconnect schedule mismatch")
-                    }
-
                     let payload: [String: Any] = [
                         "retry_consecutive_failures": retryStatus.consecutiveFailures,
                         "retry_retry_backoff_sec": retryStatus.retryBackoffSec,
                         "retry_next_retry_unix_ts": retryStatus.nextRetryUnixTs ?? NSNull(),
                         "retry_handshake_attempts_total": retryStatusAfterPoll.handshakeAttemptsTotal,
                         "retry_backoff_after_poll_sec": retryStatusAfterPoll.retryBackoffSec,
-                        "recovery_enabled": recoveryStatus.recoveryEnabled,
-                        "recovery_delay_sec": recoveryStatus.recoveryDelaySec,
-                        "recovery_reconnect_sec": recoveryStatus.recoveryReconnectSec,
-                        "recovery_next_reconnect_unix_ts": recoveryStatus.nextRecoveryReconnectUnixTs ?? NSNull(),
                     ]
                     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
                     FileHandle.standardOutput.write(data)
@@ -716,10 +700,6 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
         "retry_next_retry_unix_ts": 2001.0,
         "retry_handshake_attempts_total": 2,
         "retry_backoff_after_poll_sec": 0.0,
-        "recovery_enabled": True,
-        "recovery_delay_sec": 30.0,
-        "recovery_reconnect_sec": 30.0,
-        "recovery_next_reconnect_unix_ts": 4030.0,
     }
 
 
@@ -838,8 +818,7 @@ def test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authent
                                 }
                                 return clientSessionIDs.removeFirst()
                             }
-                        ),
-                        recoverAfterFailure: false
+                        )
                     )
                     let server = ObstacleBridgeSecureLinkPskTransportAdapter(
                         runtime: ObstacleBridgeSecureLinkPskRuntime(

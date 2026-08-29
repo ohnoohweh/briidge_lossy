@@ -113,10 +113,6 @@ class RunnerMuxAggregate:
             "consecutive_failures": 0,
             "retry_backoff_sec": 0.0,
             "next_retry_unix_ts": None,
-            "recovery_enabled": False,
-            "recovery_delay_sec": 0.0,
-            "recovery_reconnect_sec": 0.0,
-            "next_recovery_reconnect_unix_ts": None,
             "handshake_attempts_total": 0,
             "last_event": "",
             "last_event_unix_ts": None,
@@ -2719,28 +2715,12 @@ class Runner:
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
-        section_aliases = {
-            "channel_mux": {
-                "egress": "channel_mux_egress",
-            },
-            "proxy_provider": {
-                "enabled": "proxy_provider_enabled",
-                "bind": "proxy_provider_bind",
-                "http_port": "proxy_provider_http_port",
-                "socks5_port": "proxy_provider_socks5_port",
-                "protocols": "proxy_provider_protocols",
-                "auth": "proxy_provider_auth",
-                "egress": "proxy_provider_egress",
-                "policy": "proxy_provider_policy",
-            },
-        }
         section_keys = set((getattr(self.args, "_config_sections", {}) or {}).keys())
         normalized_updates: dict[str, Any] = {}
         for key, value in dict(updates).items():
             if key in section_keys and isinstance(value, dict):
-                alias_map = section_aliases.get(str(key), {})
                 for nested_key, nested_value in value.items():
-                    normalized_updates[str(alias_map.get(nested_key, nested_key))] = nested_value
+                    normalized_updates[str(nested_key)] = nested_value
                 continue
             normalized_updates[str(key)] = value
         if normalized_updates.get("admin_web_auth_disable") is True:
@@ -3479,41 +3459,12 @@ class ConfigAwareCLI:
     def _apply_config_defaults_from_json(self, parser: argparse.ArgumentParser, cfg: Dict[str, Any]) -> None:
         actions = self._scan_actions(parser)
         flat: Dict[str, Any] = {}
-        nested_dest_aliases = {
-            "channel_mux": {
-                "egress": "channel_mux_egress",
-            },
-            "proxy_provider": {
-                "enabled": "proxy_provider_enabled",
-                "bind": "proxy_provider_bind",
-                "http_port": "proxy_provider_http_port",
-                "socks5_port": "proxy_provider_socks5_port",
-                "protocols": "proxy_provider_protocols",
-                "auth": "proxy_provider_auth",
-                "egress": "proxy_provider_egress",
-                "policy": "proxy_provider_policy",
-            },
-            "tun_execution": {
-                "mode": "tun_execution_mode",
-                "helper_backend": "tun_helper_backend",
-                "helper_socket": "tun_helper_socket",
-                "helper_apply_network": "tun_helper_apply_network",
-                "helper_log_level": "tun_helper_log_level",
-            },
-        }
-        # Prefer grouped section values over legacy duplicate root keys.
         for section in self._sections.keys():
             value = cfg.get(section)
             if not isinstance(value, dict):
                 continue
             for kk, vv in value.items():
-                flat[nested_dest_aliases.get(section, {}).get(kk, kk)] = vv
-        for k, v in cfg.items():
-            if isinstance(v, dict):
-                for kk, vv in v.items():
-                    flat.setdefault(nested_dest_aliases.get(k, {}).get(kk, kk), vv)
-            else:
-                flat.setdefault(k, v)
+                flat[kk] = vv
         # Coerce/validate and set defaults
         defaults: Dict[str, Any] = {}
         for dest, val in flat.items():
@@ -3560,23 +3511,6 @@ def _attach_runtime_cli_metadata(args: argparse.Namespace, cli: ConfigAwareCLI) 
     return args
 
 
-def _attach_proxy_provider_aliases(args: argparse.Namespace) -> argparse.Namespace:
-    aliases = {
-        "enabled": "proxy_provider_enabled",
-        "bind": "proxy_provider_bind",
-        "http_port": "proxy_provider_http_port",
-        "socks5_port": "proxy_provider_socks5_port",
-        "protocols": "proxy_provider_protocols",
-        "auth": "proxy_provider_auth",
-        "egress": "proxy_provider_egress",
-        "policy": "proxy_provider_policy",
-    }
-    for legacy, canonical in aliases.items():
-        if hasattr(args, canonical) and not hasattr(args, legacy):
-            setattr(args, legacy, getattr(args, canonical))
-    return args
-
-
 def parse_runtime_args(
     argv: Optional[List[str]] = None,
     *,
@@ -3585,7 +3519,6 @@ def parse_runtime_args(
     cli = ConfigAwareCLI(description=RUNTIME_CLI_DESCRIPTION)
     args = cli.parse_args(argv, default_runtime_registrars())
     _attach_runtime_cli_metadata(args, cli)
-    _attach_proxy_provider_aliases(args)
     if apply_logging:
         DebugLoggingConfigurator.from_args(args).apply()
     return args
@@ -3660,7 +3593,6 @@ def build_runtime_args_from_config(
     args._first_start_detected = cli._first_start_detected
     args._config_path = str(pathlib.Path(persisted_config_path).expanduser().resolve()) if persisted_config_path else ""
     _attach_runtime_cli_metadata(args, cli)
-    _attach_proxy_provider_aliases(args)
     cli._apply_per_section_overrides(args)
     if apply_logging:
         DebugLoggingConfigurator.from_args(args).apply()

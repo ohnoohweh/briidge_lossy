@@ -136,45 +136,6 @@ struct ObstacleBridgeRuntimeServiceSpec {
         return nil
     }
 
-    func derivedRemoteTunnelSettings(
-        defaultTunnelPrefix: Int,
-        defaultTunnelPrefix6: Int,
-        defaultIncludedRoutes: [String],
-        defaultExcludedRoutes: [String],
-        defaultIncludedRoutes6: [String],
-        defaultExcludedRoutes6: [String],
-        defaultDNS: [String],
-        fallbackMTU: Int
-    ) -> ObstacleBridgeDerivedTunnelSettings? {
-        for env in listenerHookEnvBlocks() {
-            guard let peerAddr = env["PEER_ADDR"] as? String,
-                  !peerAddr.isEmpty
-            else {
-                continue
-            }
-            let prefix = Self.parseCIDR(env["TUN_ADDR"] as? String ?? "", maxPrefix: 32)?.1
-                ?? Self.parseCIDR(env["TUN_SUBNET"] as? String ?? "", maxPrefix: 32)?.1
-                ?? defaultTunnelPrefix
-            let peerAddr6 = env["PEER_ADDR6"] as? String ?? ""
-            let prefix6 = Self.parseCIDR(env["TUN_ADDR6"] as? String ?? "", maxPrefix: 128)?.1
-                ?? Self.parseCIDR(env["TUN_SUBNET6"] as? String ?? "", maxPrefix: 128)?.1
-                ?? defaultTunnelPrefix6
-            return ObstacleBridgeDerivedTunnelSettings(
-                tunnelAddress: peerAddr,
-                tunnelPrefix: prefix,
-                includedRoutes: defaultIncludedRoutes,
-                excludedRoutes: defaultExcludedRoutes,
-                tunnelAddress6: peerAddr6,
-                tunnelPrefix6: prefix6,
-                includedRoutes6: peerAddr6.isEmpty ? [] : defaultIncludedRoutes6,
-                excludedRoutes6: peerAddr6.isEmpty ? [] : defaultExcludedRoutes6,
-                dnsServers: defaultDNS,
-                mtu: mtu(fallback: fallbackMTU)
-            )
-        }
-        return nil
-    }
-
     func toChannelMuxServiceSpec() -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
         ObstacleBridgeChannelMuxCodec.ServiceSpec(
             svcID: svcID,
@@ -449,8 +410,6 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "secure_link_rekey_after_seconds", description: "Automatically rekey PSK sessions after this many authenticated seconds. 0 disables time-triggered rekey.", defaultValue: 0.0),
                 schemaItem(key: "secure_link_retry_backoff_initial_ms", description: "Initial SecureLink client retry backoff after authentication failure, in milliseconds.", defaultValue: 1000),
                 schemaItem(key: "secure_link_retry_backoff_max_ms", description: "Maximum SecureLink client retry backoff after repeated authentication failures, in milliseconds.", defaultValue: 5000),
-                schemaItem(key: "secure_link_recover_after_failure", description: "Whether SecureLink client failures should trigger a delayed transport reconnect recovery.", defaultValue: true),
-                schemaItem(key: "secure_link_recover_delay_seconds", description: "Seconds to wait before the SecureLink client forces a transport reconnect after persistent failure.", defaultValue: 30.0),
             ],
             "compress_layer": [
                 schemaItem(key: "compress_layer", description: "Enable transport compression", defaultValue: false),
@@ -748,12 +707,6 @@ enum ObstacleBridgeRuntimeConfig {
         }
         if payload["secure_link_retry_backoff_max_ms"] == nil {
             payload["secure_link_retry_backoff_max_ms"] = 5000
-        }
-        if payload["secure_link_recover_after_failure"] == nil {
-            payload["secure_link_recover_after_failure"] = true
-        }
-        if payload["secure_link_recover_delay_seconds"] == nil {
-            payload["secure_link_recover_delay_seconds"] = 30.0
         }
         if payload["compress_layer"] == nil {
             payload["compress_layer"] = false

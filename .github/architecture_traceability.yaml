@@ -282,7 +282,7 @@ ARC-CMP-004:
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_honors_bind_family_constraint
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_wraps_peer_rotation_after_repeated_idle_timeout
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_uses_channel_mux_egress_key
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
@@ -438,7 +438,7 @@ ARC-CMP-004:
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_explicit_missing_config_uses_defaults
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_empty_config_is_treated_as_first_start
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
@@ -450,7 +450,7 @@ ARC-CMP-004:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
-    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
+    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_ignores_remote_tun_metadata
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
@@ -474,7 +474,7 @@ ARC-CMP-005:
   # before a cached status payload exists. Admin payload coverage here guards
   # the supported peer-scoped summary contract rather than retired
   # SecureLink-specific handshake-debug telemetry fields, including persistent
-  # enabled-layer visibility and ChannelMux-owned recovery timers.
+  # enabled-layer visibility and ChannelMux-owned reconnect countdowns.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
@@ -565,7 +565,7 @@ ARC-CMP-006:
   # SecureLink integration coverage includes authenticated-readiness gating
   # and failure reporting without direct transport-reconnect ownership.
   # before multi-peer client-published TCP service probes and preservation of
-  # authenticated-failure recovery timers across runner reset/epoch callbacks,
+  # authenticated failures are reported to ChannelMux for lifecycle rotation,
   # plus cert local-identity reload reconnect/re-authentication at the
   # secure-link layer boundary.
   unit_tests:
@@ -577,7 +577,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_reports_reauthenticating_when_transport_stays_up
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
-    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_without_recovery_option
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity

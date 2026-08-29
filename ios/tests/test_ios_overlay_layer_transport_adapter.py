@@ -233,11 +233,7 @@ def test_ios_overlay_layer_transport_adapter_distinguishes_inflow_from_app_ready
                         handshakeAttemptsTotal: 1,
                         consecutiveFailures: 0,
                         retryBackoffSec: 0.0,
-                        nextRetryUnixTs: nil,
-                        recoveryEnabled: true,
-                        recoveryDelaySec: 30.0,
-                        recoveryReconnectSec: 0.0,
-                        nextRecoveryReconnectUnixTs: nil
+                        nextRetryUnixTs: nil
                     )
                     let layers = ObstacleBridgeOverlayLayerTransportAdapter.connectionLayersSnapshot(
                         transport: "tcp",

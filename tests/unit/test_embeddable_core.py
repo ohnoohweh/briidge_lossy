@@ -20,7 +20,7 @@ from obstacle_bridge.bridge import (
 
 
 class EmbeddableRuntimeArgsTests(unittest.TestCase):
-    def test_build_runtime_args_from_flat_config(self) -> None:
+    def test_build_runtime_args_ignores_unsectioned_config(self) -> None:
         args = build_runtime_args_from_config(
             {
                 "overlay_transport": "ws",
@@ -30,10 +30,9 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             }
         )
 
-        self.assertEqual(args.overlay_transport, "ws")
-        self.assertEqual(args.ws_peer, "bridge.example.com")
-        self.assertEqual(args.ws_peer_port, 443)
-        self.assertFalse(args.admin_web)
+        self.assertEqual(args.overlay_transport, "myudp")
+        self.assertIsNone(args.ws_peer)
+        self.assertEqual(args.ws_peer_port, 8080)
         self.assertEqual(args._config_file_state, "loaded")
         self.assertIn("runner", args._config_sections)
 
@@ -70,11 +69,11 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertTrue(args.ws_tls)
         self.assertIn("ws_peer_addresses", args._config_sections["ws_session"])
 
-    def test_build_runtime_args_accepts_channel_mux_egress_alias(self) -> None:
+    def test_build_runtime_args_uses_channel_mux_egress_key(self) -> None:
         args = build_runtime_args_from_config(
             {
                 "channel_mux": {
-                    "egress": {
+                    "channel_mux_egress": {
                         "mode": "system",
                         "proxy_auth": "none",
                     }
@@ -90,11 +89,11 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         args = build_runtime_args_from_config(
             {
                 "tun_execution": {
-                    "mode": "helper",
-                    "helper_backend": "linux-native",
-                    "helper_socket": "/run/user/1000/obstaclebridge/tun-helper.sock",
-                    "helper_apply_network": False,
-                    "helper_log_level": "debug",
+                    "tun_execution_mode": "helper",
+                    "tun_helper_backend": "linux-native",
+                    "tun_helper_socket": "/run/user/1000/obstaclebridge/tun-helper.sock",
+                    "tun_helper_apply_network": False,
+                    "tun_helper_log_level": "debug",
                 }
             }
         )
@@ -209,21 +208,21 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         args = build_runtime_args_from_config(
             {
                 "proxy_provider": {
-                    "enabled": True,
-                    "bind": "127.0.0.1",
-                    "http_port": 13181,
-                    "socks5_port": 13182,
-                    "protocols": ["http-connect", "socks5-connect"],
-                    "auth": {
+                    "proxy_provider_enabled": True,
+                    "proxy_provider_bind": "127.0.0.1",
+                    "proxy_provider_http_port": 13181,
+                    "proxy_provider_socks5_port": 13182,
+                    "proxy_provider_protocols": ["http-connect", "socks5-connect"],
+                    "proxy_provider_auth": {
                         "mode": "token",
                         "username": "obproxy",
                         "token": "local-token",
                     },
-                    "egress": {
+                    "proxy_provider_egress": {
                         "mode": "system",
                         "address_families": ["ipv4", "ipv6"],
                     },
-                    "policy": {
+                    "proxy_provider_policy": {
                         "allow_private_destinations": False,
                         "blocked_host_patterns": [],
                     },
@@ -239,8 +238,6 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertEqual(args.proxy_provider_socks5_port, 13182)
         self.assertEqual(args.proxy_provider_protocols, ["http-connect", "socks5-connect"])
         self.assertEqual(args.proxy_provider_auth["username"], "obproxy")
-        self.assertTrue(args.enabled)
-        self.assertEqual(args.http_port, 13181)
 
         config = runner.get_config_snapshot()
         schema = runner.get_config_schema_snapshot()
@@ -312,12 +309,12 @@ class ProxyProviderRunnerLifecycleTests(unittest.IsolatedAsyncioTestCase):
         args = build_runtime_args_from_config(
             {
                 "proxy_provider": {
-                    "enabled": True,
-                    "bind": "127.0.0.1",
-                    "http_port": 0,
-                    "socks5_port": 0,
-                    "protocols": ["http-connect", "socks5-connect"],
-                    "auth": {"mode": "none", "username": "", "token": ""},
+                    "proxy_provider_enabled": True,
+                    "proxy_provider_bind": "127.0.0.1",
+                    "proxy_provider_http_port": 0,
+                    "proxy_provider_socks5_port": 0,
+                    "proxy_provider_protocols": ["http-connect", "socks5-connect"],
+                    "proxy_provider_auth": {"mode": "none", "username": "", "token": ""},
                 }
             }
         )
@@ -398,7 +395,7 @@ class ObstacleBridgeClientTests(unittest.IsolatedAsyncioTestCase):
         packet_io = MemoryPacketIO()
         with mock.patch("obstacle_bridge.core.Runner", _Runner):
             client = ObstacleBridgeClient(
-                {"overlay_transport": "tcp", "admin_web": False},
+                {"runner": {"overlay_transport": "tcp"}},
                 packet_io=packet_io,
             )
 
@@ -409,7 +406,7 @@ class ObstacleBridgeClientTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(client.runner.started)
             self.assertEqual(client.snapshot()["status"], {"transport": "tcp"})
 
-            await client.update_config({"overlay_transport": "ws", "admin_web": False})
+            await client.update_config({"runner": {"overlay_transport": "ws"}})
             self.assertEqual(client.snapshot()["status"], {"transport": "ws"})
 
             runner = client.runner
