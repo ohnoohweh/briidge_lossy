@@ -140,13 +140,19 @@ an example of this legacy split: Security requests a reconnect, but the active
 `myudp` transport does not provide the requested operation, and the watchdog
 does not own a definitive fallback decision.
 
+Work package 1 foundation status: the Python runtime now declares a shared
+`ConnectionLifecycleEvent` and `ConnectionRotationResult` contract at the
+`ISession` boundary. Existing transports and wrappers still emit the legacy
+boolean callback; work packages 2 through 5 must adopt the new callback and
+rotation methods before this contract becomes the active runtime behavior.
+
 ### Rework work packages
 
-1. Define the shared lifecycle API. Add a transport-agnostic lifecycle event,
-   state enum, epoch, transition reason, and rotation-result contract to the
-   session interfaces. Make state snapshots and WebAdmin expose the same
-   normalized fields. Add contract tests that every session wrapper preserves
-   event ordering and epochs.
+1. Complete shared lifecycle API adoption. The transport-agnostic event, state
+   enum, epoch, transition reason, and rotation-result types are declared at
+   the Python session interface. Make state snapshots and WebAdmin expose the
+   same normalized fields, and add contract tests that every session wrapper
+   emits ordered events and preserves epochs.
 
 2. Make each transport conform. Implement the shared reconnect/rotation API in
    `myudp`, WebSocket, QUIC, and TCP. Move peer candidate resolution, next-peer

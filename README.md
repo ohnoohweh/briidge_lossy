@@ -1482,7 +1482,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The intended cross-layer connection lifecycle and rotation rework remains planned in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The intended cross-layer connection lifecycle and rotation rework now has a Python session-contract foundation; transport and Swift adoption remain planned in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1491,7 +1491,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `54` | `874` |
+| Python CLI/runtime, including macOS Python | `55` | `878` |
 | macOS Swift app | `1` | `54` |
 | iOS app/extension | `25` | `168` |
 
