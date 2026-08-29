@@ -550,6 +550,7 @@ ARC-CMP-005:
 
 ARC-CMP-006:
   # SecureLink integration coverage includes authenticated-readiness gating
+  # and failure reporting without direct transport-reconnect ownership.
   # before multi-peer client-published TCP service probes and preservation of
   # authenticated-failure recovery timers across runner reset/epoch callbacks,
   # plus cert local-identity reload reconnect/re-authentication at the
@@ -562,7 +563,7 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_reports_reauthenticating_when_transport_stays_up
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
-    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts

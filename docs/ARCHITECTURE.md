@@ -121,9 +121,9 @@ callbacks, with transport-specific recovery paths:
 - Compression forwards the lower callback but its snapshot state is
   `enabled`/`passthrough`, not the common connection state; decompression
   errors are counted and dropped without a lifecycle transition
-- SecureLink still owns a delayed recovery attempt and invokes
-  `request_reconnect()` itself, rather than ChannelMux requesting a cascaded
-  rotation
+- SecureLink reports authentication failure as disconnected and forwards a
+  rotation request only when its caller asks; ChannelMux does not yet apply the
+  30-second rotation policy
 - WebSocket, TCP, and QUIC expose transport reconnect behavior, but `myudp`
   lacks the standard `request_reconnect()` operation. Its peer-candidate
   fallback is a separate startup/liveness loop and cannot satisfy the
@@ -149,37 +149,30 @@ and Runner restart supervision remain unfinished.
 
 ### Rework work packages
 
-1. Rework SecureLink lifecycle ownership. Replace its standalone delayed
-   recovery policy with state/epoch handling driven by the inner transport and
-   cascaded rotation requests. Keep rekey connected, make terminal security
-   failure disconnected, and ensure a new transport epoch clears only the
-   correct security state. Add regression coverage for the lifecycle-invariant
-   failure seen in client logs.
-
-2. Make Compression a lifecycle-correct transparent wrapper. Forward lifecycle
+1. Make Compression a lifecycle-correct transparent wrapper. Forward lifecycle
    events and rotation requests through the immediate inner layer. Record a
    compression error as disconnected for its current epoch and reject further
    traffic until a newer connected epoch arrives. Add compression error and
    epoch-transition tests.
 
-3. Put the 30-second policy in ChannelMux. Track continuous outer-layer
+2. Put the 30-second policy in ChannelMux. Track continuous outer-layer
    disconnection, request exactly one cascaded rotation after 30 seconds, and
    wait for a new epoch before another request. Remove duplicate reconnect
    ownership from Security and avoid Runner watchdog suppression based on a
    stale SecureLink recovery flag.
 
-4. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
+3. Gate TUN at admission. Stop TUN reads and internal connectivity probes from
    entering ChannelMux while its lifecycle is disconnected. Resume only after
    the connected event for the current epoch, and add tests proving no TUN
    frame/probe is admitted during a failed or rotating connection.
 
-5. Simplify Runner restart supervision. Runner consumes the transport's
+4. Simplify Runner restart supervision. Runner consumes the transport's
    candidate-cycle exhaustion result and requests process restart exactly once.
    Retain a separate safety watchdog only for missing lifecycle events, with a
    bounded timeout and explicit diagnostic reason. Add end-to-end tests for
    three unsuccessful cycles leading to restart.
 
-6. Complete parity, observability, and migration. Apply the same observable
+5. Complete parity, observability, and migration. Apply the same observable
    lifecycle contract to the Swift macOS/iOS implementations, expose current
    state/epoch/candidate/cycle/reason in WebAdmin, and update requirements,
    traceability, and operational documentation alongside the implementation.

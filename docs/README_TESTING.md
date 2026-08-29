@@ -57,6 +57,7 @@ Representative anchors for those areas:
   - [ios/tests/test_ios_secure_link_transport_adapter.py](../ios/tests/test_ios_secure_link_transport_adapter.py)
 - current WebSocket bootstrap coverage also pins timed-out proxy-tunnel cleanup so a cancelled late proxy-open helper remains a normal `proxy_negotiation_failed` path instead of leaking an unhandled asyncio callback error
 - current SecureLink PSK coverage now also pins the lower-level one-sided-authentication failure case: a client that has verified `server_hello` but has not yet received peer-confirmed protected traffic must remain in handshaking state, fail closed after the watchdog timeout, and restart with a fresh session instead of lingering as locally authenticated
+- authenticated SecureLink failure coverage verifies that the layer reports `security_failed` without scheduling or issuing a transport reconnect; ChannelMux owns the later rotation decision
 - TUN routing, shared-TUN behavior, and hook contracts:
   - [tests/unit/test_tun_hook_scripts.py](../tests/unit/test_tun_hook_scripts.py)
   - [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py)

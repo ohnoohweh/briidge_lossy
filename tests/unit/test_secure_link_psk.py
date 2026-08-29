@@ -449,7 +449,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(int(second_snapshot["handshake_attempts_total"] or 0), 2)
         self.assertEqual(client_inner.reconnect_requests, 0)
 
-    async def test_authenticated_client_failure_schedules_transport_reconnect_recovery(self):
+    async def test_authenticated_client_failure_waits_for_channelmux_rotation(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
         client_inner.connect_peer(server_inner)
@@ -481,28 +481,25 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             state.tx_counter = client._SL_MAX_DATA_COUNTER + 1
             self.assertEqual(client.send_app(self._pack_mux(11, b"force-client-lifecycle-fail")), 0)
 
-            scheduled = client.get_secure_link_status_snapshot()
-            self.assertEqual(scheduled["state"], "failed")
-            self.assertEqual(scheduled["failure_reason"], "lifecycle")
-            self.assertEqual(scheduled["last_event"], "recovery_reconnect_scheduled")
-            self.assertTrue(scheduled["recovery_enabled"])
-            self.assertGreater(float(scheduled["recovery_reconnect_sec"] or 0.0), 0.0)
-            self.assertIsNotNone(scheduled["next_recovery_reconnect_unix_ts"])
+            failed = client.get_secure_link_status_snapshot()
+            self.assertEqual(failed["state"], "failed")
+            self.assertEqual(failed["failure_reason"], "lifecycle")
+            self.assertEqual(failed["last_event"], "security_failed")
+            self.assertEqual(float(failed["recovery_reconnect_sec"] or 0.0), 0.0)
+            self.assertIsNone(failed["next_recovery_reconnect_unix_ts"])
             self.assertEqual(client_inner.reconnect_requests, 0)
 
             client.reset_transport_epoch()
             client_inner.emit_transport_epoch(2)
             client_inner.emit_state(False)
             preserved = client.get_secure_link_status_snapshot()
-            self.assertEqual(preserved["state"], "failed")
-            self.assertEqual(preserved["last_event"], "recovery_reconnect_scheduled")
-            self.assertIsNotNone(preserved["next_recovery_reconnect_unix_ts"])
+            self.assertIn(preserved["state"], {"failed", "handshaking", "waiting_hello"})
+            self.assertIsNone(preserved["next_recovery_reconnect_unix_ts"])
 
             await asyncio.sleep(0.04)
             await asyncio.sleep(0)
 
-            self.assertEqual(client_inner.reconnect_requests, 1)
-            self.assertFalse(client_inner.is_connected())
+            self.assertEqual(client_inner.reconnect_requests, 0)
         finally:
             await client.stop()
             await server.stop()

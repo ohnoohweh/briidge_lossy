@@ -1383,37 +1383,18 @@ class SecureLinkPskSession(ISession):
                 self._client_recovery_task = None
 
     def _schedule_client_recovery(self) -> None:
-        if (
-            not self._client_mode
-            or not self._started
-            or not self._recover_after_failure
-            or self._recover_delay_s <= 0.0
-        ):
-            return
         state = self._peer_states.get(0)
         if state is None:
             return
-        target_mono = time.monotonic() + self._recover_delay_s
-        self._client_recovery_not_before_mono = target_mono
-        self._client_recovery_not_before_unix_ts = time.time() + self._recover_delay_s
-        self._cancel_client_recovery_task(clear_schedule=False)
-        state.last_event = "recovery_reconnect_scheduled"
+        self._cancel_client_recovery_task(clear_schedule=True)
+        state.last_event = "security_failed"
         state.last_event_unix_ts = time.time()
-        self._record_secure_link_event("recovery_reconnect_scheduled", state.last_event_unix_ts)
+        self._record_secure_link_event("security_failed", state.last_event_unix_ts)
         self._log.warning(
-            "[SECURE-LINK] scheduled recovery reconnect transport=%s side=client session_id=%s delay_sec=%.3f",
+            "[SECURE-LINK] security failure awaits ChannelMux rotation transport=%s side=client session_id=%s",
             self._transport_name,
             int(state.session_id or 0),
-            self._recover_delay_s,
         )
-        try:
-            self._client_recovery_task = asyncio.create_task(
-                self._delayed_client_recovery(target_mono, int(state.session_id or 0))
-            )
-        except Exception:
-            self._client_recovery_task = None
-            self._client_recovery_not_before_mono = 0.0
-            self._client_recovery_not_before_unix_ts = None
 
     async def _delayed_client_retry(self, target_mono: float) -> None:
         try:
@@ -1832,11 +1813,9 @@ class SecureLinkPskSession(ISession):
                 if self._client_mode:
                     self._cancel_client_retry_task(clear_schedule=True)
                     self._cancel_client_recovery_task(clear_schedule=True)
-                    state.last_event = "recovery_reconnect_started"
+                    state.last_event = "security_failed"
                     state.last_event_unix_ts = time.time()
-                    self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
-                    if not self.request_reconnect() and bool(getattr(self._inner, "is_connected", lambda: False)()):
-                        self._maybe_begin_client_recovery_handshake_after_reconnect()
+                    self._record_secure_link_event("security_failed", state.last_event_unix_ts)
         expected_dropped_total = dropped_total_before + int(dropped or 0)
         if int(self._secure_link_peers_dropped_total or 0) < expected_dropped_total:
             self._secure_link_peers_dropped_total = expected_dropped_total

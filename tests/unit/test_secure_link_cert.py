@@ -463,7 +463,7 @@ class SecureLinkCertSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["scope"], "local_identity")
         self.assertGreaterEqual(result["dropped"], 1)
-        self.assertEqual(client_inner.reconnect_requests, 1)
+        self.assertEqual(client_inner.reconnect_requests, 0)
 
         reconnecting = client.get_secure_link_status_snapshot()
         self.assertEqual(reconnecting["state"], "failed")
