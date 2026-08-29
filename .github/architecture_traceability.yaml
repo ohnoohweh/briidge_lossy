@@ -285,6 +285,8 @@ ARC-CMP-004:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
+    - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
+    - tests/unit/test_runner_config_persistence.py::test_cli_config_dump_discards_unregistered_effective_values
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
     - tests/unit/test_runner_events.py::test_linux_tun_elevation_exec_argv_preserves_runtime_env_names
     - tests/unit/test_runner_events.py::test_main_reexecs_with_linux_tun_privileges_when_local_tun_requires_root

@@ -556,6 +556,8 @@ The runtime config surface also now reserves a `tun_execution` section for Linux
 
 Prefer WebAdmin for routine parameter editing once the process is reachable. It reduces command-line mistakes, keeps related settings visible in one place, and is the most practical way to review exposure, transport, and security options together before saving them.
 
+Saved runtime configuration contains only registered settings grouped by their component. Unregistered data is not retained when WebAdmin or the CLI writes the configuration file.
+
 ![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
 The CLI remains useful for bootstrap situations, automation, and remote-first setup on systems such as VPS installations where you may need to expose Admin Web intentionally before the configuration editor is reachable.

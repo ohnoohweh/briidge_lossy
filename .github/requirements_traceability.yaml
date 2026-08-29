@@ -1161,6 +1161,8 @@ REQ-ADM-009:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
   unit_tests:
+    - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
+    - tests/unit/test_runner_config_persistence.py::test_cli_config_dump_discards_unregistered_effective_values
     # The persistence regression now pins the machine-derived fallback path
     # directly instead of relying on an environment-provided config-secret seed.
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back

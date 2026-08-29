@@ -2661,7 +2661,6 @@ class Runner:
         if not isinstance(sections, dict) or not sections:
             return dict(config)
         grouped: dict = {}
-        assigned: set = set()
         for section in sorted(sections.keys()):
             keys = sections.get(section, []) or []
             block = {}
@@ -2670,10 +2669,10 @@ class Runner:
                     block[key] = config[key]
             if block:
                 grouped[section] = block
-                assigned.update(block.keys())
         raw_grouped = getattr(self.args, "_raw_config", None)
         if isinstance(raw_grouped, dict):
-            for section, raw_block in raw_grouped.items():
+            for section in sections:
+                raw_block = raw_grouped.get(section)
                 if not isinstance(raw_block, dict):
                     continue
                 block = grouped.setdefault(section, {})
@@ -2681,11 +2680,6 @@ class Runner:
                     if key in block:
                         continue
                     block[key] = value
-                if block:
-                    assigned.update(block.keys())
-        misc = {k: v for k, v in config.items() if k not in assigned}
-        if misc:
-            grouped["misc"] = misc
         return grouped
 
     def save_runtime_config(self) -> tuple[bool, str]:
@@ -3391,7 +3385,6 @@ class ConfigAwareCLI:
 
     def _group_effective(self, eff: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         grouped: Dict[str, Dict[str, Any]] = {}
-        assigned: Set[str] = set()
         raw_grouped = self._raw_config if isinstance(self._raw_config, dict) else {}
         for sec, dests in self._sections.items():
             block = {k: eff[k] for k in dests if k in eff}
@@ -3402,15 +3395,6 @@ class ConfigAwareCLI:
                         block[key] = value
             if block:
                 grouped[sec] = block
-                assigned |= set(block.keys())
-        for sec, raw_block in raw_grouped.items():
-            if sec in grouped or not isinstance(raw_block, dict):
-                continue
-            grouped[sec] = dict(raw_block)
-            assigned |= set(raw_block.keys())
-        misc = {k: v for k, v in eff.items() if k not in assigned}
-        if misc:
-            grouped["misc"] = misc
         return grouped
 
     def _flat_effective(self, eff: Dict[str, Any]) -> Dict[str, Any]:
