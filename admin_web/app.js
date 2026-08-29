@@ -1725,34 +1725,28 @@ function applyProxyDoc() {
   setText('proxyLastError', totals.lastError || 'n/a');
 }
 
-function renderPeerRateBars(rxBytesPerSec, txBytesPerSec) {
+function renderPeerRateMetric(label, bytesPerSec, percent, kind) {
+  return `
+    <div class="peer-detail-metric peer-rate-metric">
+      <span class="peer-detail-label">${escapeHtml(label)}</span>
+      <span class="peer-detail-value mono">${escapeHtml(fmtBytesPerSecond(bytesPerSec))}</span>
+      <div class="peer-rate-track">
+        <div class="peer-rate-fill peer-rate-fill-${escapeHtml(kind)}" style="width: ${percent.toFixed(1)}%"></div>
+      </div>
+    </div>
+  `;
+}
+
+function peerRateMetrics(rxBytesPerSec, txBytesPerSec) {
   const rx = Math.max(0, Number(rxBytesPerSec || 0));
   const tx = Math.max(0, Number(txBytesPerSec || 0));
   const scale = Math.max(rx, tx, 1);
   const rxPct = Math.max(0, Math.min(100, (rx / scale) * 100));
   const txPct = Math.max(0, Math.min(100, (tx / scale) * 100));
-  return `
-    <div class="peer-rate-bars">
-      <div class="peer-rate-bar-card">
-        <div class="peer-rate-bar-top">
-          <span class="peer-detail-label">RX Bytes/s</span>
-          <span class="peer-detail-value mono">${escapeHtml(fmtBytesPerSecond(rx))}</span>
-        </div>
-        <div class="peer-rate-track">
-          <div class="peer-rate-fill peer-rate-fill-rx" style="width: ${rxPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-      <div class="peer-rate-bar-card">
-        <div class="peer-rate-bar-top">
-          <span class="peer-detail-label">TX Bytes/s</span>
-          <span class="peer-detail-value mono">${escapeHtml(fmtBytesPerSecond(tx))}</span>
-        </div>
-        <div class="peer-rate-track">
-          <div class="peer-rate-fill peer-rate-fill-tx" style="width: ${txPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-    </div>
-  `;
+  return [
+    renderPeerRateMetric('RX Bytes/s', rx, rxPct, 'rx'),
+    renderPeerRateMetric('TX Bytes/s', tx, txPct, 'tx'),
+  ];
 }
 
 function renderPeerDetailRow(rowLabel, metrics, extraClass = '') {
@@ -2981,9 +2975,9 @@ function renderPeerTable(rows) {
     };
     const channelMuxMetrics = !isListeningPeer && !isConnectingPeer ? renderMetricStack([[
       renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
+      ...peerRateMetrics(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0).slice(0, 1),
       renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
-    ], [
-      renderPeerRateBars(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0),
+      ...peerRateMetrics(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0).slice(1),
     ], [
       renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
       renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
@@ -3100,21 +3094,6 @@ function renderPeerTable(rows) {
       </tr>
       `);
     }
-    if (showCompressionRow) {
-      const compressionMetrics = renderMetricStack([
-        [
-          renderMetric('Reported Status', layerStatus('compression'), { pill: true }),
-          renderMetric('saving_ratio', `${fmtPercentFraction(compressSavingsRatio)}%`),
-          renderMetric('decompress_fail_total', fmtInteger(compressLayer.decompress_fail_total)),
-        ],
-      ]);
-      detailRows.push(`
-      <tr class="peer-detail-row ${showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
-        <td class="peer-detail-kind">Compression</td>
-        <td>${compressionMetrics}</td>
-      </tr>
-      `);
-    }
     if (showSecurityLifecycle) {
       detailRows.push(`
       <tr class="peer-detail-row">
@@ -3125,6 +3104,19 @@ function renderPeerTable(rows) {
             ${lifecycleMetrics}
           </div>
         </td>
+      </tr>
+      `);
+    }
+    if (showCompressionRow) {
+      const compressionMetrics = renderMetricStack([[
+        renderMetric('Reported Status', layerStatus('compression'), { pill: true }),
+        renderMetric('saving_ratio', `${fmtPercentFraction(compressSavingsRatio)}%`),
+        renderMetric('decompress_fail_total', fmtInteger(compressLayer.decompress_fail_total)),
+      ]]);
+      detailRows.push(`
+      <tr class="peer-detail-row">
+        <td class="peer-detail-kind">Compression</td>
+        <td>${compressionMetrics}</td>
       </tr>
       `);
     }
