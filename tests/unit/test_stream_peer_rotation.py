@@ -160,6 +160,21 @@ class StreamPeerRotationTests(unittest.IsolatedAsyncioTestCase):
                 await session._reconnect_task
 
 
+class StreamCandidateCycleTests(unittest.TestCase):
+    def test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_connection(self) -> None:
+        for session in (TcpStreamSession(_tcp_args()), WebSocketSession(_ws_args()), _new_quic_session()):
+            session._advance_peer_candidate(count_cycle=True)
+            self.assertEqual(session._peer_candidate_index, 1)
+            self.assertEqual(session._peer_candidate_cycle, 0)
+
+            session._advance_peer_candidate(count_cycle=True)
+            self.assertEqual(session._peer_candidate_index, 0)
+            self.assertEqual(session._peer_candidate_cycle, 1)
+
+            session._set_overlay_connected(True)
+            self.assertEqual(session._peer_candidate_cycle, 0)
+
+
 class StreamReconnectShutdownTests(unittest.TestCase):
     def _assert_shutdown_does_not_query_stopped_loop(self, session, connected_attr: str) -> None:
         loop = asyncio.new_event_loop()

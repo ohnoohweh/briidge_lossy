@@ -138,6 +138,7 @@ class TcpStreamSession(ISession):
             socktype=socket.SOCK_STREAM,
         )
         self._peer_candidate_index: int = 0
+        self._peer_candidate_cycle: int = 0
         peer_info = self._peer_candidates[0] if self._peer_candidates else None
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
@@ -736,13 +737,15 @@ class TcpStreamSession(ISession):
     def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
         if not self._peer_tuple or not self._run_flag:
             return ConnectionRotationResult(accepted=False, reason="transport_not_running")
-        self._advance_peer_candidate()
+        self._advance_peer_candidate(count_cycle=True)
         accepted = self.request_reconnect()
         return ConnectionRotationResult(
             accepted=accepted,
             reason=str(reason or "next_candidate"),
             next_epoch=self._connection_lifecycle_epoch + 1 if accepted else None,
             candidate_index=self._peer_candidate_index if accepted else None,
+            candidate_cycle=self._peer_candidate_cycle if accepted else None,
+            restart_required=accepted and self._peer_candidate_cycle >= 3,
         )
 
     def _enable_os_keepalive(self, writer: asyncio.StreamWriter) -> None:
@@ -798,10 +801,15 @@ class TcpStreamSession(ISession):
             raise RuntimeError("overlay peer requires a non-empty host name")
         return self._peer_tuple
 
-    def _advance_peer_candidate(self) -> None:
+    def _advance_peer_candidate(self, *, count_cycle: bool = False) -> None:
         if len(self._peer_candidates) <= 1:
+            if count_cycle:
+                self._peer_candidate_cycle += 1
             return
-        self._peer_candidate_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        if count_cycle and next_index == 0:
+            self._peer_candidate_cycle += 1
+        self._peer_candidate_index = next_index
         host, port, _family = self._peer_candidates[self._peer_candidate_index]
         self._peer_tuple = (host, port)
 
@@ -1210,6 +1218,7 @@ class TcpStreamSession(ISession):
         self._overlay_connected = v
         if v:
             self._connection_lifecycle_epoch += 1
+            self._peer_candidate_cycle = 0
         self._connection_lifecycle.transition(
             ConnectionState.CONNECTED if v else ConnectionState.DISCONNECTED,
             self._connection_lifecycle_epoch,

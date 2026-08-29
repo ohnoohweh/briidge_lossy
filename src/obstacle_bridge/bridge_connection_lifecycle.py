@@ -64,6 +64,7 @@ class ConnectionRotationResult:
     next_epoch: Optional[int] = None
     candidate_index: Optional[int] = None
     candidate_cycle: Optional[int] = None
+    restart_required: bool = False
 
     def as_snapshot(self) -> dict[str, Any]:
         return {
@@ -72,6 +73,7 @@ class ConnectionRotationResult:
             "next_epoch": self.next_epoch,
             "candidate_index": self.candidate_index,
             "candidate_cycle": self.candidate_cycle,
+            "restart_required": bool(self.restart_required),
         }
 
 

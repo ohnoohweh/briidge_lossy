@@ -43,6 +43,7 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
             next_epoch=4,
             candidate_index=1,
             candidate_cycle=2,
+            restart_required=False,
         )
 
         self.assertEqual(
@@ -53,6 +54,7 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
                 "next_epoch": 4,
                 "candidate_index": 1,
                 "candidate_cycle": 2,
+                "restart_required": False,
             },
         )
 
@@ -94,8 +96,32 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
 
         self.assertTrue(result.accepted)
         self.assertEqual(result.candidate_index, 1)
+        self.assertEqual(result.candidate_cycle, 0)
         self.assertEqual(result.next_epoch, 2)
+        second_result = session.request_connection_rotation("channelmux_disconnected")
+
+        self.assertTrue(second_result.accepted)
+        self.assertEqual(second_result.candidate_index, 0)
+        self.assertEqual(second_result.candidate_cycle, 1)
+        session._on_state_change(True)
+        self.assertEqual(session._peer_candidate_cycle, 0)
+
+        session._peer_candidates = [("192.0.2.10", 4433, 2)]
+        single_candidate_result = session.request_connection_rotation("channelmux_disconnected")
+
+        self.assertTrue(single_candidate_result.accepted)
+        self.assertEqual(single_candidate_result.candidate_index, 0)
+        self.assertEqual(single_candidate_result.candidate_cycle, 1)
+        for expected_cycle in (2, 3):
+            single_candidate_result = session.request_connection_rotation("channelmux_disconnected")
+            self.assertEqual(single_candidate_result.candidate_cycle, expected_cycle)
+        self.assertTrue(single_candidate_result.restart_required)
         self.assertEqual(
             [(event.state, event.epoch) for event in events],
-            [(ConnectionState.CONNECTED, 1), (ConnectionState.DISCONNECTED, 1)],
+            [
+                (ConnectionState.CONNECTED, 1),
+                (ConnectionState.DISCONNECTED, 1),
+                (ConnectionState.CONNECTED, 2),
+                (ConnectionState.DISCONNECTED, 2),
+            ],
         )

@@ -1769,6 +1769,7 @@ class UdpSession(ISession):
         self._listener_peer_cleanup_task: Optional[asyncio.Task] = None
         self._peer_candidates: List[Tuple[str, int, int]] = []
         self._peer_candidate_index: int = 0
+        self._peer_candidate_cycle: int = 0
         self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
@@ -2422,6 +2423,7 @@ class UdpSession(ISession):
         if connected:
             if self._connected_since_unix_ts is None:
                 self._connected_since_unix_ts = time.time()
+            self._peer_candidate_cycle = 0
         else:
             self._connected_since_unix_ts = None
 
@@ -2476,12 +2478,19 @@ class UdpSession(ISession):
                 deduped = matching
         return deduped
 
-    def _rotate_to_next_peer_candidate(self) -> bool:
+    def _rotate_to_next_peer_candidate(self, *, count_cycle: bool = False) -> bool:
         if self._listener_mode or self._proto is None or self._proto.send_port is None:
             return False
-        if len(self._peer_candidates) <= 1:
+        if not self._peer_candidates:
             return False
-        next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        if len(self._peer_candidates) == 1:
+            next_index = 0
+            if count_cycle:
+                self._peer_candidate_cycle += 1
+        else:
+            next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+            if count_cycle and next_index == 0:
+                self._peer_candidate_cycle += 1
         old_peer = self._peer_candidates[self._peer_candidate_index]
         new_peer = self._peer_candidates[next_index]
         self._peer_candidate_index = next_index
@@ -2510,7 +2519,7 @@ class UdpSession(ISession):
     def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
         if self._listener_mode or self._proto is None or self._proto.send_port is None:
             return ConnectionRotationResult(accepted=False, reason="transport_not_running")
-        if not self._rotate_to_next_peer_candidate():
+        if not self._rotate_to_next_peer_candidate(count_cycle=True):
             return ConnectionRotationResult(accepted=False, reason="no_alternate_candidate")
         self._publish_connection_lifecycle(False)
         return ConnectionRotationResult(
@@ -2518,6 +2527,8 @@ class UdpSession(ISession):
             reason=str(reason or "next_candidate"),
             next_epoch=self._connection_lifecycle_epoch + 1,
             candidate_index=self._peer_candidate_index,
+            candidate_cycle=self._peer_candidate_cycle,
+            restart_required=self._peer_candidate_cycle >= 3,
         )
 
     def _on_peer_send_error(self, exc: Exception) -> None:
