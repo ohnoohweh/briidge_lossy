@@ -2300,21 +2300,35 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     return
                 if self._connection_rotation_wait_epoch is not None:
                     return
-                request = getattr(self.session, "request_connection_rotation", None)
-                if callable(request):
-                    # A rotation is consumed by this epoch. Only a new lifecycle
-                    # epoch may arm another request after a persistent outage.
-                    self._connection_rotation_wait_epoch = requested_epoch
-                    result = request("channelmux_disconnected")
-                    self.log.warning("[MUX] requested connection rotation after %.1fs epoch=%s result=%r", self.CONNECTION_ROTATION_DELAY_S, requested_epoch, result)
-                    if callable(self._on_connection_rotation_result):
-                        self._on_connection_rotation_result(result)
+                result = self.request_connection_rotation("channelmux_disconnected")
+                self.log.warning("[MUX] requested connection rotation after %.1fs epoch=%s result=%r", self.CONNECTION_ROTATION_DELAY_S, requested_epoch, result)
             except asyncio.CancelledError:
                 return
             finally:
                 self._connection_rotation_task = None
 
         self._connection_rotation_task = self.loop.create_task(_rotate_after_disconnect())
+
+    def request_connection_rotation(self, reason: str = ""):
+        """Request one lower-layer rotation for the current lifecycle epoch."""
+        if self._connection_rotation_wait_epoch is not None:
+            return ConnectionRotationResult(
+                accepted=False,
+                reason="rotation_waiting_for_new_epoch",
+                candidate_cycle=None,
+            )
+        self._cancel_connection_rotation()
+        request = getattr(self.session, "request_connection_rotation", None)
+        if not callable(request):
+            return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
+
+        # A rotation is consumed by this epoch. Only a new lifecycle epoch may
+        # arm another request after a persistent outage or operator reload.
+        self._connection_rotation_wait_epoch = self._connection_lifecycle_epoch
+        result = request(str(reason or "channelmux_requested"))
+        if callable(self._on_connection_rotation_result):
+            self._on_connection_rotation_result(result)
+        return result
 
     def set_on_connection_rotation_result(self, callback) -> None:
         self._on_connection_rotation_result = callback

@@ -419,6 +419,20 @@ class CompressLayerSession(ISession):
         )
         return layers
 
+    def get_overlay_peers_snapshot(self) -> list[dict]:
+        getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                return list(getter() or [])
+        return []
+
+    def get_secure_link_status_snapshot(self) -> dict:
+        getter = getattr(self._inner, "get_secure_link_status_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                return dict(getter() or {})
+        return {}
+
     def get_transport_connected_since_unix_ts(self, peer_id: Optional[int] = None) -> Optional[float]:
         getter = getattr(self._inner, "get_transport_connected_since_unix_ts", None)
         if callable(getter):

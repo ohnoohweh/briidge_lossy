@@ -2363,6 +2363,16 @@ class Runner:
                     row_connected = bool(p.get("connected", session.is_connected()))
                     row_state = str(p.get("state") or ("connected" if row_connected else "connecting"))
                     secure_link_snapshot = dict(p.get("secure_link") or RunnerMuxAggregate._default_secure_link_snapshot())
+                    outer_secure_link = {}
+                    get_outer_secure_link = getattr(session, "get_secure_link_status_snapshot", None)
+                    if callable(get_outer_secure_link):
+                        with contextlib.suppress(Exception):
+                            outer_secure_link = dict(get_outer_secure_link() or {})
+                    # Transport peer rows do not own SecureLink diagnostics.
+                    # Prefer the wrapper's status when the row contains only
+                    # the transport-level disabled placeholder.
+                    if not bool(secure_link_snapshot.get("enabled")) and bool(outer_secure_link.get("enabled")):
+                        secure_link_snapshot = outer_secure_link
                     connected_since_unix_ts = self._first_non_null(
                         p.get("connected_since_unix_ts"),
                         secure_link_snapshot.get("connected_since_unix_ts"),
@@ -2604,7 +2614,22 @@ class Runner:
                 reloaded += 1
             else:
                 failed += 1
-            dropped += int(result.get("dropped") or 0)
+            session_dropped = int(result.get("dropped") or 0)
+            dropped += session_dropped
+            if session_dropped and normalized_scope in {"local_identity", "all"}:
+                mux = self._muxes[idx] if idx < len(self._muxes) else None
+                rotate = getattr(mux, "request_connection_rotation", None)
+                if callable(rotate):
+                    rotation = rotate("secure_link_material_reload")
+                    if isinstance(rotation, dict):
+                        result["rotation"] = dict(rotation)
+                    else:
+                        result["rotation"] = {
+                            "accepted": bool(getattr(rotation, "accepted", False)),
+                            "reason": str(getattr(rotation, "reason", "") or ""),
+                            "candidate_cycle": getattr(rotation, "candidate_cycle", None),
+                            "restart_required": bool(getattr(rotation, "restart_required", False)),
+                        }
             result.setdefault("transport", label)
             result.setdefault("peer_ids", peer_row_ids)
             results.append(result)
@@ -2832,8 +2857,10 @@ class Runner:
                 down_for = time.monotonic() - self._last_disconnected_monotonic
                 if down_for < timeout_s:
                     continue
-                lifecycle_age = time.monotonic() - float(self._last_connection_lifecycle_monotonic or 0.0)
-                if self._last_connection_lifecycle_monotonic is not None and lifecycle_age < timeout_s:
+                # A lifecycle event means ChannelMux owns the active outage.
+                # This watchdog is only a fallback for sessions that report no
+                # lifecycle progress at all.
+                if self._last_connection_lifecycle_monotonic is not None:
                     continue
 
                 self.log.warning(
@@ -2841,7 +2868,7 @@ class Runner:
                     down_for,
                     timeout_s,
                 )
-                self.request_restart(reason=f"client_restart_watchdog_missing_lifecycle down_for={down_for:.3f}s lifecycle_age={lifecycle_age:.3f}s timeout={timeout_s:.3f}s")
+                self.request_restart(reason=f"client_restart_watchdog_missing_lifecycle down_for={down_for:.3f}s timeout={timeout_s:.3f}s")
                 return
 
         except asyncio.CancelledError:

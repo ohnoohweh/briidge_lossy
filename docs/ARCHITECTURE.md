@@ -137,17 +137,17 @@ callbacks, with transport-specific recovery paths:
   overlay is inactive. This protects the overlay but is weaker than the target
   requirement to prevent TUN/probe admission before ChannelMux is connected
 
-The observed SecureLink `failed`/`recovery reconnect unavailable` condition is
-an example of this split: Security requests a reconnect, but the active
-`myudp` transport does not provide the requested operation, and the watchdog
-does not own a definitive fallback decision.
+SecureLink failure is observable as a disconnected lifecycle event. ChannelMux
+owns the delayed rotation decision, and Runner restarts only after transport
+candidate-cycle exhaustion or a missing lifecycle-event watchdog timeout.
 
 Shared lifecycle contract: `ISession` defines `ConnectionLifecycleEvent` and
 `ConnectionRotationResult`; all Python transports expose the lifecycle callback
 and normalized lifecycle snapshot, and accept a transport-local rotation
 request. Rotation results report the selected candidate, completed candidate
-cycles, and whether three completed cycles require a restart. Runner restart
-supervision remains unfinished.
+cycles, and whether three completed cycles require a restart. Runner consumes
+that exhaustion result once; its watchdog is limited to sessions that have not
+emitted lifecycle events.
 
 ### Rework work packages
 
@@ -155,9 +155,6 @@ supervision remains unfinished.
    candidate-cycle restart result, TUN admission gate, and peer-view ownership
    model to the native Swift macOS/iOS implementations. Validate on macOS.
 
-2. Linux WebAdmin and operations package. Expose lifecycle state, epoch,
-   candidate/cycle/reason, and ownership-separated peer diagnostics in WebAdmin
-   and operational documentation, with Python-side tests and traceability.
 
 ## Stable component IDs
 

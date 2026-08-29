@@ -284,6 +284,19 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         await asyncio.sleep(0)
         self.assertEqual(session.rotation_requests, ["channelmux_disconnected", "channelmux_disconnected"])
 
+    def test_operator_rotation_cascades_once_and_waits_for_new_epoch(self):
+        asyncio.run(self._test_operator_rotation_cascades_once_and_waits_for_new_epoch())
+
+    async def _test_operator_rotation_cascades_once_and_waits_for_new_epoch(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 4, "reload"))
+
+        mux.request_connection_rotation("secure_link_material_reload")
+        mux.request_connection_rotation("secure_link_material_reload")
+
+        self.assertEqual(session.rotation_requests, ["secure_link_material_reload"])
+
     def test_tun_admission_requires_connected_lifecycle_epoch(self):
         asyncio.run(self._test_tun_admission_requires_connected_lifecycle_epoch())
 

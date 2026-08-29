@@ -53,6 +53,12 @@ class FakeInnerSession:
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
 
+    def get_overlay_peers_snapshot(self):
+        return [{"peer_id": 1, "secure_link": {"state": "failed", "failure_reason": "decode"}}]
+
+    def get_secure_link_status_snapshot(self):
+        return {"enabled": True, "state": "failed", "failure_reason": "decode"}
+
 
 class CompressLayerSessionTests(unittest.TestCase):
     MUX_HDR = struct.Struct(">HBHBH")
@@ -111,6 +117,12 @@ class CompressLayerSessionTests(unittest.TestCase):
 
         self.assertTrue(snap["enabled"])
         self.assertEqual(int(snap["compress_applied_total"]), 0)
+
+    def test_forwards_secure_link_peer_diagnostics(self):
+        wrapper = CompressLayerSession(FakeInnerSession(), self._args(), "tcp")
+
+        self.assertEqual(wrapper.get_overlay_peers_snapshot()[0]["secure_link"]["state"], "failed")
+        self.assertEqual(wrapper.get_secure_link_status_snapshot()["failure_reason"], "decode")
 
     def test_send_app_bypasses_when_no_gain(self):
         inner = FakeInnerSession()
