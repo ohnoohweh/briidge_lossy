@@ -2382,6 +2382,7 @@ class Runner:
                         "connected": row_connected,
                         "listen": listen_endpoint,
                         "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
+                        "connection_layers": self._session_connection_layers_snapshot(row_session),
                         "rtt_est_ms": self._first_non_null(p.get("rtt_est_ms"), row_metrics.rtt_est_ms),
                         "transmit_delay_sample_ms": self._first_non_null(
                             p.get("transmit_delay_sample_ms"),
@@ -2453,6 +2454,7 @@ class Runner:
                 "connected": bool(session.is_connected()),
                 "listen": listen_endpoint,
                 "peer": peer_label,
+                "connection_layers": self._session_connection_layers_snapshot(session),
                 "rtt_est_ms": m.rtt_est_ms,
                 "transmit_delay_sample_ms": m.transmit_delay_sample_ms,
                 "transmit_delay_est_ms": m.transmit_delay_est_ms,

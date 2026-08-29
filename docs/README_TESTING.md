@@ -42,6 +42,7 @@ The active testing focus on this branch is:
 
 - overlay reconnect and stale-transport recovery on Python and Swift paths
 - typed Python lifecycle-contract normalization, Compression forwarding, ChannelMux epoch-gated rotation/TUN admission, Runner cycle-exhaustion restart, and myUDP event-order/epoch emission
+- WebAdmin peer ownership grouping for connection, protocol, ChannelMux, and TUN diagnostics
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
 - configuration and hook-contract derivation from `TUN_routing`

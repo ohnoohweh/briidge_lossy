@@ -1030,7 +1030,7 @@ class SecureLinkPskSession(ISession):
         self._refresh_connected_state()
 
     def _refresh_connected_state(self) -> None:
-        connected = self._compute_app_ready()
+        connected = self._compute_connected()
         if connected:
             self._connected_evt.set()
         else:
@@ -1847,7 +1847,7 @@ class SecureLinkPskSession(ISession):
             return False
 
     def is_connected(self) -> bool:
-        return self._compute_app_ready()
+        return self._compute_connected()
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
         layers = []

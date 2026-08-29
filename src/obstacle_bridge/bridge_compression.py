@@ -410,10 +410,10 @@ class CompressLayerSession(ISession):
             {
                 "layer": "compression",
                 "transport": self._transport_name,
-                "state": "enabled" if bool(self._configured_enabled) else "passthrough",
+                "state": "connected" if self.is_connected() else "disconnected",
                 "epoch": int(layers[-1].get("epoch", 0) or 0) if layers else 0,
-                "connected": bool(self._inner.is_connected()),
-                "app_ready": bool(self._inner.is_connected()),
+                "connected": bool(self.is_connected()),
+                "app_ready": bool(self.is_connected()),
                 "enabled": bool(self._configured_enabled),
             }
         )

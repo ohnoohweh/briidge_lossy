@@ -383,7 +383,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._accepting_enabled = True
 
         with self.assertLogs('channel_mux', level='INFO') as logs:
-            await mux.on_overlay_state(False)
+            await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 7, "secure_link_reauthenticating"))
 
         text = "\n".join(logs.output)
         self.assertIn("[MUX/STATE]", text)
@@ -424,7 +424,9 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._accepting_enabled = True
 
         with self.assertLogs('channel_mux', level='INFO') as logs:
-            await mux.on_overlay_state(False)
+            await mux.on_connection_lifecycle(
+                ConnectionLifecycleEvent(ConnectionState.CONNECTED, 7, "secure_link_reauthenticating")
+            )
 
         self.assertTrue(mux._overlay_connected)
         self.assertTrue(mux._accepting_enabled)

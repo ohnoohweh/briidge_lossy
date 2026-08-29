@@ -2237,23 +2237,16 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         return bool(self.session.is_connected())
 
     def _session_overlay_inflow_allowed(self) -> bool:
-        secure_status_getter = getattr(self.session, "get_secure_link_status_snapshot", None)
-        if callable(secure_status_getter):
-            with contextlib.suppress(Exception):
-                status = dict(secure_status_getter() or {})
-                state = str(status.get("state") or "").strip().lower()
-                if state in {"authenticated", "reauthenticating"}:
-                    return True
-                if state in {"handshaking", "failed", "waiting_transport", "waiting_hello", "disconnected"}:
-                    return False
-        return bool(self._session_app_ready())
+        # ChannelMux only consumes the binary lifecycle state from its immediate
+        # lower wrapper; wrapper-specific security details stay below this layer.
+        return bool(self.session.is_connected())
 
     async def on_overlay_state(self, connected: bool, *, epoch: Optional[int] = None):
         if epoch is not None:
             self._observe_connection_epoch(epoch)
         was_connected = self._overlay_connected
         was_accepting = self._accepting_enabled
-        effective_connected = bool(self._session_overlay_inflow_allowed())
+        effective_connected = bool(connected)
         self._overlay_connected = effective_connected
         self.log.info("[MUX] overlay -> %s", "CONNECTED" if effective_connected else "DISCONNECTED")
         if not effective_connected:

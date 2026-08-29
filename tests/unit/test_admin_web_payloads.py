@@ -1584,6 +1584,16 @@ class AdminWebPayloadTests(unittest.TestCase):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
                 self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
+                self.assertIn('<td class="peer-detail-kind">ChannelMux</td>', text)
+                self.assertIn('<td class="peer-detail-kind">TUN</td>', text)
+                self.assertIn('<td class="peer-detail-kind">SecureLink</td>', text)
+                self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
+                self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
+                self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
+                self.assertIn("renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected'", text)
+                self.assertIn("renderMetric('Reported Status', layerStatus('secure_link')", text)
+                self.assertIn("renderMetric('SecureLink Phase', secureLink.state", text)
+                self.assertIn("renderMetric('Reported Status', layerStatus('compression')", text)
                 self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):

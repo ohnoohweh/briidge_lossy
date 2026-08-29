@@ -1531,7 +1531,11 @@ select.config-editor option:disabled {
 .peer-security-control-line {
   display: grid;
   align-items: stretch;
-  grid-template-columns: repeat(4, minmax(120px, 1fr));
+  grid-template-columns: repeat(6, minmax(90px, 1fr));
+}
+
+.peer-security-control-line .secure-link-reported-status {
+  grid-column: span 2;
 }
 
 .peer-security-control-line .peer-detail-metric {

@@ -151,10 +151,13 @@ supervision remains unfinished.
 
 ### Rework work packages
 
-1. Complete parity, observability, and migration. Apply the same observable
-   lifecycle contract to the Swift macOS/iOS implementations, expose current
-   state/epoch/candidate/cycle/reason in WebAdmin, and update requirements,
-   traceability, and operational documentation alongside the implementation.
+1. Swift macOS/iOS lifecycle parity package. Apply the lifecycle contract,
+   candidate-cycle restart result, TUN admission gate, and peer-view ownership
+   model to the native Swift macOS/iOS implementations. Validate on macOS.
+
+2. Linux WebAdmin and operations package. Expose lifecycle state, epoch,
+   candidate/cycle/reason, and ownership-separated peer diagnostics in WebAdmin
+   and operational documentation, with Python-side tests and traceability.
 
 ## Stable component IDs
 
