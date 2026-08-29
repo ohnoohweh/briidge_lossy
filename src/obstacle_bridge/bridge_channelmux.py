@@ -189,6 +189,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         "helper_write_probe_packet",
         "helper_write_error",
     )
+    CONNECTION_ROTATION_DELAY_S: float = 30.0
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -610,6 +611,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         # Overlay state gate
         self._overlay_connected: bool = self._session_overlay_inflow_allowed()
         self._accepting_enabled: bool = self._overlay_connected
+        self._connection_rotation_task: Optional[asyncio.Task] = None
 
         # Services
         self._local_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
@@ -2246,6 +2248,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._overlay_connected = effective_connected
         self.log.info("[MUX] overlay -> %s", "CONNECTED" if effective_connected else "DISCONNECTED")
         if not effective_connected:
+            self._schedule_connection_rotation()
             self._accepting_enabled = False
             self._log_overlay_accepting_state(
                 reason="on_overlay_state_disconnected",
@@ -2258,6 +2261,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             await self._stop_all_services()
             await self._close_all_channels()
             return
+        self._cancel_connection_rotation()
         # Re-enable and (re)start
         if not was_connected:
             self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
@@ -2272,6 +2276,32 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         )
         await self._start_all_services()
         self._send_remote_services_catalog_if_any()
+
+    def _cancel_connection_rotation(self) -> None:
+        task = self._connection_rotation_task
+        self._connection_rotation_task = None
+        if task is not None and not task.done():
+            task.cancel()
+
+    def _schedule_connection_rotation(self) -> None:
+        if self._connection_rotation_task is not None and not self._connection_rotation_task.done():
+            return
+
+        async def _rotate_after_disconnect() -> None:
+            try:
+                await asyncio.sleep(self.CONNECTION_ROTATION_DELAY_S)
+                if self._overlay_connected:
+                    return
+                request = getattr(self.session, "request_connection_rotation", None)
+                if callable(request):
+                    result = request("channelmux_disconnected")
+                    self.log.warning("[MUX] requested connection rotation after %.1fs result=%r", self.CONNECTION_ROTATION_DELAY_S, result)
+            except asyncio.CancelledError:
+                return
+            finally:
+                self._connection_rotation_task = None
+
+        self._connection_rotation_task = self.loop.create_task(_rotate_after_disconnect())
 
     async def on_transport_epoch_change(self, epoch: int) -> None:
         self.log.info("[MUX] transport epoch changed -> %s (hard resync)", epoch)

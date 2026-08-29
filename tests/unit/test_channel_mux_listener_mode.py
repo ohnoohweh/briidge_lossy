@@ -38,6 +38,7 @@ class _FakeSession:
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
+        self.rotation_requests = []
         self.connected = connected
         if connection_layers is None:
             self.connection_layers = [
@@ -83,6 +84,10 @@ class _FakeSession:
     def send_app(self, payload):
         self.sent.append(payload)
         return len(payload)
+
+    def request_connection_rotation(self, reason=""):
+        self.rotation_requests.append(str(reason))
+        return {"accepted": True, "reason": str(reason)}
 
     def get_max_app_payload_size(self):
         return self.max_app_payload_size
@@ -227,6 +232,37 @@ def _ipv4_echo_reply(src: str, dst: str, identifier: int, sequence: int, payload
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_disconnected_overlay_requests_one_rotation_after_delay(self):
+        asyncio.run(self._test_disconnected_overlay_requests_one_rotation_after_delay())
+
+    async def _test_disconnected_overlay_requests_one_rotation_after_delay(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.0
+
+        await mux.on_overlay_state(False)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(session.rotation_requests, ["channelmux_disconnected"])
+
+    def test_connected_overlay_cancels_pending_rotation(self):
+        asyncio.run(self._test_connected_overlay_cancels_pending_rotation())
+
+    async def _test_connected_overlay_cancels_pending_rotation(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.05
+
+        await mux.on_overlay_state(False)
+        session.connected = True
+        session.connection_layers[-1]["connected"] = True
+        session.connection_layers[-1]["app_ready"] = True
+        await mux.on_overlay_state(True)
+        await asyncio.sleep(0.06)
+
+        self.assertEqual(session.rotation_requests, [])
+
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
         mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
 

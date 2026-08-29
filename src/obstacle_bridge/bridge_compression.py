@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 
 _bridge = export_bridge_globals(globals())
 
@@ -122,6 +123,9 @@ class CompressLayerSession(ISession):
         self._outer_on_peer_disconnect = None
         self._outer_on_app_from_peer_bytes = None
         self._outer_on_transport_epoch_change = None
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
+        self._connection_lifecycle_epoch = 0
+        self._compression_error_epoch = None
         self._compress_attempts_total = 0
         self._compress_applied_total = 0
         self._compress_skipped_no_gain_total = 0
@@ -286,6 +290,7 @@ class CompressLayerSession(ISession):
                 self._transport_name,
                 peer_id,
             )
+            self._mark_compression_error()
             return
         decoded = self._safe_decompress(body, self._max_mux_payload)
         if decoded is None:
@@ -299,6 +304,7 @@ class CompressLayerSession(ISession):
                 len(body),
                 int(self._max_mux_payload),
             )
+            self._mark_compression_error()
             return
         self._decompress_ok_total += 1
         self._mark_peer_active(peer_id)
@@ -307,6 +313,8 @@ class CompressLayerSession(ISession):
         self._deliver_outer_app(wire, peer_id)
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+        if self._compression_error_epoch == self._connection_lifecycle_epoch:
+            return 0
         parsed = self._parse_mux_frame(payload)
         if parsed is None:
             sent = self._inner.send_app(payload, peer_id=peer_id)
@@ -355,6 +363,7 @@ class CompressLayerSession(ISession):
 
     def set_on_app_payload(self, cb): self._outer_on_app = cb
     def set_on_state_change(self, cb): self._outer_on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._connection_lifecycle.set_callback(cb)
     def set_on_peer_rx(self, cb): self._outer_on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._outer_on_peer_tx = cb
     def set_on_peer_set(self, cb): self._outer_on_peer_set = cb
@@ -365,6 +374,9 @@ class CompressLayerSession(ISession):
     async def start(self) -> None:
         self._inner.set_on_app_payload(self._on_inner_payload)
         self._inner.set_on_state_change(self._outer_on_state)
+        setter = getattr(self._inner, "set_on_connection_lifecycle", None)
+        if callable(setter):
+            setter(self._on_inner_connection_lifecycle)
         self._inner.set_on_peer_rx(self._outer_on_peer_rx)
         self._inner.set_on_peer_tx(self._outer_on_peer_tx)
         self._inner.set_on_peer_set(self._outer_on_peer_set)
@@ -383,7 +395,10 @@ class CompressLayerSession(ISession):
         return await self._inner.wait_connected(timeout)
 
     def is_connected(self) -> bool:
-        return bool(self._inner.is_connected())
+        return bool(self._inner.is_connected()) and self._compression_error_epoch != self._connection_lifecycle_epoch
+
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
         layers = []
@@ -418,6 +433,27 @@ class CompressLayerSession(ISession):
             with contextlib.suppress(Exception):
                 return bool(trigger())
         return False
+
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        trigger = getattr(self._inner, "request_connection_rotation", None)
+        if callable(trigger):
+            with contextlib.suppress(Exception):
+                return trigger(reason)
+        return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
+
+    def _on_inner_connection_lifecycle(self, event) -> None:
+        self._connection_lifecycle_epoch = int(event.epoch)
+        if event.connected:
+            self._compression_error_epoch = None
+        self._connection_lifecycle.transition(event.state, event.epoch, event.reason)
+
+    def _mark_compression_error(self) -> None:
+        self._compression_error_epoch = self._connection_lifecycle_epoch
+        self._connection_lifecycle.transition(
+            ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "compression_error",
+        )
 
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()

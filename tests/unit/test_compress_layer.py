@@ -6,6 +6,7 @@ import unittest
 import zlib
 
 from obstacle_bridge.bridge import CompressLayerSession, SessionMetrics
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionState
 
 
 class FakeInnerSession:
@@ -138,6 +139,20 @@ class CompressLayerSessionTests(unittest.TestCase):
         invalid = self._pack_mux(0x80, b"not-zlib")
         wrapper._on_inner_payload(invalid, peer_id=2)
         self.assertEqual(out, [])
+
+    def test_compression_error_blocks_same_epoch_until_new_connection(self):
+        inner = FakeInnerSession()
+        wrapper = CompressLayerSession(inner, self._args(), "tcp")
+        events = []
+        wrapper.set_on_connection_lifecycle(events.append)
+        wrapper._on_inner_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1))
+
+        wrapper._on_inner_payload(self._pack_mux(0x80, b"not-zlib"))
+        self.assertEqual(wrapper.send_app(self._pack_mux(0x00, b"payload")), 0)
+        self.assertEqual(events[-1].state, ConnectionState.DISCONNECTED)
+
+        wrapper._on_inner_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 2))
+        self.assertGreater(wrapper.send_app(self._pack_mux(0x00, b"payload")), 0)
         snap = wrapper.get_compress_layer_status_snapshot()
         self.assertEqual(int(snap["decompress_fail_total"]), 1)
 
