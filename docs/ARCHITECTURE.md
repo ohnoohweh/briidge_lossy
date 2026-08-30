@@ -204,6 +204,8 @@ The peer-address protocol is anchored immediately above the concrete transport a
 
 The client records only the most recent valid reply for its current transport epoch. The fields are published as `observed_public_ip` and `observed_public_port` in the active peer snapshot and rendered together as **Own Public IP** in the Transport section of the Peer page. It therefore shows the source tuple actually used by the selected overlay path, rather than a host-wide lookup result. IPv6 is rendered in brackets before the port. A dual-stack listener's IPv4-mapped IPv6 representation (`::ffff:a.b.c.d`) is encoded as the canonical IPv4 address so it remains unambiguous beside an IPv4 resolved peer. The layer is diagnostic only: a missing reply must never hold up overlay connection, SecureLink authentication, or ChannelMux readiness.
 
+For accepted listener peers, the raw child transport session supplies peer-local metrics, while the outer stack supplies the layer inventory. The peer snapshot overlays SecureLink authentication and compression state from that peer's diagnostics onto the outer layer inventory, so a healthy accepted peer cannot be displayed as a disconnected wrapper stack.
+
 Important behaviors:
 
 - single-peer client mode

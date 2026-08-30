@@ -504,7 +504,7 @@ ARC-CMP-005:
   # SecureLink-specific handshake-debug telemetry fields, including persistent
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
   # the stable peer Transport detail layout, semantic status-pill colors, and
-  # negative-uptime launcher restart countdown.
+  # negative-uptime launcher restart countdown, and peer-scoped wrapper status.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields

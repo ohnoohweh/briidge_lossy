@@ -952,6 +952,16 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
             def is_connected(self):
                 return True
 
+            def get_connection_layers_snapshot(self):
+                return [
+                    {"layer": "transport", "state": "connected", "connected": True, "app_ready": True},
+                    {"layer": "secure_link", "state": "authenticated", "connected": True, "app_ready": True},
+                    {"layer": "compression", "state": "connected", "connected": True, "app_ready": True, "enabled": True},
+                ]
+
+            def get_compress_layer_status_snapshot(self, peer_id=None):
+                return {"enabled": True, "transport": "myudp"}
+
             def get_overlay_peers_snapshot(self):
                 return [
                     {
@@ -967,6 +977,7 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
                         "connected": True,
                         "peer": "198.51.100.1:4433",
                         "mux_chans": [101],
+                        "secure_link": {"enabled": True, "state": "authenticated", "authenticated": True},
                     },
                 ]
 
@@ -984,6 +995,8 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertEqual(listener["myudp"]["confirmed_total"], 0)
         self.assertEqual(peer["inflight"], 7)
         self.assertEqual(peer["myudp"]["confirmed_total"], 11)
+        self.assertEqual([layer["state"] for layer in peer["connection_layers"]], ["connected", "authenticated", "connected"])
+        self.assertTrue(all(layer["connected"] for layer in peer["connection_layers"]))
 
     def test_listener_peer_snapshot_unwraps_secure_link_wrapper_for_myudp_stats(self):
         class _InnerStats:

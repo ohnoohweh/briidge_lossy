@@ -272,6 +272,8 @@ For reconnect-capable Python client transports (`tcp`, `quic`, and `ws`), connec
 
 Implementation note: during a delayed launcher restart, the launcher-owned `/api/status` response represents remaining restart time as a negative `uptime_sec`. WebAdmin renders that signed value as a countdown and keeps the normal page loaded until the supervised runtime returns.
 
+Implementation note: accepted listener-peer snapshots retain child-session metrics but derive SecureLink and compression layer status from the peer's wrapper diagnostics, so an authenticated, active peer cannot report disconnected layer pills.
+
 
 - `REQ-ADM-007`: Secret configuration keys exposed by the runtime (for example `secure_link_psk` and `admin_web_password`) shall be writable through the admin configuration update API but must never be returned in cleartext by read-only snapshots. The admin UI shall render these keys as password-style inputs (empty on read) and must not display the stored secret value through the normal configuration row or editor.
 
