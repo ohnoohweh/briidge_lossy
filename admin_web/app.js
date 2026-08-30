@@ -1490,12 +1490,12 @@ function detailPillClass(value) {
   return 'role-pill role-unknown';
 }
 
-function renderMetric(label, value, { pill = false, compact = false } = {}) {
+function renderMetric(label, value, { pill = false, compact = false, neutral = false, className = '' } = {}) {
   const renderedValue = pill
-    ? `<span class="${detailPillClass(value)}">${escapeHtml(fmtText(value))}</span>`
+    ? `<span class="${neutral ? 'role-pill role-unknown' : detailPillClass(value)}">${escapeHtml(fmtText(value))}</span>`
     : `<span class="peer-detail-value mono">${escapeHtml(fmtText(value))}</span>`;
   return `
-    <div class="peer-detail-metric${compact ? ' peer-detail-metric-compact' : ''}">
+    <div class="peer-detail-metric${compact ? ' peer-detail-metric-compact' : ''}${className ? ` ${className}` : ''}">
       <span class="peer-detail-label">${escapeHtml(label)}</span>
       ${renderedValue}
     </div>
@@ -1725,34 +1725,28 @@ function applyProxyDoc() {
   setText('proxyLastError', totals.lastError || 'n/a');
 }
 
-function renderPeerRateBars(rxBytesPerSec, txBytesPerSec) {
+function renderPeerRateMetric(label, bytesPerSec, percent, kind) {
+  return `
+    <div class="peer-detail-metric peer-rate-metric">
+      <span class="peer-detail-label">${escapeHtml(label)}</span>
+      <span class="peer-detail-value mono">${escapeHtml(fmtBytesPerSecond(bytesPerSec))}</span>
+      <div class="peer-rate-track">
+        <div class="peer-rate-fill peer-rate-fill-${escapeHtml(kind)}" style="width: ${percent.toFixed(1)}%"></div>
+      </div>
+    </div>
+  `;
+}
+
+function peerRateMetrics(rxBytesPerSec, txBytesPerSec) {
   const rx = Math.max(0, Number(rxBytesPerSec || 0));
   const tx = Math.max(0, Number(txBytesPerSec || 0));
   const scale = Math.max(rx, tx, 1);
   const rxPct = Math.max(0, Math.min(100, (rx / scale) * 100));
   const txPct = Math.max(0, Math.min(100, (tx / scale) * 100));
-  return `
-    <div class="peer-rate-bars">
-      <div class="peer-rate-bar-card">
-        <div class="peer-rate-bar-top">
-          <span class="peer-detail-label">RX Bytes/s</span>
-          <span class="peer-detail-value mono">${escapeHtml(fmtBytesPerSecond(rx))}</span>
-        </div>
-        <div class="peer-rate-track">
-          <div class="peer-rate-fill peer-rate-fill-rx" style="width: ${rxPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-      <div class="peer-rate-bar-card">
-        <div class="peer-rate-bar-top">
-          <span class="peer-detail-label">TX Bytes/s</span>
-          <span class="peer-detail-value mono">${escapeHtml(fmtBytesPerSecond(tx))}</span>
-        </div>
-        <div class="peer-rate-track">
-          <div class="peer-rate-fill peer-rate-fill-tx" style="width: ${txPct.toFixed(1)}%"></div>
-        </div>
-      </div>
-    </div>
-  `;
+  return [
+    renderPeerRateMetric('RX Bytes/s', rx, rxPct, 'rx'),
+    renderPeerRateMetric('TX Bytes/s', tx, txPct, 'tx'),
+  ];
 }
 
 function renderPeerDetailRow(rowLabel, metrics, extraClass = '') {
@@ -1888,6 +1882,28 @@ async function repairTunHelperState() {
     );
   } catch (e) {
     window.alert(`TUN helper repair failed: ${e}`);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+async function toggleTunRoutingEnabled() {
+  const btn = document.getElementById('tunRoutingToggleBtn');
+  const currentLabel = String(document.getElementById('tunRoutingEnabledState')?.textContent || '').trim().toLowerCase();
+  const nextEnabled = currentLabel !== 'yes';
+  try {
+    if (btn) btn.disabled = true;
+    const r = await apiFetch('/api/tun-routing/control', {
+      method: 'POST',
+      body: JSON.stringify({ enabled: nextEnabled }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.ok) {
+      throw new Error(String(j.error || j.reason || ('HTTP ' + r.status)));
+    }
+    await loadTunRouting();
+  } catch (e) {
+    window.alert(`TUN toggle failed: ${e}`);
   } finally {
     if (btn) btn.disabled = false;
   }
@@ -2911,11 +2927,11 @@ function renderPeerTable(rows) {
       || Number(compressLayer.decompress_ok_total || 0) > 0
       || Number(compressLayer.decompress_fail_total || 0) > 0
     );
-    const showCompressionRow = !isConnectingPeer && (compressEnabled || compressHasData);
+    const showCompressionRow = !isListeningPeer && (compressEnabled || compressHasData);
     const isCertMode = secureLinkMode === 'cert';
     const trustFailureReason = String(secureLink.trust_failure_reason || '').trim();
     const trustFailureDetail = String(secureLink.trust_failure_detail || '').trim();
-    const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer && !isConnectingPeer;
+    const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer;
     const showMyUdpProtocolStats = isMyUdp;
     const showMyUdpDetailStats = isMyUdp;
     const stateText = String(row.state || 'unknown').toLowerCase();
@@ -2923,7 +2939,7 @@ function renderPeerTable(rows) {
       `
       <div class="peer-state-control">
         <div class="peer-detail-metric">
-          <span class="peer-detail-label">State</span>
+          <span class="peer-detail-label">Transport State</span>
           <span class="${detailPillClass(stateText)}">${escapeHtml(fmtText(stateText))}</span>
         </div>
         ${!isListeningPeer ? `<button class="btn btn-secondary peer-reconnect-btn" type="button" data-peer-id="${escapeHtml(fmtText(row.id))}">Reconnect</button>` : ''}
@@ -2931,41 +2947,55 @@ function renderPeerTable(rows) {
       `,
     ];
     if (isListeningPeer) {
-      connectionLine1.push(renderMetric('Listen', row.listen));
+      connectionLine1.push(renderMetric('Transport Listen', row.listen));
     } else {
-      connectionLine1.push(renderMetric('Peer', row.peer));
+      connectionLine1.push(renderMetric('Resolved Peer', row.peer));
     }
     const connectionLines = [connectionLine1];
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
-        renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
-        renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {
       connectionLines.push([
-        renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
-        renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
-        renderMetric('TUN Open', fmtInteger(row.open_connections?.tun ?? 0)),
-      ]);
-      connectionLines.push([
         renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)),
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
-        renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
-        renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
-        renderMetric('Throttle', fmtThrottleSummary(row.throttle)),
-        renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
-        renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
-      ]);
-      connectionLines.push([
-        renderPeerRateBars(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0),
       ]);
     }
+    const connectionLayers = Array.isArray(row.connection_layers) ? row.connection_layers : [];
+    const layerStatus = (name, fallback = 'disconnected') => {
+      const layer = connectionLayers.find((candidate) => String(candidate.layer || '').toLowerCase() === name);
+      if (layer && typeof layer.connected === 'boolean') {
+        return layer.connected ? 'connected' : 'disconnected';
+      }
+      return String(layer?.state || fallback).toLowerCase();
+    };
+    const channelMuxMetrics = !isListeningPeer ? renderMetricStack([[
+      renderMetric('RX Bytes', fmtBytes(row.traffic?.rx_bytes ?? 0)),
+      ...peerRateMetrics(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0).slice(0, 1),
+      renderMetric('TX Bytes', fmtBytes(row.traffic?.tx_bytes ?? 0)),
+      ...peerRateMetrics(row.traffic?.rx_bytes_per_sec ?? 0, row.traffic?.tx_bytes_per_sec ?? 0).slice(1),
+    ], [
+      renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
+      renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
+      renderMetric('TUN Open', fmtInteger(row.open_connections?.tun ?? 0)),
+    ], [
+      renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
+      renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
+    ]]) : '';
+    const tunMetrics = !isListeningPeer ? renderMetricStack([[
+      renderMetric('Throttle', fmtThrottleSummary(row.throttle)),
+    ]]) : '';
     const connectionMetrics = renderMetricStack(connectionLines);
-    const showProtocolRow = !isListeningPeer && !isConnectingPeer;
+    const showProtocolRow = !isListeningPeer;
+    const protocolBaseLines = !isListeningPeer ? [[
+      renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected', { pill: true }),
+      renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms)),
+      renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms)),
+    ]] : [];
     const protocolMetrics = showMyUdpProtocolStats
-      ? renderMetricStack([
+      ? renderMetricStack(protocolBaseLines.concat([
         [
           renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
           renderMetric('Buffered Frames', fmtMyUdpMetric(row, row.myudp?.buffered_frames)),
@@ -2976,18 +3006,19 @@ function renderPeerTable(rows) {
           renderMetric('myUDP Repeated Once', fmtMyUdpPercent(row, row.myudp?.repeated_once)),
           renderMetric('myUDP Repeated Multiple', fmtMyUdpPercent(row, row.myudp?.repeated_multiple)),
         ],
-      ])
-      : renderMetricStack([
+      ]))
+      : renderMetricStack(protocolBaseLines.concat([
         [
           renderMetric('Decode Errors', fmtInteger(row.decode_errors ?? 0)),
         ],
-      ]);
+      ]));
     const securityLines = [];
     const rekeySupported = secureLink.rekey_supported !== false;
     const allowRekeyAction = rekeySupported && String(row.state || '').toLowerCase() !== 'listening';
     if (showSecurityLifecycle) {
       securityLines.push([
-        renderMetric('Status', secureLink.state, { pill: true, compact: true }),
+        renderMetric('Reported Status', layerStatus('secure_link'), { pill: true, compact: true, className: 'secure-link-reported-status' }),
+        renderMetric('SecureLink Phase', secureLink.state, { pill: true, compact: true, neutral: true }),
         renderMetric('Session ID', fmtInteger(secureLink.session_id), { compact: true }),
         ...(allowRekeyAction ? [
           renderMetric('Rekey in progress', secureLink.rekey_in_progress, { pill: true, compact: true }),
@@ -3043,14 +3074,15 @@ function renderPeerTable(rows) {
       ]] : []),
     ]) : '';
     const rowSpan = 1
+      + (!isListeningPeer ? 2 : 0)
       + (showProtocolRow ? 1 : 0)
       + (showCompressionRow ? 1 : 0)
-      + (showSecurityLifecycle ? 2 : 0);
+      + (showSecurityLifecycle ? 1 : 0);
     const detailRows = [
       `
       <tr class="peer-detail-row peer-detail-row-start ${rowSpan === 1 ? 'peer-detail-row-end' : ''}">
         <td class="mono peer-id-cell" rowspan="${rowSpan}">${escapeHtml(fmtPeerCompositeId(row.transport, row.id))}</td>
-        <td class="peer-detail-kind">Connection</td>
+        <td class="peer-detail-kind">Transport</td>
         <td>${connectionMetrics}</td>
       </tr>
       `,
@@ -3063,35 +3095,43 @@ function renderPeerTable(rows) {
       </tr>
       `);
     }
-    if (showCompressionRow) {
-      const compressionMetrics = renderMetricStack([
-        [
-          renderMetric('saving_ratio', `${fmtPercentFraction(compressSavingsRatio)}%`),
-          renderMetric('decompress_fail_total', fmtInteger(compressLayer.decompress_fail_total)),
-        ],
-      ]);
+    if (showSecurityLifecycle) {
       detailRows.push(`
-      <tr class="peer-detail-row ${showSecurityLifecycle ? '' : 'peer-detail-row-end'}">
+      <tr class="peer-detail-row">
+        <td class="peer-detail-kind">SecureLink</td>
+        <td>
+          <div class="peer-detail-stack">
+            ${securityMetrics}
+            ${lifecycleMetrics}
+          </div>
+        </td>
+      </tr>
+      `);
+    }
+    if (showCompressionRow) {
+      const compressionMetrics = renderMetricStack([[
+        renderMetric('Reported Status', layerStatus('compression'), { pill: true }),
+        renderMetric('saving_ratio', `${fmtPercentFraction(compressSavingsRatio)}%`),
+        renderMetric('decompress_fail_total', fmtInteger(compressLayer.decompress_fail_total)),
+      ]]);
+      detailRows.push(`
+      <tr class="peer-detail-row">
         <td class="peer-detail-kind">Compression</td>
         <td>${compressionMetrics}</td>
       </tr>
       `);
     }
-    if (showSecurityLifecycle) {
+    if (channelMuxMetrics) {
       detailRows.push(`
-      <tr class="peer-detail-row ">
-        <td class="peer-detail-kind">Security</td>
-        <td>
-          <div class="peer-detail-stack">
-            ${securityMetrics}
-          </div>
-        </td>
+      <tr class="peer-detail-row">
+        <td class="peer-detail-kind">ChannelMux</td>
+        <td>${channelMuxMetrics}</td>
       </tr>
       `);
       detailRows.push(`
       <tr class="peer-detail-row peer-detail-row-end">
-        <td class="peer-detail-kind">Lifecycle</td>
-        <td>${lifecycleMetrics}</td>
+        <td class="peer-detail-kind">TUN</td>
+        <td>${tunMetrics}</td>
       </tr>
       `);
     }
@@ -3218,6 +3258,11 @@ function applyTunRoutingDoc(j) {
   setText('tunRoutingExcludedRoutes', fmtTunRoutingRouteList(j.excluded_routes));
   setText('tunRoutingIncludedRoutes6', fmtTunRoutingRouteList(j.included_routes6));
   setText('tunRoutingExcludedRoutes6', fmtTunRoutingRouteList(j.excluded_routes6));
+  const tunControl = j.tun_control || {};
+  const tunEnabled = Boolean(tunControl.enabled);
+  const tunToggleSupported = Boolean(tunControl.supported);
+  setText('tunRoutingEnabledState', tunEnabled ? 'yes' : 'no');
+  setText('tunRoutingStartupState', Boolean(tunControl.startup_enabled) ? 'enabled' : 'suspended');
   const verification = j.verification || {};
   const configVerification = verification.tun_config || {};
   const peerVerification = verification.tun_connectivity || {};
@@ -3292,6 +3337,12 @@ function applyTunRoutingDoc(j) {
     );
     helperRepairBtn.classList.toggle('hidden', !helperRepairAvailable);
     helperRepairBtn.disabled = !helperRepairAvailable;
+  }
+  const tunToggleBtn = document.getElementById('tunRoutingToggleBtn');
+  if (tunToggleBtn instanceof HTMLButtonElement) {
+    tunToggleBtn.classList.toggle('hidden', !tunToggleSupported);
+    tunToggleBtn.disabled = !tunToggleSupported;
+    tunToggleBtn.textContent = tunEnabled ? 'Suspend TUN' : 'Enable TUN';
   }
 }
 
@@ -4774,6 +4825,7 @@ function initMetaToggle() {
 }
 
 document.getElementById('restartBtn').addEventListener('click', restart);
+document.getElementById('tunRoutingToggleBtn')?.addEventListener('click', toggleTunRoutingEnabled);
 document.getElementById('tunHelperRepairBtn')?.addEventListener('click', repairTunHelperState);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);

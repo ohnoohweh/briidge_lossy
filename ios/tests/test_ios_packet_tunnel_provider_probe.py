@@ -213,33 +213,33 @@ def _overlay_secure_link_server_config(
     cert_dir: Path | None = None,
 ) -> dict:
     config: dict = {
-        "overlay_transport": transport,
-        "secure_link": True,
-        "secure_link_mode": "psk",
-        "secure_link_psk": "probe-own-server-psk",
-        "admin_web": True,
-        "admin_web_bind": "127.0.0.1",
-        "admin_web_port": int(admin_port),
-        "admin_web_auth_disable": True,
-        "status": False,
+        "runner": {"overlay_transport": transport},
+        "secure_link": {
+            "secure_link": True,
+            "secure_link_mode": "psk",
+            "secure_link_psk": "probe-own-server-psk",
+        },
+        "admin_web": {
+            "admin_web": True,
+            "admin_web_bind": "127.0.0.1",
+            "admin_web_port": int(admin_port),
+            "admin_web_auth_disable": True,
+        },
+        "stats_board": {"status": False},
     }
     if transport == "ws":
-        config.update(
-            {
+        config["ws_session"] = {
                 "ws_bind": "127.0.0.1",
                 "ws_own_port": int(peer_port),
-            }
-        )
+        }
     elif transport == "quic":
         assert cert_dir is not None
-        config.update(
-            {
+        config["quic_session"] = {
                 "quic_bind": "127.0.0.1",
                 "quic_own_port": int(peer_port),
                 "quic_cert": str(cert_dir / "cert.pem"),
                 "quic_key": str(cert_dir / "key.pem"),
-            }
-        )
+        }
     else:
         raise AssertionError(f"unsupported transport: {transport}")
     return config

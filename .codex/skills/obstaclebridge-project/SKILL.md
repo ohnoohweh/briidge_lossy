@@ -94,6 +94,10 @@ state before finishing the turn.
   separates delivered work, current limitations, and remaining follow-ups.
 - Do not leave design docs describing already-landed work as if it were still a
   proposed step.
+- Phrase architecture and roadmap text as present status and remaining work,
+  not implementation-change history. Do not use labels such as `legacy`,
+  `former/current`, or phrases such as `the Python runtime now` unless they
+  identify a still-supported compatibility interface required by the design.
 
 ## Iteration Expectation
 

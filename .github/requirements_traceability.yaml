@@ -261,17 +261,16 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_psk.py::test_auth_failure_unregisters_server_mux_routes
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
 REQ-AUT-008:
-  # The authenticated-failure recovery slice also covers preservation of the
-  # pending reconnect timer across runner disconnect resets and transport epoch
-  # callbacks, so CI catches regressions where recovery is scheduled but erased.
+  # Authenticated SecureLink failures are reported to ChannelMux, which owns
+  # the resulting lifecycle rotation through the lower layers.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_reconnect
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window
     - tests/unit/test_secure_link_psk.py::test_reconnect_respects_remaining_retry_backoff_after_auth_failure
-    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
-    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_recovery_can_be_disabled
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_without_recovery_option
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
@@ -302,7 +301,7 @@ REQ-AUT-009:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
-    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_schedules_transport_reconnect_recovery
+    - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
 REQ-AUT-010:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold
@@ -549,12 +548,32 @@ REQ-PRX-001:
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
 
 REQ-LIFE-001:
+  # SecureLink lifecycle coverage reports failure without issuing a direct transport reconnect.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
   unit_tests:
+    - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason
+    - tests/unit/test_connection_lifecycle.py::test_event_normalizes_legacy_connected_snapshot
+    - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
+    - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
+    - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
+    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_secure_link_psk.py::test_lifecycle_forwards_transport_epoch_and_rotation_request
+    - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
+    - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_operator_rotation_cascades_once_and_waits_for_new_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_connected_lifecycle_resets_transport_rotation_cycles
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_requires_connected_lifecycle_epoch
+    - tests/unit/test_runner_events.py::test_rotation_exhaustion_requests_restart_once
+    - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
+    - tests/unit/test_compress_layer.py::test_compression_error_blocks_same_epoch_until_new_connection
+    - tests/unit/test_compress_layer.py::test_forwards_secure_link_peer_diagnostics
+    - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_sender_reset_clears_stale_reconnect_state
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_transport_epoch_reset_clears_receiver_gap_state
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_peer_protocol_epoch_reset_drops_queued_datagrams_and_control_state
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
+    - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect
 
 REQ-LIFE-002:
   # The reconnect integration coverage includes bounded wait handling for
@@ -564,6 +583,7 @@ REQ-LIFE-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
+    - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop
@@ -620,7 +640,7 @@ REQ-LIFE-007:
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_explicit_missing_config_uses_defaults
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_empty_config_is_treated_as_first_start
     - tests/unit/test_config_bootstrap_cli.py::test_parse_args_invalid_json_config_raises_clear_error
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
@@ -651,6 +671,8 @@ REQ-LIFE-009:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_continues_when_dependency_install_declined
 
 REQ-LIFE-010:
+  # Elevated route/DNS verification is host-local and deterministic; the
+  # paired packet-carry tests cover overlay delivery independently of ICMP policy.
   # macOS elevated scripts preserve CI identity across sudo so hosted-runner
   # diagnostics remain scoped to the CI privilege boundary, including the
   # inline case where hosted macOS leaves the TUN row empty and the Swift
@@ -679,7 +701,7 @@ REQ-LIFE-010:
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_reports_helper_death_warning
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_repairs_stale_network_state
   unit_tests:
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_flat_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
@@ -803,6 +825,13 @@ REQ-LIFE-011:
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_embedded_webadmin_probe_exercises_restart_and_persistence
   unit_tests:
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_provider_owns_restart_without_app_process
+
+REQ-LIFE-012:
+  unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_routing_enabled_on_startup_parses_from_mapping
+    - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later
+    - tests/unit/test_runner_tun_helper.py::test_runner_can_toggle_tun_enabled_state_through_helper_backend
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
 
 REQ-LST-001:
   integration_tests:
@@ -956,7 +985,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
-    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_channel_mux_egress_alias
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_uses_channel_mux_egress_key
     - tests/unit/test_channel_mux_listener_mode.py::test_select_hook_argv_uses_platform_specific_mapping
     - tests/unit/test_channel_mux_listener_mode.py::test_resolve_hook_argv_resolves_relative_executable_against_base_dir
     - tests/unit/test_channel_mux_listener_mode.py::test_render_hook_value_replaces_known_placeholders
@@ -1044,7 +1073,7 @@ REQ-MUX-010:
     - tests/unit/test_bridge_tun_ios.py::test_write_tun_packet_uses_bridge_backend
     - tests/unit/test_bridge_tun_ios.py::test_register_tun_reader_drains_bridge_queue
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_prefers_local_ios_tun_hook_env
-    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_can_fallback_to_remote_peer_addr
+    - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_ignores_remote_tun_metadata
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
@@ -1136,6 +1165,10 @@ REQ-ADM-009:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
   unit_tests:
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_uses_channel_mux_egress_key
+    - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
+    - tests/unit/test_runner_config_persistence.py::test_cli_config_dump_discards_unregistered_effective_values
     # The persistence regression now pins the machine-derived fallback path
     # directly instead of relying on an environment-provided config-secret seed.
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
@@ -1172,6 +1205,8 @@ REQ-ADM-005:
 REQ-ADM-006:
   # Admin status polling keeps a minimal live-session fallback when the
   # regular stats snapshot is temporarily unavailable before a cache exists.
+  # Peer-detail coverage also pins persistent enabled-layer visibility and
+  # ChannelMux-owned candidate/restart timers.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels

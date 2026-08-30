@@ -59,6 +59,10 @@ class WindowsTunHelperBackend:
         self._apply_calls = 0
         self._remove_calls = 0
         self._network_applied = False
+        self._included_routes_active = False
+        self._included_routes_startup_enabled = True
+        self._suspend_calls = 0
+        self._resume_calls = 0
         self._last_apply_payload: dict[str, Any] = {}
         self._last_remove_payload: dict[str, Any] = {}
         self._applied_ipv4_cidr = ""
@@ -768,6 +772,8 @@ class WindowsTunHelperBackend:
     async def apply_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._apply_calls += 1
         self._network_applied = True
+        self._included_routes_startup_enabled = bool(payload.get("tun_routing", {}).get("enabled_on_startup", True)) if isinstance(payload.get("tun_routing"), dict) else True
+        self._included_routes_active = False
         self._last_apply_payload = dict(payload or {})
         ifname = str(payload.get("ifname") or self._ifname or "obtun0")
         interface_index = int(self._ifindex or 0)
@@ -799,7 +805,9 @@ class WindowsTunHelperBackend:
             self._apply_excluded_routes(payload)
             stage = "included_routes_apply"
             self._log.debug("[TUN/HELPER/WIN] apply_network stage=%s ifname=%s", stage, ifname)
-            self._apply_included_routes(payload, interface_index=interface_index)
+            if self._included_routes_startup_enabled:
+                self._apply_included_routes(payload, interface_index=interface_index)
+                self._included_routes_active = True
             stage = "dns_apply"
             self._log.debug("[TUN/HELPER/WIN] apply_network stage=%s ifname=%s", stage, ifname)
             self._apply_dns(interface_index=interface_index, payload=payload)
@@ -844,6 +852,7 @@ class WindowsTunHelperBackend:
     async def remove_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._remove_calls += 1
         self._network_applied = False
+        self._included_routes_active = False
         self._last_remove_payload = dict(payload or {})
         ifname = str(payload.get("ifname") or self._ifname or "obtun0")
         interface_index = int(self._ifindex or self._resolve_interface_index(ifname))
@@ -892,6 +901,11 @@ class WindowsTunHelperBackend:
             "packets_from_runtime": self._packets_from_runtime,
             "packets_to_runtime": self._packets_to_runtime,
             "network_applied": self._network_applied,
+            "included_routes_active": self._included_routes_active,
+            "included_routes_startup_enabled": self._included_routes_startup_enabled,
+            "included_routes_toggle_supported": True,
+            "suspend_calls": self._suspend_calls,
+            "resume_calls": self._resume_calls,
             "apply_calls": self._apply_calls,
             "remove_calls": self._remove_calls,
             "last_apply_payload": dict(self._last_apply_payload),
@@ -912,6 +926,27 @@ class WindowsTunHelperBackend:
             "last_failure": dict(self._last_failure),
             "stopped": self._stopped,
         }
+
+    async def set_tun_enabled(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._network_applied:
+            raise RuntimeError("TUN network is not applied")
+        enabled = bool(payload.get("enabled"))
+        ifname = str(payload.get("ifname") or self._ifname or "obtun0")
+        interface_index = int(self._ifindex or self._resolve_interface_index(ifname))
+        self._clear_last_failure()
+        if enabled:
+            self._resume_calls += 1
+            if not self._included_routes_active:
+                self._apply_included_routes(payload, interface_index=interface_index)
+                self._included_routes_active = True
+        else:
+            self._suspend_calls += 1
+            if self._included_routes_active:
+                self._remove_included_routes(interface_index=interface_index)
+                self._included_routes_active = False
+        snapshot = self.local_snapshot()
+        snapshot.update({"ok": True, "enabled": enabled, "ifname": ifname})
+        return snapshot
 
     async def stop(self) -> None:
         self._stopped = True

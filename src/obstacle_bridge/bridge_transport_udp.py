@@ -17,6 +17,7 @@ from .bridge_transport_common import (
     _strip_brackets,
     _wildcard_host_for_family,
 )
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 
 _bridge = export_bridge_globals(globals())
 
@@ -547,7 +548,7 @@ class SendPort:
     Model B only:
     - The overlay UDP socket is always unconnected at the OS level.
     - Current destination is owned by SendPort.peer_addr.
-    - --peer is only an initial seed; peer may later be relearned/moved.
+    - --udp-peer is only an initial seed; peer may later be relearned/moved.
     - Do not reintroduce connected-UDP behavior here unless the protocol-level
       peer learning/relearning logic is removed as well.
     """
@@ -1768,6 +1769,7 @@ class UdpSession(ISession):
         self._listener_peer_cleanup_task: Optional[asyncio.Task] = None
         self._peer_candidates: List[Tuple[str, int, int]] = []
         self._peer_candidate_index: int = 0
+        self._peer_candidate_cycle: int = 0
         self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
@@ -1782,6 +1784,8 @@ class UdpSession(ISession):
         self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
+        self._connection_lifecycle_epoch = 0
 
         # Optional peer-frame mirror (debug) — installed by Runner when flags are set
         self._peer_mirror_out: Optional[Callable[[bytes], None]] = None
@@ -1806,10 +1810,10 @@ class UdpSession(ISession):
         if not _has('--udp-own-port'):
             p.add_argument('--udp-own-port', dest='udp_own_port', type=int, default=4433, help='overlay own port')
         if not _has('--udp-peer'):
-            p.add_argument('--udp-peer', '--peer', dest='udp_peer', default=None,
+            p.add_argument('--udp-peer', dest='udp_peer', default=None,
                            help="peer IP/FQDN, or comma-separated IPv4/IPv6 alternatives (IPv6 may be in [brackets])")
         if not _has('--udp-peer-port'):
-            p.add_argument('--udp-peer-port', '--peer-port', dest='udp_peer_port', type=int, default=4433, help='peer overlay port')
+            p.add_argument('--udp-peer-port', dest='udp_peer_port', type=int, default=4433, help='peer overlay port')
         if not _has('--udp-peer-resolve-family'):
             p.add_argument(
                 '--udp-peer-resolve-family',
@@ -1840,6 +1844,9 @@ class UdpSession(ISession):
     def set_on_state_change(self, cb: Callable[[bool], None]) -> None:
         self._log.debug("[UDP/SESSION] set_on_state_change wired: cb=%r on session id=%x", cb, id(self))
         self._on_state = cb
+
+    def set_on_connection_lifecycle(self, cb) -> None:
+        self._connection_lifecycle.set_callback(cb)
 
     def set_on_peer_rx(self, cb: Callable[[int], None]) -> None:
         self._log.debug("[UDP/SESSION] set_on_peer_rx wired: cb=%r on session id=%x", cb, id(self))
@@ -2260,6 +2267,9 @@ class UdpSession(ISession):
             "app_ready": connected,
         }]
 
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
+
     # ---- ISession: data path ----
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         self._log.debug(f"[UdpSession] send_app len {len(payload)}  on session id=%x", id(self))
@@ -2416,6 +2426,8 @@ class UdpSession(ISession):
         else:
             self._connected_since_unix_ts = None
 
+        self._publish_connection_lifecycle(connected)
+
         if callable(self._on_state):
             try:
                 self._on_state(connected)
@@ -2465,12 +2477,19 @@ class UdpSession(ISession):
                 deduped = matching
         return deduped
 
-    def _rotate_to_next_peer_candidate(self) -> bool:
+    def _rotate_to_next_peer_candidate(self, *, count_cycle: bool = False) -> bool:
         if self._listener_mode or self._proto is None or self._proto.send_port is None:
             return False
-        if len(self._peer_candidates) <= 1:
+        if not self._peer_candidates:
             return False
-        next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        if len(self._peer_candidates) == 1:
+            next_index = 0
+            if count_cycle:
+                self._peer_candidate_cycle += 1
+        else:
+            next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+            if count_cycle and next_index == 0:
+                self._peer_candidate_cycle += 1
         old_peer = self._peer_candidates[self._peer_candidate_index]
         new_peer = self._peer_candidates[next_index]
         self._peer_candidate_index = next_index
@@ -2495,6 +2514,32 @@ class UdpSession(ISession):
             self._proto._proto_rt._next_probe_due_ns = 0
             self._proto._proto_rt._send_idle_probe(initial=True)
         return True
+
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        if self._listener_mode or self._proto is None or self._proto.send_port is None:
+            return ConnectionRotationResult(accepted=False, reason="transport_not_running")
+        if not self._rotate_to_next_peer_candidate(count_cycle=True):
+            return ConnectionRotationResult(accepted=False, reason="no_alternate_candidate")
+        # Rotation starts a new connection attempt even though transport remains
+        # disconnected. The new epoch releases ChannelMux to schedule the next
+        # attempt if this candidate does not recover.
+        self._connection_lifecycle_epoch += 1
+        self._connection_lifecycle.transition(
+            ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "transport_rotation",
+        )
+        return ConnectionRotationResult(
+            accepted=True,
+            reason=str(reason or "next_candidate"),
+            next_epoch=self._connection_lifecycle_epoch,
+            candidate_index=self._peer_candidate_index,
+            candidate_cycle=self._peer_candidate_cycle,
+            restart_required=self._peer_candidate_cycle >= 3,
+        )
+
+    def reset_connection_rotation_cycles(self) -> None:
+        self._peer_candidate_cycle = 0
 
     def _on_peer_send_error(self, exc: Exception) -> None:
         err = getattr(exc, "errno", None)
@@ -2769,11 +2814,21 @@ class UdpSession(ISession):
         if connected == self._listener_connected:
             return
         self._listener_connected = connected
+        self._publish_connection_lifecycle(connected)
         if callable(self._on_state):
             try:
                 self._on_state(connected)
             except Exception as e:
                 self._log.debug("[UDP/SESSION/STATE] _update_server_connected_state failed on _on_state %r", e)
+
+    def _publish_connection_lifecycle(self, connected: bool) -> None:
+        if connected and not self._connection_lifecycle.event.connected:
+            self._connection_lifecycle_epoch += 1
+        self._connection_lifecycle.transition(
+            ConnectionState.CONNECTED if connected else ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "transport_connected" if connected else "transport_disconnected",
+        )
 
     async def _close_server_peer(self, peer_id: int) -> None:
         ctx = self._server_peers.pop(peer_id, None)

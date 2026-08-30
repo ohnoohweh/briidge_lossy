@@ -551,6 +551,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         let nowNS = monotonicNowNS()
         handleTransportLiveness(nowNS: nowNS)
+        handleLifecycleRotationIfDue(nowNS: nowNS)
         flushDueSecureLinkFramesIfNeeded()
         let snapshot = overlayRuntime.handleControlTimerTick(nowNS: nowNS, sendPortPresent: currentPeerAddress != nil)
         guard snapshot.controlShouldEmit else {
@@ -760,21 +761,12 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         else {
             return false
         }
-        if status.authFailCode != 0 {
-            guard status.recoveryEnabled else {
-                return false
-            }
-            if status.recoveryReconnectSec > 0.0 {
-                return false
-            }
-        } else {
-            guard secureLinkHandshakePrimed,
-                  lastSecureLinkPrimeNS != 0,
-                  nowNS >= lastSecureLinkPrimeNS,
-                  (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
-            else {
-                return false
-            }
+        guard secureLinkHandshakePrimed,
+              lastSecureLinkPrimeNS != 0,
+              nowNS >= lastSecureLinkPrimeNS,
+              (nowNS - lastSecureLinkPrimeNS) >= Self.lowerLayerUnavailableFallbackNS
+        else {
+            return false
         }
         let reason: String
         if status.authFailCode != 0 {
@@ -797,8 +789,31 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
-        overlayLayerTransportAdapter?.handleTransportDisconnected()
+        overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
+    }
+
+    private func handleLifecycleRotationIfDue(nowNS: UInt64) {
+        guard let adapter = overlayLayerTransportAdapter,
+              let result = adapter.connectionRotationDue(candidateCount: peerCandidates.count)
+        else {
+            return
+        }
+        eventSink?("udp_overlay_lifecycle_rotation", [
+            "epoch": result.epoch,
+            "candidate_cycle": result.candidateCycle,
+            "restart_required": result.restartRequired,
+        ])
+        guard !result.restartRequired else {
+            eventSink?("udp_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
+            return
+        }
+        if peerCandidates.count > 1 {
+            rotateToNextPeerCandidate(nowNS: nowNS, reason: result.reason)
+        } else {
+            resetOverlayTransportEpoch(reason: result.reason)
+            sendInitialIdleProbe()
+        }
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {

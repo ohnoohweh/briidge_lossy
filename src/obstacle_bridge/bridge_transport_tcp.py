@@ -13,6 +13,7 @@ from .bridge_transport_common import (
     _strip_brackets,
     _wildcard_host_for_family,
 )
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 
 _bridge = export_bridge_globals(globals())
 
@@ -116,6 +117,8 @@ class TcpStreamSession(ISession):
         self._on_peer_disconnect_cb: Optional[Callable[[int], None]] = None
         self._on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._on_transport_epoch_change: Optional[Callable[[int], None]] = None
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
+        self._connection_lifecycle_epoch = 0
 
         # tcp state
         self._server: Optional[asyncio.base_events.Server] = None
@@ -135,6 +138,7 @@ class TcpStreamSession(ISession):
             socktype=socket.SOCK_STREAM,
         )
         self._peer_candidate_index: int = 0
+        self._peer_candidate_cycle: int = 0
         peer_info = self._peer_candidates[0] if self._peer_candidates else None
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
@@ -193,6 +197,7 @@ class TcpStreamSession(ISession):
     # ---- ISession: callback wiring ----
     def set_on_app_payload(self, cb): self._on_app = cb
     def set_on_state_change(self, cb): self._on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._connection_lifecycle.set_callback(cb)
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
@@ -308,6 +313,9 @@ class TcpStreamSession(ISession):
             "connected": connected,
             "app_ready": connected,
         }]
+
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
 
     # ---- metrics surface for StatsBoard (RTT plumbing) ----
     def get_metrics(self) -> SessionMetrics:
@@ -726,6 +734,20 @@ class TcpStreamSession(ISession):
         self._start_reconnect_loop()
         return True
 
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        if not self._peer_tuple or not self._run_flag:
+            return ConnectionRotationResult(accepted=False, reason="transport_not_running")
+        self._advance_peer_candidate(count_cycle=True)
+        accepted = self.request_reconnect()
+        return ConnectionRotationResult(
+            accepted=accepted,
+            reason=str(reason or "next_candidate"),
+            next_epoch=self._connection_lifecycle_epoch + 1 if accepted else None,
+            candidate_index=self._peer_candidate_index if accepted else None,
+            candidate_cycle=self._peer_candidate_cycle if accepted else None,
+            restart_required=accepted and self._peer_candidate_cycle >= 3,
+        )
+
     def _enable_os_keepalive(self, writer: asyncio.StreamWriter) -> None:
         try:
             transport = writer.transport  # type: ignore[attr-defined]
@@ -779,10 +801,15 @@ class TcpStreamSession(ISession):
             raise RuntimeError("overlay peer requires a non-empty host name")
         return self._peer_tuple
 
-    def _advance_peer_candidate(self) -> None:
+    def _advance_peer_candidate(self, *, count_cycle: bool = False) -> None:
         if len(self._peer_candidates) <= 1:
+            if count_cycle:
+                self._peer_candidate_cycle += 1
             return
-        self._peer_candidate_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        if count_cycle and next_index == 0:
+            self._peer_candidate_cycle += 1
+        self._peer_candidate_index = next_index
         host, port, _family = self._peer_candidates[self._peer_candidate_index]
         self._peer_tuple = (host, port)
 
@@ -1189,6 +1216,13 @@ class TcpStreamSession(ISession):
         if self._overlay_connected == v:
             return
         self._overlay_connected = v
+        if v:
+            self._connection_lifecycle_epoch += 1
+        self._connection_lifecycle.transition(
+            ConnectionState.CONNECTED if v else ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "transport_connected" if v else "transport_disconnected",
+        )
         self._log.info(f"[TCP-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} (RTT)")
         if v and callable(self._on_peer_set_cb):
             try: self._on_peer_set_cb(self._peer_host, self._peer_port)
@@ -1196,6 +1230,9 @@ class TcpStreamSession(ISession):
         if callable(self._on_state):
             try: self._on_state(v)
             except Exception: pass
+
+    def reset_connection_rotation_cycles(self) -> None:
+        self._peer_candidate_cycle = 0
 
     def _on_state_change_for_peer(self, peer_id: int, connected: bool) -> None:
         ctx = self._server_peers.get(peer_id)

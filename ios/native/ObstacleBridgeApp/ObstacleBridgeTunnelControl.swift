@@ -4,8 +4,6 @@ import NetworkExtension
 @objc(ObstacleBridgeTunnelControl)
 final class ObstacleBridgeTunnelControl: NSObject {
     private static let providerBundleIdentifier = "com.obstaclebridge.obstacle-bridge-ios.IPServer"
-    private static let legacyLocalizedDescription = "ObstacleBridge"
-    private static let legacyLocalizedDescriptionAlt = "AdminWeb"
     private static let providerConfigurationBaseVersion = "2026-05-17-ios-config-derived-tunnel-v1"
     private static var providerConfigurationVersion: String {
         let providerBuildTimestampUTC = ObstacleBridgeGeneratedBuildStamp.providerBuildTimestampUTC
@@ -296,19 +294,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             || hasCurrentProviderConfiguration(manager)
             || hasCurrentTunnelAddress(manager)
             || hasCurrentProviderSchema(manager)
-            || isLegacyObstacleBridgeManager(manager)
     }
-    
-    private class func isLegacyObstacleBridgeManager(_ manager: NETunnelProviderManager) -> Bool {
-        if hasCurrentProviderIdentifier(manager) {
-            return manager.localizedDescription != desiredLocalizedDescription()
-        }
-
-        return manager.localizedDescription == legacyLocalizedDescription
-            || manager.localizedDescription == legacyLocalizedDescriptionAlt
-            || manager.localizedDescription?.contains("ObstacleBridge") == true
-    }
-
 
     private class func hasCurrentProviderIdentifier(_ manager: NETunnelProviderManager) -> Bool {
         (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == providerBundleIdentifier
@@ -1627,9 +1613,6 @@ final class ObstacleBridgeTunnelControl: NSObject {
         if let data = UserDefaults.standard.data(forKey: statusDefaultsKey),
            let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return object
-        }
-        if let legacy = UserDefaults.standard.dictionary(forKey: statusDefaultsKey) {
-            return legacy
         }
         return nil
     }

@@ -768,6 +768,29 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             return
         }
         flushDueSecureLinkFramesIfNeeded()
+        handleLifecycleRotationIfDue()
+    }
+
+    private func handleLifecycleRotationIfDue() {
+        guard let adapter = overlayLayerTransportAdapter,
+              let result = adapter.connectionRotationDue(candidateCount: peerCandidates.count)
+        else {
+            return
+        }
+        eventSink?("tcp_overlay_lifecycle_rotation", [
+            "epoch": result.epoch,
+            "candidate_cycle": result.candidateCycle,
+            "restart_required": result.restartRequired,
+        ])
+        guard !result.restartRequired else {
+            eventSink?("tcp_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
+            return
+        }
+        overlayConnection?.cancel()
+        overlayConnection = nil
+        overlayConnected = false
+        resetOverlayTransportEpoch()
+        scheduleReconnect()
     }
 
     private func flushDueSecureLinkFramesIfNeeded() {
@@ -814,18 +837,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             lowerLayerFallbackDeadlineNS = nil
             return
         }
-        let delayNS: UInt64
-        if status.authFailCode != 0 {
-            guard status.recoveryEnabled, status.recoveryReconnectSec > 0.0 else {
-                lowerLayerFallbackWorkItem?.cancel()
-                lowerLayerFallbackWorkItem = nil
-                lowerLayerFallbackDeadlineNS = nil
-                return
-            }
-            delayNS = UInt64(max(0.0, status.recoveryReconnectSec) * 1_000_000_000.0)
-        } else {
-            delayNS = Self.lowerLayerUnavailableFallbackNS
-        }
+        let delayNS = Self.lowerLayerUnavailableFallbackNS
         lowerLayerFallbackWorkItem?.cancel()
         lowerLayerFallbackWorkItem = nil
         if delayNS == 0 {

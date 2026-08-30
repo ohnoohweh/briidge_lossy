@@ -27,16 +27,22 @@ def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
         assert '"app_ready": ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)' in source or 'snapshot["app_ready"] = ObstacleBridgeOverlayLayerTransportAdapter.appReady(from: connectionLayers)' in source
         assert 'self?.inflowAllowed() ?? false' in source
         assert 'overlayConnected: inflowAllowed()' in source
+        assert "connectionRotationDue(candidateCount:" in source
+        assert "lifecycle_restart_required" in source
 
 
-def test_swift_layered_readiness_distinguishes_inflow_from_app_ready() -> None:
+def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
 
     assert "static func appReady(from layers: [[String: Any]]) -> Bool" in adapter
     assert "static func inflowAllowed(from layers: [[String: Any]]) -> Bool" in adapter
     assert 'state = "reauthenticating"' in adapter
     assert 'return (last["app_ready"] as? Bool) ?? false' in adapter
-    assert 'return (last["connected"] as? Bool) ?? false' in adapter
+    assert "return appReady(from: layers)" in adapter
+    assert "struct ObstacleBridgeConnectionLifecycleEvent" in adapter
+    assert "struct ObstacleBridgeConnectionRotationResult" in adapter
+    assert "func connectionRotationDue(candidateCount: Int)" in adapter
+    assert 'layers[index]["lifecycle_state"] = outerLifecycle.state.rawValue' in adapter
 
 
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:

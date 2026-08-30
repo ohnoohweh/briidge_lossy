@@ -556,6 +556,8 @@ The runtime config surface also now reserves a `tun_execution` section for Linux
 
 Prefer WebAdmin for routine parameter editing once the process is reachable. It reduces command-line mistakes, keeps related settings visible in one place, and is the most practical way to review exposure, transport, and security options together before saving them.
 
+Saved runtime configuration contains only registered settings grouped by their component. JSON configuration therefore uses top-level sections such as `runner`, `udp_session`, `admin_web`, and `secure_link`; unsectioned root options are ignored. Unregistered data is not retained when WebAdmin or the CLI writes the configuration file.
+
 ![WebAdmin Config Editor](docs/refered_docs/WebAdmin%20ConfigEditor.png)
 
 The CLI remains useful for bootstrap situations, automation, and remote-first setup on systems such as VPS installations where you may need to expose Admin Web intentionally before the configuration editor is reachable.
@@ -577,8 +579,6 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--udp-peer-port` | `443` | peer overlay port |
 | `--peer-resolve-family` | `prefer-ipv6` | Peer name resolution policy: prefer IPv6 then IPv4, IPv4 only, or IPv6 only. |
 | `--max-inflight` | `32767` | max DATA frames allowed in flight (1..32767). Excess frames are queued. |
-| `--peer` | alias of `--udp-peer` | backwards-compatible alias |
-| `--peer-port` | alias of `--udp-peer-port` | backwards-compatible alias |
 
 ### WebSocket overlay
 | Option(s) | Default | Description |
@@ -1067,7 +1067,7 @@ What the admin web shows:
 
 - A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
-- A peer-session table that now groups each peer into connection, protocol, security, and lifecycle rows so secure-link state stays with the peer it belongs to; connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
+- A peer-session table that separates Transport endpoint/state, Protocol status and timing, SecureLink reported status and phase, Compression reported status, ChannelMux traffic/channel counts plus candidate/restart timers, and TUN throttle diagnostics. Transport, Protocol, and ChannelMux remain visible for every non-listening peer, while enabled SecureLink and Compression layers remain visible throughout failed or reconnecting states. Connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
 - The dedicated TUN / Routing view also shows shared-TUN ownership maps, active channel bindings, interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
@@ -1092,6 +1092,8 @@ What the admin web shows:
 | `--overlay-transport` | `myudp` | Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances. |
 | `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
+
+When the outer lifecycle remains disconnected, ChannelMux rotates the lower stack every 30 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
 
 ### Compression layer
 
@@ -1136,8 +1138,6 @@ To explicitly run without compression on both peers, set:
 | `--secure-link-mode` | `off` | Secure-link mode. Supported values are `off`, `psk`, and `cert`. |
 | `--secure-link-retry-backoff-initial-ms` | `1000` | Initial client-side retry backoff after a secure-link authentication failure, in milliseconds. |
 | `--secure-link-retry-backoff-max-ms` | `5000` | Maximum client-side retry backoff after repeated secure-link authentication failures, in milliseconds. |
-| `--secure-link-recover-after-failure` / `--no-secure-link-recover-after-failure` | `True` | Reconnect the lower client transport after an already-authenticated secure-link session fails closed. |
-| `--secure-link-recover-delay-seconds` | `30.0` | Delay before reconnecting the lower client transport for authenticated secure-link failure recovery. |
 | `--secure-link-require` | `False` | Fail closed if secure-link cannot be negotiated or authenticated. |
 
 #### PSK mode parameters
@@ -1284,7 +1284,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
 - if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, the session remains `handshaking` rather than surfacing as authenticated; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
-- if an already-authenticated client-side secure-link session later fails closed, the client schedules lower-transport reconnect recovery that survives runner reset/epoch cleanup and reports `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, `next_recovery_reconnect_unix_ts`, and recovery scheduling/starting `last_event` values; cert local-identity reloads use the same reconnect/re-authentication boundary instead of continuing on the superseded transport epoch
+- if an already-authenticated secure-link session later fails closed, SecureLink reports `Disconnected` and ChannelMux requests one lower-layer rotation after 30 seconds; raw transport liveness does not reset the three-cycle restart budget until the outer stack reports `Connected`. An operator-triggered cert local-identity reload requests that same cascaded rotation immediately so the replacement identity can authenticate without waiting for the failure timer
 
 Current WebAdmin gap to close in a future update:
 
@@ -1306,7 +1306,7 @@ Operator notes:
 - use `secure_link_rekey_after_seconds` when you want automatic rotation on long-lived authenticated client-side sessions without waiting for a frame-count threshold
 - operator-forced rekey currently applies to authenticated client-side secure-link sessions for the targeted peer row; if no protected client data has been sent yet, the WebAdmin action and admin API both reject the request rather than guessing its way past the handshake boundary
 - if you are intentionally testing wrong-PSK or rollout mistakes, `secure_link_retry_backoff_initial_ms` and `secure_link_retry_backoff_max_ms` let you tune how aggressively the client retries after secure-link auth failures
-- `secure_link_recover_after_failure` keeps post-authentication secure-link failures from remaining permanently stuck by closing/reconnecting the lower client transport after `secure_link_recover_delay_seconds`; leave it enabled unless you want purely manual recovery during fault investigation
+- post-authentication SecureLink failures report `Disconnected`; ChannelMux requests the lower-layer rotation after its continuous-disconnection policy expires
 - the current PSK runtime uses strictly monotonic per-direction protected-data counters starting at `1`; counter `0` is reserved and counter exhaustion fails closed rather than wrapping
 - malformed or unexpected secure-link frames fail closed and remain observable through the admin/API surface; they do not continue forwarding overlay traffic on the affected peer
 - the delivered PSK mode remains useful for development/testing/lab bring-up, while the delivered cert mode is the deployment-rooted trust model described in [docs/SECURE_LINK_DESIGN.md](docs/SECURE_LINK_DESIGN.md)
@@ -1482,7 +1482,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and INFO-level ICMP decision breadcrumbs plus layered-readiness gating so SecureLink reauthentication windows can be distinguished from true overlay disconnects.
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1491,17 +1491,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `54` | `871` |
+| Python CLI/runtime, including macOS Python | `55` | `888` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `24` | `160` |
+| iOS app/extension | `25` | `168` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `82/91 = 90.1%` | `89/91 = 97.8%` | `89/91 = 97.8%` |
-| macOS Swift app | `3/91 = 3.3%` | `6/91 = 6.6%` | `9/91 = 9.9%` |
-| iOS app/extension | `10/91 = 11.0%` | `12/91 = 13.2%` | `18/91 = 19.8%` |
+| Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
+| macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
+| iOS app/extension | `10/92 = 10.9%` | `12/92 = 13.0%` | `18/92 = 19.6%` |
 
 #### Architecture traceability
 
@@ -1532,8 +1532,8 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `54` | `0` | `54` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `30` | `30` |
-| Total parity-oriented evidence | Sum of the lanes above | `58` | `149` | `207` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `31` | `31` |
+| Total parity-oriented evidence | Sum of the lanes above | `58` | `150` | `208` |
 
 Important caveat:
 

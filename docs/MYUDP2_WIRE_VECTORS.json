@@ -1,0 +1,27 @@
+{
+  "format": "myudp2-wire-v1",
+  "byte_order": "big-endian",
+  "limits": {
+    "udp_payload_budget": 1452,
+    "protocol_header_bytes": 19,
+    "batch_version": 1,
+    "max_batch_records": 64,
+    "max_batch_payload_bytes": 1433,
+    "max_chunk_bytes": 1425,
+    "max_stream_record_bytes": 65535
+  },
+  "valid_frames": [
+    {"name": "idle", "hex": "00000000000000000003ea0000000000000000", "ptype": 0, "tx_ns": 1002, "echo_ns": 0},
+    {"name": "data_batch_two_chunks", "hex": "01001300000000000003e800000000000001f401020007000100036162630006000200026465", "ptype": 1, "tx_ns": 1000, "echo_ns": 500, "batch_version": 1, "chunks": [{"counter": 1, "data_hex": "616263"}, {"counter": 2, "data_hex": "6465"}]},
+    {"name": "control_one_missing", "hex": "02000800000000000003e900000000000001f50001000300010002", "ptype": 2, "tx_ns": 1001, "echo_ns": 501, "last_in_order": 1, "highest_rx": 3, "missed": [2]}
+  ],
+  "valid_stream_records": [
+    {"name": "abc", "hex": "00000003616263"},
+    {"name": "empty", "hex": "00000000"}
+  ],
+  "invalid_frames": [
+    {"name": "data_batch_zero_record_count", "hex": "010002000000000000000000000000000000000100", "error": "record_count_out_of_range"},
+    {"name": "data_batch_record_truncated", "hex": "010008000000000000000000000000000000000101000500010001", "error": "record_length_exceeds_payload"},
+    {"name": "data_batch_trailing_byte", "hex": "01000a00000000000000000000000000000000010100050001000161ff", "error": "trailing_bytes"}
+  ]
+}

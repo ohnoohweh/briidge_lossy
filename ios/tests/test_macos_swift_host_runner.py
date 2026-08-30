@@ -459,6 +459,10 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
     assert "enum ObstacleBridgeOverlayChannelCore" in core
     assert "static func sendLocalTunPacket(" in core
     assert "static func handleInboundTunMuxFrame(" in core
+    for owner in [tcp_owner, udp_owner, ws_owner, quic_owner]:
+        assert "func handleLifecycleRotationIfDue" in owner
+        assert "connectionRotationDue(candidateCount:" in owner
+        assert "lifecycle_restart_required" in owner
     assert "static func handleTCPTransportEvent(" in core
 
     for source in (tcp_owner, udp_owner, ws_owner, quic_owner):
@@ -504,7 +508,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "peer_candidate_rotated")' in udp_owner
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
-    assert "overlayLayerTransportAdapter?.handleTransportDisconnected()" in udp_owner
+    assert "overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)" in udp_owner
     assert "runtime.handleTransportDisconnected()" in secure_adapter
 
 
@@ -693,6 +697,8 @@ def test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fiel
 
     assert '"next_address_attempt_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
     assert '"restart_in_seconds": ObstacleBridgeAdminSnapshotSupport.peerMetric(' in host_runner
+    assert "let protocolConnected = connectionLayers.first(where:" in host_runner
+    assert '"connected": protocolConnected' in host_runner
     for source in transport_sources:
         assert "private var nextReconnectAttemptDeadlineNS: UInt64?" in source
         assert '"next_address_attempt_in_seconds": nextAddressAttemptInSeconds() ?? NSNull()' in source
@@ -862,7 +868,7 @@ def test_macos_app_bundle_embeds_latest_macos_tun_hook() -> None:
 
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
-        self.client = ObstacleBridgeClient(config)
+        self.client = ObstacleBridgeClient(_group_python_peer_config(config))
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
@@ -907,6 +913,37 @@ class _AsyncBridgeClientThread:
         if self._loop is None:
             raise RuntimeError("bridge client loop not started")
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+
+def _group_python_peer_config(config: dict) -> dict:
+    """Translate test peer fixtures to the runner's canonical grouped schema."""
+    sections = {
+        "runner": {"overlay_transport", "overlay_reconnect_retry_delay_ms"},
+        "admin_web": {"admin_web", "admin_web_bind", "admin_web_port", "admin_web_dir", "admin_web_auth_disable"},
+        "channel_mux": {"own_servers", "remote_servers"},
+        "secure_link": {"secure_link", "secure_link_mode", "secure_link_psk"},
+        "compress_layer": {
+            "compress_layer", "compress_layer_algo", "compress_layer_level",
+            "compress_layer_min_bytes", "compress_layer_types",
+        },
+        "stats_board": {"status"},
+        "udp_session": {"udp_bind", "udp_own_port", "udp_peer", "udp_peer_port"},
+        "tcp_session": {"tcp_bind", "tcp_own_port", "tcp_peer", "tcp_peer_port"},
+        "ws_session": {"ws_bind", "ws_own_port", "ws_peer", "ws_peer_port", "ws_tls", "ws_path"},
+        "quic_session": {
+            "quic_bind", "quic_own_port", "quic_peer", "quic_peer_port", "quic_cert",
+            "quic_key", "quic_alpn", "quic_insecure",
+        },
+    }
+    grouped: dict[str, dict[str, object]] = {}
+    for section, keys in sections.items():
+        values = {key: value for key, value in config.items() if key in keys}
+        if values:
+            grouped[section] = values
+    unknown = set(config) - set().union(*sections.values())
+    if unknown:
+        raise ValueError(f"unassigned Python peer config keys: {sorted(unknown)}")
+    return grouped
 
 
 def _unused_tcp_port() -> int:
@@ -977,7 +1014,7 @@ def _mixed_overlay_python_peer_config(
         })
     else:
         raise ValueError(f"unsupported transport {transport}")
-    return config
+    return _group_python_peer_config(config)
 
 
 def _mixed_overlay_hostrunner_runtime_config(
@@ -1778,16 +1815,6 @@ struct RuntimeProbe {
             defaultDNS: ["1.1.1.1"],
             fallbackMTU: 1600
         )
-        let remoteDerived = remote.first?.derivedRemoteTunnelSettings(
-            defaultTunnelPrefix: 30,
-            defaultTunnelPrefix6: 126,
-            defaultIncludedRoutes: ["0.0.0.0/0"],
-            defaultExcludedRoutes: ["127.0.0.0/8"],
-            defaultIncludedRoutes6: ["::/0"],
-            defaultExcludedRoutes6: ["::1/128"],
-            defaultDNS: ["1.1.1.1"],
-            fallbackMTU: 1600
-        )
         let overridden = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: [
             "TUN_routing": [
                 "included_routes": ["198.18.0.254/32"],
@@ -1837,9 +1864,6 @@ struct RuntimeProbe {
             "remote_target_ifname": remote.first?.targetIfname ?? "",
             "remote_mtu": remote.first?.mtu(fallback: 0) ?? -1,
             "remote_peer_addr": remote.first?.listenerHookEnvBlocks().first?["PEER_ADDR"] as? String ?? "",
-            "remote_derived_addr": remoteDerived?.tunnelAddress ?? "",
-            "remote_derived_prefix": remoteDerived?.tunnelPrefix ?? -1,
-            "remote_derived_prefix6": remoteDerived?.tunnelPrefix6 ?? -1,
             "override_dns": overridden??.dnsServers ?? [],
             "override_mtu": overridden??.mtu ?? -1,
             "override_included_routes": overridden??.includedRoutes ?? [],
@@ -1898,9 +1922,6 @@ struct RuntimeProbe {
         "override_mtu": 1600,
         "override_tun_tcpdump_pcap_path": "/tmp/swift-runtime-probe.pcap",
         "remote_count": 1,
-        "remote_derived_addr": "192.168.105.1",
-        "remote_derived_prefix": 30,
-        "remote_derived_prefix6": 126,
         "remote_mtu": 1280,
         "remote_peer_addr": "192.168.105.1",
         "remote_target_ifname": "ios-utun",

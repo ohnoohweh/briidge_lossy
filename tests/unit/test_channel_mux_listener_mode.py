@@ -16,6 +16,7 @@ from obstacle_bridge.bridge_tun_ping import (
     probe_payload,
 )
 from obstacle_bridge.bridge_tun_routing import TunRoutingSettings
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionState
 
 
 class _FakeSession:
@@ -38,6 +39,8 @@ class _FakeSession:
         self.app_cb = None
         self.peer_disconnect_cb = None
         self.sent = []
+        self.rotation_requests = []
+        self.rotation_cycle_resets = 0
         self.connected = connected
         if connection_layers is None:
             self.connection_layers = [
@@ -83,6 +86,13 @@ class _FakeSession:
     def send_app(self, payload):
         self.sent.append(payload)
         return len(payload)
+
+    def request_connection_rotation(self, reason=""):
+        self.rotation_requests.append(str(reason))
+        return {"accepted": True, "reason": str(reason)}
+
+    def reset_connection_rotation_cycles(self):
+        self.rotation_cycle_resets += 1
 
     def get_max_app_payload_size(self):
         return self.max_app_payload_size
@@ -227,6 +237,108 @@ def _ipv4_echo_reply(src: str, dst: str, identifier: int, sequence: int, payload
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_disconnected_overlay_requests_one_rotation_after_delay(self):
+        asyncio.run(self._test_disconnected_overlay_requests_one_rotation_after_delay())
+
+    async def _test_disconnected_overlay_requests_one_rotation_after_delay(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.0
+
+        await mux.on_overlay_state(False)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertEqual(session.rotation_requests, ["channelmux_disconnected"])
+
+    def test_connected_overlay_cancels_pending_rotation(self):
+        asyncio.run(self._test_connected_overlay_cancels_pending_rotation())
+
+    async def _test_connected_overlay_cancels_pending_rotation(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.05
+
+        await mux.on_overlay_state(False)
+        session.connected = True
+        session.connection_layers[-1]["connected"] = True
+        session.connection_layers[-1]["app_ready"] = True
+        await mux.on_overlay_state(True)
+        await asyncio.sleep(0.06)
+
+        self.assertEqual(session.rotation_requests, [])
+
+    def test_rotation_waits_for_new_lifecycle_epoch(self):
+        asyncio.run(self._test_rotation_waits_for_new_lifecycle_epoch())
+
+    async def _test_rotation_waits_for_new_lifecycle_epoch(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.0
+
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "test"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "still_down"))
+        await asyncio.sleep(0)
+        self.assertEqual(session.rotation_requests, ["channelmux_disconnected"])
+
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 2, "new_epoch"))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        self.assertEqual(session.rotation_requests, ["channelmux_disconnected", "channelmux_disconnected"])
+
+    def test_operator_rotation_cascades_once_and_waits_for_new_epoch(self):
+        asyncio.run(self._test_operator_rotation_cascades_once_and_waits_for_new_epoch())
+
+    async def _test_operator_rotation_cascades_once_and_waits_for_new_epoch(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 4, "reload"))
+
+        mux.request_connection_rotation("secure_link_material_reload")
+        mux.request_connection_rotation("secure_link_material_reload")
+
+        self.assertEqual(session.rotation_requests, ["secure_link_material_reload"])
+
+    def test_connected_lifecycle_resets_transport_rotation_cycles(self):
+        asyncio.run(self._test_connected_lifecycle_resets_transport_rotation_cycles())
+
+    async def _test_connected_lifecycle_resets_transport_rotation_cycles(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1, "authenticated"))
+
+        self.assertEqual(session.rotation_cycle_resets, 1)
+
+    def test_tun_admission_requires_connected_lifecycle_epoch(self):
+        asyncio.run(self._test_tun_admission_requires_connected_lifecycle_epoch())
+
+    async def _test_tun_admission_requires_connected_lifecycle_epoch(self):
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        dev = ChannelMux.TunDevice(fd=10, ifname="obtun0", mtu=1500)
+        dev.chan_id = 7
+        sent = []
+        mux._send_mux = lambda chan, proto, mtype, payload: sent.append((chan, proto, mtype, payload))
+        packet = _ipv4_packet("192.0.2.1", "198.51.100.1")
+        mux._on_local_tun_packet(dev, packet)
+        self.assertEqual(sent, [])
+        result = await mux._probe_tun_connectivity_once(probe_kind="peer", ifname="obtun0", target="192.0.2.1", timeout_s=0.1)
+        self.assertEqual(result["state"], "skipped")
+        session.connected = True
+        session.connection_layers[-1]["connected"] = True
+        session.connection_layers[-1]["app_ready"] = True
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1, "authenticated"))
+        mux._on_local_tun_packet(dev, packet)
+        self.assertEqual(len(sent), 1)
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "failed"))
+        mux._on_local_tun_packet(dev, packet)
+        self.assertEqual(len(sent), 1)
+
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
         mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
 
@@ -299,16 +411,16 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._accepting_enabled = True
 
         with self.assertLogs('channel_mux', level='INFO') as logs:
-            await mux.on_overlay_state(False)
+            await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 7, "secure_link_reauthenticating"))
 
         text = "\n".join(logs.output)
         self.assertIn("[MUX/STATE]", text)
-        self.assertIn("reason=on_overlay_state_disconnected", text)
-        self.assertIn("connected_arg=0", text)
+        self.assertIn("reason=on_overlay_state_connected", text)
+        self.assertIn("connected_arg=1", text)
         self.assertIn("was_overlay_connected=1", text)
-        self.assertIn("new_overlay_connected=0", text)
+        self.assertIn("new_overlay_connected=1", text)
         self.assertIn("was_accepting_enabled=1", text)
-        self.assertIn("new_accepting_enabled=0", text)
+        self.assertIn("new_accepting_enabled=1", text)
         self.assertIn("session_connected=0", text)
         self.assertIn("session_app_ready=0", text)
 
@@ -340,7 +452,9 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._accepting_enabled = True
 
         with self.assertLogs('channel_mux', level='INFO') as logs:
-            await mux.on_overlay_state(False)
+            await mux.on_connection_lifecycle(
+                ConnectionLifecycleEvent(ConnectionState.CONNECTED, 7, "secure_link_reauthenticating")
+            )
 
         self.assertTrue(mux._overlay_connected)
         self.assertTrue(mux._accepting_enabled)
@@ -679,7 +793,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
         self.assertFalse(result['ok'])
         self.assertEqual(result['state'], 'skipped')
-        self.assertIn('inactive transport', result['detail'])
+        self.assertIn('awaits a connected lifecycle epoch', result['detail'])
         write_tun.assert_not_called()
         send_mux.assert_not_called()
 
@@ -820,6 +934,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertFalse(settings.enable_tcpmss)
         self.assertFalse(settings.enable_tun_tcpdump)
         self.assertEqual(settings.tun_tcpdump_pcap_path, "")
+        self.assertTrue(settings.enabled_on_startup)
         self.assertFalse(settings.shared_tun_disable_outgoing_normalization)
         self.assertFalse(settings.shared_tun_disable_inflow_filter)
         self.assertFalse(settings.shared_tun_disable_outflow_filter)
@@ -844,11 +959,22 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         self.assertTrue(settings.enable_tcpmss)
         self.assertTrue(settings.enable_tun_tcpdump)
         self.assertEqual(settings.tun_tcpdump_pcap_path, "/tmp/shared-tun-test.pcap")
+        self.assertTrue(settings.enabled_on_startup)
         self.assertTrue(settings.shared_tun_disable_outgoing_normalization)
         self.assertTrue(settings.shared_tun_disable_inflow_filter)
         self.assertTrue(settings.shared_tun_disable_outflow_filter)
         self.assertTrue(settings.disable_channelmux_inflow_throttle)
         self.assertTrue(settings.shared_tun_disable_scoped_throttle)
+
+    def test_tun_routing_enabled_on_startup_parses_from_mapping(self):
+        settings = TunRoutingSettings.from_mapping(
+            {
+                "TUN_routing": {
+                    "enabled_on_startup": "false",
+                }
+            }
+        )
+        self.assertFalse(settings.enabled_on_startup)
 
     def test_tun_routing_legacy_scoped_throttle_flag_enables_global_channelmux_disable(self):
         settings = TunRoutingSettings.from_mapping(
@@ -2008,7 +2134,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
 
-    async def test_overlay_connect_requires_top_layer_app_ready(self):
+    async def test_overlay_connect_uses_reported_lifecycle_state(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=1,
             l_proto='udp',
@@ -2043,10 +2169,10 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(self.mux, '_start_all_services', new=AsyncMock()) as start_all, patch.object(self.mux, '_send_mux') as send_mux:
             await self.mux.on_overlay_state(True)
 
-        self.assertFalse(self.mux._overlay_connected)
-        self.assertFalse(self.mux._accepting_enabled)
-        start_all.assert_not_awaited()
-        send_mux.assert_not_called()
+        self.assertTrue(self.mux._overlay_connected)
+        self.assertTrue(self.mux._accepting_enabled)
+        start_all.assert_awaited_once()
+        send_mux.assert_called_once()
 
     async def test_overlay_connect_does_not_replay_tun_on_created_hook_for_active_tun_service(self):
         spec = ChannelMux.ServiceSpec(
@@ -2313,6 +2439,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
                     'ipv4': ['192.168.107.2'],
                     'ipv6': ['fd20:107::2'],
                     'address_count': 2,
+                    'local_virtual': False,
                     'throttle_prev_window_bytes': 0,
                     'throttle_curr_window_bytes': 0,
                     'throttle_drop_count': 0,

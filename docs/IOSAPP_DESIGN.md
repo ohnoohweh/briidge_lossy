@@ -606,8 +606,8 @@ The iOS tunnel is no longer tied to a baked-in local address. The app/provider p
 
 The current dual-stack model is:
 
-- IPv4 local/peer identity is derived from `TUN_ADDR`, `PEER_ADDR`, and `TUN_SUBNET`
-- IPv6 local/peer identity is derived from `TUN_ADDR6`, `PEER_ADDR6`, and `TUN_SUBNET6`
+- IPv4 local identity is derived from `TUN_ADDR`
+- IPv6 local identity is derived from `TUN_ADDR6`
 - included routes are full-tunnel by default:
   - IPv4 `0.0.0.0/0`
   - IPv6 `::/0`
@@ -619,7 +619,8 @@ The intended source of truth is the service definition itself, especially:
 
 - `channel_mux.own_servers[].lifecycle_hooks.listener.on_created.env`
 
-with compatible fallback to matching remote-side peer data when needed for transition compatibility.
+The remote service catalog describes the peer-facing service and does not provide
+the local iOS tunnel identity.
 
 Design impact:
 
@@ -796,7 +797,6 @@ Current route policy:
 - Default excluded route: `127.0.0.0/8`
 - Keep DNS settings explicit and conservative for the selected tunnel behavior.
 - Derive the local iOS tunnel IPv4 identity from the local TUN service definition, ideally `own_servers[].lifecycle_hooks.listener.on_created.env.TUN_ADDR`.
-- If that local metadata is temporarily absent, compatibility fallback may infer the local iOS address from the matching remote TUN listener metadata such as `PEER_ADDR`.
 - Derive the transport-facing peer endpoint from `udp_peer`, `ws_peer`, `tcp_peer`, or `quic_peer` according to `overlay_transport`.
 
 Target profile/runtime behavior:

@@ -137,46 +137,6 @@ def _source_dir_candidates(name: str) -> list[Path]:
     return candidates
 
 
-def _migrate_legacy_ios_documents_root(target_root: Path) -> None:
-    """Flatten the short-lived nested iOS Documents/ObstacleBridge layout."""
-    if sys.platform != "ios":
-        return
-
-    legacy_root = Path.home() / "Documents" / "ObstacleBridge"
-    try:
-        if legacy_root.resolve() == target_root.resolve():
-            return
-    except OSError:
-        return
-
-    for name in (
-        "config",
-        "profiles",
-        "logs",
-        "admin_web",
-        "web",
-        "README.txt",
-        "documents-manifest.json",
-    ):
-        source = legacy_root / name
-        destination = target_root / name
-        if not source.exists() or destination.exists():
-            continue
-        try:
-            if source.is_dir():
-                shutil.copytree(
-                    source,
-                    destination,
-                    dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"),
-                )
-            else:
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, destination)
-        except Exception:
-            pass
-
-
 def _copy_document_tree(source_name: str, target: Path) -> bool:
     for candidate in _source_dir_candidates(source_name):
         if candidate.resolve() == target.resolve():
@@ -402,7 +362,6 @@ def _write_startup_artifacts(root: Path | None = None) -> Path:
     root = _ios_documents_root() if root is None else Path(root)
     try:
         root.mkdir(parents=True, exist_ok=True)
-        _migrate_legacy_ios_documents_root(root)
         (root / "config").mkdir(parents=True, exist_ok=True)
         (root / "profiles").mkdir(parents=True, exist_ok=True)
         (root / "logs").mkdir(parents=True, exist_ok=True)

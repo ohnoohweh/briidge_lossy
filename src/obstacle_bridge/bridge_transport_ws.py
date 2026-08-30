@@ -45,6 +45,7 @@ from .bridge_transport_common import (
     _split_configured_peer_hosts,
     _strip_brackets,
 )
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 
 _bridge = resolve_bridge_module()
 
@@ -376,6 +377,7 @@ class WebSocketSession(ISession):
             socktype=socket.SOCK_STREAM,
         )
         self._peer_candidate_index: int = 0
+        self._peer_candidate_cycle: int = 0
         peer_info = self._peer_candidates[0] if self._peer_candidates else None
         self._peer_tuple: Optional[Tuple[str, int]] = (
             (peer_info[0], peer_info[1]) if peer_info is not None else None
@@ -452,6 +454,7 @@ class WebSocketSession(ISession):
         self._rtt_rt = StreamRTTRuntime(self._rtt)
         self._overlay_connected = False
         self.connection_epoch: int = 0
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
         self._app_payload_passthrough: bool = False
         self._egress_tracker = EgressThroughputTracker()
         self._ws_connect_timeout_s: float = 5.0
@@ -468,6 +471,7 @@ class WebSocketSession(ISession):
     # ---- ISession wiring ------------------------------------------------------
     def set_on_app_payload(self, cb): self._on_app = cb
     def set_on_state_change(self, cb): self._on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._connection_lifecycle.set_callback(cb)
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set_cb = cb
@@ -669,6 +673,9 @@ class WebSocketSession(ISession):
             "connected": connected,
             "app_ready": connected,
         }]
+
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
 
     def get_metrics(self) -> SessionMetrics:
         try:
@@ -1766,6 +1773,20 @@ class WebSocketSession(ISession):
         self._start_reconnect_loop()
         return True
 
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        if not self._peer_tuple or not self._run_flag:
+            return ConnectionRotationResult(accepted=False, reason="transport_not_running")
+        self._advance_peer_candidate(count_cycle=True)
+        accepted = self.request_reconnect()
+        return ConnectionRotationResult(
+            accepted=accepted,
+            reason=str(reason or "next_candidate"),
+            next_epoch=int(self.connection_epoch or 0) + 1 if accepted else None,
+            candidate_index=self._peer_candidate_index if accepted else None,
+            candidate_cycle=self._peer_candidate_cycle if accepted else None,
+            restart_required=accepted and self._peer_candidate_cycle >= 3,
+        )
+
     def _current_peer_endpoint(self) -> Tuple[str, int]:
         if self._peer_candidates:
             host, port, _family = self._peer_candidates[self._peer_candidate_index]
@@ -1775,10 +1796,15 @@ class WebSocketSession(ISession):
             raise RuntimeError("overlay peer requires a non-empty host name")
         return self._peer_tuple
 
-    def _advance_peer_candidate(self) -> None:
+    def _advance_peer_candidate(self, *, count_cycle: bool = False) -> None:
         if len(self._peer_candidates) <= 1:
+            if count_cycle:
+                self._peer_candidate_cycle += 1
             return
-        self._peer_candidate_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        next_index = (self._peer_candidate_index + 1) % len(self._peer_candidates)
+        if count_cycle and next_index == 0:
+            self._peer_candidate_cycle += 1
+        self._peer_candidate_index = next_index
         host, port, _family = self._peer_candidates[self._peer_candidate_index]
         self._peer_tuple = (host, port)
 
@@ -2660,6 +2686,15 @@ class WebSocketSession(ISession):
         if self._overlay_connected == v:
             return
         self._overlay_connected = v
+        epoch = int(self.connection_epoch or 0)
+        if v and epoch <= 0:
+            self.connection_epoch = 1
+            epoch = 1
+        self._connection_lifecycle.transition(
+            ConnectionState.CONNECTED if v else ConnectionState.DISCONNECTED,
+            epoch,
+            "transport_connected" if v else "transport_disconnected",
+        )
         mode = "RTT" if self._peer_tuple else "peer-count"
         self._log.info(f"[WS-SESSION] ({self._probe_id}) overlay -> {'CONNECTED' if v else 'DISCONNECTED'} ({mode})")
         if v and callable(self._on_peer_set_cb):
@@ -2668,6 +2703,9 @@ class WebSocketSession(ISession):
         if callable(self._on_state):
             try: self._on_state(v)
             except Exception: pass
+
+    def reset_connection_rotation_cycles(self) -> None:
+        self._peer_candidate_cycle = 0
 
 # -----------------------------------------------------------------------------
 

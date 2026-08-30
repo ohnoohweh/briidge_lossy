@@ -360,6 +360,9 @@
                 <h2>TUN / Routing</h2>
                 <p>Dedicated visibility for TUN interfaces, shared ownership, and routing selections</p>
               </div>
+              <div class="quick-actions">
+                <button id="tunRoutingToggleBtn" class="btn btn-secondary" type="button">Suspend TUN</button>
+              </div>
             </div>
             <div id="tunRoutingHealthWarning" class="warning-card hidden"></div>
             <div class="kv-list">
@@ -454,6 +457,8 @@
               </div>
             </div>
             <div class="kv-list">
+              <div class="kv-row"><span>Included Routes Active</span><strong id="tunRoutingEnabledState">no</strong></div>
+              <div class="kv-row"><span>Startup State</span><strong id="tunRoutingStartupState">enabled</strong></div>
               <div class="kv-row"><span>Mode</span><strong id="tunHelperMode">inline</strong></div>
               <div class="kv-row"><span>Lifecycle Phase</span><strong id="tunHelperLifecyclePhase">disabled</strong></div>
               <div class="kv-row"><span>Backend</span><strong id="tunHelperBackend">n/a</strong></div>
@@ -944,6 +949,6 @@
     </section>
   </div>
 
-  <script src="app.js?v=20260412a"></script>
+  <script src="app.js?v=20260829b"></script>
 </body>
 </html>

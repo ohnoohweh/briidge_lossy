@@ -158,19 +158,6 @@ def _override_network_settings(
     return M3NetworkSettings.from_mapping(config, base=base)
 
 
-def _prefix_from_subnet(value: Any, *, version: Optional[int] = None) -> int | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    try:
-        net = ipaddress.ip_network(text, strict=False)
-    except ValueError:
-        return None
-    if version is not None and net.version != version:
-        return None
-    return int(net.prefixlen)
-
-
 def network_settings_from_runtime_config(
     config: Mapping[str, Any],
     *,
@@ -180,12 +167,8 @@ def network_settings_from_runtime_config(
 ) -> M3NetworkSettings:
     """Derive iOS packet-tunnel network settings from live ChannelMux TUN config.
 
-    Preferred source is the local iOS TUN service hook env:
+    The local iOS TUN service hook env is the source of truth:
     `own_servers[].lifecycle_hooks.listener.on_created.env.TUN_ADDR`.
-
-    For transition compatibility with existing profiles, this also falls back to
-    a matching remote TUN service env using `PEER_ADDR` plus the prefix inferred
-    from `TUN_ADDR` or `TUN_SUBNET`.
     """
 
     chosen_address = DEFAULT_TUNNEL_ADDRESS
@@ -194,7 +177,6 @@ def network_settings_from_runtime_config(
     chosen_prefix6 = DEFAULT_TUNNEL_PREFIX6
 
     own_services = _service_catalog(config, "own_servers")
-    remote_services = _service_catalog(config, "remote_servers")
 
     tun_services = [
         item
@@ -230,65 +212,6 @@ def network_settings_from_runtime_config(
                 excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
                 dns_servers=list(dns_servers or ["1.1.1.1"]),
                 mtu=int(service.get("listen", {}).get("mtu") or mtu),
-                ),
-            )
-
-    remote_tun_services = [
-        item
-        for item in remote_services
-        if isinstance(item.get("listen"), Mapping)
-        and str(item["listen"].get("protocol") or "").strip().lower() == "tun"
-    ]
-    remote_tun_services.sort(
-        key=lambda item: 0
-        if str(item.get("target", {}).get("ifname") or "").strip() == ios_ifname
-        else 1
-    )
-    for service in remote_tun_services:
-        for env in _iter_hook_env_blocks(service):
-            peer_addr = str(env.get("PEER_ADDR") or "").strip()
-            peer_addr6 = str(env.get("PEER_ADDR6") or "").strip()
-            if peer_addr:
-                try:
-                    ip = ipaddress.ip_address(peer_addr)
-                except ValueError:
-                    ip = None
-                if ip is not None and ip.version == 4:
-                    prefix = (
-                        (_parse_interface_address(env.get("TUN_ADDR"), version=4) or ("", None))[1]
-                        or _prefix_from_subnet(env.get("TUN_SUBNET"), version=4)
-                        or DEFAULT_TUNNEL_PREFIX
-                    )
-                    chosen_address = str(ip)
-                    chosen_prefix = int(prefix)
-            if peer_addr6:
-                try:
-                    ip6 = ipaddress.ip_address(peer_addr6)
-                except ValueError:
-                    ip6 = None
-                if ip6 is not None and ip6.version == 6:
-                    prefix6 = (
-                        (_parse_interface_address(env.get("TUN_ADDR6"), version=6) or ("", None))[1]
-                        or _prefix_from_subnet(env.get("TUN_SUBNET6"), version=6)
-                        or DEFAULT_TUNNEL_PREFIX6
-                    )
-                    chosen_address6 = str(ip6)
-                    chosen_prefix6 = int(prefix6)
-            if not peer_addr and not peer_addr6:
-                continue
-            return _override_network_settings(
-                config,
-                M3NetworkSettings(
-                tunnel_address=chosen_address,
-                tunnel_prefix=chosen_prefix,
-                included_routes=list(DEFAULT_INCLUDED_ROUTES),
-                excluded_routes=list(DEFAULT_EXCLUDED_ROUTES),
-                tunnel_address6=chosen_address6,
-                tunnel_prefix6=chosen_prefix6,
-                included_routes6=list(DEFAULT_INCLUDED_ROUTES6) if chosen_address6 else [],
-                excluded_routes6=list(DEFAULT_EXCLUDED_ROUTES6) if chosen_address6 else [],
-                dns_servers=list(dns_servers or ["1.1.1.1"]),
-                mtu=int(service.get("target", {}).get("mtu") or service.get("listen", {}).get("mtu") or mtu),
                 ),
             )
 

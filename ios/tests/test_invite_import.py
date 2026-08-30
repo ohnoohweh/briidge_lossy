@@ -53,11 +53,13 @@ def test_preview_invite_token_masks_psk_and_returns_updates() -> None:
 def test_preview_json_config_snippet_uses_runtime_validation() -> None:
     snippet = json.dumps(
         {
-            "overlay_transport": "ws",
-            "ws_peer": "bridge.example.net",
-            "ws_peer_port": 443,
-            "secure_link_mode": "psk",
-            "admin_web": False,
+            "runner": {"overlay_transport": "ws"},
+            "ws_session": {
+                "ws_peer": "bridge.example.net",
+                "ws_peer_port": 443,
+            },
+            "secure_link": {"secure_link_mode": "psk"},
+            "admin_web": {"admin_web": False},
         }
     )
 
@@ -67,7 +69,7 @@ def test_preview_json_config_snippet_uses_runtime_validation() -> None:
     assert doc["preview"]["overlay_transport"] == "ws"
     assert doc["preview"]["secure_link_mode"] == "psk"
     assert doc["preview"]["admin_web"] is False
-    assert doc["suggested_updates"]["ws_peer"] == "bridge.example.net"
+    assert doc["suggested_updates"]["ws_session"]["ws_peer"] == "bridge.example.net"
 
 
 def test_preview_invite_token_rejects_legacy_encrypted_psk_from_other_host() -> None:

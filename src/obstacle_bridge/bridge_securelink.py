@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
+from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 from .bridge_transport_common import _has_configured_overlay_peer
 
 _bridge = export_bridge_globals(globals())
@@ -345,28 +346,6 @@ class SecureLinkPskSession(ISession):
                 default=5000,
                 help='Maximum client-side secure-link retry backoff after repeated authentication failures, in milliseconds.'
             )
-        if not _has('--secure-link-recover-after-failure'):
-            try:
-                p.add_argument(
-                    '--secure-link-recover-after-failure',
-                    action=argparse.BooleanOptionalAction,
-                    default=True,
-                    help='Reconnect the lower client transport after an already-authenticated secure-link session fails closed.'
-                )
-            except Exception:
-                p.add_argument(
-                    '--secure-link-recover-after-failure',
-                    action='store_true',
-                    default=True,
-                    help='Reconnect the lower client transport after an already-authenticated secure-link session fails closed.'
-                )
-        if not _has('--secure-link-recover-delay-seconds'):
-            p.add_argument(
-                '--secure-link-recover-delay-seconds',
-                type=float,
-                default=30.0,
-                help='Delay before reconnecting a lower client transport after authenticated secure-link failure recovery.'
-            )
         if not _has('--secure-link-root-pub'):
             p.add_argument(
                 '--secure-link-root-pub',
@@ -429,6 +408,8 @@ class SecureLinkPskSession(ISession):
         self._outer_on_peer_disconnect: Optional[Callable[[int], None]] = None
         self._outer_on_app_from_peer_bytes: Optional[Callable[[int], None]] = None
         self._outer_on_transport_epoch_change: Optional[Callable[[int], None]] = None
+        self._connection_lifecycle = ConnectionLifecycleEmitter()
+        self._connection_lifecycle_epoch = 0
         self._client_mode = _has_configured_overlay_peer(args, self._transport_name)
         self._mode = str(getattr(args, "secure_link_mode", "off") or "off").strip().lower()
         self._psk = str(getattr(args, "secure_link_psk", "") or "").encode("utf-8")
@@ -439,8 +420,6 @@ class SecureLinkPskSession(ISession):
             self._retry_backoff_initial_s,
             float(int(getattr(args, "secure_link_retry_backoff_max_ms", 5000) or 0)) / 1000.0,
         )
-        self._recover_after_failure = bool(getattr(args, "secure_link_recover_after_failure", True))
-        self._recover_delay_s = max(0.0, float(getattr(args, "secure_link_recover_delay_seconds", 30.0) or 0.0))
         self._peer_states: Dict[int, _SecureLinkPeerState] = {}
         self._server_chan_to_peer: Dict[int, Tuple[int, int]] = {}
         self._server_peer_chan_to_mux: Dict[Tuple[int, int], int] = {}
@@ -470,14 +449,11 @@ class SecureLinkPskSession(ISession):
         self._rekeys_completed_total: int = 0
         self._preserve_connected_during_epoch_restart = False
         self._client_retry_task: Optional[asyncio.Task] = None
-        self._client_recovery_task: Optional[asyncio.Task] = None
         self._client_rekey_task: Optional[asyncio.Task] = None
         self._handshake_watchdog_task: Optional[asyncio.Task] = None
         self._client_retry_consecutive_failures: int = 0
         self._client_retry_not_before_mono: float = 0.0
         self._client_retry_not_before_unix_ts: Optional[float] = None
-        self._client_recovery_not_before_mono: float = 0.0
-        self._client_recovery_not_before_unix_ts: Optional[float] = None
         self._client_rekey_due_mono: float = 0.0
         self._client_rekey_due_unix_ts: Optional[float] = None
         self._client_rekey_hold_after_commit: bool = False
@@ -941,16 +917,6 @@ class SecureLinkPskSession(ISession):
     def _mark_auth_fail(self, peer_id: Optional[int], session_id: int, code: int) -> None:
         key = self._peer_key(peer_id)
         state = self._peer_states.get(key)
-        if (
-            self._client_mode
-            and int(session_id or 0) <= 0
-            and self._client_recovery_not_before_mono > 0.0
-            and (
-                (state is not None and int(state.auth_fail_code or 0) > 0)
-                or int(self._last_auth_fail_code or 0) > 0
-            )
-        ):
-            return
         if state is None:
             state = _SecureLinkPeerState(
                 session_id=int(session_id or 0),
@@ -1019,7 +985,6 @@ class SecureLinkPskSession(ISession):
         )
         if self._client_mode and self._started and int(code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL:
             self._cancel_client_retry_task(clear_schedule=True)
-            self._cancel_client_recovery_task(clear_schedule=True)
         elif (
             self._client_mode
             and self._started
@@ -1027,22 +992,25 @@ class SecureLinkPskSession(ISession):
             and recent_transport_epoch_change
             and inner_connected
         ):
-            self._cancel_client_recovery_task(clear_schedule=True)
             if self._client_retry_not_before_mono <= time.monotonic():
                 self._client_retry_consecutive_failures = 0
                 self._schedule_client_retry()
         elif self._client_mode and self._started and was_authenticated:
             self._cancel_client_retry_task(clear_schedule=True)
-            if inner_connected:
-                self._schedule_client_recovery()
-            else:
-                self._cancel_client_recovery_task(clear_schedule=True)
+            state.last_event = "security_failed"
+            state.last_event_unix_ts = time.time()
+            self._record_secure_link_event("security_failed", state.last_event_unix_ts)
+            self._log.warning(
+                "[SECURE-LINK] security failure awaits ChannelMux rotation transport=%s side=client session_id=%s",
+                self._transport_name,
+                int(state.session_id or 0),
+            )
         elif self._client_mode and self._started and inner_connected:
             self._schedule_client_retry()
         self._refresh_connected_state()
 
     def _refresh_connected_state(self) -> None:
-        connected = self._compute_app_ready()
+        connected = self._compute_connected()
         if connected:
             self._connected_evt.set()
         else:
@@ -1050,6 +1018,11 @@ class SecureLinkPskSession(ISession):
         if connected == self._last_connected:
             return
         self._last_connected = connected
+        self._connection_lifecycle.transition(
+            ConnectionState.CONNECTED if connected else ConnectionState.DISCONNECTED,
+            self._connection_lifecycle_epoch,
+            "security_authenticated" if connected else "security_disconnected",
+        )
         if callable(self._outer_on_state):
             try:
                 self._outer_on_state(connected)
@@ -1058,21 +1031,12 @@ class SecureLinkPskSession(ISession):
 
     def _clear_all_states(self) -> None:
         self._cancel_client_rekey_task(clear_schedule=True)
-        self._cancel_client_recovery_task(clear_schedule=True)
         self._clear_client_rekey_app_queue()
         self._peer_states.clear()
         self._server_chan_to_peer.clear()
         self._server_peer_chan_to_mux.clear()
         self._server_next_mux_chan = 1
         self._refresh_connected_state()
-
-    def _has_pending_client_recovery(self) -> bool:
-        if not self._client_mode:
-            return False
-        if self._client_recovery_not_before_mono <= 0.0 and self._client_recovery_not_before_unix_ts is None:
-            return False
-        state = self._peer_states.get(0)
-        return bool(state is not None and int(state.auth_fail_code or 0) > 0)
 
     def _clear_client_rekey_app_queue(self) -> None:
         self._client_rekey_hold_after_commit = False
@@ -1321,91 +1285,7 @@ class SecureLinkPskSession(ISession):
 
     def _reset_client_retry_backoff(self) -> None:
         self._cancel_client_retry_task(clear_schedule=True)
-        self._cancel_client_recovery_task(clear_schedule=True)
         self._client_retry_consecutive_failures = 0
-
-    def _cancel_client_recovery_task(self, *, clear_schedule: bool) -> None:
-        task = self._client_recovery_task
-        self._client_recovery_task = None
-        current = None
-        try:
-            current = asyncio.current_task()
-        except Exception:
-            current = None
-        if task is not None and task is not current and not task.done():
-            task.cancel()
-        if clear_schedule:
-            self._client_recovery_not_before_mono = 0.0
-            self._client_recovery_not_before_unix_ts = None
-
-    async def _delayed_client_recovery(self, target_mono: float, expected_session_id: int) -> None:
-        try:
-            while True:
-                remaining = float(target_mono) - time.monotonic()
-                if remaining <= 0.0:
-                    break
-                await asyncio.sleep(min(remaining, 0.25))
-            if not self._started or not self._client_mode:
-                return
-            state = self._peer_states.get(0)
-            if state is None or state.authenticated:
-                return
-            if int(state.session_id or 0) != int(expected_session_id or 0):
-                return
-            state.last_event = "recovery_reconnect_started"
-            state.last_event_unix_ts = time.time()
-            self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
-            self._client_recovery_not_before_mono = 0.0
-            self._client_recovery_not_before_unix_ts = None
-            if not self.request_reconnect():
-                self._log.warning(
-                    "[SECURE-LINK] recovery reconnect unavailable transport=%s side=client session_id=%s",
-                    self._transport_name,
-                    int(expected_session_id or 0),
-                )
-        except asyncio.CancelledError:
-            return
-        finally:
-            current = None
-            try:
-                current = asyncio.current_task()
-            except Exception:
-                current = None
-            if self._client_recovery_task is current:
-                self._client_recovery_task = None
-
-    def _schedule_client_recovery(self) -> None:
-        if (
-            not self._client_mode
-            or not self._started
-            or not self._recover_after_failure
-            or self._recover_delay_s <= 0.0
-        ):
-            return
-        state = self._peer_states.get(0)
-        if state is None:
-            return
-        target_mono = time.monotonic() + self._recover_delay_s
-        self._client_recovery_not_before_mono = target_mono
-        self._client_recovery_not_before_unix_ts = time.time() + self._recover_delay_s
-        self._cancel_client_recovery_task(clear_schedule=False)
-        state.last_event = "recovery_reconnect_scheduled"
-        state.last_event_unix_ts = time.time()
-        self._record_secure_link_event("recovery_reconnect_scheduled", state.last_event_unix_ts)
-        self._log.warning(
-            "[SECURE-LINK] scheduled recovery reconnect transport=%s side=client session_id=%s delay_sec=%.3f",
-            self._transport_name,
-            int(state.session_id or 0),
-            self._recover_delay_s,
-        )
-        try:
-            self._client_recovery_task = asyncio.create_task(
-                self._delayed_client_recovery(target_mono, int(state.session_id or 0))
-            )
-        except Exception:
-            self._client_recovery_task = None
-            self._client_recovery_not_before_mono = 0.0
-            self._client_recovery_not_before_unix_ts = None
 
     async def _delayed_client_retry(self, target_mono: float) -> None:
         try:
@@ -1437,8 +1317,6 @@ class SecureLinkPskSession(ISession):
 
     def _schedule_client_retry(self) -> None:
         if not self._client_mode or not self._started or self._retry_backoff_max_s <= 0.0:
-            return
-        if self._client_recovery_not_before_mono > time.monotonic():
             return
         self._client_retry_consecutive_failures += 1
         exponent = max(0, self._client_retry_consecutive_failures - 1)
@@ -1541,30 +1419,6 @@ class SecureLinkPskSession(ISession):
         self._client_retry_not_before_mono = 0.0
         self._client_retry_not_before_unix_ts = None
         self._begin_client_handshake()
-
-    def _maybe_begin_client_recovery_handshake_after_reconnect(self) -> bool:
-        if not self._client_mode or not self._started:
-            return False
-        if not bool(getattr(self._inner, "is_connected", lambda: False)()):
-            return False
-        if any(int(state.auth_fail_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL for state in self._peer_states.values()):
-            return False
-        if int(self._last_terminal_failure_code or 0) == self._SL_AUTH_FAIL_REVOKED_SERIAL:
-            return False
-        should_recover = bool(
-            self._client_recovery_not_before_mono > 0.0
-            or self._client_recovery_not_before_unix_ts is not None
-            or any(
-                str(state.last_event or "").strip().lower() == "recovery_reconnect_started"
-                for state in self._peer_states.values()
-            )
-        )
-        if not should_recover:
-            return False
-        self._cancel_client_retry_task(clear_schedule=True)
-        self._cancel_client_recovery_task(clear_schedule=True)
-        self._begin_client_handshake()
-        return True
 
     @staticmethod
     def _clear_pending_rekey(state: _SecureLinkPeerState) -> None:
@@ -1823,12 +1677,9 @@ class SecureLinkPskSession(ISession):
                 dropped += 1
                 if self._client_mode:
                     self._cancel_client_retry_task(clear_schedule=True)
-                    self._cancel_client_recovery_task(clear_schedule=True)
-                    state.last_event = "recovery_reconnect_started"
+                    state.last_event = "security_failed"
                     state.last_event_unix_ts = time.time()
-                    self._record_secure_link_event("recovery_reconnect_started", state.last_event_unix_ts)
-                    if not self.request_reconnect() and bool(getattr(self._inner, "is_connected", lambda: False)()):
-                        self._maybe_begin_client_recovery_handshake_after_reconnect()
+                    self._record_secure_link_event("security_failed", state.last_event_unix_ts)
         expected_dropped_total = dropped_total_before + int(dropped or 0)
         if int(self._secure_link_peers_dropped_total or 0) < expected_dropped_total:
             self._secure_link_peers_dropped_total = expected_dropped_total
@@ -1856,12 +1707,16 @@ class SecureLinkPskSession(ISession):
 
     def set_on_app_payload(self, cb): self._outer_on_app = cb
     def set_on_state_change(self, cb): self._outer_on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._connection_lifecycle.set_callback(cb)
     def set_on_peer_rx(self, cb): self._outer_on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._outer_on_peer_tx = cb
     def set_on_peer_set(self, cb): self._outer_on_peer_set = cb
     def set_on_peer_disconnect(self, cb): self._outer_on_peer_disconnect = cb
     def set_on_app_from_peer_bytes(self, cb): self._outer_on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._outer_on_transport_epoch_change = cb
+
+    def get_connection_lifecycle_snapshot(self) -> dict[str, object]:
+        return self._connection_lifecycle.snapshot()
 
     def reset_sender(self) -> None:
         resetter = getattr(self._inner, "reset_sender", None)
@@ -1877,9 +1732,7 @@ class SecureLinkPskSession(ISession):
             return
         self._cancel_client_retry_task(clear_schedule=False)
         self._cancel_client_rekey_task(clear_schedule=False)
-        preserve_client_recovery = self._has_pending_client_recovery()
-        if not preserve_client_recovery:
-            self._clear_all_states()
+        self._clear_all_states()
         resetter = getattr(self._inner, "reset_transport_epoch", None)
         if not callable(resetter):
             resetter = getattr(self._inner, "reset_sender", None)
@@ -1908,6 +1761,9 @@ class SecureLinkPskSession(ISession):
             setter(True)
         self._inner.set_on_app_payload(self._on_inner_payload)
         self._inner.set_on_state_change(self._on_inner_state_change)
+        lifecycle_setter = getattr(self._inner, "set_on_connection_lifecycle", None)
+        if callable(lifecycle_setter):
+            lifecycle_setter(self._on_inner_connection_lifecycle)
         self._inner.set_on_peer_rx(self._outer_on_peer_rx)
         self._inner.set_on_peer_tx(self._outer_on_peer_tx)
         self._inner.set_on_peer_set(self._outer_on_peer_set)
@@ -1943,7 +1799,7 @@ class SecureLinkPskSession(ISession):
             return False
 
     def is_connected(self) -> bool:
-        return self._compute_app_ready()
+        return self._compute_connected()
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
         layers = []
@@ -1979,6 +1835,18 @@ class SecureLinkPskSession(ISession):
             with contextlib.suppress(Exception):
                 return bool(trigger())
         return False
+
+    def request_connection_rotation(self, reason: str = "") -> ConnectionRotationResult:
+        trigger = getattr(self._inner, "request_connection_rotation", None)
+        if callable(trigger):
+            with contextlib.suppress(Exception):
+                return trigger(reason)
+        return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
+
+    def reset_connection_rotation_cycles(self) -> None:
+        resetter = getattr(self._inner, "reset_connection_rotation_cycles", None)
+        if callable(resetter):
+            resetter()
 
     def get_metrics(self) -> SessionMetrics:
         return self._inner.get_metrics()
@@ -2152,10 +2020,6 @@ class SecureLinkPskSession(ISession):
                 "consecutive_failures": int(state.consecutive_failures or 0) if state is not None else 0,
                 "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
                 "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
-                "recovery_enabled": bool(self._recover_after_failure) if self._client_mode else False,
-                "recovery_delay_sec": self._recover_delay_s if self._client_mode else 0.0,
-                "recovery_reconnect_sec": max(0.0, self._client_recovery_not_before_mono - time.monotonic()) if self._client_mode and self._client_recovery_not_before_mono > 0.0 else 0.0,
-                "next_recovery_reconnect_unix_ts": self._client_recovery_not_before_unix_ts if self._client_mode else None,
                 "handshake_attempts_total": int(state.handshake_attempts_total or 0) if state is not None else 0,
                 "last_event": str(state.last_event or "") if state is not None else "",
                 "last_event_unix_ts": state.last_event_unix_ts if state is not None else None,
@@ -2272,10 +2136,6 @@ class SecureLinkPskSession(ISession):
                         "consecutive_failures": 0,
                         "retry_backoff_sec": 0.0,
                         "next_retry_unix_ts": None,
-                        "recovery_enabled": False,
-                        "recovery_delay_sec": 0.0,
-                        "recovery_reconnect_sec": 0.0,
-                        "next_recovery_reconnect_unix_ts": None,
                         "handshake_attempts_total": int(self._handshake_attempts_total or 0),
                         "last_event": self._last_secure_link_event,
                         "last_event_unix_ts": self._last_secure_link_event_unix_ts,
@@ -2413,10 +2273,6 @@ class SecureLinkPskSession(ISession):
             "consecutive_failures": int(self._client_retry_consecutive_failures or 0) if self._client_mode else 0,
             "retry_backoff_sec": max(0.0, self._client_retry_not_before_mono - time.monotonic()) if self._client_mode and self._client_retry_not_before_mono > 0.0 else 0.0,
             "next_retry_unix_ts": self._client_retry_not_before_unix_ts if self._client_mode else None,
-            "recovery_enabled": bool(self._recover_after_failure) if self._client_mode else False,
-            "recovery_delay_sec": self._recover_delay_s if self._client_mode else 0.0,
-            "recovery_reconnect_sec": max(0.0, self._client_recovery_not_before_mono - time.monotonic()) if self._client_mode and self._client_recovery_not_before_mono > 0.0 else 0.0,
-            "next_recovery_reconnect_unix_ts": self._client_recovery_not_before_unix_ts if self._client_mode else None,
             "handshake_attempts_total": int(self._handshake_attempts_total or 0),
             "last_event": self._last_secure_link_event,
             "last_event_unix_ts": self._last_secure_link_event_unix_ts,
@@ -2548,15 +2404,11 @@ class SecureLinkPskSession(ISession):
                 if preserving_epoch_restart_handshake:
                     self._refresh_connected_state()
                     return
-                preserving_failure_state = bool(
-                    self._client_recovery_not_before_mono > 0.0
-                    or self._client_recovery_not_before_unix_ts is not None
-                    or any(
+                preserving_failure_state = any(
                         int(state.auth_fail_code or 0) > 0
                         or str(state.disconnect_reason or "")
                         or str(state.disconnect_detail or "")
                         for state in self._peer_states.values()
-                    )
                 )
                 if preserving_failure_state:
                     self._refresh_connected_state()
@@ -2564,9 +2416,15 @@ class SecureLinkPskSession(ISession):
             self._clear_all_states()
             return
         if self._client_mode and self._started:
-            if self._maybe_begin_client_recovery_handshake_after_reconnect():
-                return
             self._maybe_begin_client_handshake()
+
+    def _on_inner_connection_lifecycle(self, event) -> None:
+        self._connection_lifecycle_epoch = int(event.epoch)
+        if not bool(event.connected):
+            self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, event.reason)
+            self._on_inner_state_change(False)
+            return
+        self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, "security_handshaking")
 
     def _on_inner_transport_epoch_change(self, epoch: int) -> None:
         self._cancel_client_retry_task(clear_schedule=False)
@@ -2594,27 +2452,24 @@ class SecureLinkPskSession(ISession):
                 for state in self._peer_states.values()
             )
         )
-        preserve_client_recovery = self._has_pending_client_recovery()
         self._log.info(
-            "[SECURE-LINK] transport epoch change transport=%s side=%s epoch=%s preserve_connected=%s preserve_handshake=%s preserve_recovery=%s authenticated_sessions_total=%s peer_states=%s",
+            "[SECURE-LINK] transport epoch change transport=%s side=%s epoch=%s preserve_connected=%s preserve_handshake=%s authenticated_sessions_total=%s peer_states=%s",
             self._transport_name,
             "client" if self._client_mode else "server",
             int(epoch),
             bool(preserve_connected_epoch_restart),
             bool(preserve_client_handshake),
-            bool(preserve_client_recovery),
             int(self._authenticated_sessions_total or 0),
             len(self._peer_states),
         )
         self._preserve_connected_during_epoch_restart = bool(preserve_connected_epoch_restart)
-        if not preserve_client_handshake and not preserve_client_recovery:
+        if not preserve_client_handshake:
             self._clear_all_states()
         if (
             self._client_mode
             and self._started
             and bool(getattr(self._inner, "is_connected", lambda: False)())
             and not preserve_client_handshake
-            and not preserve_client_recovery
         ):
             self._maybe_begin_client_handshake()
         if callable(self._outer_on_transport_epoch_change):

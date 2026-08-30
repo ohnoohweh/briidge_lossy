@@ -92,6 +92,9 @@ class _RunnerStub:
                     "firewall_manager": "",
                     "applied_firewall_rules": [],
                     "network_applied": False,
+                    "included_routes_active": True,
+                    "included_routes_startup_enabled": True,
+                    "included_routes_toggle_supported": True,
                 },
             },
         }
@@ -1104,6 +1107,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(payload["tun_helper"]["runtime"]["ifname"], "obtun0")
         self.assertEqual(payload["tun_helper"]["runtime"]["packets_from_runtime"], 12)
         self.assertEqual(payload["tun_helper"]["runtime"]["last_failure"]["stage"], "dns_apply")
+        self.assertTrue(payload["tun_control"]["enabled"])
+        self.assertTrue(payload["tun_control"]["startup_enabled"])
+        self.assertTrue(payload["tun_control"]["supported"])
         self.assertEqual(payload["tun_helper"]["recovery"], {})
         self.assertTrue(payload["tun_helper"]["last_repair"]["attempted"])
         self.assertFalse(payload["tun_helper"]["last_repair"]["stale_state_remaining"])
@@ -1578,7 +1584,22 @@ class AdminWebPayloadTests(unittest.TestCase):
                 text = app_path.read_text(encoding="utf-8")
                 self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
                 self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
+                self.assertIn('<td class="peer-detail-kind">ChannelMux</td>', text)
+                self.assertIn('<td class="peer-detail-kind">TUN</td>', text)
+                self.assertIn('<td class="peer-detail-kind">SecureLink</td>', text)
+                self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
+                self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
+                self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
+                self.assertIn("renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected'", text)
+                self.assertIn("renderMetric('Reported Status', layerStatus('secure_link')", text)
+                self.assertIn("renderMetric('SecureLink Phase', secureLink.state", text)
+                self.assertIn("renderMetric('Reported Status', layerStatus('compression')", text)
                 self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
+                self.assertIn("const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer;", text)
+                self.assertIn("const showCompressionRow = !isListeningPeer && (compressEnabled || compressHasData);", text)
+                self.assertIn("const channelMuxMetrics = !isListeningPeer ? renderMetricStack", text)
+                self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", text)
+                self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", text)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

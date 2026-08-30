@@ -10499,10 +10499,7 @@ def test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_rec
         bounce = None
         server_proc = client_proc = None
         secure_args = ['--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', 'lab-secret']
-        client_secure_args = secure_args + [
-            '--secure-link-recover-delay-seconds', '1.0',
-            '--overlay-reconnect-retry-delay-ms', '100',
-        ]
+        client_secure_args = secure_args + ['--overlay-reconnect-retry-delay-ms', '100']
         try:
             case, bounce, server_proc, client_proc = _start_case_with_secure_link_args(
                 case,
@@ -10550,14 +10547,13 @@ def test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_rec
             )
             failed_secure = dict((first_active_secure_link_row(failed_doc, transport='tcp').get('secure_link') or {}))
             last_event = str(failed_secure.get('last_event') or '')
-            assert last_event in {'recovery_reconnect_scheduled', 'recovery_reconnect_started'}
-            assert bool(failed_secure.get('recovery_enabled')) is True
-            assert float(failed_secure.get('recovery_delay_sec') or 0.0) > 0.0
+            assert last_event == 'security_failed'
+            assert bool(failed_secure.get('recovery_enabled')) is False
 
             recovered_doc = wait_peer_secure_link_session_change(
                 client_proc.admin_port or 0,
                 previous_session_id=first_session_id,
-                timeout=20.0,
+                timeout=45.0,
                 label='client',
                 transport='tcp',
             )

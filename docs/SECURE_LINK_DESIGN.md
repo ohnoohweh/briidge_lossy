@@ -916,8 +916,7 @@ Current runtime decision:
 
 - repeated client-side PSK authentication failures now retry under bounded exponential backoff rather than immediate tight looping
 - the current admin/API surface exposes `consecutive_failures`, `retry_backoff_sec`, and `next_retry_unix_ts` for that throttle window
-- authenticated-session failure recovery is distinct from wrong-secret retry: initial PSK mismatch stays on the bounded handshake retry path, while a post-authentication secure-link failure schedules lower-transport reconnect recovery through `secure_link_recover_after_failure` and `secure_link_recover_delay_seconds`
-- the current admin/API surface exposes `recovery_enabled`, `recovery_delay_sec`, `recovery_reconnect_sec`, and `next_recovery_reconnect_unix_ts` so operators can see when a failed client-side secure-link session is waiting for reconnect recovery
+- authenticated-session failure recovery is distinct from wrong-secret retry: initial PSK mismatch stays on the bounded handshake retry path, while a post-authentication failure reports `Disconnected` and ChannelMux owns lower-stack rotation through lifecycle and epoch diagnostics
 - the current admin/API surface also exposes stronger operational diagnostics such as `failure_session_id`, `handshake_attempts_total`, `last_event`, `last_event_unix_ts`, `last_authenticated_unix_ts`, `authenticated_sessions_total`, and `rekeys_completed_total`
 - the current PSK runtime and iOS parity runtime both implement the peer-confirmation rule and the 60 second unconfirmed-handshake timeout for the secure-link state machine
 

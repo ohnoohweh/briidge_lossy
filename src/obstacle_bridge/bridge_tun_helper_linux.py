@@ -52,6 +52,10 @@ class LinuxTunHelperBackend:
         self._reader_task: Optional[asyncio.Task] = None
         self._read_poll_interval_s = float(read_poll_interval_s)
         self._network_applied = False
+        self._included_routes_active = False
+        self._included_routes_startup_enabled = True
+        self._suspend_calls = 0
+        self._resume_calls = 0
         self._apply_calls = 0
         self._remove_calls = 0
         self._last_apply_payload: dict[str, Any] = {}
@@ -99,6 +103,25 @@ class LinuxTunHelperBackend:
     @staticmethod
     def _resolvectl_path() -> str:
         return str(shutil.which("resolvectl") or "").strip()
+
+    @staticmethod
+    def _included_routes_startup_enabled_from_payload(payload: dict[str, Any]) -> bool:
+        tun_routing = payload.get("tun_routing")
+        if not isinstance(tun_routing, dict):
+            return True
+        value = tun_routing.get("enabled_on_startup")
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value).strip().lower()
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        return True
 
     def set_packet_sink(self, sink: Callable[[bytes], Awaitable[None] | None]) -> None:
         self._packet_sink = sink
@@ -1064,6 +1087,11 @@ class LinuxTunHelperBackend:
             "packets_from_runtime": self._packets_from_runtime,
             "packets_to_runtime": self._packets_to_runtime,
             "network_applied": self._network_applied,
+            "included_routes_active": self._included_routes_active,
+            "included_routes_startup_enabled": self._included_routes_startup_enabled,
+            "included_routes_toggle_supported": True,
+            "suspend_calls": self._suspend_calls,
+            "resume_calls": self._resume_calls,
             "apply_calls": self._apply_calls,
             "remove_calls": self._remove_calls,
             "last_apply_payload": dict(self._last_apply_payload),
@@ -1090,6 +1118,8 @@ class LinuxTunHelperBackend:
     async def apply_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._apply_calls += 1
         self._network_applied = True
+        self._included_routes_startup_enabled = self._included_routes_startup_enabled_from_payload(payload)
+        self._included_routes_active = False
         self._last_apply_payload = dict(payload or {})
         ifname = str(payload.get("ifname") or self._ifname or "obtun0")
         self._clear_last_failure()
@@ -1116,7 +1146,9 @@ class LinuxTunHelperBackend:
             self._apply_excluded_routes(payload, ifname=ifname)
             stage = "included_routes_apply"
             self._maybe_inject_test_failure(operation="apply_network", stage=stage)
-            self._apply_included_routes(payload, ifname=ifname)
+            if self._included_routes_startup_enabled:
+                self._apply_included_routes(payload, ifname=ifname)
+                self._included_routes_active = True
             stage = "firewall_apply"
             self._maybe_inject_test_failure(operation="apply_network", stage=stage)
             self._apply_firewall(payload, ifname=ifname)
@@ -1163,6 +1195,7 @@ class LinuxTunHelperBackend:
     async def remove_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._remove_calls += 1
         self._network_applied = False
+        self._included_routes_active = False
         self._last_remove_payload = dict(payload or {})
         ifname = str(payload.get("ifname") or self._ifname or "obtun0")
         self._clear_last_failure()
@@ -1210,7 +1243,28 @@ class LinuxTunHelperBackend:
             "backend": "linux-native",
             "ifname": ifname,
             "remove_calls": self._remove_calls,
+            "included_routes_active": self._included_routes_active,
         }
+
+    async def set_tun_enabled(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._network_applied:
+            raise RuntimeError("TUN network is not applied")
+        enabled = bool(payload.get("enabled"))
+        ifname = str(payload.get("ifname") or self._ifname or "obtun0")
+        self._clear_last_failure()
+        if enabled:
+            self._resume_calls += 1
+            if not self._included_routes_active:
+                self._apply_included_routes(payload, ifname=ifname)
+                self._included_routes_active = True
+        else:
+            self._suspend_calls += 1
+            if self._included_routes_active:
+                self._remove_included_routes(payload, ifname=ifname)
+                self._included_routes_active = False
+        snapshot = self.local_snapshot()
+        snapshot.update({"ok": True, "enabled": enabled, "ifname": ifname})
+        return snapshot
 
     async def stop(self) -> None:
         self._stopped = True
@@ -1265,6 +1319,10 @@ class LinuxTunHelperInMemoryBackend:
         self._stopped = False
         self._incoming_packets: asyncio.Queue[bytes] = asyncio.Queue()
         self._network_applied = False
+        self._included_routes_active = False
+        self._included_routes_startup_enabled = True
+        self._suspend_calls = 0
+        self._resume_calls = 0
         self._apply_calls = 0
         self._remove_calls = 0
         self._last_apply_payload: dict[str, Any] = {}
@@ -1307,6 +1365,11 @@ class LinuxTunHelperInMemoryBackend:
             "packets_from_runtime": self._packets_from_runtime,
             "packets_to_runtime": self._packets_to_runtime,
             "network_applied": self._network_applied,
+            "included_routes_active": self._included_routes_active,
+            "included_routes_startup_enabled": self._included_routes_startup_enabled,
+            "included_routes_toggle_supported": True,
+            "suspend_calls": self._suspend_calls,
+            "resume_calls": self._resume_calls,
             "apply_calls": self._apply_calls,
             "remove_calls": self._remove_calls,
             "last_apply_payload": dict(self._last_apply_payload),
@@ -1320,6 +1383,8 @@ class LinuxTunHelperInMemoryBackend:
     def local_apply_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._apply_calls += 1
         self._network_applied = True
+        self._included_routes_startup_enabled = LinuxTunHelperBackend._included_routes_startup_enabled_from_payload(payload)
+        self._included_routes_active = self._included_routes_startup_enabled
         self._last_apply_payload = dict(payload or {})
         return {
             "applied": True,
@@ -1334,6 +1399,7 @@ class LinuxTunHelperInMemoryBackend:
     def local_remove_network(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._remove_calls += 1
         self._network_applied = False
+        self._included_routes_active = False
         self._last_remove_payload = dict(payload or {})
         return {
             "removed": True,
@@ -1341,6 +1407,28 @@ class LinuxTunHelperInMemoryBackend:
             "ifname": str(payload.get("ifname") or self._ifname or "obtun0"),
             "remove_calls": self._remove_calls,
         }
+
+    async def set_tun_enabled(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self.local_set_tun_enabled(payload)
+
+    def local_set_tun_enabled(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._network_applied:
+            raise RuntimeError("TUN network is not applied")
+        enabled = bool(payload.get("enabled"))
+        if enabled:
+            self._resume_calls += 1
+        else:
+            self._suspend_calls += 1
+        self._included_routes_active = enabled
+        snapshot = self.local_snapshot()
+        snapshot.update(
+            {
+                "ok": True,
+                "enabled": enabled,
+                "ifname": str(payload.get("ifname") or self._ifname or "obtun0"),
+            }
+        )
+        return snapshot
 
     async def stop(self) -> None:
         self._stopped = True

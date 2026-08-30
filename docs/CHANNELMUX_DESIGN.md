@@ -163,6 +163,34 @@ The intended contract is now:
 4. Hook scripts consume the environment without needing duplicate address data
    embedded in the service definitions.
 
+## Runtime TUN Route Control
+
+As of Saturday, August 29, 2026, the Admin Web TUN page also exposes a live
+enable or suspend control for helper-managed TUN routing.
+
+The implemented behavior is intentionally route-scoped:
+
+- `Suspend TUN` removes the configured included routes.
+- `Enable TUN` re-applies the configured included routes.
+- TUN interface ownership, tunnel addresses, excluded routes, DNS, and firewall
+  state remain under the existing helper-managed network lifecycle.
+
+The startup default comes from `TUN_routing.enabled_on_startup`.
+
+- When `true`, helper-managed startup applies included routes during
+  `apply_network`.
+- When `false`, helper-managed startup leaves included routes suspended until
+  the operator enables them from Admin Web.
+
+Current backend support:
+
+- Linux native helper: supported.
+- Windows native helper: supported.
+- In-memory helper test backend: supported for control-flow parity tests.
+- Darwin native helper: not yet supported for route-only toggle semantics,
+  because the current helper contract is still hook-script based at whole-link
+  granularity.
+
 ### Example: one TCP service specification
 
 Example service spec:

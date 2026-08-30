@@ -15,7 +15,10 @@ def _make_runner(tmp_path):
         admin_web_password="admin-secret",
         secure_link_psk="bridge-secret",
         overlay_transport="myudp",
-        _config_sections={"admin_web": ["admin_web_bind", "admin_web_port"]},
+        _config_sections={
+            "admin_web": ["admin_web_bind", "admin_web_port"],
+            "runner": ["overlay_transport"],
+        },
     )
     return runner
 
@@ -31,7 +34,37 @@ def test_update_config_persists_to_config_file(tmp_path):
     written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
     assert written["admin_web"]["admin_web_port"] == 18081
     assert written["admin_web"]["admin_web_bind"] == "127.0.0.1"
-    assert written["misc"]["overlay_transport"] == "myudp"
+    assert written["runner"]["overlay_transport"] == "myudp"
+    assert "misc" not in written
+
+
+def test_runtime_config_save_discards_unregistered_sections(tmp_path):
+    runner = _make_runner(tmp_path)
+    runner.args._raw_config = {
+        "misc": {"stale_option": "ignored"},
+        "unregistered_extension": {"option": "ignored"},
+    }
+
+    ok, err = runner.save_runtime_config()
+
+    assert ok is True
+    assert err == ""
+
+    written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
+    assert "misc" not in written
+    assert "unregistered_extension" not in written
+
+
+def test_cli_config_dump_discards_unregistered_effective_values():
+    cli = ConfigAwareCLI(description="test")
+    cli._sections = {"runner": {"overlay_transport"}}
+
+    dumped = json.loads(cli.dump_effective_config_json(argparse.Namespace(
+        overlay_transport="myudp",
+        stale_option="ignored",
+    )))
+
+    assert dumped == {"runner": {"overlay_transport": "myudp"}}
 
 
 def test_update_config_accepts_grouped_tun_routing_section(tmp_path):

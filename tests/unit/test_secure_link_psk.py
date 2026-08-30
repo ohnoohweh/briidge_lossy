@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from obstacle_bridge.bridge import ChaCha20Poly1305, SecureLinkPskSession
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionRotationResult, ConnectionState
 
 
 class FakeInnerSession:
@@ -18,6 +19,7 @@ class FakeInnerSession:
         self._on_peer_disconnect = None
         self._on_app_from_peer_bytes = None
         self._on_transport_epoch_change = None
+        self._on_connection_lifecycle = None
         self.sent = []
         self.reconnect_requests = 0
         self._passthrough_enabled = False
@@ -48,6 +50,9 @@ class FakeInnerSession:
             self._on_state(False)
         return True
 
+    def request_connection_rotation(self, reason=""):
+        return ConnectionRotationResult(accepted=True, reason=str(reason), candidate_index=1, candidate_cycle=1)
+
     def send_app(self, payload: bytes, peer_id=None):
         self.sent.append((bytes(payload), peer_id))
         if self._peer is None or not callable(self._peer._on_app):
@@ -63,6 +68,7 @@ class FakeInnerSession:
 
     def set_on_app_payload(self, cb): self._on_app = cb
     def set_on_state_change(self, cb): self._on_state = cb
+    def set_on_connection_lifecycle(self, cb): self._on_connection_lifecycle = cb
     def set_on_peer_rx(self, cb): self._on_peer_rx = cb
     def set_on_peer_tx(self, cb): self._on_peer_tx = cb
     def set_on_peer_set(self, cb): self._on_peer_set = cb
@@ -106,6 +112,10 @@ class FakeInnerSession:
         if callable(self._on_transport_epoch_change):
             self._on_transport_epoch_change(epoch)
 
+    def emit_lifecycle(self, state: ConnectionState, epoch: int, reason: str = ""):
+        if callable(self._on_connection_lifecycle):
+            self._on_connection_lifecycle(ConnectionLifecycleEvent(state=state, epoch=epoch, reason=reason))
+
 
 def _args(**overrides):
     base = dict(
@@ -117,8 +127,6 @@ def _args(**overrides):
         secure_link_rekey_after_seconds=0.0,
         secure_link_retry_backoff_initial_ms=1000,
         secure_link_retry_backoff_max_ms=5000,
-        secure_link_recover_after_failure=True,
-        secure_link_recover_delay_seconds=30.0,
         tcp_peer=None,
     )
     base.update(overrides)
@@ -126,6 +134,24 @@ def _args(**overrides):
 
 
 class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_lifecycle_forwards_transport_epoch_and_rotation_request(self):
+        inner = FakeInnerSession()
+        session = SecureLinkPskSession(inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+        events = []
+        session.set_on_connection_lifecycle(events.append)
+
+        await session.start()
+        inner.emit_lifecycle(ConnectionState.CONNECTED, 4, "transport_connected")
+        inner.emit_lifecycle(ConnectionState.DISCONNECTED, 4, "transport_disconnected")
+        result = session.request_connection_rotation("channelmux_disconnected")
+        await session.stop()
+
+        self.assertEqual(
+            [(event.state, event.epoch) for event in events],
+            [(ConnectionState.DISCONNECTED, 4)],
+        )
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.reason, "channelmux_disconnected")
     @staticmethod
     def _pack_mux(chan_id: int, data: bytes, *, counter: int = 1) -> bytes:
         from obstacle_bridge.bridge import ChannelMux
@@ -336,7 +362,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(int(status_after["failure_code"] or 0), client._SL_AUTH_FAIL_LIFECYCLE)
             self.assertIn("timed out", str(status_after["failure_detail"] or ""))
             self.assertGreater(float(status_after["retry_backoff_sec"] or 0.0), 0.0)
-            self.assertEqual(float(status_after["recovery_reconnect_sec"] or 0.0), 0.0)
+            self.assertNotIn("recovery_reconnect_sec", status_after)
         finally:
             await client.stop()
 
@@ -421,7 +447,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertGreaterEqual(int(second_snapshot["handshake_attempts_total"] or 0), 2)
         self.assertEqual(client_inner.reconnect_requests, 0)
 
-    async def test_authenticated_client_failure_schedules_transport_reconnect_recovery(self):
+    async def test_authenticated_client_failure_waits_for_channelmux_rotation(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
         client_inner.connect_peer(server_inner)
@@ -431,7 +457,6 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             client_inner,
             _args(
                 tcp_peer='127.0.0.1',
-                secure_link_recover_delay_seconds=0.02,
             ),
             'tcp',
         )
@@ -453,33 +478,29 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             state.tx_counter = client._SL_MAX_DATA_COUNTER + 1
             self.assertEqual(client.send_app(self._pack_mux(11, b"force-client-lifecycle-fail")), 0)
 
-            scheduled = client.get_secure_link_status_snapshot()
-            self.assertEqual(scheduled["state"], "failed")
-            self.assertEqual(scheduled["failure_reason"], "lifecycle")
-            self.assertEqual(scheduled["last_event"], "recovery_reconnect_scheduled")
-            self.assertTrue(scheduled["recovery_enabled"])
-            self.assertGreater(float(scheduled["recovery_reconnect_sec"] or 0.0), 0.0)
-            self.assertIsNotNone(scheduled["next_recovery_reconnect_unix_ts"])
+            failed = client.get_secure_link_status_snapshot()
+            self.assertEqual(failed["state"], "failed")
+            self.assertEqual(failed["failure_reason"], "lifecycle")
+            self.assertEqual(failed["last_event"], "security_failed")
+            self.assertNotIn("recovery_reconnect_sec", failed)
             self.assertEqual(client_inner.reconnect_requests, 0)
 
             client.reset_transport_epoch()
             client_inner.emit_transport_epoch(2)
             client_inner.emit_state(False)
             preserved = client.get_secure_link_status_snapshot()
-            self.assertEqual(preserved["state"], "failed")
-            self.assertEqual(preserved["last_event"], "recovery_reconnect_scheduled")
-            self.assertIsNotNone(preserved["next_recovery_reconnect_unix_ts"])
+            self.assertIn(preserved["state"], {"failed", "handshaking", "waiting_hello"})
+            self.assertNotIn("next_recovery_reconnect_unix_ts", preserved)
 
             await asyncio.sleep(0.04)
             await asyncio.sleep(0)
 
-            self.assertEqual(client_inner.reconnect_requests, 1)
-            self.assertFalse(client_inner.is_connected())
+            self.assertEqual(client_inner.reconnect_requests, 0)
         finally:
             await client.stop()
             await server.stop()
 
-    async def test_authenticated_client_failure_recovery_can_be_disabled(self):
+    async def test_authenticated_client_failure_waits_for_channelmux_without_recovery_option(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
         client_inner.connect_peer(server_inner)
@@ -487,11 +508,7 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         client = SecureLinkPskSession(
             client_inner,
-            _args(
-                tcp_peer='127.0.0.1',
-                secure_link_recover_after_failure=False,
-                secure_link_recover_delay_seconds=0.01,
-            ),
+            _args(tcp_peer='127.0.0.1'),
             'tcp',
         )
         server = SecureLinkPskSession(server_inner, _args(), 'tcp')
@@ -507,11 +524,11 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
             state = client._peer_states[0]
             state.tx_counter = client._SL_MAX_DATA_COUNTER + 1
-            self.assertEqual(client.send_app(self._pack_mux(11, b"disabled-recovery")), 0)
+            self.assertEqual(client.send_app(self._pack_mux(11, b"channelmux-rotation")), 0)
             snapshot = client.get_secure_link_status_snapshot()
             self.assertEqual(snapshot["state"], "failed")
-            self.assertFalse(snapshot["recovery_enabled"])
-            self.assertIsNone(snapshot["next_recovery_reconnect_unix_ts"])
+            self.assertNotIn("recovery_enabled", snapshot)
+            self.assertNotIn("next_recovery_reconnect_unix_ts", snapshot)
 
             await asyncio.sleep(0.03)
             await asyncio.sleep(0)
@@ -686,7 +703,9 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         for _ in range(8):
             await asyncio.sleep(0)
 
-        self.assertEqual(client_states, [True, False, True])
+        # The app handshake pauses, but SecureLink reports one continuous
+        # connected lifecycle state to its outer wrapper during reauthentication.
+        self.assertEqual(client_states, [True])
         self.assertEqual(client.get_secure_link_status_snapshot()["state"], "authenticated")
         secure_layer = client.get_connection_layers_snapshot()[-1]
         self.assertTrue(secure_layer["connected"])
@@ -783,8 +802,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         server._on_inner_peer_disconnect(1)
         await asyncio.sleep(0)
 
-        self.assertEqual(server_states, [True, False])
-        self.assertFalse(server.is_connected())
+        self.assertEqual(server_states, [True])
+        self.assertTrue(server.is_connected())
         secure_layer = server.get_connection_layers_snapshot()[-1]
         self.assertTrue(secure_layer["connected"])
         self.assertFalse(secure_layer["app_ready"])

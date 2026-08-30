@@ -6,6 +6,7 @@ import unittest
 import zlib
 
 from obstacle_bridge.bridge import CompressLayerSession, SessionMetrics
+from obstacle_bridge.bridge_connection_lifecycle import ConnectionLifecycleEvent, ConnectionState
 
 
 class FakeInnerSession:
@@ -51,6 +52,12 @@ class FakeInnerSession:
     def set_on_peer_disconnect(self, cb): self._on_peer_disconnect = cb
     def set_on_app_from_peer_bytes(self, cb): self._on_app_from_peer_bytes = cb
     def set_on_transport_epoch_change(self, cb): self._on_transport_epoch_change = cb
+
+    def get_overlay_peers_snapshot(self):
+        return [{"peer_id": 1, "secure_link": {"state": "failed", "failure_reason": "decode"}}]
+
+    def get_secure_link_status_snapshot(self):
+        return {"enabled": True, "state": "failed", "failure_reason": "decode"}
 
 
 class CompressLayerSessionTests(unittest.TestCase):
@@ -111,6 +118,12 @@ class CompressLayerSessionTests(unittest.TestCase):
         self.assertTrue(snap["enabled"])
         self.assertEqual(int(snap["compress_applied_total"]), 0)
 
+    def test_forwards_secure_link_peer_diagnostics(self):
+        wrapper = CompressLayerSession(FakeInnerSession(), self._args(), "tcp")
+
+        self.assertEqual(wrapper.get_overlay_peers_snapshot()[0]["secure_link"]["state"], "failed")
+        self.assertEqual(wrapper.get_secure_link_status_snapshot()["failure_reason"], "decode")
+
     def test_send_app_bypasses_when_no_gain(self):
         inner = FakeInnerSession()
         wrapper = CompressLayerSession(inner, self._args(compress_layer_min_bytes=1), "tcp")
@@ -138,6 +151,20 @@ class CompressLayerSessionTests(unittest.TestCase):
         invalid = self._pack_mux(0x80, b"not-zlib")
         wrapper._on_inner_payload(invalid, peer_id=2)
         self.assertEqual(out, [])
+
+    def test_compression_error_blocks_same_epoch_until_new_connection(self):
+        inner = FakeInnerSession()
+        wrapper = CompressLayerSession(inner, self._args(), "tcp")
+        events = []
+        wrapper.set_on_connection_lifecycle(events.append)
+        wrapper._on_inner_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1))
+
+        wrapper._on_inner_payload(self._pack_mux(0x80, b"not-zlib"))
+        self.assertEqual(wrapper.send_app(self._pack_mux(0x00, b"payload")), 0)
+        self.assertEqual(events[-1].state, ConnectionState.DISCONNECTED)
+
+        wrapper._on_inner_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 2))
+        self.assertGreater(wrapper.send_app(self._pack_mux(0x00, b"payload")), 0)
         snap = wrapper.get_compress_layer_status_snapshot()
         self.assertEqual(int(snap["decompress_fail_total"]), 1)
 
