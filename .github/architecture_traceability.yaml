@@ -69,6 +69,8 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_ws_peer
 
 ARC-CMP-002:
+  # The myUDP E2E entrypoint exercises DATA_BATCH loss, reorder, and duplicate
+  # recovery in all-Python and mixed Swift/Python runtime directions.
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_out_of_order_delivery_tracks_missing_and_reassembles_without_corruption
