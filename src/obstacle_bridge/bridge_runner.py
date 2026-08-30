@@ -2449,6 +2449,7 @@ class Runner:
                             row_metrics.transmit_delay_est_ms,
                         ),
                         "connected_since_unix_ts": connected_since_unix_ts,
+                        "observed_public_ip": str(p.get("observed_public_ip") or ""),
                         "last_incoming_age_seconds": self._first_non_null(
                             p.get("last_incoming_age_seconds"),
                             self._session_last_incoming_age_seconds(row_session),
@@ -2973,6 +2974,16 @@ class Runner:
         return SecureLinkPskSession(session, args, transport_name)
 
     @staticmethod
+    def _wrap_peer_address_protocol(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
+        from .bridge_peer_address import PeerAddressProtocolSession
+
+        return PeerAddressProtocolSession(
+            session,
+            transport_name=transport_name,
+            client_mode=_has_configured_overlay_peer(args, transport=transport_name),
+        )
+
+    @staticmethod
     def _maybe_wrap_compress_layer(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
         enabled = bool(getattr(args, "compress_layer", True))
         peer_host = str(getattr(args, "peer", "") or "").strip()
@@ -3010,7 +3021,8 @@ class Runner:
                 session = WebSocketSession.from_args(session_args)
             else:
                 session = UdpSession.from_args(session_args)
-            wrapped = Runner._maybe_wrap_secure_link(session_args, choice, session)
+            wrapped = Runner._wrap_peer_address_protocol(session_args, choice, session)
+            wrapped = Runner._maybe_wrap_secure_link(session_args, choice, wrapped)
             wrapped = Runner._maybe_wrap_compress_layer(session_args, choice, wrapped)
             out.append((choice, wrapped))
         return out

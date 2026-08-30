@@ -36,6 +36,7 @@ def _compile_swift_overlay_layer_transport_probe(source_path: Path, binary_path:
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(source_path),
     ]

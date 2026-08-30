@@ -2950,6 +2950,7 @@ function renderPeerTable(rows) {
       connectionLine1.push(renderMetric('Transport Listen', row.listen));
     } else {
       connectionLine1.push(renderMetric('Resolved Peer', row.peer));
+      connectionLine1.push(renderMetric('Own Public IP', row.observed_public_ip));
     }
     const connectionLines = [connectionLine1];
     if (!isListeningPeer && isConnectingPeer) {

@@ -642,7 +642,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         for payload in snapshot.completedPayloads {
             let inboundPayloads: [Data]
             if let adapter = overlayLayerTransportAdapter {
-                let adapterSnapshot = adapter.handleInboundFrame(payload)
+                let adapterSnapshot = adapter.handleInboundFrame(payload, observedPeerHost: resolvedPeerHost)
                 inboundPayloads = adapterSnapshot.deliveredPayloads
                 if !adapterSnapshot.emittedFrames.isEmpty {
                     sendTransportFrames(adapterSnapshot.emittedFrames)

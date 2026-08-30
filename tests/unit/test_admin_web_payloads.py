@@ -1590,6 +1590,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
                 self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
                 self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
+                self.assertIn("renderMetric('Own Public IP', row.observed_public_ip)", text)
                 self.assertIn("renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected'", text)
                 self.assertIn("renderMetric('Reported Status', layerStatus('secure_link')", text)
                 self.assertIn("renderMetric('SecureLink Phase', secureLink.state", text)

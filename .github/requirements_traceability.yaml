@@ -1244,6 +1244,10 @@ REQ-ADM-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
   unit_tests:
+    - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
+    - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
+    - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
+    - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_connection_snapshots.py::test_tcp_client_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_tcp_server_snapshot_includes_last_incoming_age_seconds

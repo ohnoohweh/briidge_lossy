@@ -860,6 +860,18 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "func connectionRotationDue(candidateCount: Int)" in runtime
 
 
+def test_peer_address_protocol_source_exists_and_is_below_secure_link() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
+    adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgePeerAddressProtocolRuntime" in runtime
+    assert "handleTransportConnected()" in runtime
+    assert "handleInboundFrame(_ payload: Data, observedPeerHost: String? = nil)" in runtime
+    assert "inet_pton" in runtime
+    assert "peerAddressRuntime?.handleTransportConnected()" in adapter
+    assert "peerAddressRuntime.handleInboundFrame(" in adapter
+
+
 def test_udp_overlay_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
 

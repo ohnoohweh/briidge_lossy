@@ -650,3 +650,12 @@ ARC-CMP-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings
+
+ARC-CMP-008:
+  unit_tests:
+    - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
+    - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
+    - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_all_transports_with_peer_address_protocol_without_secure_link
+    - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
+    - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link

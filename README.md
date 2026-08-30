@@ -1096,6 +1096,10 @@ What the admin web shows:
 
 When the outer lifecycle remains disconnected, ChannelMux rotates the lower stack every 30 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
 
+### Own public IP
+
+Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address it observes. The Peer page’s Transport block presents that value as **Own Public IP**. It reports the IPv4 or IPv6 address for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. This is not an external address lookup and does not depend on SecureLink.
+
 ### Compression layer
 
 Compression is now enabled by default and runs below `ChannelMux` and above secure-link/session wrappers.
@@ -1494,9 +1498,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `58` | `915` |
+| Python CLI/runtime, including macOS Python | `57` | `900` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `26` | `170` |
+| iOS app/extension | `26` | `172` |
 
 #### Requirement traceability
 
@@ -1504,15 +1508,15 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
-| iOS app/extension | `10/92 = 10.9%` | `14/92 = 15.2%` | `20/92 = 21.7%` |
+| iOS app/extension | `10/92 = 10.9%` | `15/92 = 16.3%` | `21/92 = 22.8%` |
 
 #### Architecture traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
-| macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `6/7 = 85.7%` | `6/7 = 85.7%` |
+| Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
+| macOS Swift app | `1/8 = 12.5%` | `3/8 = 37.5%` | `3/8 = 37.5%` |
+| iOS app/extension | `4/8 = 50.0%` | `6/8 = 75.0%` | `6/8 = 75.0%` |
 
 The supporting manifests remain shared:
 

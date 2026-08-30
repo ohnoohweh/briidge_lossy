@@ -1876,6 +1876,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressProtocolRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunHelperService.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperContract.swift'),

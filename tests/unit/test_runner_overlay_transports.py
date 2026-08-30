@@ -15,6 +15,7 @@ from obstacle_bridge.bridge import (
     SecureLinkPskSession,
     CompressLayerSession,
 )
+from obstacle_bridge.bridge_peer_address import PeerAddressProtocolSession
 from tests.fixtures.secure_link_cert import materialize_secure_link_cert_fixture_set
 
 _FIXTURES_TMPDIR = tempfile.TemporaryDirectory()
@@ -302,7 +303,28 @@ class RunnerOverlayTransportTests(unittest.TestCase):
                     sessions = Runner.build_sessions_from_overlay(args)
                 self.assertEqual([name for name, _ in sessions], [overlay_transport])
                 self.assertIsInstance(sessions[0][1], SecureLinkPskSession)
+                self.assertIsInstance(sessions[0][1]._inner, PeerAddressProtocolSession)
                 factory.assert_called_once()
+
+    def test_build_sessions_from_overlay_wraps_all_transports_with_peer_address_protocol_without_secure_link(self):
+        cases = [
+            ('myudp', 'udp_peer', UdpSession),
+            ('tcp', 'tcp_peer', TcpStreamSession),
+            ('quic', 'quic_peer', QuicSession),
+            ('ws', 'ws_peer', WebSocketSession),
+        ]
+        for overlay_transport, peer_attr, cls in cases:
+            with self.subTest(overlay_transport=overlay_transport):
+                args = _args(
+                    overlay_transport=overlay_transport,
+                    secure_link=False,
+                    secure_link_mode='off',
+                    compress_layer=False,
+                    **{peer_attr: '127.0.0.1'},
+                )
+                with mock.patch.object(cls, 'from_args', return_value=mock.Mock(spec=cls)):
+                    sessions = Runner.build_sessions_from_overlay(args)
+                self.assertIsInstance(sessions[0][1], PeerAddressProtocolSession)
 
     def test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_cert(self):
         cases = [
@@ -396,6 +418,7 @@ class RunnerOverlayTransportTests(unittest.TestCase):
         top = sessions[0][1]
         self.assertIsInstance(top, CompressLayerSession)
         self.assertIsInstance(top._inner, SecureLinkPskSession)
+        self.assertIsInstance(top._inner._inner, PeerAddressProtocolSession)
 
 
 if __name__ == '__main__':

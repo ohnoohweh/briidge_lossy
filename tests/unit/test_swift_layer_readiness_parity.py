@@ -43,6 +43,8 @@ def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     assert "struct ObstacleBridgeConnectionRotationResult" in adapter
     assert "func connectionRotationDue(candidateCount: Int)" in adapter
     assert 'layers[index]["lifecycle_state"] = outerLifecycle.state.rawValue' in adapter
+    assert '"layer": "peer_address_protocol"' in adapter
+    assert '"app_ready": transportLifecycle.state == .connected' in adapter
 
 
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:
@@ -54,9 +56,11 @@ def test_swift_admin_surfaces_consume_layered_readiness() -> None:
     assert "func appReady() -> Bool" in host_runner
     assert 'currentOverlayOwner()?.owner.appReady()' in host_runner
     assert '"connection_layers": connectionLayers' in host_runner
+    assert '"observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? ""' in host_runner
 
     assert "static func connectionLayers(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [[String: Any]]" in admin_support
     assert "static func appReady(from transportRuntime: [String: Any], preferredKind: String? = nil) -> Bool" in admin_support
 
     assert '"connection_layers": ObstacleBridgeAdminSnapshotSupport.connectionLayers(' in packet_tunnel
     assert "let layeredReady = ObstacleBridgeAdminSnapshotSupport.appReady(" in packet_tunnel
+    assert '"observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? ""' in packet_tunnel

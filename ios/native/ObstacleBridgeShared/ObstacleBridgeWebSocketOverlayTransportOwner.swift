@@ -854,7 +854,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private func handleOverlayTransportPayload(_ payload: Data) {
         lastOverlayRxWallNS = DispatchTime.now().uptimeNanoseconds
         if let adapter = overlayLayerTransportAdapter {
-            let snapshot = adapter.handleInboundFrame(payload)
+            let snapshot = adapter.handleInboundFrame(payload, observedPeerHost: resolvedPeerHost)
             for frame in snapshot.emittedFrames {
                 sendRawOverlayWire(frame)
             }

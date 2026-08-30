@@ -43,6 +43,7 @@ def _compile_swift_tcp_transport_owner_probe(source_path: Path, binary_path: Pat
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
