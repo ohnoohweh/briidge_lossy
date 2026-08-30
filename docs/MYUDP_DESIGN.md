@@ -148,6 +148,31 @@ This is a protocol-wide myUDP2 replacement: all Python and Swift endpoints
 must emit and accept the batch form. There is no old one-record wire fallback,
 capability negotiation, or ambiguous parser mode.
 
+### Frozen myUDP2 wire contract
+
+WP1 freezes the following values. The machine-readable golden vectors are in
+[MYUDP2_WIRE_VECTORS.json](./MYUDP2_WIRE_VECTORS.json); Python and Swift WP3/WP5
+implementations must use those vectors unchanged.
+
+| Item | Value |
+| --- | --- |
+| UDP payload budget | `1452` bytes for the conservative IPv6-safe 1500-byte MTU assumption |
+| Protocol header | `ptype:u8`, `payload_len:u16`, `tx_ns:u64`, `echo_ns:u64`, all big-endian; exactly 19 bytes |
+| `ptype` values | `IDLE=0`, `DATA_BATCH=1`, `CONTROL=2` |
+| Batch header | `version:u8`, `record_count:u8`; version is `1`, count is `1..64` |
+| Batch record | `record_len:u16` followed by one complete chunk record; `record_len` includes the chunk header and bytes |
+| Chunk record | `counter:u16`, `chunk_len:u16`, `bytes[chunk_len]`; counter is `1..65535`, chunk length is `1..1425` |
+| Batch validity | exactly `record_count` records and no trailing bytes; every record length is at least 5 bytes and exactly matches its chunk length |
+| `CONTROL` payload | unchanged: `last_in_order:u16`, `highest_rx:u16`, `missed_count:u16`, then `missed_count` `u16` counters |
+| `IDLE` payload | empty |
+| Stream serializer | `payload_len:u32 + payload bytes`, big-endian; payload length is `0..65535`, including an allowed empty payload |
+| MTU calculation | batch payload is at most `1452 - 19 = 1433` bytes; the batch header and every record length are included in that limit |
+
+The maximum 1425-byte chunk is the one-record case:
+`1433 - batch_header(2) - record_len(2) - chunk_header(4)`. A multi-record
+batch has a smaller remaining chunk budget after each complete preceding record.
+`CONTROL` and `IDLE` are never embedded in a data batch.
+
 ### Batch parsing rules
 
 The batch header must contain an explicit format/version value and bounded

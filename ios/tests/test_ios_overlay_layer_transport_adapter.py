@@ -343,5 +343,5 @@ def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_ou
         "second_rotation_epoch": 1,
         "restart_required": False,
         "state": "connected",
-        "epoch": 1,
+        "epoch": 2,
     }

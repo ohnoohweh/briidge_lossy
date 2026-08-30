@@ -233,6 +233,8 @@ ARC-CMP-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
 
 ARC-CMP-004:
+  # Elevated route/DNS verification is host-local and deterministic; packet
+  # carriage remains a separate integration responsibility.
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
   # Hosted macOS elevated gates keep Admin/helper state assertions even when

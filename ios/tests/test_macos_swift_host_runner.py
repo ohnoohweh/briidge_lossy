@@ -868,7 +868,7 @@ def test_macos_app_bundle_embeds_latest_macos_tun_hook() -> None:
 
 class _AsyncBridgeClientThread:
     def __init__(self, config: dict) -> None:
-        self.client = ObstacleBridgeClient(config)
+        self.client = ObstacleBridgeClient(_group_python_peer_config(config))
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._ready = threading.Event()
@@ -913,6 +913,37 @@ class _AsyncBridgeClientThread:
         if self._loop is None:
             raise RuntimeError("bridge client loop not started")
         return asyncio.run_coroutine_threadsafe(coro, self._loop)
+
+
+def _group_python_peer_config(config: dict) -> dict:
+    """Translate test peer fixtures to the runner's canonical grouped schema."""
+    sections = {
+        "runner": {"overlay_transport", "overlay_reconnect_retry_delay_ms"},
+        "admin_web": {"admin_web", "admin_web_bind", "admin_web_port", "admin_web_dir", "admin_web_auth_disable"},
+        "channel_mux": {"own_servers", "remote_servers"},
+        "secure_link": {"secure_link", "secure_link_mode", "secure_link_psk"},
+        "compress_layer": {
+            "compress_layer", "compress_layer_algo", "compress_layer_level",
+            "compress_layer_min_bytes", "compress_layer_types",
+        },
+        "stats_board": {"status"},
+        "udp_session": {"udp_bind", "udp_own_port", "udp_peer", "udp_peer_port"},
+        "tcp_session": {"tcp_bind", "tcp_own_port", "tcp_peer", "tcp_peer_port"},
+        "ws_session": {"ws_bind", "ws_own_port", "ws_peer", "ws_peer_port", "ws_tls", "ws_path"},
+        "quic_session": {
+            "quic_bind", "quic_own_port", "quic_peer", "quic_peer_port", "quic_cert",
+            "quic_key", "quic_alpn", "quic_insecure",
+        },
+    }
+    grouped: dict[str, dict[str, object]] = {}
+    for section, keys in sections.items():
+        values = {key: value for key, value in config.items() if key in keys}
+        if values:
+            grouped[section] = values
+    unknown = set(config) - set().union(*sections.values())
+    if unknown:
+        raise ValueError(f"unassigned Python peer config keys: {sorted(unknown)}")
+    return grouped
 
 
 def _unused_tcp_port() -> int:
@@ -983,7 +1014,7 @@ def _mixed_overlay_python_peer_config(
         })
     else:
         raise ValueError(f"unsupported transport {transport}")
-    return config
+    return _group_python_peer_config(config)
 
 
 def _mixed_overlay_hostrunner_runtime_config(
