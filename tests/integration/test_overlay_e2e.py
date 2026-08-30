@@ -70,6 +70,7 @@ LOCALHOST_TLS_FIXTURES = materialize_localhost_tls_fixture_set(Path(_LOCALHOST_T
 from obstacle_bridge.bridge import (
     CONTROL_MAX_MISSED,
     MyUDP2BatchCodec,
+    StreamChunk,
     PROTO,
     PTYPE_CONTROL,
     PTYPE_DATA,
@@ -128,6 +129,13 @@ class MyudpDelayLossCase:
     drop_client_to_server_control: tuple[int, ...] = ()
     drop_server_to_client_data: tuple[int, ...] = ()
     drop_server_to_client_control: tuple[int, ...] = ()
+    minimum_observed_batch_chunks: int = 0
+    require_dropped_multi_chunk_batch: bool = False
+    tcp_application_stream: bool = False
+    tcp_expected_request_bytes: int = 0
+    duplicate_client_to_server_data: tuple[int, ...] = ()
+    reorder_client_to_server_data: tuple[int, ...] = ()
+    drop_client_to_server_min_chunks: int = 0
 
 
 @contextlib.contextmanager
@@ -1015,14 +1023,30 @@ MYUDP_DELAY_LOSS_CASES: Dict[str, MyudpDelayLossCase] = {
     'tc3_2000_client_to_server': MyudpDelayLossCase(name='tc3_2000_client_to_server', direction='client_to_server', payload=b'A' * 2000),
     'tc4_2000_server_to_client': MyudpDelayLossCase(name='tc4_2000_server_to_client', direction='server_to_client', payload=b'B' * 2000),
     'tc5_concurrent_bidir': MyudpDelayLossCase(name='tc5_concurrent_bidir'),
-    'tc6_20k_drop_2_3': MyudpDelayLossCase(name='tc6_20k_drop_2_3', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3)),
-    'tc7_20k_drop_2_3_20': MyudpDelayLossCase(name='tc7_20k_drop_2_3_20', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 20)),
-    'tc8_20k_drop_2_3_21': MyudpDelayLossCase(name='tc8_20k_drop_2_3_21', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 21)),
-    'tc9_20k_drop_2_3_20_21': MyudpDelayLossCase(name='tc9_20k_drop_2_3_20_21', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 20, 21)),
+    'tc5a_small_records_batched_and_recovered': MyudpDelayLossCase(
+        name='tc5a_small_records_batched_and_recovered',
+        direction='client_to_server',
+        drop_client_to_server_min_chunks=2,
+        minimum_observed_batch_chunks=2,
+        require_dropped_multi_chunk_batch=True,
+    ),
+    'tc5b_small_records_reordered_and_duplicated': MyudpDelayLossCase(
+        name='tc5b_small_records_reordered_and_duplicated',
+        direction='client_to_server',
+        minimum_observed_batch_chunks=2,
+        duplicate_client_to_server_data=(2,),
+        reorder_client_to_server_data=(1,),
+    ),
+    'tc6_20k_drop_2_3': MyudpDelayLossCase(name='tc6_20k_drop_2_3', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3), tcp_application_stream=True),
+    'tc7_20k_drop_2_3_20': MyudpDelayLossCase(name='tc7_20k_drop_2_3_20', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 20), tcp_application_stream=True),
+    'tc8_20k_drop_2_3_21': MyudpDelayLossCase(name='tc8_20k_drop_2_3_21', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 21), tcp_application_stream=True),
+    'tc9_20k_drop_2_3_20_21': MyudpDelayLossCase(name='tc9_20k_drop_2_3_20_21', direction='client_to_server', payload=b'X' * (20 * 1024), drop_client_to_server_data=(2, 3, 20, 21), tcp_application_stream=True),
     'tc10_full_missed_list_pressure': MyudpDelayLossCase(
         name='tc10_full_missed_list_pressure',
         direction='client_to_server',
         drop_client_to_server_data=tuple(range(1, CONTROL_MAX_MISSED + 3)),
+        tcp_application_stream=True,
+        tcp_expected_request_bytes=32768,
     ),
 }
 
@@ -1153,6 +1177,9 @@ class BounceBackServer:
         self.ready_event = threading.Event()
         self.stop_event = threading.Event()
         self.sock: Optional[socket.socket] = None
+        self._received_payloads: list[bytes] = []
+        self._received_lock = threading.Lock()
+        self.tcp_expected_request_bytes = 0
 
     def _log(self, msg: str) -> None:
         with self.log_path.open('a', encoding='utf-8', errors='replace') as fp:
@@ -1175,6 +1202,10 @@ class BounceBackServer:
         if self.thread:
             self.thread.join(timeout=2.0)
 
+    def received_payloads(self) -> list[bytes]:
+        with self._received_lock:
+            return list(self._received_payloads)
+
     def _run(self) -> None:
         if self.proto == 'udp':
             self._run_udp()
@@ -1196,6 +1227,8 @@ class BounceBackServer:
                 continue
             except OSError:
                 break
+            with self._received_lock:
+                self._received_payloads.append(bytes(data))
             reply = response_payload(data)
             self._log(f'RX {data.hex(" ")} from {addr!r} -> TX {reply.hex(" ")}')
             try:
@@ -1225,6 +1258,7 @@ class BounceBackServer:
         with conn:
             conn.settimeout(0.5)
             self._log(f'TCP accepted {addr!r}')
+            accumulated = bytearray()
             while not self.stop_event.is_set():
                 try:
                     data = conn.recv(65535)
@@ -1235,12 +1269,24 @@ class BounceBackServer:
                     return
                 if not data:
                     return
+                if self.tcp_expected_request_bytes:
+                    accumulated.extend(data)
+                    if len(accumulated) < self.tcp_expected_request_bytes:
+                        continue
+                    if len(accumulated) != self.tcp_expected_request_bytes:
+                        self._log(f'TCP request length mismatch got={len(accumulated)} expected={self.tcp_expected_request_bytes}')
+                        return
+                    data = bytes(accumulated)
+                with self._received_lock:
+                    self._received_payloads.append(bytes(data))
                 reply = response_payload(data)
                 self._log(f'RX {data.hex(" ")} from {addr!r} -> TX {reply.hex(" ")}')
                 try:
                     conn.sendall(reply)
                 except OSError as e:
                     self._log(f'TCP send failed to {addr!r}: {e!r}')
+                    return
+                if self.tcp_expected_request_bytes:
                     return
 
 
@@ -1261,6 +1307,10 @@ class UdpDelayLossProxy:
         drop_client_to_server_control: tuple[int, ...] = (),
         drop_server_to_client_data: tuple[int, ...] = (),
         drop_server_to_client_control: tuple[int, ...] = (),
+        duplicate_client_to_server_data: tuple[int, ...] = (),
+        reorder_client_to_server_data: tuple[int, ...] = (),
+        drop_client_to_server_min_chunks: int = 0,
+        capture_path: Optional[Path] = None,
         delay_server_to_client_secure_link_types_ms: Optional[Dict[int, int]] = None,
     ):
         self.name = name
@@ -1272,6 +1322,7 @@ class UdpDelayLossProxy:
         self.forward_bind_port = int(forward_bind_port)
         self.delay_ms = max(0, int(delay_ms))
         self.log_path = log_path
+        self.capture_path = capture_path
         self.listen_sock: Optional[socket.socket] = None
         self.upstream_sock: Optional[socket.socket] = None
         self.thread: Optional[threading.Thread] = None
@@ -1292,10 +1343,16 @@ class UdpDelayLossProxy:
                 'control': set(drop_server_to_client_control),
             },
         }
+        self._duplicate_rules = {'client_to_server': {'data': set(duplicate_client_to_server_data)}}
+        self._reorder_rules = {'client_to_server': {'data': set(reorder_client_to_server_data)}}
+        self._drop_min_chunks = {'client_to_server': max(0, int(drop_client_to_server_min_chunks))}
         self._counters = {
             'client_to_server': {'data': 0, 'control': 0},
             'server_to_client': {'data': 0, 'control': 0},
         }
+        self._observed_batches: list[dict[str, object]] = []
+        self._capture_packets: list[tuple[float, bytes]] = []
+        self._observation_lock = threading.Lock()
         self._secure_link_delay_rules_ms = {
             'server_to_client': {
                 int(sl_type): max(0, int(delay_override_ms))
@@ -1323,6 +1380,27 @@ class UdpDelayLossProxy:
                 pass
         if self.thread is not None:
             self.thread.join(timeout=2.0)
+        self._write_sanitized_capture()
+
+    def _write_sanitized_capture(self) -> None:
+        if self.capture_path is None:
+            return
+        with self._observation_lock:
+            packets = list(self._capture_packets)
+            summary = list(self._observed_batches)
+        # DLT_USER0 makes the artifact payload-free and lets the supplied Lua
+        # dissector decode myUDP2 without pretending it is an IP packet capture.
+        with self.capture_path.open('wb') as fp:
+            fp.write(struct.pack('<IHHIIII', 0xA1B2C3D4, 2, 4, 0, 0, 65535, 147))
+            for timestamp, packet in packets:
+                seconds = int(timestamp)
+                micros = int((timestamp - seconds) * 1_000_000)
+                fp.write(struct.pack('<IIII', seconds, micros, len(packet), len(packet)))
+                fp.write(packet)
+        self.capture_path.with_suffix('.summary.json').write_text(
+            json.dumps({'format': 'myudp2-sanitized-pcap-v1', 'batches': summary}, indent=2) + '\n',
+            encoding='utf-8',
+        )
 
     def pause(self) -> None:
         self.pause_event.set()
@@ -1358,7 +1436,39 @@ class UdpDelayLossProxy:
         self._counters[direction][frame_kind] += 1
         frame_idx = self._counters[direction][frame_kind]
         should_drop = frame_idx in self._drop_rules[direction][frame_kind]
+        min_chunks = self._drop_min_chunks.get(direction, 0)
+        if frame_kind == 'data' and min_chunks:
+            try:
+                should_drop = should_drop or len(MyUDP2BatchCodec.decode_batch(PROTO.parse_frame_with_times(data)[1])) >= min_chunks
+            except (BatchDecodeError, TypeError):
+                pass
         return should_drop, frame_kind, frame_idx
+
+    def _observe_batch(self, direction: str, data: bytes, *, dropped: bool) -> None:
+        parsed = PROTO.parse_frame_with_times(data)
+        if not parsed or parsed[0] != PTYPE_DATA:
+            return
+        try:
+            chunks = MyUDP2BatchCodec.decode_batch(bytes(parsed[1]))
+        except BatchDecodeError:
+            return
+        # Keep only framing metadata: captures must never retain upper-layer bytes.
+        observation = {
+            'direction': direction,
+            'chunks': len(chunks),
+            'counters': tuple(chunk.counter for chunk in chunks),
+            'stream_bytes': sum(len(chunk.data) for chunk in chunks),
+            'dropped': bool(dropped),
+        }
+        sanitized_chunks = [StreamChunk(chunk.counter, b'\x00' * len(chunk.data)) for chunk in chunks]
+        sanitized_packet = PROTO.build_frame(PTYPE_DATA, MyUDP2BatchCodec.encode_batch(sanitized_chunks))
+        with self._observation_lock:
+            self._observed_batches.append(observation)
+            self._capture_packets.append((time.time(), sanitized_packet))
+
+    def observed_batches(self) -> list[dict[str, object]]:
+        with self._observation_lock:
+            return list(self._observed_batches)
 
     def _secure_link_type(self, data: bytes) -> Optional[int]:
         parsed = PROTO.parse_frame_with_times(data)
@@ -1394,6 +1504,19 @@ class UdpDelayLossProxy:
         self._pending_seq += 1
         due = time.monotonic() + (total_delay_ms / 1000.0)
         heapq.heappush(self._pending, (due, self._pending_seq, sock, dest, data))
+
+    def _schedule_reordered(self, sock: socket.socket, dest: tuple[str, int], data: bytes, *, direction: str, frame_kind: Optional[str], frame_idx: Optional[int]) -> None:
+        if frame_kind == 'data' and frame_idx in self._reorder_rules.get(direction, {}).get('data', set()):
+            self._pending_seq += 1
+            heapq.heappush(self._pending, (time.monotonic() + 0.05, self._pending_seq, sock, dest, data))
+            self._log(f'reorder delay direction={direction} kind={frame_kind} idx={frame_idx}')
+            return
+        self._schedule(sock, dest, data, direction=direction)
+
+    def _duplicate_if_due(self, sock: socket.socket, dest: tuple[str, int], data: bytes, *, direction: str, frame_kind: Optional[str], frame_idx: Optional[int]) -> None:
+        if frame_kind == 'data' and frame_idx in self._duplicate_rules.get(direction, {}).get('data', set()):
+            self._schedule(sock, dest, data, direction=direction)
+            self._log(f'duplicate direction={direction} kind={frame_kind} idx={frame_idx}')
 
     def _flush_pending(self) -> None:
         now = time.monotonic()
@@ -1444,20 +1567,27 @@ class UdpDelayLossProxy:
                 if sock is self.listen_sock:
                     self.client_addr = (str(addr[0]), int(addr[1]))
                     should_drop, frame_kind, frame_idx = self._should_drop('client_to_server', data)
+                    if frame_kind == 'data':
+                        self._observe_batch('client_to_server', data, dropped=should_drop)
                     if should_drop:
                         self._log(f'drop c2s kind={frame_kind} idx={frame_idx} from={addr!r}')
                         continue
-                    self._schedule(
+                    self._schedule_reordered(
                         self.upstream_sock,
                         (self.upstream_host, self.upstream_port),
                         data,
                         direction='client_to_server',
+                        frame_kind=frame_kind,
+                        frame_idx=frame_idx,
                     )
+                    self._duplicate_if_due(self.upstream_sock, (self.upstream_host, self.upstream_port), data, direction='client_to_server', frame_kind=frame_kind, frame_idx=frame_idx)
                 else:
                     if self.client_addr is None:
                         self._log(f'ignore s2c packet before client discovery from={addr!r}')
                         continue
                     should_drop, frame_kind, frame_idx = self._should_drop('server_to_client', data)
+                    if frame_kind == 'data':
+                        self._observe_batch('server_to_client', data, dropped=should_drop)
                     if should_drop:
                         self._log(f'drop s2c kind={frame_kind} idx={frame_idx} from={addr!r}')
                         continue
@@ -1752,6 +1882,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperXPCTransport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunAdapter.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunPing.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunProbeDiagnosticsSupport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeRuntimeConfig.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOnboarding.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebAdminServer.swift'),
@@ -4146,6 +4277,32 @@ def _wait_udp_probe_result(host: str, port: int, payload: bytes, *, bind_host: s
     raise RuntimeError(f'UDP probe to {host}:{port} failed for payload len={len(payload)}: {last_exc!r}')
 
 
+def _wait_tcp_probe_result(host: str, port: int, payload: bytes, *, bind_host: str = '127.0.0.1', timeout: float = 20.0) -> bytes:
+    end = time.time() + timeout
+    expected = response_payload(payload)
+    last_exc = None
+    while time.time() < end:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+                sock.bind((bind_host, 0))
+                sock.settimeout(min(2.5, max(0.5, end - time.time())))
+                sock.connect((host, port))
+                sock.sendall(payload)
+                received = bytearray()
+                while len(received) < len(expected):
+                    chunk = sock.recv(len(expected) - len(received))
+                    if not chunk:
+                        break
+                    received.extend(chunk)
+                if bytes(received) == expected:
+                    return bytes(received)
+                last_exc = RuntimeError(f'unexpected TCP reply length={len(received)} expected={len(expected)}')
+        except Exception as exc:
+            last_exc = exc
+        time.sleep(0.2)
+    raise RuntimeError(f'TCP probe to {host}:{port} failed for payload len={len(payload)}: {last_exc!r}')
+
+
 def run_case_myudp_delay_loss(
     loss_case: MyudpDelayLossCase,
     log_dir: Path,
@@ -4165,10 +4322,15 @@ def run_case_myudp_delay_loss(
 
     bounce_server = BounceBackServer(
         name=f'{loss_case.name}_server_bounce',
-        proto='udp',
+        proto='tcp' if loss_case.tcp_application_stream else 'udp',
         bind_host=loopback_v4,
         port=server_target_port,
         log_path=log_dir / f'{loss_case.name}_server_bounce.log',
+    )
+    bounce_server.tcp_expected_request_bytes = (
+        int(loss_case.tcp_expected_request_bytes or len(loss_case.payload))
+        if loss_case.tcp_application_stream
+        else 0
     )
     bounce_client = BounceBackServer(
         name=f'{loss_case.name}_client_bounce',
@@ -4187,10 +4349,14 @@ def run_case_myudp_delay_loss(
         forward_bind_port=proxy_forward_port,
         delay_ms=loss_case.delay_ms,
         log_path=log_dir / f'{loss_case.name}_proxy.log',
+        capture_path=log_dir / f'{loss_case.name}_sanitized.pcap',
         drop_client_to_server_data=loss_case.drop_client_to_server_data,
         drop_client_to_server_control=loss_case.drop_client_to_server_control,
         drop_server_to_client_data=loss_case.drop_server_to_client_data,
         drop_server_to_client_control=loss_case.drop_server_to_client_control,
+        duplicate_client_to_server_data=loss_case.duplicate_client_to_server_data,
+        reorder_client_to_server_data=loss_case.reorder_client_to_server_data,
+        drop_client_to_server_min_chunks=loss_case.drop_client_to_server_min_chunks,
     )
 
     missing_cfg = str(log_dir / f'{loss_case.name}_missing.cfg')
@@ -4205,7 +4371,11 @@ def run_case_myudp_delay_loss(
         '--overlay-transport', 'myudp',
         '--udp-peer', loopback_v4, '--udp-peer-port', str(proxy_listen_port),
         '--udp-bind', loopback_v4, '--udp-own-port', '0',
-        '--own-servers', f'udp,{client_probe_port},{loopback_v4},udp,{loopback_v4},{server_target_port}',
+        '--own-servers', (
+            f'tcp,{client_probe_port},{loopback_v4},tcp,{loopback_v4},{server_target_port}'
+            if loss_case.tcp_application_stream
+            else f'udp,{client_probe_port},{loopback_v4},udp,{loopback_v4},{server_target_port}'
+        ),
         '--remote-servers', f'udp,{server_probe_port},{loopback_v4},udp,{loopback_v4},{client_target_port}',
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{loss_case.name}_bridge_client.txt'),
@@ -4231,6 +4401,24 @@ def run_case_myudp_delay_loss(
 
     server_proc: Optional[Proc] = None
     client_proc: Optional[Proc] = None
+
+    def assert_batch_observation() -> None:
+        observations = proxy.observed_batches()
+        direction_observations = [
+            observation for observation in observations
+            if observation['direction'] == loss_case.direction
+        ]
+        if loss_case.minimum_observed_batch_chunks:
+            if not any(int(observation['chunks']) >= loss_case.minimum_observed_batch_chunks for observation in direction_observations):
+                raise RuntimeError(
+                    f'{loss_case.name} did not observe a DATA_BATCH with at least '
+                    f'{loss_case.minimum_observed_batch_chunks} chunks: {direction_observations!r}'
+                )
+        if loss_case.require_dropped_multi_chunk_batch:
+            if not any(bool(observation['dropped']) and int(observation['chunks']) >= 2 for observation in direction_observations):
+                raise RuntimeError(
+                    f'{loss_case.name} did not drop a multi-chunk DATA_BATCH: {direction_observations!r}'
+                )
     try:
         phase('1. Start bidirectional UDP bounce services and delay/loss proxy')
         bounce_server.start()
@@ -4279,6 +4467,47 @@ def run_case_myudp_delay_loss(
                 raise RuntimeError(f'Unexpected concurrent server_to_client reply: {results.get("server_to_client")!r}')
             return
 
+        if loss_case.name in ('tc5a_small_records_batched_and_recovered', 'tc5b_small_records_reordered_and_duplicated'):
+            payloads = [f'BATCH-{index:02d}'.encode('ascii') for index in range(12)]
+            results: list[Optional[bytes]] = [None] * len(payloads)
+            errors: list[tuple[int, Exception]] = []
+            start_event = threading.Event()
+
+            def _small_record_worker(index: int, payload: bytes) -> None:
+                try:
+                    start_event.wait(timeout=5.0)
+                    results[index] = probe_udp(loopback_v4, client_probe_port, loopback_v4, payload, timeout=45.0)
+                except Exception as exc:
+                    errors.append((index, exc))
+
+            workers = [
+                threading.Thread(target=_small_record_worker, args=(index, payload), daemon=True)
+                for index, payload in enumerate(payloads)
+            ]
+            for worker in workers:
+                worker.start()
+            start_event.set()
+            for worker in workers:
+                worker.join(timeout=50.0)
+            if errors:
+                raise RuntimeError(f'Batched small-record probes failed: {errors!r}')
+            for index, payload in enumerate(payloads):
+                expected = response_payload(payload)
+                if results[index] != expected:
+                    raise RuntimeError(
+                        f'Batched small-record reply mismatch index={index}: '
+                        f'got={results[index]!r} expected={expected!r}'
+                    )
+            assert_batch_observation()
+            received = bounce_server.received_payloads()
+            for payload in payloads:
+                if received.count(payload) != 1:
+                    raise RuntimeError(
+                        f'Batched small-record payload was not delivered exactly once: '
+                        f'payload={payload!r} count={received.count(payload)}'
+                    )
+            return
+
         if loss_case.name == 'tc10_full_missed_list_pressure':
             payloads = [
                 (f'Z{i:03d}-'.encode('ascii') + b'Z' * (32768 - 5))
@@ -4289,7 +4518,8 @@ def run_case_myudp_delay_loss(
 
             def _bulk_worker(idx: int, payload: bytes) -> None:
                 try:
-                    results[idx] = _wait_udp_probe_result(loopback_v4, client_probe_port, payload, timeout=45.0)
+                    probe = _wait_tcp_probe_result if loss_case.tcp_application_stream else _wait_udp_probe_result
+                    results[idx] = probe(loopback_v4, client_probe_port, payload, timeout=45.0)
                 except Exception as e:
                     errors.append((idx, e))
 
@@ -4311,7 +4541,8 @@ def run_case_myudp_delay_loss(
 
         target_port = client_probe_port if loss_case.direction == 'client_to_server' else server_probe_port
         timeout = 30.0 if len(loss_case.payload) >= 20 * 1024 or loss_case.drop_client_to_server_data else 15.0
-        got = _wait_udp_probe_result(loopback_v4, target_port, loss_case.payload, timeout=timeout)
+        probe = _wait_tcp_probe_result if loss_case.tcp_application_stream else _wait_udp_probe_result
+        got = probe(loopback_v4, target_port, loss_case.payload, timeout=timeout)
         expected = response_payload(loss_case.payload)
         if got != expected:
             raise RuntimeError(f'myudp delay/loss probe mismatch: got={got!r} expected={expected!r}')
@@ -6537,6 +6768,8 @@ def test_overlay_e2e_basic_mixed_runtime_myudp(case_name: str, runtime_mode: str
 
 MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
     'tc1a_drop_first_data_client_to_server',
+    'tc5a_small_records_batched_and_recovered',
+    'tc5b_small_records_reordered_and_duplicated',
 ]
 
 

@@ -598,7 +598,7 @@ its exported API. DATA_BATCH stream chunks are the sole reliable-data contract;
 the maintained Python and Swift batch/stream probes replace former
 frame/reassembly checks.
 
-### WP7: Extend Python E2E qualification
+### Python E2E qualification
 
 Extend [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) rather
 than creating an unrepresentative synthetic-only gate. Add myUDP2 cases for
@@ -606,11 +606,20 @@ small-record coalescing, final-chunk splitting, records crossing chunk and batch
 boundaries, secure-link plus compression, bidirectional concurrency, listener
 multi-peer traffic, IPv4/IPv6, and deterministic loss/reorder/duplicate faults.
 
-Definition of Done:
+The shared loopback UDP proxy records sanitized DATA_BATCH metadata only:
+direction, chunk counters, chunk count, stream-byte total, and whether the
+datagram was dropped. `tc5a_small_records_batched_and_recovered` starts twelve
+concurrent small application sends, observes multi-chunk batches, drops the
+first such batch, and verifies each upper-layer payload is delivered exactly
+once after per-chunk recovery. `tc5b_small_records_reordered_and_duplicated`
+delays one batch and duplicates the next, while preserving ordered exact-once
+upper-layer delivery.
 
-- The complete existing Python myUDP delay/loss matrix still passes, including
+Delivered qualification:
+
+- The complete Python myUDP delay/loss matrix covers
   control loss, persistent gaps, large transfers, and missed-list pressure.
-- New cases prove the intended batching behavior from observed UDP datagrams and
+- New cases prove intended batching behavior from observed UDP datagrams and
   prove byte-for-byte upper-layer delivery.
 - New cases inject loss of a multi-record batch and show recovery of every
   affected counter without duplicate upper-layer records.
@@ -618,7 +627,7 @@ Definition of Done:
   stream boundaries.
 - Listener and concurrent-channel E2E cases show independent peers do not share
   serializer, counter, or reassembly state.
-- Each new E2E fault case emits a sanitized PCAP/PCAPNG fixture and an expected
+- Each new E2E fault case emits a sanitized PCAP fixture and an expected
   Wireshark decode summary, so capture analysis is repeatable rather than a
   manual interpretation of opaque UDP bytes.
 
@@ -628,6 +637,11 @@ Run the expanded Python E2E suite in all-Python mode and in both existing mixed
 directions: Swift server/Python client and Python server/Swift client. Then run
 the same release candidate against separate network hosts, not only loopback,
 with captured transport diagnostics and packet traces.
+
+The local mixed-runtime gate covers `tc5a` and `tc5b` in both directions. The
+host-runner compiler source list includes the same TUN probe diagnostics support
+as the production macOS build, preventing a test-only compile drift from masking
+transport interoperability.
 
 Definition of Done:
 

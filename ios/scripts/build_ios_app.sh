@@ -32,6 +32,15 @@ SIM_APP_PACKAGES_DIR="${IOS_DIR}/build/obstacle_bridge_ios/ios/xcode/ObstacleBri
 echo "[build_ios_app] refreshing embedded build metadata and VPN profile timestamp"
 "${PYTHON_CMD}" "${REPO_ROOT}/scripts/write_build_info.py"
 
+# Apple's CFBundleVersion must be numeric. Keep the SHA in embedded build
+# metadata while using the monotonic commit count for the installable build.
+IOS_MARKETING_VERSION="$(date -u +%Y.%m.%d)"
+IOS_BUILD_NUMBER="$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || true)"
+IOS_BUILD_NUMBER="${IOS_BUILD_NUMBER:-1}"
+IOS_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || true)"
+IOS_GIT_COMMIT="${IOS_GIT_COMMIT:-unknown}"
+echo "[build_ios_app] bundle identity display=ObstacleBridge version=${IOS_MARKETING_VERSION} build=${IOS_BUILD_NUMBER} commit=${IOS_GIT_COMMIT}"
+
 if [ ! -f "${PROJECT_PBXPROJ}" ]; then
   echo "[build_ios_app] Xcode project missing, creating it first"
   "${IOS_DIR}/scripts/create_ios_xcode_project.sh" --no-input
@@ -82,6 +91,9 @@ XCODEBUILD_ARGS=(
   -configuration Debug
   -destination "${DESTINATION[0]}"
   DEVELOPMENT_TEAM="${RESOLVED_APPLE_TEAM_ID}"
+  MARKETING_VERSION="${IOS_MARKETING_VERSION}"
+  CURRENT_PROJECT_VERSION="${IOS_BUILD_NUMBER}"
+  INFOPLIST_KEY_CFBundleDisplayName=ObstacleBridge
   CODE_SIGN_STYLE=Automatic
   -derivedDataPath "${DERIVED_DATA_PATH}"
   build
