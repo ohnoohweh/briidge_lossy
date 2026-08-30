@@ -733,6 +733,14 @@ def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -
     assert "resolveMode: ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in packet_tunnel
 
 
+def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
+
+    assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
+    assert "bytes[10] == 0xff, bytes[11] == 0xff" in runtime
+    assert "return (4, Data(bytes.suffix(4)))" in runtime
+
+
 def test_swift_peer_resolution_probe_keeps_ipv4_fallback_for_prefer_ipv6(tmp_path: Path) -> None:
     source_path = tmp_path / "PeerResolutionProbe.swift"
     binary_path = tmp_path / "peer-resolution-probe"

@@ -1098,7 +1098,7 @@ When the outer lifecycle remains disconnected, ChannelMux rotates the lower stac
 
 ### Own public IP
 
-Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the IPv4 or IPv6 address for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.
+Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the IPv4 or IPv6 address for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. IPv4-mapped dual-stack observations are published as normal IPv4 addresses. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.
 
 ### Compression layer
 
@@ -1498,8 +1498,8 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `57` | `900` |
-| macOS Swift app | `1` | `54` |
+| Python CLI/runtime, including macOS Python | `57` | `903` |
+| macOS Swift app | `1` | `55` |
 | iOS app/extension | `26` | `172` |
 
 #### Requirement traceability
@@ -1508,7 +1508,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
-| iOS app/extension | `10/92 = 10.9%` | `15/92 = 16.3%` | `21/92 = 22.8%` |
+| iOS app/extension | `10/92 = 10.9%` | `16/92 = 17.4%` | `21/92 = 22.8%` |
 
 #### Architecture traceability
 

@@ -39,6 +39,7 @@ def test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_con
                 let output: [String: Any] = [
                     "ipv4": reflected("198.51.100.44"),
                     "ipv6": reflected("2001:db8::44"),
+                    "mapped_ipv4": reflected("::ffff:198.51.100.44"),
                     "ordinary_consumed": ordinary.consumed,
                 ]
                 FileHandle.standardOutput.write(
@@ -59,5 +60,6 @@ def test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_con
     assert json.loads(output.stdout) == {
         "ipv4": "198.51.100.44",
         "ipv6": "2001:db8::44",
+        "mapped_ipv4": "198.51.100.44",
         "ordinary_consumed": False,
     }

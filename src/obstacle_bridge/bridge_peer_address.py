@@ -40,6 +40,11 @@ class PeerAddressProtocolSession(ISession):
     @classmethod
     def _reply_frame(cls, host: str) -> bytes:
         address = ipaddress.ip_address(str(host).split("%", 1)[0])
+        # A dual-stack listener can report an IPv4 client as ::ffff:a.b.c.d.
+        # Publish that as IPv4: it is the same network path and must match the
+        # resolved IPv4 peer shown in the operator UI.
+        if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+            address = address.ipv4_mapped
         family = 4 if address.version == 4 else 6
         return cls._HEADER.pack(cls._MAGIC, cls._VERSION, cls._TYPE_REPLY, family) + address.packed
 

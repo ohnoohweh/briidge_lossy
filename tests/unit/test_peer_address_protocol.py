@@ -74,6 +74,9 @@ class PeerAddressProtocolSessionTests(unittest.IsolatedAsyncioTestCase):
     async def test_server_reflects_observed_ipv6_without_delivering_control_frames(self) -> None:
         await self._reflect("2001:db8::44", "2001:db8::44")
 
+    async def test_server_normalizes_ipv4_mapped_ipv6_to_ipv4(self) -> None:
+        await self._reflect("::ffff:198.51.100.44", "198.51.100.44")
+
     def test_malformed_or_unrelated_frames_are_not_consumed(self) -> None:
         wrapper = PeerAddressProtocolSession(_FakeInnerSession(peer_id=0, observed_host=""), transport_name="ws", client_mode=True)
         self.assertIsNone(wrapper._parse_control_frame(b"OBPA\x01\x02\x04short"))

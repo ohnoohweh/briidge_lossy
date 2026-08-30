@@ -656,6 +656,7 @@ ARC-CMP-008:
   unit_tests:
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
+    - tests/unit/test_peer_address_protocol.py::test_server_normalizes_ipv4_mapped_ipv6_to_ipv4
     - tests/unit/test_peer_address_protocol.py::test_transparent_wrapper_delegates_required_session_methods
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_all_transports_with_peer_address_protocol_without_secure_link

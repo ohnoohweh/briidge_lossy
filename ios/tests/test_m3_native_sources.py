@@ -868,6 +868,8 @@ def test_peer_address_protocol_source_exists_and_is_below_secure_link() -> None:
     assert "handleTransportConnected()" in runtime
     assert "handleInboundFrame(_ payload: Data, observedPeerHost: String? = nil)" in runtime
     assert "inet_pton" in runtime
+    assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
+    assert "return (4, Data(bytes.suffix(4)))" in runtime
     assert "peerAddressRuntime?.handleTransportConnected()" in adapter
     assert "peerAddressRuntime.handleInboundFrame(" in adapter
 

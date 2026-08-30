@@ -78,7 +78,13 @@ final class ObstacleBridgePeerAddressProtocolRuntime {
         }
         var ipv6 = in6_addr()
         if inet_pton(AF_INET6, host, &ipv6) == 1 {
-            return (6, withUnsafeBytes(of: &ipv6) { Data($0) })
+            let bytes = withUnsafeBytes(of: &ipv6) { Data($0) }
+            // Dual-stack listeners represent IPv4 clients as ::ffff:a.b.c.d.
+            // Encode those as IPv4 so the reflected address matches the path.
+            if bytes.prefix(10).allSatisfy({ $0 == 0 }), bytes[10] == 0xff, bytes[11] == 0xff {
+                return (4, Data(bytes.suffix(4)))
+            }
+            return (6, bytes)
         }
         return nil
     }

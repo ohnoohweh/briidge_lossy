@@ -202,7 +202,7 @@ Main contribution:
 
 The peer-address protocol is anchored immediately above the concrete transport and below optional SecureLink. On each client connection epoch it sends a small `OBPA` version-1 request. The server consumes that request and replies with the endpoint address observed by its active transport peer. IPv4 replies contain four address bytes and IPv6 replies contain sixteen; malformed or unrelated frames pass to the next layer unchanged.
 
-The client records only the most recent valid reply for its current transport epoch. The field is published as `observed_public_ip` in the active peer snapshot and rendered as **Own Public IP** in the Transport section of the Peer page. It therefore shows the address family actually used by the selected overlay path, rather than a host-wide lookup result. The layer is diagnostic only: a missing reply must never hold up overlay connection, SecureLink authentication, or ChannelMux readiness.
+The client records only the most recent valid reply for its current transport epoch. The field is published as `observed_public_ip` in the active peer snapshot and rendered as **Own Public IP** in the Transport section of the Peer page. It therefore shows the address family actually used by the selected overlay path, rather than a host-wide lookup result. A dual-stack listener's IPv4-mapped IPv6 representation (`::ffff:a.b.c.d`) is encoded as the canonical IPv4 address so it remains unambiguous beside an IPv4 resolved peer. The layer is diagnostic only: a missing reply must never hold up overlay connection, SecureLink authentication, or ChannelMux readiness.
 
 Important behaviors:
 

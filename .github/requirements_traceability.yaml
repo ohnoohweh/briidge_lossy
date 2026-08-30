@@ -1247,6 +1247,7 @@ REQ-ADM-006:
   unit_tests:
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
+    - tests/unit/test_peer_address_protocol.py::test_server_normalizes_ipv4_mapped_ipv6_to_ipv4
     - tests/unit/test_peer_address_protocol.py::test_transparent_wrapper_delegates_required_session_methods
     - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
