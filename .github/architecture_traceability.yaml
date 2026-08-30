@@ -132,6 +132,7 @@ ARC-CMP-003:
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns

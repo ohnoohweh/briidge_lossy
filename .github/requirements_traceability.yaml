@@ -211,6 +211,7 @@ REQ-MUX-005:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
@@ -913,6 +914,7 @@ REQ-MUX-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
   unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic
