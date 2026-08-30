@@ -142,7 +142,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private let instanceID: UInt64
-    private let connectionSeq: UInt32
+    private var connectionSeq: UInt32
     private let chanIDStart: Int
     private let chanIDStride: Int
     private let sessionMaxAppPayload: Int
@@ -411,6 +411,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     /// make the next local packet send DATA on that stale channel without a
     /// replacement OPEN.
     func resetTransportEpoch() {
+        connectionSeq &+= 1
         counters.removeAll(keepingCapacity: true)
         boundTunChanIDs.removeAll(keepingCapacity: true)
         preferredTunChanID = nil

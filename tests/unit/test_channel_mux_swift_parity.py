@@ -4523,6 +4523,13 @@ def test_swift_channelmux_tun_open_then_local_packet_matches_python(
 def test_swift_channelmux_tun_epoch_reset_reopens_local_channel(
     swift_channelmux_runner: Path,
 ) -> None:
+    python_mux = _make_mux(connected=True)
+    try:
+        before_python_sequence = python_mux._mux_connection_seq
+        python_mux.loop.run_until_complete(python_mux.on_transport_epoch_change(1))
+        after_python_sequence = python_mux._mux_connection_seq
+    finally:
+        _close_mux(python_mux)
     swift = _run_swift(
         swift_channelmux_runner,
         {
@@ -4542,6 +4549,8 @@ def test_swift_channelmux_tun_epoch_reset_reopens_local_channel(
     assert before["chan_id"] != after["chan_id"]
     assert len(before["frames_hex"]) == 2  # OPEN then DATA
     assert len(after["frames_hex"]) == 2  # fresh OPEN then DATA
+    assert swift["before_connection_seq"] == before_python_sequence
+    assert swift["after_connection_seq"] == after_python_sequence
 
 
 def test_swift_channelmux_local_tun_chunked_open_matches_python(

@@ -1886,9 +1886,20 @@ private func handle(_ request: [String: Any]) throws -> Any {
             overlayConnected: true,
             acceptingEnabled: true
         )
+        func openConnectionSeq(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.LocalTunSendSnapshot?) -> Any {
+            guard let frame = snapshot?.frames.first,
+                  let mux = ObstacleBridgeChannelMuxCodec.unpackMux(frame),
+                  let open = ObstacleBridgeChannelMuxCodec.parseOpenPayload(mux.body)
+            else {
+                return NSNull()
+            }
+            return Int(open.connectionSeq)
+        }
         return [
             "before_reset": beforeReset.map(localTunSendSnapshotObject) ?? NSNull(),
             "after_reset": afterReset.map(localTunSendSnapshotObject) ?? NSNull(),
+            "before_connection_seq": openConnectionSeq(beforeReset),
+            "after_connection_seq": openConnectionSeq(afterReset),
         ]
     case "drive_channelmux_tun_open_then_local_packet":
         guard
