@@ -867,12 +867,17 @@ class SecureLinkPskSession(ISession):
         dst.frames_dropped_total = int(src.frames_dropped_total or 0)
 
     def _compute_connected(self) -> bool:
-        if any(state.authenticated for state in self._peer_states.values()):
+        # Deriving local traffic keys after SERVER_HELLO is only handshake
+        # progress.  The client has not yet received the protected response
+        # that confirms the peer accepted its proof, so exposing Connected
+        # here would let ChannelMux treat an unconfirmed initial session as
+        # usable.
+        if any(state.peer_confirmed_authenticated for state in self._peer_states.values()):
             return True
         return bool(self._preserve_connected_during_epoch_restart)
 
     def _compute_app_ready(self) -> bool:
-        return any(state.authenticated for state in self._peer_states.values())
+        return any(state.peer_confirmed_authenticated for state in self._peer_states.values())
 
     @classmethod
     def _auth_fail_reason(cls, code: int) -> Optional[str]:

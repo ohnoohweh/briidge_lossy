@@ -818,6 +818,8 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "typeServerHello" in runtime
     assert "typeAuthFail" in runtime
     assert "typeData" in runtime
+    assert "authenticated && peerConfirmedAuthenticated" in runtime
+    assert "authenticated: isAuthenticated" in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:

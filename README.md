@@ -1284,7 +1284,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
-- if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, the session remains `handshaking` rather than surfacing as authenticated; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
+- if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, SecureLink remains `handshaking` and reports `Disconnected` to ChannelMux rather than surfacing as authenticated or connected; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
 - if an already-authenticated secure-link session later fails closed, SecureLink reports `Disconnected` and ChannelMux requests one lower-layer rotation after 30 seconds; raw transport liveness does not reset the three-cycle restart budget until the outer stack reports `Connected`. An operator-triggered cert local-identity reload requests that same cascaded rotation immediately so the replacement identity can authenticate without waiting for the failure timer
 
 Current WebAdmin gap to close in a future update:

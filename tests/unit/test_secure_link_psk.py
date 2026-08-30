@@ -235,11 +235,10 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
 
         server_inner.emit_state(True)
         client_inner.emit_state(True)
-        await asyncio.sleep(0)
-        await asyncio.sleep(0)
+        self.assertTrue(await client.wait_connected(timeout=0.1))
 
         self.assertTrue(client.is_connected())
-        self.assertFalse(server.is_connected())
+        self.assertTrue(server.is_connected())
 
         hello_mux = self._pack_mux(11, b"hello-secure")
         self.assertEqual(client.send_app(hello_mux), len(hello_mux))
@@ -340,6 +339,8 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             ),
             'tcp',
         )
+        client_states = []
+        client.set_on_state_change(client_states.append)
         client._HANDSHAKE_TIMEOUT_S = 0.02
         client._HANDSHAKE_WATCHDOG_INTERVAL_S = 0.005
 
@@ -366,6 +367,11 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(secure_link["state"], "handshaking")
             self.assertFalse(secure_link["authenticated"])
             self.assertEqual(int(secure_link["session_id"] or 0), session_id)
+            self.assertFalse(client.is_connected())
+            self.assertEqual(client_states, [])
+            secure_layer = client.get_connection_layers_snapshot()[-1]
+            self.assertFalse(secure_layer["connected"])
+            self.assertFalse(secure_layer["app_ready"])
 
             await asyncio.sleep(0.05)
 

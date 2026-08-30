@@ -88,16 +88,21 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                     }
 
                     let clientAuth = client.handleInboundFrame(serverHelloFrame)
-                    let clientProofFrame = clientAuth.emittedFrames.first
-                    let flushedClientDataFrame = clientAuth.emittedFrames.dropFirst().first
-                    guard let clientProofFrame else {
+                    guard !clientAuth.authenticated,
+                          clientAuth.emittedFrames.count == 1,
+                          let clientProofFrame = clientAuth.emittedFrames.first else {
                         throw ProbeError.badState("missing client proof")
-                    }
-                    guard let flushedClientDataFrame else {
-                        throw ProbeError.badState("missing flushed client data")
                     }
 
                     let serverAuth = server.handleInboundFrame(clientProofFrame)
+                    guard let serverHandshakeAck = serverAuth.emittedFrames.first else {
+                        throw ProbeError.badState("missing server handshake acknowledgement")
+                    }
+                    let clientConfirmed = client.handleInboundFrame(serverHandshakeAck)
+                    guard clientConfirmed.authenticated,
+                          let flushedClientDataFrame = clientConfirmed.emittedFrames.first else {
+                        throw ProbeError.badState("missing flushed client data after confirmation")
+                    }
                     let serverData = server.handleInboundFrame(flushedClientDataFrame)
                     let serverSend = try server.handleOutboundPayload(Data("reply-secure".utf8))
                     guard let serverReplyFrame = serverSend.emittedFrames.first else {
@@ -108,6 +113,8 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                     let payload: [String: Any] = [
                         "queued_client_frames": queuedSend.emittedFrames.count,
                         "client_auth_frames": clientAuth.emittedFrames.count,
+                        "client_authenticated_before_confirmation": clientAuth.authenticated,
+                        "client_confirmed_frames": clientConfirmed.emittedFrames.count,
                         "server_auth_frames": serverAuth.emittedFrames.count,
                         "server_received": serverData.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" },
                         "client_received": clientData.deliveredPayloads.map { String(data: $0, encoding: .utf8) ?? "" },
@@ -158,7 +165,9 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
 
     assert payload == {
         "queued_client_frames": 1,
-        "client_auth_frames": 2,
+        "client_auth_frames": 1,
+        "client_authenticated_before_confirmation": False,
+        "client_confirmed_frames": 1,
         "server_auth_frames": 1,
         "server_received": ["hello-secure"],
         "client_received": ["reply-secure"],
@@ -963,8 +972,8 @@ def test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_r
 
                     let localAuth = client.handleInboundFrame(serverHello)
                     let localStatus = client.statusSnapshot()
-                    guard localStatus.authenticated, !localStatus.peerConfirmedAuthenticated else {
-                        throw ProbeError.badState("client did not enter local-only auth phase")
+                    guard !localStatus.authenticated, !localStatus.peerConfirmedAuthenticated else {
+                        throw ProbeError.badState("client reported authenticated before peer confirmation")
                     }
                     now += 61
                     let timedOutStatus = client.statusSnapshot()
