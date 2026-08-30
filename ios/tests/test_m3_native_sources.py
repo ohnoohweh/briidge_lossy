@@ -874,6 +874,16 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "struct DataPacket" not in codec
 
 
+def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "private func rebuildSocketForPeerRotation() -> Bool" in owner
+    assert "Darwin.close(socketFD)" in owner
+    assert "installReadSource()" in owner
+    assert "udp_overlay_socket_rebuilt" in owner
+    assert "guard rebuildSocketForPeerRotation() else" in owner
+
+
 def test_udp_overlay_session_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
 

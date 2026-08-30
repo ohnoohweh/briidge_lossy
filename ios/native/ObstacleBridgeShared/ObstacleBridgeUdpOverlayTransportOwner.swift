@@ -194,17 +194,64 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         lastIdleProbeNS = 0
         lastOverlayConnectedState = false
 
+        installReadSource()
+
+        startOverlayTimers()
+        startPeerFallbackTimer()
+        if currentPeerAddress != nil {
+            sendInitialIdleProbe()
+        }
+    }
+
+    private func installReadSource() {
+        guard socketFD >= 0 else {
+            return
+        }
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
             self?.drainSocket()
         }
         readSource = source
         source.resume()
+    }
 
-        startOverlayTimers()
-        startPeerFallbackTimer()
-        if currentPeerAddress != nil {
-            sendInitialIdleProbe()
+    @discardableResult
+    private func rebuildSocketForPeerRotation() -> Bool {
+        let selectedIndex = peerCandidateIndex
+        readSource?.cancel()
+        readSource = nil
+        if socketFD >= 0 {
+            Darwin.close(socketFD)
+            socketFD = -1
+        }
+        do {
+            let socket = try Self.makeBoundSocket(
+                bindHost: bindHost,
+                bindPort: bindPort,
+                peerHost: configuredPeerHost,
+                peerPort: configuredPeerPort,
+                peerResolveFamily: configuredPeerResolveFamily
+            )
+            socketFD = socket.socketFD
+            socketFamily = socket.socketFamily
+            peerCandidates = socket.peerCandidates
+            if peerCandidates.indices.contains(selectedIndex) {
+                peerCandidateIndex = selectedIndex
+                currentPeerAddress = peerCandidates[selectedIndex]
+            } else {
+                peerCandidateIndex = 0
+                currentPeerAddress = socket.peerAddress
+            }
+            installReadSource()
+            eventSink?("udp_overlay_socket_rebuilt", [
+                "candidate_index": peerCandidateIndex,
+                "peer_host": currentPeerAddress?.host ?? NSNull(),
+                "peer_port": currentPeerAddress?.port ?? NSNull(),
+            ])
+            return true
+        } catch {
+            eventSink?("udp_overlay_socket_rebuild_failed", ["error": error.localizedDescription])
+            return false
         }
     }
 
@@ -812,6 +859,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         if peerCandidates.count > 1 {
             rotateToNextPeerCandidate(nowNS: nowNS, reason: result.reason)
         } else {
+            guard rebuildSocketForPeerRotation() else {
+                return
+            }
             resetOverlayTransportEpoch(reason: result.reason)
             sendInitialIdleProbe()
         }
@@ -1141,6 +1191,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         currentPeerAddress = peerCandidates[peerCandidateIndex]
         currentPeerSelectedAtNS = nowNS
         lastInboundDatagramNS = 0
+        guard rebuildSocketForPeerRotation() else {
+            return
+        }
         resetOverlayTransportEpoch(reason: "peer_candidate_rotated")
         eventSink?("udp_overlay_peer_candidate_rotated", [
             "reason": reason,
