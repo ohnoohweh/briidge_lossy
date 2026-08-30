@@ -120,13 +120,14 @@ function fmtThrottleRateLimit(throttle) {
 
 function fmtUptime(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
-  const s = Math.max(0, Math.floor(sec));
+  const numeric = Number(sec);
+  const negative = numeric < 0;
+  const s = Math.max(0, Math.floor(Math.abs(numeric)));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const r = s % 60;
-  if (h > 0) return `${h}h ${m}m ${r}s`;
-  if (m > 0) return `${m}m ${r}s`;
-  return `${r}s`;
+  const formatted = h > 0 ? `${h}h ${m}m ${r}s` : m > 0 ? `${m}m ${r}s` : `${r}s`;
+  return negative ? `-${formatted}` : formatted;
 }
 
 function fmtRouteList(routes) {
@@ -854,7 +855,8 @@ function startRestartCountdown(durationSec = 40, options = {}) {
       if (embedded) {
         scheduleRestartProbe();
       } else {
-        window.location.reload();
+        // The launcher keeps /api/status available with negative uptime.
+        finishRestartGate();
       }
     }
   };
@@ -1466,8 +1468,18 @@ function fmtTunRoutingRouteList(routes) {
     .join('\n') || 'n/a';
 }
 
+function fmtOwnPublicEndpoint(ip, port) {
+  const host = String(ip || '').trim();
+  const numericPort = Number(port);
+  if (!host) return 'n/a';
+  if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) return host;
+  return host.includes(':') ? `[${host}]:${numericPort}` : `${host}:${numericPort}`;
+}
+
 function detailPillClass(value) {
   const normalized = String(value || '').toLowerCase();
+  if (normalized === 'connected') return 'role-pill role-server';
+  if (normalized === 'disconnected') return 'role-pill role-disconnected';
   if (
     normalized.includes('auth')
     || normalized.includes('connect')
@@ -2954,13 +2966,15 @@ function renderPeerTable(rows) {
     const connectionLines = [connectionLine1];
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
-        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds), { className: 'peer-transport-quarter' }),
+        renderMetric('Own Public IP', fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port), { className: 'peer-transport-half' }),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {
       connectionLines.push([
-        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)),
-        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts), { className: 'peer-transport-quarter' }),
+        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds), { className: 'peer-transport-quarter' }),
+        renderMetric('Own Public IP', fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port), { className: 'peer-transport-half' }),
       ]);
     }
     const connectionLayers = Array.isArray(row.connection_layers) ? row.connection_layers : [];

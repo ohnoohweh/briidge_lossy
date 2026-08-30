@@ -246,6 +246,7 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_psk.py::test_transport_epoch_change_keeps_app_ready_false_while_layered_connection_stays_up_during_live_rehandshake
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_reports_reauthenticating_when_transport_stays_up
     - tests/unit/test_secure_link_psk.py::test_server_peer_disconnect_preserves_layered_connected_until_inner_transport_drops
+    - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
 
 REQ-AUT-007:
   integration_tests:
@@ -260,6 +261,7 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_psk.py::test_unexpected_rekey_commit_fails_closed
     - tests/unit/test_secure_link_psk.py::test_auth_failure_unregisters_server_mux_routes
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
+    - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
 REQ-AUT-008:
   # Authenticated SecureLink failures are reported to ChannelMux, which owns
   # the resulting lifecycle rotation through the lower layers.
@@ -300,8 +302,10 @@ REQ-AUT-009:
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
+    - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
 REQ-AUT-010:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold
@@ -321,6 +325,8 @@ REQ-AUT-010:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window
     - tests/unit/test_secure_link_psk.py::test_operator_forced_rekey_rotates_session_and_reports_trigger
     - tests/unit/test_secure_link_psk.py::test_psk_rekey_rotates_session_id_and_keeps_data_flowing
+    - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
+    - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
 REQ-AUT-011:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_cert_happy_path_transports
@@ -584,6 +590,8 @@ REQ-LIFE-002:
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_peer_resolution.py::test_udp_session_rotation_rebuilds_client_socket
+    - ios/tests/test_m3_native_sources.py::test_udp_overlay_peer_rotation_rebuilds_the_native_socket
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_quic_reconnect_cleanup_survives_stopped_event_loop
@@ -1226,7 +1234,9 @@ REQ-ADM-006:
   # Admin status polling keeps a minimal live-session fallback when the
   # regular stats snapshot is temporarily unavailable before a cache exists.
   # Peer-detail coverage also pins persistent enabled-layer visibility and
-  # ChannelMux-owned candidate/restart timers.
+  # ChannelMux-owned candidate/restart timers, including the Transport
+  # detail ordering, status-pill semantics, launcher restart countdowns, and peer-scoped wrapper states for resolved and
+  # server-observed peer address-and-port tuples.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
@@ -1236,6 +1246,12 @@ REQ-ADM-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
   unit_tests:
+    - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
+    - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames
+    - tests/unit/test_peer_address_protocol.py::test_server_normalizes_ipv4_mapped_ipv6_to_ipv4
+    - tests/unit/test_peer_address_protocol.py::test_transparent_wrapper_delegates_required_session_methods
+    - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
+    - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_connection_snapshots.py::test_tcp_client_snapshot_includes_last_incoming_age_seconds
     - tests/unit/test_connection_snapshots.py::test_tcp_server_snapshot_includes_last_incoming_age_seconds

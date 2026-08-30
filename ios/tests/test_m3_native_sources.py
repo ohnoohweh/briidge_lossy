@@ -818,6 +818,8 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "typeServerHello" in runtime
     assert "typeAuthFail" in runtime
     assert "typeData" in runtime
+    assert "authenticated && peerConfirmedAuthenticated" in runtime
+    assert "authenticated: isAuthenticated" in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:
@@ -858,6 +860,22 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "func connectionRotationDue(candidateCount: Int)" in runtime
 
 
+def test_peer_address_protocol_source_exists_and_is_below_secure_link() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
+    adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+
+    assert "final class ObstacleBridgePeerAddressProtocolRuntime" in runtime
+    assert "handleTransportConnected()" in runtime
+    assert "observedPeerPort: Int? = nil" in runtime
+    assert "private(set) var observedPublicPort: Int?" in runtime
+    assert "private static func encodePort(_ port: Int) -> Data" in runtime
+    assert "inet_pton" in runtime
+    assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
+    assert "return (4, Data(bytes.suffix(4)))" in runtime
+    assert "peerAddressRuntime?.handleTransportConnected()" in adapter
+    assert "peerAddressRuntime.handleInboundFrame(" in adapter
+
+
 def test_udp_overlay_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
 
@@ -872,6 +890,16 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "buildDataFrame(" not in codec
     assert "parseDataFrame(" not in codec
     assert "struct DataPacket" not in codec
+
+
+def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+
+    assert "private func rebuildSocketForPeerRotation() -> Bool" in owner
+    assert "Darwin.close(socketFD)" in owner
+    assert "installReadSource()" in owner
+    assert "udp_overlay_socket_rebuilt" in owner
+    assert "guard rebuildSocketForPeerRotation() else" in owner
 
 
 def test_udp_overlay_session_codec_source_exists() -> None:

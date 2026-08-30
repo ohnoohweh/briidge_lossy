@@ -1337,6 +1337,8 @@ final class ObstacleBridgeHostRunner {
             "resolved_peer_host": resolvedPeer?["host"] ?? NSNull(),
             "resolved_peer_port": resolvedPeer?["port"] ?? NSNull(),
             "resolved_peer_family": resolvedPeer?["family"] ?? NSNull(),
+            "observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? "",
+            "observed_public_port": sharedOverlayLayerTransportAdapter?.observedPublicPortSnapshot() ?? NSNull(),
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(
@@ -2519,12 +2521,16 @@ final class ObstacleBridgeHostRunner {
                 summary["secure_link_retry_backoff_max_ms"] = retryBackoffMaxMS
             }
 
-            if sharedCompressLayerRuntime != nil || sharedSecureLinkPskTransportAdapter != nil {
-                sharedOverlayLayerTransportAdapter = ObstacleBridgeOverlayLayerTransportAdapter(
-                    compressRuntime: sharedCompressLayerRuntime,
-                    secureLinkAdapter: sharedSecureLinkPskTransportAdapter
+            // This protocol sits directly above transport. Keep it active even
+            // when the optional SecureLink and compression layers are absent.
+            sharedOverlayLayerTransportAdapter = ObstacleBridgeOverlayLayerTransportAdapter(
+                compressRuntime: sharedCompressLayerRuntime,
+                secureLinkAdapter: sharedSecureLinkPskTransportAdapter,
+                peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime(
+                    clientMode: settings.peerHost != nil
                 )
-            }
+            )
+            summary["peer_address_protocol_runtime"] = "ready"
 
             if settings.transport == "ws" {
                 let payloadMode = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["ws_payload_mode"]) ?? "binary"

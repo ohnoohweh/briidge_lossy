@@ -1528,6 +1528,19 @@ select.config-editor option:disabled {
   gap: 10px 14px;
 }
 
+.peer-detail-line:has(.peer-transport-quarter) {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.peer-transport-quarter,
+.peer-transport-half {
+  min-width: 0;
+}
+
+.peer-transport-half {
+  grid-column: span 2;
+}
+
 .peer-security-control-line {
   display: grid;
   align-items: stretch;
@@ -1648,6 +1661,12 @@ select.config-editor option:disabled {
   background: rgba(59, 130, 246, 0.12);
   color: #93c5fd;
   border-color: rgba(59, 130, 246, 0.22);
+}
+
+.conn-table .role-disconnected {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.22);
 }
 
 .conn-table .role-unknown {

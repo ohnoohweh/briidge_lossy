@@ -141,14 +141,14 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     var isAuthenticated: Bool {
-        authenticated
+        authenticated && peerConfirmedAuthenticated
     }
 
     func statusSnapshot() -> StatusSnapshot {
         expireHandshakeIfNeeded()
         return StatusSnapshot(
             clientMode: clientMode,
-            authenticated: authenticated,
+            authenticated: isAuthenticated,
             peerConfirmedAuthenticated: peerConfirmedAuthenticated,
             sessionID: sessionID,
             txCounter: txCounter,
@@ -214,7 +214,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         guard !clientRekeyHoldAfterCommit else {
             throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
         }
-        guard authenticated, sessionID > 0 else {
+        guard isAuthenticated, sessionID > 0 else {
             throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
         }
         guard txCounter >= Self.firstDataCounter, txCounter <= Self.maxDataCounter else {

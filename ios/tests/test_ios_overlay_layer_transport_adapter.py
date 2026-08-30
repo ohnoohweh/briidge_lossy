@@ -36,6 +36,7 @@ def _compile_swift_overlay_layer_transport_probe(source_path: Path, binary_path:
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(source_path),
     ]
@@ -124,11 +125,19 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                     }
 
                     let clientAuth = client.handleInboundFrame(serverHelloFrame)
-                    guard clientAuth.emittedFrames.count >= 2 else {
-                        throw ProbeError.badState("missing client proof or flushed payload")
+                    guard clientAuth.emittedFrames.count == 1,
+                          let clientProofFrame = clientAuth.emittedFrames.first else {
+                        throw ProbeError.badState("missing client proof")
                     }
-                    let serverProof = server.handleInboundFrame(clientAuth.emittedFrames[0])
-                    let serverData = server.handleInboundFrame(clientAuth.emittedFrames[1])
+                    let serverProof = server.handleInboundFrame(clientProofFrame)
+                    guard let serverHandshakeAck = serverProof.emittedFrames.first else {
+                        throw ProbeError.badState("missing server handshake acknowledgement")
+                    }
+                    let clientConfirmed = client.handleInboundFrame(serverHandshakeAck)
+                    guard let flushedClientDataFrame = clientConfirmed.emittedFrames.first else {
+                        throw ProbeError.badState("missing flushed client data")
+                    }
+                    let serverData = server.handleInboundFrame(flushedClientDataFrame)
                     guard let deliveredClientMux = serverData.deliveredPayloads.first,
                           let unpackedClientMux = ObstacleBridgeChannelMuxCodec.unpackMux(deliveredClientMux)
                     else {
@@ -149,6 +158,7 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
                     let payload: [String: Any] = [
                         "queued_client_frames": clientQueued.emittedFrames.count,
                         "client_auth_frames": clientAuth.emittedFrames.count,
+                        "client_confirmed_frames": clientConfirmed.emittedFrames.count,
                         "server_auth_frames": serverProof.emittedFrames.count,
                         "client_compress_applied": clientCompress.statusSnapshot().compressAppliedTotal,
                         "server_decompress_ok": serverCompress.statusSnapshot().decompressOKTotal,
@@ -181,7 +191,8 @@ def test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link(tmp
 
     assert payload == {
         "queued_client_frames": 1,
-        "client_auth_frames": 2,
+        "client_auth_frames": 1,
+        "client_confirmed_frames": 1,
         "server_auth_frames": 1,
         "client_compress_applied": 1,
         "server_decompress_ok": 1,

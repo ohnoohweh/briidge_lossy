@@ -1255,6 +1255,48 @@ class Runner:
         }]
 
     @classmethod
+    def _peer_connection_layers_snapshot(
+        cls,
+        session: Optional[ISession],
+        *,
+        peer_connected: bool,
+        peer_state: str,
+        secure_link: dict,
+        compress_layer: dict,
+    ) -> list[dict]:
+        """Publish wrapper-layer state for one accepted listener peer.
+
+        Listener transports keep a raw per-peer session for peer-local metrics,
+        while SecureLink and compression state live in the shared wrapper.
+        Do not let that raw metric session replace the visible layer stack.
+        """
+        layers = cls._session_connection_layers_snapshot(session)
+        secure_state = str(secure_link.get("state") or "disconnected").strip().lower()
+        secure_enabled = bool(secure_link.get("enabled"))
+        secure_connected = bool(secure_link.get("authenticated"))
+        compress_enabled = bool(compress_layer.get("enabled"))
+        compress_connected = bool(compress_enabled and (secure_connected if secure_enabled else peer_connected))
+        for layer in layers:
+            name = str(layer.get("layer") or "").strip().lower()
+            if name == "transport":
+                layer["state"] = peer_state
+                layer["connected"] = peer_connected
+                layer["app_ready"] = peer_connected
+            elif name == "peer_address_protocol":
+                layer["connected"] = peer_connected
+                layer["app_ready"] = peer_connected
+            elif name == "secure_link":
+                layer["state"] = secure_state
+                layer["connected"] = secure_connected
+                layer["app_ready"] = secure_connected
+            elif name == "compression":
+                layer["enabled"] = compress_enabled
+                layer["state"] = "connected" if compress_connected else "disconnected"
+                layer["connected"] = compress_connected
+                layer["app_ready"] = compress_connected
+        return layers
+
+    @classmethod
     def _session_app_ready(cls, session: Optional[ISession]) -> bool:
         layers = cls._session_connection_layers_snapshot(session)
         if layers:
@@ -2419,6 +2461,14 @@ class Runner:
                     # the transport-level disabled placeholder.
                     if not bool(secure_link_snapshot.get("enabled")) and bool(outer_secure_link.get("enabled")):
                         secure_link_snapshot = outer_secure_link
+                    compress_layer_snapshot = dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id")))
+                    peer_connection_layers = self._peer_connection_layers_snapshot(
+                        session,
+                        peer_connected=row_connected,
+                        peer_state=row_state,
+                        secure_link=secure_link_snapshot,
+                        compress_layer=compress_layer_snapshot,
+                    )
                     connected_since_unix_ts = self._first_non_null(
                         p.get("connected_since_unix_ts"),
                         secure_link_snapshot.get("connected_since_unix_ts"),
@@ -2438,7 +2488,7 @@ class Runner:
                         "connected": row_connected,
                         "listen": listen_endpoint,
                         "peer": RunnerMuxAggregate._peer_label_for_ui(p.get("peer")),
-                        "connection_layers": self._session_connection_layers_snapshot(row_session),
+                        "connection_layers": peer_connection_layers,
                         "rtt_est_ms": self._first_non_null(p.get("rtt_est_ms"), row_metrics.rtt_est_ms),
                         "transmit_delay_sample_ms": self._first_non_null(
                             p.get("transmit_delay_sample_ms"),
@@ -2449,6 +2499,8 @@ class Runner:
                             row_metrics.transmit_delay_est_ms,
                         ),
                         "connected_since_unix_ts": connected_since_unix_ts,
+                        "observed_public_ip": str(p.get("observed_public_ip") or ""),
+                        "observed_public_port": self._first_non_null(p.get("observed_public_port"), None),
                         "last_incoming_age_seconds": self._first_non_null(
                             p.get("last_incoming_age_seconds"),
                             self._session_last_incoming_age_seconds(row_session),
@@ -2467,7 +2519,7 @@ class Runner:
                         "throttle": p_throttle or {"applicable": False, "active": False, "reason": "no_local_ingress"},
                         "myudp": self._session_retransmit_stats(row_session),
                         "secure_link": secure_link_snapshot,
-                        "compress_layer": dict(self._session_compress_layer_snapshot(session, peer_id=p.get("peer_id"))),
+                        "compress_layer": compress_layer_snapshot,
                         "next_address_attempt_in_seconds": self._first_non_null(
                             p.get("next_address_attempt_in_seconds"),
                             connecting_timers.get("next_address_attempt_in_seconds"),
@@ -2973,6 +3025,16 @@ class Runner:
         return SecureLinkPskSession(session, args, transport_name)
 
     @staticmethod
+    def _wrap_peer_address_protocol(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
+        from .bridge_peer_address import PeerAddressProtocolSession
+
+        return PeerAddressProtocolSession(
+            session,
+            transport_name=transport_name,
+            client_mode=_has_configured_overlay_peer(args, transport=transport_name),
+        )
+
+    @staticmethod
     def _maybe_wrap_compress_layer(args: argparse.Namespace, transport_name: str, session: ISession) -> ISession:
         enabled = bool(getattr(args, "compress_layer", True))
         peer_host = str(getattr(args, "peer", "") or "").strip()
@@ -3010,7 +3072,8 @@ class Runner:
                 session = WebSocketSession.from_args(session_args)
             else:
                 session = UdpSession.from_args(session_args)
-            wrapped = Runner._maybe_wrap_secure_link(session_args, choice, session)
+            wrapped = Runner._wrap_peer_address_protocol(session_args, choice, session)
+            wrapped = Runner._maybe_wrap_secure_link(session_args, choice, wrapped)
             wrapped = Runner._maybe_wrap_compress_layer(session_args, choice, wrapped)
             out.append((choice, wrapped))
         return out

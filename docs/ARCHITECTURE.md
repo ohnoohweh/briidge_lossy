@@ -4,17 +4,18 @@ This document describes the main runtime components and how they contribute to t
 
 ## Architectural layers
 
-The current runtime can be understood in seven layers:
+The current runtime can be understood in eight layers:
 
 1. transport/session layer
-2. secure-link layer
-3. compression layer
-4. reliability and framing layer
-5. channel/service multiplexing layer
-6. runner and process orchestration layer
-7. admin web and observability layer
+2. peer-address protocol layer
+3. secure-link layer
+4. compression layer
+5. reliability and framing layer
+6. channel/service multiplexing layer
+7. runner and process orchestration layer
+8. admin web and observability layer
 
-The secure-link layer now exists as a delivered runtime slice between the transport/session layer and the compression/reliability path. The delivered modes now include both the Phase 1 PSK slice and the Phase 2 certificate-based trust-anchor / certificate-validation slice, so the boundary itself is no longer only a reservation.
+The peer-address protocol is a delivered transport-adjacent layer. It obtains the address observed by the connected peer before optional SecureLink processing, and does not change connection readiness. SecureLink remains a delivered runtime slice above it and below the compression/reliability path.
 
 ## Connection lifecycle propagation and rotation
 
@@ -31,13 +32,13 @@ The contract travels upward with the wrapper stack and carries at least:
 The effective stack and propagation direction are:
 
 ```text
-Transport -> Security -> Compression -> ChannelMux
+Transport -> Peer Address Protocol -> Security -> Compression -> ChannelMux
 ```
 
 The control direction is the reverse and must never skip a layer:
 
 ```text
-ChannelMux -> Compression -> Security -> Transport
+ChannelMux -> Compression -> Security -> Peer Address Protocol -> Transport
 ```
 
 `ChannelMux` owns the policy decision to request a connection rotation. Each
@@ -60,6 +61,14 @@ Transport (`myudp`, WebSocket, QUIC, TCP):
 - on a rotation request, advances to the next configured/resolved peer
   candidate, begins a new disconnected epoch, and continues connection
   attempts until a connected epoch is reported or the candidate budget ends
+
+Peer address protocol:
+
+- is transparent to application payloads and is active for `myudp`, TCP, WebSocket, and QUIC
+- sends one versioned request on each client transport epoch
+- has the receiving peer reply with the actual source IP it observed for that connection; the reply carries either an IPv4 or IPv6 literal
+- clears the value on disconnect and exposes an empty value until a valid reply arrives
+- does not authenticate, encrypt, compress, or delay the secure-link handshake and does not gate `connected` or `app_ready`
 
 Security:
 
@@ -175,6 +184,7 @@ The following component IDs are intended to stay stable so requirements, tests, 
 | `ARC-CMP-005` | Admin web and observability layer | HTTP API/UI, auth/session control, runtime snapshots, logs, and operator visibility |
 | `ARC-CMP-006` | Secure-link layer | Delivered PSK-based and certificate-based authentication, frame protection, replay defense, rekeying, and secure-link diagnostics between transport sessions and `ChannelMux` |
 | `ARC-CMP-007` | Compression layer | Mux-aware per-frame compression/decompression between secure-link/session and `ChannelMux`, no-gain bypass, and compression observability counters |
+| `ARC-CMP-008` | Peer-address protocol layer | Versioned request/reply control frames directly above every supported transport; server-reflected client IPv4/IPv6 observation for peer diagnostics without changing readiness |
 
 ## 1. Transport and session layer
 
@@ -187,6 +197,14 @@ Main contribution:
 - creates the underlying transport session
 - owns peer connectivity state
 - provides send/receive hooks into the higher framing layer
+
+## 1a. Peer-address protocol layer
+
+The peer-address protocol is anchored immediately above the concrete transport and below optional SecureLink. On each client connection epoch it sends a small `OBPA` version-2 request. The server consumes that request and replies with the endpoint address and source port observed by its active transport peer. IPv4 replies contain four address bytes and IPv6 replies contain sixteen, followed by a two-byte network-order port; malformed or unrelated frames pass to the next layer unchanged.
+
+The client records only the most recent valid reply for its current transport epoch. The fields are published as `observed_public_ip` and `observed_public_port` in the active peer snapshot and rendered together as **Own Public IP** in the Transport section of the Peer page. It therefore shows the source tuple actually used by the selected overlay path, rather than a host-wide lookup result. IPv6 is rendered in brackets before the port. A dual-stack listener's IPv4-mapped IPv6 representation (`::ffff:a.b.c.d`) is encoded as the canonical IPv4 address so it remains unambiguous beside an IPv4 resolved peer. The layer is diagnostic only: a missing reply must never hold up overlay connection, SecureLink authentication, or ChannelMux readiness.
+
+For accepted listener peers, the raw child transport session supplies peer-local metrics, while the outer stack supplies the layer inventory. The peer snapshot overlays SecureLink authentication and compression state from that peer's diagnostics onto the outer layer inventory, so a healthy accepted peer cannot be displayed as a disconnected wrapper stack.
 
 Important behaviors:
 
@@ -410,7 +428,7 @@ Primary responsibility:
 
 Current delivered boundary:
 
-- the delivered secure-link runtime sits below `ChannelMux` and above the transport/session layer
+- the delivered secure-link runtime sits below `ChannelMux` and above the peer-address protocol / transport-session boundary
 
 Current contribution:
 

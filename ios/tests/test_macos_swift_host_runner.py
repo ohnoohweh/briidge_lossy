@@ -733,6 +733,16 @@ def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -
     assert "resolveMode: ObstacleBridgePeerAddressResolver.ResolveMode(rawValue: peerResolveFamily)" in packet_tunnel
 
 
+def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
+
+    assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
+    assert "bytes[10] == 0xff, bytes[11] == 0xff" in runtime
+    assert "return (4, Data(bytes.suffix(4)))" in runtime
+    assert "private(set) var observedPublicPort: Int?" in runtime
+    assert "private static func encodePort(_ port: Int) -> Data" in runtime
+
+
 def test_swift_peer_resolution_probe_keeps_ipv4_fallback_for_prefer_ipv6(tmp_path: Path) -> None:
     source_path = tmp_path / "PeerResolutionProbe.swift"
     binary_path = tmp_path / "peer-resolution-probe"
@@ -1510,10 +1520,32 @@ def _recv_tcp_overlay_payload(sock: socket.socket) -> bytes:
     return body[1:]
 
 
+_PEER_ADDRESS_REQUEST = b"OBPA\x02\x01\x00"
+
+
+def _handle_peer_address_request(conn: socket.socket, payload: bytes) -> bool:
+    """Reply to the transport-level public-address discovery control frame."""
+    if payload != _PEER_ADDRESS_REQUEST:
+        return False
+    host, port = conn.getpeername()[:2]
+    try:
+        address = socket.inet_pton(socket.AF_INET, host)
+        family = b"\x04"
+    except OSError:
+        address = socket.inet_pton(socket.AF_INET6, host)
+        family = b"\x06"
+    reply = b"OBPA\x02\x02" + family + address + struct.pack(">H", port)
+    conn.sendall(_pack_tcp_overlay_payload(reply))
+    return True
+
+
 def _recv_mux_frame(sock: socket.socket) -> tuple[int, int, int, int, bytes]:
-    payload = _recv_tcp_overlay_payload(sock)
-    chan_id, proto, counter, mtype, size = struct.unpack(">HBHBH", payload[:8])
-    return chan_id, proto, counter, mtype, payload[8 : 8 + size]
+    while True:
+        payload = _recv_tcp_overlay_payload(sock)
+        if _handle_peer_address_request(sock, payload):
+            continue
+        chan_id, proto, counter, mtype, size = struct.unpack(">HBHBH", payload[:8])
+        return chan_id, proto, counter, mtype, payload[8 : 8 + size]
 
 
 class _TCPOverlayPeer:
@@ -1673,6 +1705,8 @@ class _WrappedTCPOverlayPeer(_TCPOverlayPeer):
         conn = self.wait_connected()
         while not self._stop.is_set():
             payload = _recv_tcp_overlay_payload(conn)
+            if _handle_peer_address_request(conn, payload):
+                continue
             sl_type, session_id, counter, body = self._parse_sl_frame(payload)
             if sl_type == 1:
                 if len(body) < 34 or body[32] != 1:
@@ -1704,6 +1738,8 @@ class _WrappedTCPOverlayPeer(_TCPOverlayPeer):
         while not self._stop.is_set():
             try:
                 payload = _recv_tcp_overlay_payload(conn)
+                if _handle_peer_address_request(conn, payload):
+                    continue
                 sl_type, session_id, counter, body = self._parse_sl_frame(payload)
             except (AssertionError, OSError, TimeoutError, socket.timeout, struct.error):
                 return
@@ -5026,6 +5062,11 @@ def test_macos_swift_host_runner_udp_ownserver_proxies_wrapped_overlay_chain(tmp
         _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
         overlay_peer.wait_connected()
         overlay_peer.start_mux_echo_loop()
+        _wait_http_condition(
+            f"http://127.0.0.1:{status_port}/api/peers",
+            lambda doc: bool(doc.get("peers")) and bool(doc["peers"][0].get("secure_link", {}).get("authenticated")),
+            timeout_sec=20.0,
+        )
 
         client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         client.settimeout(2.0)

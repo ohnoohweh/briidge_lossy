@@ -1590,16 +1590,28 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
                 self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
                 self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
+                self.assertIn("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", text)
+                uptime_index = text.index("renderMetric('Connection Uptime'")
+                self.assertLess(
+                    uptime_index,
+                    text.index("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", uptime_index),
+                )
+                self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr));", (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8"))
                 self.assertIn("renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected'", text)
                 self.assertIn("renderMetric('Reported Status', layerStatus('secure_link')", text)
                 self.assertIn("renderMetric('SecureLink Phase', secureLink.state", text)
                 self.assertIn("renderMetric('Reported Status', layerStatus('compression')", text)
+                self.assertIn("if (normalized === 'connected') return 'role-pill role-server';", text)
+                self.assertIn("if (normalized === 'disconnected') return 'role-pill role-disconnected';", text)
+                self.assertIn(".conn-table .role-disconnected", (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8"))
                 self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
                 self.assertIn("const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer;", text)
                 self.assertIn("const showCompressionRow = !isListeningPeer && (compressEnabled || compressHasData);", text)
                 self.assertIn("const channelMuxMetrics = !isListeningPeer ? renderMetricStack", text)
                 self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", text)
                 self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", text)
+                self.assertIn("const negative = numeric < 0;", text)
+                self.assertIn("return negative ? `-${formatted}` : formatted;", text)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
@@ -1780,6 +1792,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("startRestartCountdown(delaySec, { embedded: Boolean(j.restart_embedded) });", text)
                 self.assertIn("function scheduleRestartProbe(maxProbeSeconds = 180)", text)
                 self.assertIn("fetch('/api/meta', {", text)
+                self.assertIn("finishRestartGate();", text)
 
     def test_config_save_requires_challenge_bound_to_update_block(self):
         args = argparse.Namespace(

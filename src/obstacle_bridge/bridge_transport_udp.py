@@ -1862,6 +1862,7 @@ class UdpSession(ISession):
         self._peer_candidate_index: int = 0
         self._peer_candidate_cycle: int = 0
         self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
+        self._socket_rebuild_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
         self.inner_session = MyUDP2Session(max_in_flight=args.max_inflight, proto=self._proto_state)
@@ -2218,24 +2219,19 @@ class UdpSession(ISession):
             family = _listener_family_for_host(listen_host)
         listen = (listen_host, listen_port)
 
-        def _factory():
-            if self._listener_mode:
-                return self._ListenerDatagramProtocol(self)
-            self._log.debug(f"[UDP/SESSION] Initiate Peerprotocol with peer {peer}")
-            return PeerProtocol(
-                self.inner_session,
-                self._on_control_needed,
-                self._on_complete,
+        if not self._listener_mode:
+            if await self._open_client_datagram_endpoint(
+                listen_host=listen_host,
+                listen_port=listen_port,
                 peer=peer,
-                proto=self._proto_state,
-                on_peer_set=self._on_peer_set,
-                on_peer_rx_bytes=self._on_peer_rx_bytes,
-                on_peer_tx_bytes=self._on_peer_tx_bytes,
-                on_rtt_success=self._on_rtt_success,
-                on_state_change=self._on_state_change,
-                on_send_error=self._on_peer_send_error,
+                peer_family=peer_family,
                 allow_ipv4_mapped_send=allow_ipv4_mapped_send,
-            )
+            ) and len(self._peer_candidates) > 1 and self._peer_candidate_fallback_task is None:
+                self._peer_candidate_fallback_task = self._loop.create_task(self._peer_candidate_fallback_loop())
+            return
+
+        def _factory():
+            return self._ListenerDatagramProtocol(self)
 
         sock = None
 
@@ -2321,30 +2317,153 @@ class UdpSession(ISession):
             return
 
         self._transport = transport
-        if self._listener_mode:
-            self._proto = None
-            if self._listener_peer_cleanup_task is None:
-                self._listener_peer_cleanup_task = self._loop.create_task(self._listener_peer_cleanup_loop())
-        else:
-            self._proto = protocol
-            self.peer_proto = protocol
+        self._proto = None
+        if self._listener_peer_cleanup_task is None:
+            self._listener_peer_cleanup_task = self._loop.create_task(self._listener_peer_cleanup_loop())
 
-        # Model B:
-        # Seed only the protocol-layer peer. The UDP socket itself stays unconnected.
-        if (not self._listener_mode) and peer is not None:
-            try:
-                host, port = peer
-                self._on_peer_set(host, port)
-                sp = getattr(self._proto, "send_port", None)
-                if sp:
-                    sp.set_peer((host, port))
-            except Exception as e:
-                self._log.debug("[UdpSession] start failed on set_peer %r", e)
-            if len(self._peer_candidates) > 1 and self._peer_candidate_fallback_task is None:
-                self._peer_candidate_fallback_task = self._loop.create_task(self._peer_candidate_fallback_loop())
+    async def _open_client_datagram_endpoint(
+        self,
+        *,
+        listen_host: str,
+        listen_port: int,
+        peer: Optional[Tuple[str, int]],
+        peer_family: int,
+        allow_ipv4_mapped_send: bool,
+    ) -> bool:
+        """Open a fresh unconnected UDP endpoint for one client peer epoch."""
+        if self._loop is None or peer is None:
+            return False
+        if (
+            listen_host in ('::', '0.0.0.0')
+            and peer_family in (socket.AF_INET, socket.AF_INET6)
+        ):
+            family = peer_family
+            listen_host = _wildcard_host_for_family(peer_family)
+        else:
+            family = _listener_family_for_host(listen_host)
+        listen = (listen_host, listen_port)
+
+        def _factory():
+            self._log.debug("[UDP/SESSION] Initiate PeerProtocol with peer %r", peer)
+            return PeerProtocol(
+                self.inner_session,
+                self._on_control_needed,
+                self._on_complete,
+                peer=peer,
+                proto=self._proto_state,
+                on_peer_set=self._on_peer_set,
+                on_peer_rx_bytes=self._on_peer_rx_bytes,
+                on_peer_tx_bytes=self._on_peer_tx_bytes,
+                on_rtt_success=self._on_rtt_success,
+                on_state_change=self._on_state_change,
+                on_send_error=self._on_peer_send_error,
+                allow_ipv4_mapped_send=allow_ipv4_mapped_send,
+            )
+
+        sock = None
+        try:
+            if os.name == "nt":
+                win_family = family if family != socket.AF_UNSPEC else (
+                    socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+                )
+                sock = socket.socket(win_family, socket.SOCK_DGRAM)
+                sock.setblocking(False)
+                if win_family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                    with contextlib.suppress(Exception):
+                        sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                sock.bind(listen)
+                with contextlib.suppress(Exception):
+                    sock.ioctl(socket.SIO_UDP_CONNRESET, False)
+                transport, protocol = await self._loop.create_datagram_endpoint(_factory, sock=sock)
+            else:
+                use_prebuilt_socket = hasattr(socket, "SO_NOSIGPIPE") or family == socket.AF_INET6
+                if use_prebuilt_socket:
+                    sock_family = family if family != socket.AF_UNSPEC else (
+                        socket.AF_INET6 if ":" in listen_host else socket.AF_INET
+                    )
+                    sock = socket.socket(sock_family, socket.SOCK_DGRAM)
+                    sock.setblocking(False)
+                    if sock_family == socket.AF_INET6 and hasattr(socket, "IPV6_V6ONLY"):
+                        with contextlib.suppress(Exception):
+                            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+                    with contextlib.suppress(Exception):
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_NOSIGPIPE, 1)
+                    sock.bind(listen)
+                    transport, protocol = await self._loop.create_datagram_endpoint(_factory, sock=sock)
+                else:
+                    transport, protocol = await self._loop.create_datagram_endpoint(
+                        _factory,
+                        local_addr=listen,
+                        family=family,
+                    )
+        except Exception as exc:
+            self._log.error(
+                "[UDP/SESSION] client endpoint create failed local=%r peer=%r family=%r error=%r",
+                listen,
+                peer,
+                family,
+                exc,
+            )
+            if sock is not None:
+                with contextlib.suppress(Exception):
+                    sock.close()
+            return False
+
+        self._transport = transport
+        self._proto = protocol
+        self.peer_proto = protocol
+        host, port = peer
+        self._on_peer_set(host, port)
+        send_port = getattr(protocol, "send_port", None)
+        if send_port is not None:
+            send_port.set_peer((host, port))
+        return True
+
+    def _schedule_client_socket_rebuild(self, peer_info: Tuple[str, int, int]) -> bool:
+        """Replace the client UDP socket so rotation has restart-like transport state."""
+        if self._listener_mode or self._loop is None or self._loop.is_closed():
+            return False
+        prior_task = self._socket_rebuild_task
+        if prior_task is not None and not prior_task.done():
+            prior_task.cancel()
+        old_transport = self._transport
+        self._transport = None
+        self._proto = None
+        self.peer_proto = None
+        if old_transport is not None:
+            old_transport.close()
+        self._socket_rebuild_task = self._loop.create_task(self._rebuild_client_socket(peer_info))
+        return True
+
+    async def _rebuild_client_socket(self, peer_info: Tuple[str, int, int]) -> None:
+        try:
+            await asyncio.sleep(0)
+            host, port, family = peer_info
+            opened = await self._open_client_datagram_endpoint(
+                listen_host=_strip_brackets(getattr(self._args, "udp_bind", "::")),
+                listen_port=int(getattr(self._args, "udp_own_port", 4433)),
+                peer=(host, port),
+                peer_family=family,
+                allow_ipv4_mapped_send=_peer_resolve_mode(self._args, "udp_peer_resolve_family") in {"ipv6", "prefer-ipv6"},
+            )
+            if opened:
+                self._log.info(
+                    "[UDP/SESSION] rebuilt client socket for peer rotation peer=%r",
+                    (host, port),
+                )
+        except asyncio.CancelledError:
+            return
+        finally:
+            if self._socket_rebuild_task is asyncio.current_task():
+                self._socket_rebuild_task = None
 
     async def stop(self) -> None:
         try:
+            if self._socket_rebuild_task is not None:
+                self._socket_rebuild_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await self._socket_rebuild_task
+                self._socket_rebuild_task = None
             if self._peer_candidate_fallback_task is not None:
                 self._peer_candidate_fallback_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
@@ -2603,7 +2722,7 @@ class UdpSession(ISession):
         return deduped
 
     def _rotate_to_next_peer_candidate(self, *, count_cycle: bool = False) -> bool:
-        if self._listener_mode or self._proto is None or self._proto.send_port is None:
+        if self._listener_mode:
             return False
         if not self._peer_candidates:
             return False
@@ -2631,6 +2750,11 @@ class UdpSession(ISession):
             self._proto_state._last_rx_tx_ns = 0
             self._proto_state._last_rx_wall_ns = 0
         host, port, _family = new_peer
+        if self._schedule_client_socket_rebuild(new_peer):
+            self._on_peer_set(host, port)
+            return True
+        if self._proto is None or self._proto.send_port is None:
+            return False
         self._on_peer_set(host, port)
         self._proto.send_port.set_peer((host, port))
         with contextlib.suppress(Exception):

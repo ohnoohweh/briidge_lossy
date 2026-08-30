@@ -1069,6 +1069,8 @@ What the admin web shows:
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
 - A peer-session table that separates Transport endpoint/state, Protocol status and timing, SecureLink reported status and phase, Compression reported status, ChannelMux traffic/channel counts plus candidate/restart timers, and TUN throttle diagnostics. Transport, Protocol, and ChannelMux remain visible for every non-listening peer, while enabled SecureLink and Compression layers remain visible throughout failed or reconnecting states. Connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
 - Python `myudp` peer diagnostics include the myUDP2 stream-record, chunk, batch, and queue budgets plus live batch/chunk/stream-byte totals, queue age, retransmitted-chunk, malformed-batch, and malformed-stream counters. These fields describe the Python reference runtime; Swift myUDP2 parity remains a release prerequisite.
+- Transport State, Protocol Status, and layer Reported Status pills use green for connected and red for disconnected, keeping transitions distinct from definitive connection state.
+- Accepted listener peers retain their peer-local transport metrics while their SecureLink and compression pills use that peer’s authenticated wrapper state.
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
 - The dedicated TUN / Routing view also shows shared-TUN ownership maps, active channel bindings, interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
@@ -1095,6 +1097,10 @@ What the admin web shows:
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
 When the outer lifecycle remains disconnected, ChannelMux rotates the lower stack every 30 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
+
+### Own public IP
+
+Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address and port it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the peer-observed IPv4 or IPv6 source tuple for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. IPv6 uses `[address]:port`; IPv4-mapped dual-stack observations are published as normal IPv4 addresses. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.
 
 ### Compression layer
 
@@ -1183,7 +1189,7 @@ python -m obstacle_bridge --config ObstacleBridge.cfg
 
 Launcher options: `--interval` (seconds between restarts when the process exits with code 77), `--no-redirect`, and `--command`.
 Any unknown launcher options are forwarded to `bridge.py`.
-During delayed restart windows (`exit code 77`), the launcher now temporarily serves a small holding page on the configured WebAdmin bind/port so operators still get a response with a countdown until the supervised runtime starts again.
+During delayed restart windows (`exit code 77`), the launcher keeps serving `/api/status` on the configured WebAdmin bind/port. It publishes the remaining restart time as negative `uptime_sec`, allowing an already-open WebAdmin page to show the countdown without loading a special holding page.
 When the default redirected mode is active and startup fails early, the launcher now replays the hidden child stderr tail so issues such as an inaccessible `--log-file` path are still shown to the operator.
 
 #### Current secure-link quick start
@@ -1284,7 +1290,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_code=1`
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
-- if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, the session remains `handshaking` rather than surfacing as authenticated; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
+- if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, SecureLink remains `handshaking` and reports `Disconnected` to ChannelMux rather than surfacing as authenticated or connected; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
 - if an already-authenticated secure-link session later fails closed, SecureLink reports `Disconnected` and ChannelMux requests one lower-layer rotation after 30 seconds; raw transport liveness does not reset the three-cycle restart budget until the outer stack reports `Connected`. An operator-triggered cert local-identity reload requests that same cascaded rotation immediately so the replacement identity can authenticate without waiting for the failure timer
 
 Current WebAdmin gap to close in a future update:
@@ -1494,9 +1500,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `58` | `915` |
-| macOS Swift app | `1` | `54` |
-| iOS app/extension | `26` | `170` |
+| Python CLI/runtime, including macOS Python | `57` | `903` |
+| macOS Swift app | `1` | `55` |
+| iOS app/extension | `26` | `172` |
 
 #### Requirement traceability
 
@@ -1504,15 +1510,15 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
-| iOS app/extension | `10/92 = 10.9%` | `14/92 = 15.2%` | `20/92 = 21.7%` |
+| iOS app/extension | `10/92 = 10.9%` | `16/92 = 17.4%` | `21/92 = 22.8%` |
 
 #### Architecture traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
-| macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `6/7 = 85.7%` | `6/7 = 85.7%` |
+| Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
+| macOS Swift app | `1/8 = 12.5%` | `3/8 = 37.5%` | `3/8 = 37.5%` |
+| iOS app/extension | `4/8 = 50.0%` | `6/8 = 75.0%` | `6/8 = 75.0%` |
 
 The supporting manifests remain shared:
 
