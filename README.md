@@ -1492,9 +1492,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `57` | `900` |
+| Python CLI/runtime, including macOS Python | `58` | `911` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `25` | `169` |
+| iOS app/extension | `26` | `170` |
 
 #### Requirement traceability
 
@@ -1502,7 +1502,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
-| iOS app/extension | `10/92 = 10.9%` | `13/92 = 14.1%` | `19/92 = 20.7%` |
+| iOS app/extension | `10/92 = 10.9%` | `14/92 = 15.2%` | `20/92 = 21.7%` |
 
 #### Architecture traceability
 
@@ -1510,7 +1510,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `5/7 = 71.4%` | `5/7 = 71.4%` |
+| iOS app/extension | `4/7 = 57.1%` | `6/7 = 85.7%` | `6/7 = 85.7%` |
 
 The supporting manifests remain shared:
 
