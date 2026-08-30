@@ -65,6 +65,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var peerCandidateIndex = 0
     private var resolvedPeerHost = ""
     private var observedPeerHost = ""
+    private var observedPeerPort = 0
     private var resolvedPeerPort = 0
     private var resolvedPeerFamily = ""
     private var secureLinkHandshakePrimed = false
@@ -547,6 +548,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         case .ready:
             let endpoint = ObstacleBridgeOverlayConnectionSupport.endpointDescription(connection.endpoint)
             observedPeerHost = endpoint.host
+            observedPeerPort = endpoint.port
             let snapshot = overlayRuntime.acceptServerPeer(peerHost: endpoint.host, peerPort: endpoint.port, socketPresent: true)
             overlayPeerID = snapshot.peerID
             overlayConnected = snapshot.overlayConnected
@@ -722,7 +724,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private func handleOverlayTransportPayload(_ payload: Data) {
         lastOverlayRxWallNS = DispatchTime.now().uptimeNanoseconds
         if let adapter = overlayLayerTransportAdapter {
-            let snapshot = adapter.handleInboundFrame(payload, observedPeerHost: observedPeerHost)
+            let snapshot = adapter.handleInboundFrame(
+                payload,
+                observedPeerHost: observedPeerHost,
+                observedPeerPort: observedPeerPort
+            )
             for frame in snapshot.emittedFrames {
                 sendOverlayTransportPayload(frame)
             }

@@ -875,7 +875,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             if let adapter = overlayLayerTransportAdapter {
                 let snapshot = adapter.handleInboundFrame(
                     payload,
-                    observedPeerHost: currentPeerAddress?.host
+                    observedPeerHost: currentPeerAddress?.host,
+                    observedPeerPort: currentPeerAddress?.port
                 )
                 for emitted in snapshot.emittedFrames {
                     sendOverlayTransportPayload(emitted)

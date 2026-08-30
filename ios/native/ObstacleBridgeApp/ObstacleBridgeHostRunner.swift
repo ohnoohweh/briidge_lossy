@@ -1338,6 +1338,7 @@ final class ObstacleBridgeHostRunner {
             "resolved_peer_port": resolvedPeer?["port"] ?? NSNull(),
             "resolved_peer_family": resolvedPeer?["family"] ?? NSNull(),
             "observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? "",
+            "observed_public_port": sharedOverlayLayerTransportAdapter?.observedPublicPortSnapshot() ?? NSNull(),
             "decode_errors": 0,
             "inflight": protocolStats["inflight"] ?? 0,
             "last_incoming_age_seconds": ObstacleBridgeAdminSnapshotSupport.peerLastIncomingAgeSeconds(

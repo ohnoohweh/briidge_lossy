@@ -178,6 +178,10 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         peerAddressRuntime?.observedPublicIP ?? ""
     }
 
+    func observedPublicPortSnapshot() -> Int? {
+        peerAddressRuntime?.observedPublicPort
+    }
+
     func requestSecureLinkRekey() throws -> OutboundSnapshot {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
@@ -222,6 +226,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
                 "connected": transportLifecycle.state == .connected,
                 "app_ready": transportLifecycle.state == .connected,
                 "observed_public_ip": peerAddressRuntime.observedPublicIP,
+                "observed_public_port": peerAddressRuntime.observedPublicPort ?? NSNull(),
             ], at: min(1, layers.count))
         }
         if compressionFailureEpoch == transportLifecycle.epoch, !layers.isEmpty {
@@ -289,13 +294,18 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         return OutboundSnapshot(emittedFrames: [outboundPayload])
     }
 
-    func handleInboundFrame(_ payload: Data, observedPeerHost: String? = nil) -> InboundSnapshot {
+    func handleInboundFrame(
+        _ payload: Data,
+        observedPeerHost: String? = nil,
+        observedPeerPort: Int? = nil
+    ) -> InboundSnapshot {
         var deliveredPayloads: [Data] = []
         var emittedFrames: [Data] = []
         if let peerAddressRuntime {
             let peerAddressSnapshot = peerAddressRuntime.handleInboundFrame(
                 payload,
-                observedPeerHost: observedPeerHost
+                observedPeerHost: observedPeerHost,
+                observedPeerPort: observedPeerPort
             )
             if peerAddressSnapshot.consumed {
                 return InboundSnapshot(

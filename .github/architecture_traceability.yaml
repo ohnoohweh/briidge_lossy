@@ -653,6 +653,7 @@ ARC-CMP-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings
 
 ARC-CMP-008:
+  # Peer-address framing covers the server-observed source address and port.
   unit_tests:
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv4_without_delivering_control_frames
     - tests/unit/test_peer_address_protocol.py::test_server_reflects_observed_ipv6_without_delivering_control_frames

@@ -57,6 +57,7 @@ def test_swift_admin_surfaces_consume_layered_readiness() -> None:
     assert 'currentOverlayOwner()?.owner.appReady()' in host_runner
     assert '"connection_layers": connectionLayers' in host_runner
     assert '"observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? ""' in host_runner
+    assert '"observed_public_port": sharedOverlayLayerTransportAdapter?.observedPublicPortSnapshot() ?? NSNull()' in host_runner
 
     assert "static func connectionLayers(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [[String: Any]]" in admin_support
     assert "static func appReady(from transportRuntime: [String: Any], preferredKind: String? = nil) -> Bool" in admin_support
@@ -64,3 +65,4 @@ def test_swift_admin_surfaces_consume_layered_readiness() -> None:
     assert '"connection_layers": ObstacleBridgeAdminSnapshotSupport.connectionLayers(' in packet_tunnel
     assert "let layeredReady = ObstacleBridgeAdminSnapshotSupport.appReady(" in packet_tunnel
     assert '"observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? ""' in packet_tunnel
+    assert '"observed_public_port": sharedOverlayLayerTransportAdapter?.observedPublicPortSnapshot() ?? NSNull()' in packet_tunnel

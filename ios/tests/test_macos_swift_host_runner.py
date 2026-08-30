@@ -739,6 +739,8 @@ def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:
     assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
     assert "bytes[10] == 0xff, bytes[11] == 0xff" in runtime
     assert "return (4, Data(bytes.suffix(4)))" in runtime
+    assert "private(set) var observedPublicPort: Int?" in runtime
+    assert "private static func encodePort(_ port: Int) -> Data" in runtime
 
 
 def test_swift_peer_resolution_probe_keeps_ipv4_fallback_for_prefer_ipv6(tmp_path: Path) -> None:

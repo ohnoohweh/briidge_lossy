@@ -1466,6 +1466,14 @@ function fmtTunRoutingRouteList(routes) {
     .join('\n') || 'n/a';
 }
 
+function fmtOwnPublicEndpoint(ip, port) {
+  const host = String(ip || '').trim();
+  const numericPort = Number(port);
+  if (!host) return 'n/a';
+  if (!Number.isInteger(numericPort) || numericPort < 1 || numericPort > 65535) return host;
+  return host.includes(':') ? `[${host}]:${numericPort}` : `${host}:${numericPort}`;
+}
+
 function detailPillClass(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'connected') return 'role-pill role-server';
@@ -2957,14 +2965,14 @@ function renderPeerTable(rows) {
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds), { className: 'peer-transport-quarter' }),
-        renderMetric('Own Public IP', row.observed_public_ip, { className: 'peer-transport-half' }),
+        renderMetric('Own Public IP', fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port), { className: 'peer-transport-half' }),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {
       connectionLines.push([
         renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts), { className: 'peer-transport-quarter' }),
         renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds), { className: 'peer-transport-quarter' }),
-        renderMetric('Own Public IP', row.observed_public_ip, { className: 'peer-transport-half' }),
+        renderMetric('Own Public IP', fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port), { className: 'peer-transport-half' }),
       ]);
     }
     const connectionLayers = Array.isArray(row.connection_layers) ? row.connection_layers : [];

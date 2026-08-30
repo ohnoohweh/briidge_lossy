@@ -16,7 +16,7 @@ class PeerAddressProtocolSession(ISession):
 
     _HEADER = struct.Struct(">4sBBB")
     _MAGIC = b"OBPA"
-    _VERSION = 1
+    _VERSION = 2
     _TYPE_REQUEST = 1
     _TYPE_REPLY = 2
 
@@ -27,6 +27,7 @@ class PeerAddressProtocolSession(ISession):
         self._outer_on_app = None
         self._outer_on_state = None
         self._observed_public_ip = ""
+        self._observed_public_port = 0
         self._request_sent = False
         self._log = logging.getLogger("peer_address_protocol")
 
@@ -38,7 +39,7 @@ class PeerAddressProtocolSession(ISession):
         return cls._HEADER.pack(cls._MAGIC, cls._VERSION, cls._TYPE_REQUEST, 0)
 
     @classmethod
-    def _reply_frame(cls, host: str) -> bytes:
+    def _reply_frame(cls, host: str, port: int) -> bytes:
         address = ipaddress.ip_address(str(host).split("%", 1)[0])
         # A dual-stack listener can report an IPv4 client as ::ffff:a.b.c.d.
         # Publish that as IPv4: it is the same network path and must match the
@@ -46,10 +47,10 @@ class PeerAddressProtocolSession(ISession):
         if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
             address = address.ipv4_mapped
         family = 4 if address.version == 4 else 6
-        return cls._HEADER.pack(cls._MAGIC, cls._VERSION, cls._TYPE_REPLY, family) + address.packed
+        return cls._HEADER.pack(cls._MAGIC, cls._VERSION, cls._TYPE_REPLY, family) + address.packed + struct.pack(">H", port)
 
     @classmethod
-    def _parse_control_frame(cls, payload: bytes) -> Optional[tuple[int, str]]:
+    def _parse_control_frame(cls, payload: bytes) -> Optional[tuple[int, str, int]]:
         if len(payload) < cls._HEADER.size:
             return None
         magic, version, frame_type, family = cls._HEADER.unpack(payload[: cls._HEADER.size])
@@ -57,12 +58,14 @@ class PeerAddressProtocolSession(ISession):
             return None
         body = payload[cls._HEADER.size :]
         if frame_type == cls._TYPE_REQUEST and family == 0 and not body:
-            return frame_type, ""
+            return frame_type, "", 0
         expected = 4 if family == 4 else 16 if family == 6 else 0
-        if frame_type != cls._TYPE_REPLY or expected == 0 or len(body) != expected:
+        if frame_type != cls._TYPE_REPLY or expected == 0 or len(body) != expected + 2:
             return None
         with contextlib.suppress(ValueError):
-            return frame_type, str(ipaddress.ip_address(body))
+            port = struct.unpack(">H", body[expected:])[0]
+            if 1 <= port <= 65535:
+                return frame_type, str(ipaddress.ip_address(body[:expected])), port
         return None
 
     def set_on_app_payload(self, cb) -> None:
@@ -110,12 +113,13 @@ class PeerAddressProtocolSession(ISession):
         if not connected:
             self._request_sent = False
             self._observed_public_ip = ""
+            self._observed_public_port = 0
         elif self._client_mode and not self._request_sent:
             self._request_sent = bool(self._inner.send_app(self._request_frame()))
         if callable(self._outer_on_state):
             self._outer_on_state(bool(connected))
 
-    def _observed_peer_host(self, peer_id: Optional[int]) -> str:
+    def _observed_peer_endpoint(self, peer_id: Optional[int]) -> tuple[str, int]:
         getter = getattr(self._inner, "get_overlay_peers_snapshot", None)
         rows = list(getter() or []) if callable(getter) else []
         for row in rows:
@@ -125,9 +129,12 @@ class PeerAddressProtocolSession(ISession):
                 continue
             endpoint = row.get("peer")
             host = endpoint.get("host") if isinstance(endpoint, dict) else ""
+            port = endpoint.get("port") if isinstance(endpoint, dict) else 0
             with contextlib.suppress(ValueError):
-                return str(ipaddress.ip_address(str(host).split("%", 1)[0]))
-        return ""
+                port = int(port)
+                if 1 <= port <= 65535:
+                    return str(ipaddress.ip_address(str(host).split("%", 1)[0])), port
+        return "", 0
 
     def _deliver_outer(self, payload: bytes, peer_id: Optional[int]) -> None:
         if not callable(self._outer_on_app):
@@ -142,19 +149,21 @@ class PeerAddressProtocolSession(ISession):
         if parsed is None:
             self._deliver_outer(payload, peer_id)
             return
-        frame_type, address = parsed
+        frame_type, address, port = parsed
         if frame_type == self._TYPE_REQUEST and not self._client_mode:
-            observed = self._observed_peer_host(peer_id)
-            if observed:
-                self._inner.send_app(self._reply_frame(observed), peer_id=peer_id)
+            observed_host, observed_port = self._observed_peer_endpoint(peer_id)
+            if observed_host:
+                self._inner.send_app(self._reply_frame(observed_host, observed_port), peer_id=peer_id)
             return
         if frame_type == self._TYPE_REPLY and self._client_mode:
             self._observed_public_ip = address
+            self._observed_public_port = port
             self._log.info(
-                "[PEER-ADDRESS] server-observed source transport=%s family=ipv%s address=%s",
+                "[PEER-ADDRESS] server-observed source transport=%s family=ipv%s address=%s port=%s",
                 self._transport_name,
                 ipaddress.ip_address(address).version,
                 address,
+                port,
             )
             return
 
@@ -166,6 +175,7 @@ class PeerAddressProtocolSession(ISession):
     async def stop(self) -> None:
         self._request_sent = False
         self._observed_public_ip = ""
+        self._observed_public_port = 0
         await self._inner.stop()
 
     async def wait_connected(self, timeout: Optional[float] = None) -> bool:
@@ -197,6 +207,7 @@ class PeerAddressProtocolSession(ISession):
             for row in rows:
                 if not bool(row.get("listening")) and int(row.get("peer_id", 0)) == 0:
                     row["observed_public_ip"] = self._observed_public_ip
+                    row["observed_public_port"] = self._observed_public_port or None
         return rows
 
     def get_connection_layers_snapshot(self) -> list[dict[str, object]]:
@@ -212,6 +223,7 @@ class PeerAddressProtocolSession(ISession):
                 "connected": transport_connected,
                 "app_ready": transport_connected,
                 "observed_public_ip": self._observed_public_ip,
+                "observed_public_port": self._observed_public_port or None,
             }
         )
         return layers

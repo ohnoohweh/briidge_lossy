@@ -2450,6 +2450,7 @@ class Runner:
                         ),
                         "connected_since_unix_ts": connected_since_unix_ts,
                         "observed_public_ip": str(p.get("observed_public_ip") or ""),
+                        "observed_public_port": self._first_non_null(p.get("observed_public_port"), None),
                         "last_incoming_age_seconds": self._first_non_null(
                             p.get("last_incoming_age_seconds"),
                             self._session_last_incoming_age_seconds(row_session),

@@ -1590,11 +1590,11 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
                 self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
                 self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
-                self.assertIn("renderMetric('Own Public IP', row.observed_public_ip, { className: 'peer-transport-half' })", text)
+                self.assertIn("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", text)
                 uptime_index = text.index("renderMetric('Connection Uptime'")
                 self.assertLess(
                     uptime_index,
-                    text.index("renderMetric('Own Public IP', row.observed_public_ip, { className: 'peer-transport-half' })", uptime_index),
+                    text.index("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", uptime_index),
                 )
                 self.assertIn("grid-template-columns: repeat(4, minmax(0, 1fr));", (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8"))
                 self.assertIn("renderMetric('Protocol Status', row.connected ? 'connected' : 'disconnected'", text)
