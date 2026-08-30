@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Bidirectional overlay with multiplexed UDP+TCP fan-in/fan-out over one reliable Session.
+Bidirectional overlay with multiplexed UDP+TCP fan-in/fan-out over one reliable transport.
 
-ChannelMux (shim between Runner and Session):
+ChannelMux (shim between Runner and transport):
 - Offers UDP and TCP server sockets simultaneously (multi-client).
 - TCP channels carry OPEN/DATA/CLOSE control.
 - UDP channels are created on first datagram from a client and expire after 20s idle.
 - Client roles use dynamic (ephemeral) ports on the local side by default.
 
-Overlay/Session synchronization:
+Overlay transport synchronization:
 - DISCONNECTED:
   * Stop accepting new UDP/TCP connections
   * Close all existing UDP/TCP channels and clear mappings
@@ -30,7 +30,7 @@ Instructions to AI for changes:
 - Only replace Python >3.9 syntax with 3.9-safe equivalents.
 - Return a patch or only the exact modified lines.
 
-Reliability/RTT is handled by Session/PeerProtocol in this module.
+Reliability/RTT is handled by myUDP2/PeerProtocol in this module.
 """
 from __future__ import annotations
 
@@ -441,7 +441,7 @@ from .bridge_debug_logging import (
 )
 
 # === ISession abstraction and UDP adapter (Milestone A; no behavior change) ===
-# Keeps everything in this file; UdpSession simply packages the existing Session+PeerProtocol
+# Keeps everything in this file; UdpSession packages the myUDP2 peer runtime.
 # while exposing a small, transport-agnostic surface for ChannelMux and Runner.  
 from typing import Protocol, Callable, Optional, Awaitable
 
@@ -465,6 +465,17 @@ class SessionMetrics:
     expected: Optional[int]        = None
     peer_missed_count: Optional[int] = None
     our_missed_count: Optional[int]  = None
+    batch_datagrams_sent: Optional[int] = None
+    batch_chunks_sent: Optional[int] = None
+    batch_datagrams_received: Optional[int] = None
+    batch_chunks_received: Optional[int] = None
+    malformed_batches: Optional[int] = None
+    batch_stream_bytes_sent: Optional[int] = None
+    batch_stream_bytes_received: Optional[int] = None
+    queued_stream_bytes: Optional[int] = None
+    stream_queue_age_ms: Optional[float] = None
+    retransmitted_chunks: Optional[int] = None
+    stream_decode_errors: Optional[int] = None
 
 class ISession(Protocol):
     # lifecycle
@@ -473,9 +484,10 @@ class ISession(Protocol):
     async def wait_connected(self, timeout: Optional[float] = None) -> bool: ...
     def is_connected(self) -> bool: ...
 
-    # application payload (Mux -> Session)
+    # application payload (Mux -> transport)
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int: ...
     def get_max_app_payload_size(self) -> int: ...
+    def get_stream_record_limit(self) -> int: ...
 
     # callback wiring
     def set_on_app_payload(self, cb: Callable[[bytes], None]) -> None: ...
@@ -506,13 +518,10 @@ from .bridge_transport_udp import (
     PTYPE_DATA,
     PTYPE_CONTROL,
     UDP_FRAME_SIZE,
-    DATA_UNPADDED_HEADER_SIZE,
     CONTROL_MAX_MISSED,
-    DATA_MAX_CHUNK,
     STREAM_RECORD_HEADER_BYTES,
     MAX_STREAM_RECORD_BYTES,
-    FRAME_FIRST,
-    FRAME_CONT,
+    MYUDP2_MAX_CHUNK_BYTES,
     now_ns,
     _monotonic_age_seconds_from_ns,
     ring_cmp,
@@ -521,7 +530,6 @@ from .bridge_transport_udp import (
     c16_range,
     highest_ring,
     ahead_distance,
-    DataPacket,
     StreamDecodeError,
     StreamSerializer,
     StreamDeserializer,
@@ -529,9 +537,8 @@ from .bridge_transport_udp import (
     StreamChunk,
     MyUDP2BatchCodec,
     ControlPacket,
-    Reassembly,
     SendPort,
-    Session,
+    MyUDP2Session,
     PeerProtocol,
     UdpSession,
 )

@@ -13,7 +13,7 @@ class StatsBoard:
       - Track byte counters and state
       - Render dashboard / line output periodically (status task)
       - Consume events from Runner (on_* methods)
-      - Read RTT/inflight from a Session reference
+      - Read RTT/inflight from a myUDP2 transport reference
     """
 
     # ---- CLI integration -------------------------------------------------------
@@ -44,7 +44,7 @@ class StatsBoard:
         DebugLoggingConfigurator.debug_logger_status(self.log)
 
         # References provided by Runner
-        self.session: Optional[Session] = None     # for RTT/inflight/ACK counters
+        self.session: Optional[MyUDP2Session] = None     # for RTT/inflight/ACK counters
         self._status_session: Optional[ISession] = None
         self.mux: Optional["ChannelMux"] = None         # for open connection counts
         self.peer_proto: Optional[PeerProtocol] = None  # for decode error counters (optional)
@@ -102,7 +102,7 @@ class StatsBoard:
         }
 
     # ---- wiring from Runner ----------------------------------------------------
-    def set_session_ref(self, s: Optional[Session]) -> None:
+    def set_session_ref(self, s: Optional[MyUDP2Session]) -> None:
         self.session = s
 
     def set_mux_ref(self, m: Optional["ChannelMux"]) -> None:
@@ -475,6 +475,17 @@ class StatsBoard:
                 "expected": _num(m.expected),
                 "peer_missed_count": _num(m.peer_missed_count),
                 "our_missed_count": _num(m.our_missed_count),
+                "batch_datagrams_sent": _num(m.batch_datagrams_sent),
+                "batch_chunks_sent": _num(m.batch_chunks_sent),
+                "batch_datagrams_received": _num(m.batch_datagrams_received),
+                "batch_chunks_received": _num(m.batch_chunks_received),
+                "malformed_batches": _num(m.malformed_batches),
+                "batch_stream_bytes_sent": _num(m.batch_stream_bytes_sent),
+                "batch_stream_bytes_received": _num(m.batch_stream_bytes_received),
+                "queued_stream_bytes": _num(m.queued_stream_bytes),
+                "stream_queue_age_ms": _num(m.stream_queue_age_ms),
+                "retransmitted_chunks": _num(m.retransmitted_chunks),
+                "stream_decode_errors": _num(m.stream_decode_errors),
             },
             "myudp": {
                 "retransmit": {

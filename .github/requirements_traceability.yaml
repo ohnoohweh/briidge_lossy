@@ -1097,6 +1097,7 @@ REQ-MYU-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_rebuilds_fresh_transport_timestamps
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
+    - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
 
 REQ-MYU-003:
   integration_tests:
@@ -1114,6 +1115,9 @@ REQ-MYU-004:
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_to_channelmux_edge_reassembles_large_payload
     - tests/unit/test_myudp_stream_boundary.py::test_stream_deserializer_accepts_every_split_of_length_prefix_and_body
     - tests/unit/test_myudp_stream_boundary.py::test_stream_serializer_rejects_records_above_wire_limit
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_splits_final_record_to_use_remaining_batch_space
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
+    - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
 
 REQ-MYU-005:
   integration_tests:
@@ -1130,6 +1134,9 @@ REQ-MYU-006:
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives
     - tests/unit/test_replay_myudp_semantic_log.py::test_replay_myudp_semantic_log_detects_regression_and_reset_match
     - tests/unit/test_myudp2_batch_codec.py::test_batch_codec_rejects_frozen_invalid_vectors
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_counter_rollover_keeps_stream_delivery_contiguous
+    - tests/unit/test_myudp_processing_repro.py::test_malformed_stream_record_is_counted_and_not_delivered
 
 REQ-MYU-007:
   integration_tests:

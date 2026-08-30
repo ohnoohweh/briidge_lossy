@@ -69,7 +69,7 @@ LOCALHOST_TLS_FIXTURES = materialize_localhost_tls_fixture_set(Path(_LOCALHOST_T
 
 from obstacle_bridge.bridge import (
     CONTROL_MAX_MISSED,
-    DataPacket,
+    MyUDP2BatchCodec,
     PROTO,
     PTYPE_CONTROL,
     PTYPE_DATA,
@@ -1346,11 +1346,7 @@ class UdpDelayLossProxy:
             return None
         ptype, payload, _tx_ns, _echo_ns = parsed
         if ptype == PTYPE_DATA:
-            payload_bytes = bytes(payload)
-            ctr = struct.unpack('>H', payload_bytes[:2])[0] if len(payload_bytes) >= 2 else 0
-            if ctr == 0:
-                return None
-            return 'data'
+            return 'data' if MyUDP2BatchCodec.decode_batch(bytes(payload)) else None
         if ptype == PTYPE_CONTROL:
             return 'control'
         return None
@@ -1365,13 +1361,20 @@ class UdpDelayLossProxy:
         return should_drop, frame_kind, frame_idx
 
     def _secure_link_type(self, data: bytes) -> Optional[int]:
-        pkt = DataPacket.parse_full(data)
-        if pkt is None or int(pkt.frame_type) != 0x01:
+        parsed = PROTO.parse_frame_with_times(data)
+        if not parsed or parsed[0] != PTYPE_DATA:
             return None
-        parsed = SecureLinkPskSession._parse_frame(pkt.data)
-        if parsed is None:
+        chunks = MyUDP2BatchCodec.decode_batch(bytes(parsed[1]))
+        if not chunks or len(chunks) != 1 or len(chunks[0].data) < 5:
             return None
-        sl_type, _session_id, _counter, _body = parsed
+        record = chunks[0].data
+        record_len = struct.unpack('>I', record[:4])[0]
+        if record_len != len(record) - 4:
+            return None
+        secure_link = SecureLinkPskSession._parse_frame(record[4:])
+        if secure_link is None:
+            return None
+        sl_type, _session_id, _counter, _body = secure_link
         return int(sl_type)
 
     def _extra_delay_ms(self, direction: str, data: bytes) -> int:

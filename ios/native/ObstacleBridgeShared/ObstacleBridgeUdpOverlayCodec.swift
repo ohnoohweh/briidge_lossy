@@ -8,8 +8,16 @@ enum ObstacleBridgeUdpOverlayCodecError: Error {
 struct ObstacleBridgeUdpOverlayCodec {
     static let maxFrameSize = 1500 - 48
     static let protocolHeaderSize = 19
-    static let dataPayloadFixed = 7
     static let controlFixedBase = 6
+    static let streamRecordHeaderSize = 4
+    static let maxStreamRecordBytes = 0xFFFF
+    static let batchVersion = 1
+    static let maxBatchRecords = 64
+    static let batchHeaderSize = 2
+    static let batchRecordLengthSize = 2
+    static let chunkHeaderSize = 4
+    static let maxBatchPayloadBytes = 1433
+    static let maxChunkBytes = 1425
     static let ptypeIdle = 0
     static let ptypeData = 1
     static let ptypeControl = 2
@@ -21,13 +29,9 @@ struct ObstacleBridgeUdpOverlayCodec {
         var echoNS: UInt64
     }
 
-    struct DataPacket: Equatable {
-        var pktCounter: Int
-        var frameType: Int
-        var lenOrOffset: Int
-        var chunkLen: Int
+    struct StreamChunk: Equatable {
+        var counter: Int
         var data: Data
-        var raw: Data
     }
 
     struct ControlPacket: Equatable {
@@ -41,8 +45,80 @@ struct ObstacleBridgeUdpOverlayCodec {
         return max(0, maxFrameSize - protocolHeaderSize)
     }
 
-    static func dataMaxChunk() -> Int {
-        return maxPayloadLength() - dataPayloadFixed
+    static func encodeStreamRecord(_ payload: Data) throws -> Data {
+        guard payload.count <= maxStreamRecordBytes else {
+            throw ObstacleBridgeUdpOverlayCodecError.payloadTooLarge
+        }
+        var record = Data()
+        let length = UInt32(payload.count)
+        record.append(UInt8((length >> 24) & 0xFF))
+        record.append(UInt8((length >> 16) & 0xFF))
+        record.append(UInt8((length >> 8) & 0xFF))
+        record.append(UInt8(length & 0xFF))
+        record.append(payload)
+        return record
+    }
+
+    static func encodeDataBatch(_ chunks: [StreamChunk]) throws -> Data {
+        guard !chunks.isEmpty, chunks.count <= maxBatchRecords else {
+            throw ObstacleBridgeUdpOverlayCodecError.invalidField
+        }
+        var payload = Data([UInt8(batchVersion), UInt8(chunks.count)])
+        for chunk in chunks {
+            guard (1...0xFFFF).contains(chunk.counter), !chunk.data.isEmpty, chunk.data.count <= maxChunkBytes else {
+                throw ObstacleBridgeUdpOverlayCodecError.invalidField
+            }
+            let recordLength = chunkHeaderSize + chunk.data.count
+            payload.appendUInt16(UInt16(recordLength))
+            payload.appendUInt16(UInt16(chunk.counter))
+            payload.appendUInt16(UInt16(chunk.data.count))
+            payload.append(chunk.data)
+        }
+        guard payload.count <= maxBatchPayloadBytes else {
+            throw ObstacleBridgeUdpOverlayCodecError.payloadTooLarge
+        }
+        return payload
+    }
+
+    static func decodeDataBatch(_ payload: Data) -> [StreamChunk]? {
+        guard payload.count >= batchHeaderSize, payload.count <= maxBatchPayloadBytes else {
+            return nil
+        }
+        let version = Int(payload[payload.startIndex])
+        let count = Int(payload[payload.index(after: payload.startIndex)])
+        guard version == batchVersion, (1...maxBatchRecords).contains(count) else {
+            return nil
+        }
+        var offset = batchHeaderSize
+        var chunks: [StreamChunk] = []
+        chunks.reserveCapacity(count)
+        for _ in 0..<count {
+            guard let recordLength = readUInt16(from: payload, offset: &offset) else {
+                return nil
+            }
+            let length = Int(recordLength)
+            guard length >= chunkHeaderSize + 1, offset + length <= payload.count,
+                  let counter = readUInt16(from: payload, offset: &offset),
+                  let chunkLength = readUInt16(from: payload, offset: &offset) else {
+                return nil
+            }
+            let dataLength = Int(chunkLength)
+            guard (1...0xFFFF).contains(Int(counter)), (1...maxChunkBytes).contains(dataLength),
+                  length == chunkHeaderSize + dataLength,
+                  let data = readData(from: payload, offset: &offset, length: dataLength) else {
+                return nil
+            }
+            chunks.append(StreamChunk(counter: Int(counter), data: data))
+        }
+        return offset == payload.count ? chunks : nil
+    }
+
+    static func buildDataBatchFrame(
+        chunks: [StreamChunk],
+        txNS: UInt64,
+        echoNS: UInt64
+    ) throws -> Data {
+        try buildProtocolFrame(ptype: ptypeData, payload: encodeDataBatch(chunks), txNS: txNS, echoNS: echoNS)
     }
 
     static func controlMaxMissed() -> Int {
@@ -85,82 +161,6 @@ struct ObstacleBridgeUdpOverlayCodec {
             return nil
         }
         return ParsedProtocolFrame(ptype: Int(ptype), payload: payload, txNS: txNS, echoNS: echoNS)
-    }
-
-    static func buildDataPayload(
-        pktCounter: Int,
-        frameType: Int,
-        lenOrOffset: Int,
-        data: Data
-    ) throws -> Data {
-        let isIdle = pktCounter == 0 && frameType == 1 && data.isEmpty
-        guard isIdle || (1...0xFFFF).contains(pktCounter) else {
-            throw ObstacleBridgeUdpOverlayCodecError.invalidField
-        }
-        guard (0...0xFFFF).contains(lenOrOffset) else {
-            throw ObstacleBridgeUdpOverlayCodecError.invalidField
-        }
-        guard data.count <= dataMaxChunk() else {
-            throw ObstacleBridgeUdpOverlayCodecError.payloadTooLarge
-        }
-        if data.isEmpty && frameType != 1 {
-            throw ObstacleBridgeUdpOverlayCodecError.invalidField
-        }
-        var payload = Data()
-        payload.appendUInt16(UInt16(pktCounter & 0xFFFF))
-        payload.appendUInt8(UInt8(frameType & 0xFF))
-        payload.appendUInt16(UInt16(lenOrOffset))
-        payload.appendUInt16(UInt16(data.count))
-        payload.append(data)
-        return payload
-    }
-
-    static func parseDataPayload(_ payload: Data, raw: Data) -> DataPacket? {
-        guard payload.count >= dataPayloadFixed else {
-            return nil
-        }
-        var offset = 0
-        guard
-            let pktCounter = readUInt16(from: payload, offset: &offset),
-            let frameType = readUInt8(from: payload, offset: &offset),
-            let lenOrOffset = readUInt16(from: payload, offset: &offset),
-            let chunkLen = readUInt16(from: payload, offset: &offset),
-            let chunk = readData(from: payload, offset: &offset, length: Int(chunkLen))
-        else {
-            return nil
-        }
-        return DataPacket(
-            pktCounter: Int(pktCounter),
-            frameType: Int(frameType),
-            lenOrOffset: Int(lenOrOffset),
-            chunkLen: Int(chunkLen),
-            data: chunk,
-            raw: raw
-        )
-    }
-
-    static func buildDataFrame(
-        pktCounter: Int,
-        frameType: Int,
-        lenOrOffset: Int,
-        data: Data,
-        txNS: UInt64,
-        echoNS: UInt64
-    ) throws -> Data {
-        let payload = try buildDataPayload(
-            pktCounter: pktCounter,
-            frameType: frameType,
-            lenOrOffset: lenOrOffset,
-            data: data
-        )
-        return try buildProtocolFrame(ptype: ptypeData, payload: payload, txNS: txNS, echoNS: echoNS)
-    }
-
-    static func parseDataFrame(_ raw: Data) -> DataPacket? {
-        guard let frame = parseProtocolFrame(raw), frame.ptype == ptypeData else {
-            return nil
-        }
-        return parseDataPayload(frame.payload, raw: raw)
     }
 
     static func buildControlPayload(
@@ -236,7 +236,8 @@ struct ObstacleBridgeUdpOverlayCodec {
         guard offset + 1 <= data.count else {
             return nil
         }
-        let value = data[offset]
+        let index = data.index(data.startIndex, offsetBy: offset)
+        let value = data[index]
         offset += 1
         return value
     }
@@ -245,8 +246,24 @@ struct ObstacleBridgeUdpOverlayCodec {
         guard offset + 2 <= data.count else {
             return nil
         }
-        let value = (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
+        let start = data.index(data.startIndex, offsetBy: offset)
+        let end = data.index(after: start)
+        let value = (UInt16(data[start]) << 8) | UInt16(data[end])
         offset += 2
+        return value
+    }
+
+    private static func readUInt32(from data: Data, offset: inout Int) -> UInt32? {
+        guard offset + 4 <= data.count else {
+            return nil
+        }
+        let start = data.index(data.startIndex, offsetBy: offset)
+        let byte1 = data.index(after: start)
+        let byte2 = data.index(after: byte1)
+        let byte3 = data.index(after: byte2)
+        let value = (UInt32(data[start]) << 24) | (UInt32(data[byte1]) << 16) |
+            (UInt32(data[byte2]) << 8) | UInt32(data[byte3])
+        offset += 4
         return value
     }
 
@@ -256,7 +273,8 @@ struct ObstacleBridgeUdpOverlayCodec {
         }
         var value: UInt64 = 0
         for index in 0..<8 {
-            value = (value << 8) | UInt64(data[offset + index])
+            let dataIndex = data.index(data.startIndex, offsetBy: offset + index)
+            value = (value << 8) | UInt64(data[dataIndex])
         }
         offset += 8
         return value
@@ -266,7 +284,9 @@ struct ObstacleBridgeUdpOverlayCodec {
         guard offset + length <= data.count else {
             return nil
         }
-        let payload = data.subdata(in: offset..<(offset + length))
+        let start = data.index(data.startIndex, offsetBy: offset)
+        let end = data.index(start, offsetBy: length)
+        let payload = data.subdata(in: start..<end)
         offset += length
         return payload
     }

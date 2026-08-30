@@ -96,6 +96,15 @@ ARC-CMP-002:
     - tests/unit/test_myudp2_batch_codec.py::test_batch_codec_decodes_and_reencodes_frozen_data_vector
     - tests/unit/test_myudp2_batch_codec.py::test_batch_codec_rejects_frozen_invalid_vectors
     - tests/unit/test_myudp2_batch_codec.py::test_batch_codec_fills_the_exact_frozen_payload_budget
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_coalesces_small_stream_records_in_one_datagram
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_splits_final_record_to_use_remaining_batch_space
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_counter_rollover_keeps_stream_delivery_contiguous
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_epoch_reset_clears_queued_and_partial_stream_state
+    - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
+    - tests/unit/test_connection_snapshots.py::test_myudp_stats_expose_stream_batch_budget_and_diagnostics
+    - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly

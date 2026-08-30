@@ -328,6 +328,14 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - runner event/config helpers
 - myUDP2 stream-record boundaries and frozen batch-codec vectors, including
   arbitrary prefix splits, empty records, malformed lengths, and the MTU budget
+- Python myUDP2 batch scheduling and loss recovery, including coalesced records,
+  final-space chunk splitting, reorder, duplicate suppression, counter rollover,
+  and fresh per-chunk retransmit envelopes after a lost multi-chunk datagram
+- myUDP2 upper-layer stream-record budgets through SecureLink, Compression, and
+  ChannelMux, plus peer-status diagnostics for batch, stream-byte, queue, retry,
+  malformed-batch, and malformed-stream counters
+- shared Swift myUDP2 batch vectors and reordered stream delivery through a
+  compiled probe of the macOS/iOS codec and peer-runtime sources
 
 ## Test catalog
 

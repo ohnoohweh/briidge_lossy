@@ -124,6 +124,13 @@ class CompressLayerSessionTests(unittest.TestCase):
         self.assertEqual(wrapper.get_overlay_peers_snapshot()[0]["secure_link"]["state"], "failed")
         self.assertEqual(wrapper.get_secure_link_status_snapshot()["failure_reason"], "decode")
 
+    def test_stream_record_limit_and_budget_forward_to_outer_layer(self):
+        wrapper = CompressLayerSession(FakeInnerSession(max_payload=4096), self._args(), "myudp")
+
+        self.assertEqual(wrapper.get_stream_record_limit(), 4096)
+        self.assertEqual(wrapper.get_max_app_payload_size(), 4096)
+        self.assertEqual(wrapper.get_transport_budget_snapshot()["stream_record_limit"], 4096)
+
     def test_send_app_bypasses_when_no_gain(self):
         inner = FakeInnerSession()
         wrapper = CompressLayerSession(inner, self._args(compress_layer_min_bytes=1), "tcp")

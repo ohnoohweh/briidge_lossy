@@ -99,7 +99,6 @@ class BaseFrameV2:
 # ================================================================
 # IDLE frames now carry an empty inner payload; DATA/CONTROL payloads no longer include timestamps.
 # Protocol header now includes: ptype(1) + len(2) + tx_time_ns(8) + echo_time_ns(8) = 19 bytes.
-DATA_PAYLOAD_FIXED = 2 + 1 + 2 + 2 # ctr(2) + type(1) + len_or_off(2) + chunk_len(2)
 CONTROL_FIXED_BASE = 2 + 2 + 2 # last(2) + highest(2) + num_missed(2)
 # -------------------- Timers / RTT / Keepalive --------------------
 RETRANSMIT_UNCONFIRMED_MS = 25
@@ -122,7 +121,7 @@ class Protocol:
     - On reception, RTT sample = now - echo_time_ns (if echo!=0).
     PTYPEs:
     0 -> IDLE (empty payload)
-    1 -> DATA (DataPacket payload)
+    1 -> DATA_BATCH (stream chunk batch payload)
     2 -> CONTROL (ControlPacket payload)
     """
     PTYPE_IDLE: int = 0x00
@@ -342,12 +341,7 @@ MAGIC = PROTO.MAGIC
 PTYPE_DATA = PROTO.PTYPE_DATA
 PTYPE_CONTROL = PROTO.PTYPE_CONTROL
 UDP_FRAME_SIZE = PROTO.MAX_FRAME_SIZE
-# same numeric result as legacy: (1158-21)-22 -> space for missed list
-# For reference/compat with old math: DATA header including frame-prefix == 21 + 15 = 36
-DATA_UNPADDED_HEADER_SIZE = BaseFrame.HEADER_PREFIX_LEN + DATA_PAYLOAD_FIXED
-# Keep derived sizes consistent with Protocol header.
 CONTROL_MAX_MISSED = (PROTO.max_payload_len() - CONTROL_FIXED_BASE) // 2
-DATA_MAX_CHUNK = PROTO.max_payload_len() - DATA_PAYLOAD_FIXED
 # -------------------- Utility helpers --------------------
 def now_ns() -> int:
     return time.monotonic_ns()
@@ -399,74 +393,6 @@ def ahead_distance(a: int, ref: int) -> int:
     ar = a - 1
     br = ref - 1
     return (ar - br) % 65535
-# -------------------- Frames: DataPacket --------------------
-class DataPacket:
-    __slots__ = ("pkt_counter", "frame_type", "len_or_offset", "chunk_len", "data", "raw")
-    def __init__(self, pkt_counter: int, frame_type: int, len_or_offset: int,
-                 chunk_len: int, data: bytes, raw: bytes):
-        self.pkt_counter = pkt_counter
-        self.frame_type = frame_type
-        self.len_or_offset = len_or_offset
-        self.chunk_len = chunk_len
-        self.data = data
-        self.raw = raw # full frame bytes
-    # -------- payload API (timestamps are NOT part of payload anymore) --------
-    @staticmethod
-    def build_payload(pkt_counter: int, frame_type: int,
-                      len_or_offset: int, data: bytes, * _ignored_tx_ns) -> bytes:
-        """
-        Signature kept backward-compatible (tx_ns is ignored).
-        """
-        is_idle = (pkt_counter == 0 and frame_type == FRAME_FIRST and len(data) == 0)
-        if not is_idle and not (1 <= pkt_counter <= 65535):
-            raise ValueError("pkt_counter out of range")
-        chunk_len = len(data)
-        if chunk_len == 0 and frame_type != FRAME_FIRST:
-            raise ValueError("zero-length chunk only valid for FRAME_FIRST")
-        if chunk_len > DATA_MAX_CHUNK:
-            raise ValueError("chunk too large")
-        if not (0 <= len_or_offset <= 65535):
-            raise ValueError("len_or_offset out of range")
-        return (
-            struct.pack(">H", pkt_counter) +
-            bytes([frame_type]) +
-            struct.pack(">H", len_or_offset) +
-            struct.pack(">H", chunk_len) +
-            data
-        )
-    @staticmethod
-    def parse_payload(payload: memoryview, full_raw: bytes) -> Optional["DataPacket"]:
-        if payload.nbytes < DATA_PAYLOAD_FIXED:
-            return None
-        try:
-            pkt_counter = struct.unpack(">H", payload[0:2])[0]
-            frame_type = int(payload[2])
-            len_or_offset = struct.unpack(">H", payload[3:5])[0]
-            chunk_len = struct.unpack(">H", payload[5:7])[0]
-            if 7 + chunk_len > payload.nbytes:
-                return None
-            data = payload[7:7 + chunk_len].tobytes()
-            return DataPacket(pkt_counter, frame_type, len_or_offset, chunk_len, data, full_raw)
-        except Exception:
-            return None
-    # -------- convenience wrappers --------
-    @staticmethod
-    def build_full(pkt_counter: int, frame_type: int, len_or_offset: int,
-                   data: bytes) -> "DataPacket":
-        payload = DataPacket.build_payload(pkt_counter, frame_type, len_or_offset, data)
-        frame = PROTO.build_frame(PTYPE_DATA, payload)
-        return DataPacket.parse_full(frame) # type: ignore
-    @staticmethod
-    def parse_full(dat: bytes) -> Optional["DataPacket"]:
-        parsed = PROTO.parse_frame_with_times(dat)
-        if not parsed:
-            return None
-        ptype, payload, _tx_ns, _echo_ns = parsed
-        if ptype != PTYPE_DATA:
-            return None
-        return DataPacket.parse_payload(payload, dat)
-
-
 # -------------------- myUDP2 stream boundary --------------------
 STREAM_RECORD_HEADER_BYTES = 4
 MAX_STREAM_RECORD_BYTES = 65535
@@ -668,28 +594,6 @@ class ControlPacket:
         if ptype != PTYPE_CONTROL:
             return None
         return ControlPacket.parse_payload(payload, dat)
-# -------------------- Reassembly --------------------
-class Reassembly:
-    __slots__ = ("total_len", "buf", "marks", "filled", "start_ns")
-    def __init__(self, total_len: int):
-        self.total_len = total_len
-        self.buf = bytearray(total_len)
-        self.marks = bytearray(total_len)
-        self.filled = 0
-        self.start_ns = now_ns()
-    def apply(self, offset: int, data: bytes) -> None:
-        end = offset + len(data)
-        if offset < 0 or end > self.total_len:
-            return
-        self.buf[offset:end] = data
-        new = 0
-        for i in range(offset, end):
-            if self.marks[i] == 0:
-                self.marks[i] = 1
-                new += 1
-        self.filled += new
-    def complete(self) -> bool:
-        return self.filled >= self.total_len
 # -------------------- SendPort --------------------
 class SendPort:
     """
@@ -779,15 +683,13 @@ class SendPort:
         except Exception as e:
             self.log.error("[PEER/TX] send failed: %r", e)
             raise            
-# -------------------- Session --------------------
-OutgoingSegment = Tuple[int, int, bytes]
-QueuedSegment = Tuple[OutgoingSegment, int]
-class Session:
+# -------------------- myUDP2 reliability state --------------------
+class _MyUDP2SessionCore:
     def __init__(self, max_in_flight: int = 200, proto: Optional[Protocol] = None):
         self.proto = proto or PROTO
         self.next_ctr = 1
         self.send_buf: Dict[int, bytes] = {}
-        self.send_meta: Dict[int, OutgoingSegment] = {}
+        self.send_meta: Dict[int, bytes] = {}
         # Start of the local send path, including queue wait before first emission.
         self.send_path_start_ns: Dict[int, int] = {}
         # First on-wire tx_time_ns stamped into the protocol header on initial emission.
@@ -801,12 +703,10 @@ class Session:
             "confirmed_total": 0, "created_total": 0,
         }
         self.max_in_flight = max(1, min(32767, int(max_in_flight)))
-        self.wait_queue: Deque[QueuedSegment] = deque()
         self.expected = 1
-        self.pending: Dict[int, DataPacket] = {}
+        self.pending: Dict[int, StreamChunk] = {}
         self.missing: Set[int] = set()
         self._pending_highest: Optional[int] = None
-        self.reass: Optional[Reassembly] = None
         # RTT mirrors read from Protocol (source of truth)
         self.transmit_delay_sample_ms: float = 0.0
         self.transmit_delay_est_ms: float = 0.0
@@ -815,16 +715,12 @@ class Session:
         self.peer_missed_count = 0
         self.last_send_ns = 0
         self.log = logging.getLogger("udp_session")
-        # Track which counters contributed to current reassembly (for logging)
-        self._reass_ctrs: Set[int] = set()
-        # internal marker for emission trigger text
-        self._last_emit_trigger: str = "app_send"
     # ---------- helpers formerly free-standing ----------
     @staticmethod
     def last_in_order_from_expected(expected: int) -> int:
         return 0 if expected == 1 else c16_dec(expected)
     def last_in_order(self) -> int:
-        return Session.last_in_order_from_expected(self.expected)
+        return _MyUDP2SessionCore.last_in_order_from_expected(self.expected)
     def _compute_highest_rx(self) -> int:
         last_in_order = self.last_in_order()
         candidates: List[int] = []
@@ -851,21 +747,19 @@ class Session:
             filtered_missed: List[int] = []
         else:
             filtered_missed = [m for m in self.missing if m != 0 and ring_cmp(highest_rx, m) >= 0]
-        missed_sorted = Session._sort_missed_for_control(set(filtered_missed), last_in_order)
+        missed_sorted = _MyUDP2SessionCore._sort_missed_for_control(set(filtered_missed), last_in_order)
         payload = ControlPacket.build_payload(last_in_order, highest_rx, missed_sorted)
         frame = self.proto.build_frame(PTYPE_CONTROL, payload)
         cp = ControlPacket.parse_full(frame)
         assert cp is not None
         return cp
-    # ------------- send path -------------
+    # ------------- shared send bookkeeping -------------
     def reserve_ctr(self) -> int:
         c = self.next_ctr
         self.next_ctr = c16_inc(c)
         return c
     def in_flight(self) -> int:
         return len(self.send_buf)
-    def waiting_count(self) -> int:
-        return len(self.wait_queue)
     def _record_created_if_appdata(self, ctr: int, chunk: bytes) -> None:
         is_app = len(chunk) > 0
         self.data_pkt_flags[ctr] = is_app
@@ -875,51 +769,6 @@ class Session:
         if ctr == 0:
             return
         self.send_attempts[ctr] = self.send_attempts.get(ctr, 0) + 1
-    def _rebuild_data_frame(self, ctr: int, meta: OutgoingSegment) -> bytes:
-        frame_type, off_or_len, chunk = meta
-        payload = DataPacket.build_payload(ctr, frame_type, off_or_len, chunk)
-        return self.proto.build_frame(PTYPE_DATA, payload)
-
-    def _emit_now(self, seg: OutgoingSegment, transport: Any, queued_at_ns: Optional[int] = None) -> None:
-        frame_type, off_or_len, chunk = seg
-        path_start_ns = int(queued_at_ns or 0)
-        ctr = self.reserve_ctr()
-        self._record_created_if_appdata(ctr, chunk)
-        try:
-            frame = self._rebuild_data_frame(ctr, seg)
-            tx = int(getattr(self.proto, "_last_built_tx_ns", 0) or 0) or now_ns()
-            transport.sendto(frame)
-        except Exception:
-            self.wait_queue.appendleft((seg, path_start_ns or now_ns()))
-            return
-        self.send_meta[ctr] = (frame_type, off_or_len, chunk)
-        self.send_path_start_ns[ctr] = min(path_start_ns, tx) if path_start_ns > 0 else tx
-        self.send_buf[ctr] = frame
-        self.send_txns[ctr] = tx
-        self.last_sent_ctr = ctr
-        self.last_send_ns = tx
-        self._bump_attempt(ctr)
-        if self.log.isEnabledFor(logging.DEBUG):
-            trig = getattr(self, "_last_emit_trigger", "app_send")
-            self.log.debug(f"[TX] DATA ctr={ctr} trig={trig} type={frame_type} off/len={off_or_len} chunk_len={len(chunk)} inflight={len(self.send_buf)} queued={len(self.wait_queue)}")
-    def try_flush_send_queue(self, transport: Any) -> int:
-        emitted = 0
-        while self.in_flight() < self.max_in_flight and self.wait_queue:
-            seg, queued_at_ns = self.wait_queue.popleft()
-            self._last_emit_trigger = "flush_queue"
-            self._emit_now(seg, transport, queued_at_ns=queued_at_ns)
-            emitted += 1
-        self._last_emit_trigger = "app_send"
-        return emitted
-    def _send_or_queue(self, seg: OutgoingSegment, transport: Any) -> None:
-        if self.in_flight() < self.max_in_flight:
-            self._last_emit_trigger = "app_send"
-            self._emit_now(seg, transport)
-        else:
-            queued_at_ns = now_ns()
-            self.wait_queue.append((seg, queued_at_ns))
-            if self.log.isEnabledFor(logging.DEBUG):
-                self.log.debug(f"[TX] QUEUE type={seg[0]} off/len={seg[1]} chunk_len={len(seg[2])} inflight={len(self.send_buf)} queued={len(self.wait_queue)}")
     def _finalize_stats_for(self, cnt: int) -> None:
         if not self.data_pkt_flags.pop(cnt, False):
             self.send_attempts.pop(cnt, None)
@@ -1059,130 +908,6 @@ class Session:
             except Exception:
                 pass
 
-    def _enqueue_out_of_order_packet(self, pkt: DataPacket) -> None:
-        ctr = pkt.pkt_counter
-        already_pending = ctr in self.pending
-        self.pending[ctr] = pkt
-        if not already_pending:
-            if ctr in self.missing:
-                self.missing.discard(ctr)
-            else:
-                gap_start = self.expected
-                if self._pending_highest is not None and ring_cmp(ctr, self._pending_highest) > 0:
-                    gap_start = c16_inc(self._pending_highest)
-                if self._pending_highest is None or ring_cmp(ctr, self._pending_highest) > 0:
-                    for missing_ctr in c16_range(gap_start, ctr):
-                        if missing_ctr not in self.pending:
-                            self.missing.add(missing_ctr)
-                self.missing.discard(ctr)
-            if self._pending_highest is None or ring_cmp(ctr, self._pending_highest) > 0:
-                self._pending_highest = ctr
-        self._log_missing_state()
-    def process_data(self, pkt: DataPacket) -> Tuple[bool, List[bytes]]:
-        if pkt.pkt_counter == 0:
-            return False, []
-        adv = False
-        completed: List[bytes] = []
-        X = pkt.pkt_counter
-        cmpv = ring_cmp(X, self.expected)
-        if cmpv < 0:
-            if self.log.isEnabledFor(logging.DEBUG):
-                self.log.debug(f"[RX] ctr={X} DROP (old) expected={self.expected}")
-            return adv, completed
-        elif cmpv == 0:
-            adv = True
-            self.expected = c16_inc(self.expected)
-            if self.log.isEnabledFor(logging.DEBUG):
-                self.log.debug(f"[RX] ctr={X} IN-ORDER -> advance expected={self.expected}")
-        else:
-            self._enqueue_out_of_order_packet(pkt)
-            if self.log.isEnabledFor(logging.DEBUG):
-                self.log.debug(f"[RX] ctr={X} QUEUED (gap); frame_type={pkt.frame_type} off/len={pkt.len_or_offset} chunk_len={pkt.chunk_len}")
-            return adv, completed
-        if pkt.frame_type == FRAME_FIRST:
-            if self.reass is None:
-                total = pkt.len_or_offset
-                if 0 < total <= 65535:
-                    self.reass = Reassembly(total)
-                    self._reass_ctrs = set()
-            if self.reass is not None:
-                self.reass.apply(0, pkt.data)
-                self._reass_ctrs.add(X)
-        else:
-            if self.reass is not None:
-                self.reass.apply(pkt.len_or_offset, pkt.data)
-                self._reass_ctrs.add(X)
-        if self.reass is not None and self.reass.complete():
-            completed.append(bytes(self.reass.buf))
-            if self.log.isEnabledFor(logging.DEBUG):
-                try:
-                    used = sorted(self._reass_ctrs)
-                    self.log.debug(f"[APP] completed len={len(completed[-1])} using_ctrs={used}")
-                except Exception:
-                    pass
-            self.reass = None
-            self._reass_ctrs = set()
-        if adv:
-            while True:
-                nxt = self.expected
-                p = self.pending.pop(nxt, None)
-                if p is None:
-                    break
-                self.missing.discard(nxt)
-                self.expected = c16_inc(self.expected)
-                if self.log.isEnabledFor(logging.DEBUG):
-                    self.log.debug(f"[RX] ctr={nxt} POP from pending -> advance expected={self.expected}")
-                if p.frame_type == FRAME_FIRST:
-                    if self.reass is None:
-                        total = p.len_or_offset
-                        if 0 < total <= 65535:
-                            self.reass = Reassembly(total)
-                            self._reass_ctrs = set()
-                    if self.reass is not None:
-                        self.reass.apply(0, p.data)
-                        self._reass_ctrs.add(nxt)
-                else:
-                    if self.reass is not None:
-                        self.reass.apply(p.len_or_offset, p.data)
-                        self._reass_ctrs.add(nxt)
-                if self.reass is not None and self.reass.complete():
-                    completed.append(bytes(self.reass.buf))
-                    if self.log.isEnabledFor(logging.DEBUG):
-                        try:
-                            used = sorted(self._reass_ctrs)
-                            self.log.debug(f"[APP] completed len={len(completed[-1])} using_ctrs={used}")
-                        except Exception:
-                            pass
-                    self.reass = None
-                    self._reass_ctrs = set()
-            if self.pending:
-                self.identify_missing()
-            else:
-                self._pending_highest = None
-                self.missing.clear()
-                self._log_missing_state()
-        return adv, completed
-    # ------------- API -------------
-    def send_application_payload(self, data: bytes, transport: Any) -> int:
-        if not data or transport is None:
-            return 0
-        total = len(data)
-        if total <= 0 or total > 65535:
-            return 0
-        produced = 0
-        first_chunk = data[:DATA_MAX_CHUNK]
-        first_seg = (FRAME_FIRST, total, first_chunk)
-        self._send_or_queue(first_seg, transport)
-        produced += 1
-        off = len(first_chunk)
-        while off < total:
-            chunk = data[off: off + DATA_MAX_CHUNK]
-            seg = (FRAME_CONT, off, chunk)
-            self._send_or_queue(seg, transport)
-            produced += 1
-            off += len(chunk)
-        self.try_flush_send_queue(transport)
-        return produced
     def reset_sender(self) -> None:
         self.send_buf.clear()
         self.send_meta.clear()
@@ -1190,7 +915,6 @@ class Session:
         self.send_txns.clear()
         self.last_retx_ns.clear()
         self.peer_reported_missing.clear()
-        self.wait_queue.clear()
         self.send_attempts.clear()
         self.data_pkt_flags.clear()
         self.next_ctr = 1
@@ -1207,11 +931,208 @@ class Session:
         self.pending.clear()
         self.missing.clear()
         self._pending_highest = None
-        self.reass = None
-        self._reass_ctrs.clear()
+
+
+class MyUDP2Session(_MyUDP2SessionCore):
+    """Reliable myUDP2 byte stream carried as bounded DATA_BATCH chunk records."""
+
+    def __init__(self, max_in_flight: int = 200, proto: Optional[Protocol] = None):
+        super().__init__(max_in_flight=max_in_flight, proto=proto)
+        self._stream_serializer = StreamSerializer()
+        self._stream_deserializer = StreamDeserializer()
+        self._outbound_records: Deque[bytearray] = deque()
+        self._outbound_started_ns = 0
+        self._flush_scheduled = False
+        self.batch_datagrams_sent = 0
+        self.batch_chunks_sent = 0
+        self.batch_datagrams_received = 0
+        self.batch_chunks_received = 0
+        self.malformed_batches = 0
+        self.batch_stream_bytes_sent = 0
+        self.batch_stream_bytes_received = 0
+        self.retransmitted_chunks = 0
+        self.stream_decode_errors = 0
+
+    def waiting_count(self) -> int:
+        return len(self._outbound_records)
+
+    def _queued_stream_bytes(self) -> int:
+        return sum(len(record) for record in self._outbound_records)
+
+    def stream_queue_age_ms(self) -> float:
+        if not self._outbound_started_ns or not self._outbound_records:
+            return 0.0
+        return max(0.0, (now_ns() - self._outbound_started_ns) / 1e6)
+
+    def _rebuild_data_frame(self, ctr: int, data: bytes) -> bytes:
+        payload = MyUDP2BatchCodec.encode_batch([StreamChunk(ctr, data)])
+        return self.proto.build_frame(PTYPE_DATA, payload)
+
+    def _build_next_batch(self) -> Tuple[List[StreamChunk], List[int]]:
+        available_slots = self.max_in_flight - self.in_flight()
+        if available_slots <= 0 or not self._outbound_records:
+            return [], []
+        payload_used = MYUDP2_BATCH_HEADER_BYTES
+        counter = self.next_ctr
+        chunks: List[StreamChunk] = []
+        consume: List[int] = []
+        records = list(self._outbound_records)
+        record_index = 0
+        record_offset = 0
+        while (
+            record_index < len(records)
+            and len(chunks) < min(MYUDP2_MAX_BATCH_RECORDS, available_slots)
+        ):
+            remaining = MYUDP2_MAX_BATCH_PAYLOAD_BYTES - payload_used
+            chunk_budget = remaining - MYUDP2_RECORD_LENGTH_BYTES - MYUDP2_CHUNK_HEADER_BYTES
+            if chunk_budget <= 0:
+                break
+            record = records[record_index]
+            record_remaining = len(record) - record_offset
+            chunk_len = min(MYUDP2_MAX_CHUNK_BYTES, chunk_budget, record_remaining)
+            chunks.append(StreamChunk(counter, record[record_offset:record_offset + chunk_len]))
+            consume.append(chunk_len)
+            record_offset += chunk_len
+            if record_offset == len(record):
+                record_index += 1
+                record_offset = 0
+            payload_used += MYUDP2_RECORD_LENGTH_BYTES + MYUDP2_CHUNK_HEADER_BYTES + chunk_len
+            counter = c16_inc(counter)
+        return chunks, consume
+
+    def _emit_next_batch(self, transport: Any) -> int:
+        chunks, consume = self._build_next_batch()
+        if not chunks:
+            return 0
+        frame = self.proto.build_frame(PTYPE_DATA, MyUDP2BatchCodec.encode_batch(chunks))
+        try:
+            transport.sendto(frame)
+        except Exception:
+            return 0
+        tx = int(getattr(self.proto, "_last_built_tx_ns", 0) or 0) or now_ns()
+        path_start_ns = self._outbound_started_ns or tx
+        for chunk_len in consume:
+            record = self._outbound_records[0]
+            del record[:chunk_len]
+            if not record:
+                self._outbound_records.popleft()
+        self.next_ctr = c16_inc(chunks[-1].counter)
+        for chunk in chunks:
+            self._record_created_if_appdata(chunk.counter, chunk.data)
+            self.send_meta[chunk.counter] = chunk.data
+            self.send_path_start_ns[chunk.counter] = min(path_start_ns, tx)
+            self.send_buf[chunk.counter] = frame
+            self.send_txns[chunk.counter] = tx
+            self._bump_attempt(chunk.counter)
+        if not self._outbound_records:
+            self._outbound_started_ns = 0
+        self.last_sent_ctr = chunks[-1].counter
+        self.last_send_ns = tx
+        self.batch_datagrams_sent += 1
+        self.batch_chunks_sent += len(chunks)
+        self.batch_stream_bytes_sent += sum(len(chunk.data) for chunk in chunks)
+        if self.log.isEnabledFor(logging.DEBUG):
+            self.log.debug(
+                "[TX] DATA_BATCH chunks=%d counters=%d-%d inflight=%d queued_bytes=%d",
+                len(chunks), chunks[0].counter, chunks[-1].counter,
+                self.in_flight(), self._queued_stream_bytes(),
+            )
+        return len(chunks)
+
+    def try_flush_send_queue(self, transport: Any) -> int:
+        emitted = 0
+        while self._outbound_records and self.in_flight() < self.max_in_flight:
+            count = self._emit_next_batch(transport)
+            if count == 0:
+                break
+            emitted += count
+        return emitted
+
+    def _flush_deferred(self, transport: Any) -> None:
+        self._flush_scheduled = False
+        self.try_flush_send_queue(transport)
+
+    def send_application_payload(self, data: bytes, transport: Any) -> int:
+        if transport is None:
+            return 0
+        encoded = self._stream_serializer.encode(data)
+        if not self._outbound_records:
+            self._outbound_started_ns = now_ns()
+        self._outbound_records.append(bytearray(encoded))
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return self.try_flush_send_queue(transport)
+        if not self._flush_scheduled:
+            self._flush_scheduled = True
+            loop.call_soon(self._flush_deferred, transport)
+        return 1
+
+    def _accept_contiguous_chunk(self, chunk: StreamChunk) -> List[bytes]:
+        try:
+            return self._stream_deserializer.feed(chunk.data)
+        except StreamDecodeError:
+            self._stream_deserializer.reset()
+            raise
+
+    def _enqueue_stream_chunk(self, chunk: StreamChunk) -> None:
+        counter = chunk.counter
+        if counter in self.pending:
+            return
+        self.pending[counter] = chunk
+        if self._pending_highest is None or ring_cmp(counter, self._pending_highest) > 0:
+            gap_start = self.expected if self._pending_highest is None else c16_inc(self._pending_highest)
+            for missing_counter in c16_range(gap_start, counter):
+                if missing_counter not in self.pending:
+                    self.missing.add(missing_counter)
+            self._pending_highest = counter
+        self.missing.discard(counter)
+
+    def process_data(self, chunk: StreamChunk) -> Tuple[bool, List[bytes]]:
+        if not (1 <= chunk.counter <= 65535):
+            return False, []
+        completed: List[bytes] = []
+        cmpv = ring_cmp(chunk.counter, self.expected)
+        if cmpv < 0:
+            return False, completed
+        if cmpv > 0:
+            self._enqueue_stream_chunk(chunk)
+            return False, completed
+        self.expected = c16_inc(self.expected)
+        completed.extend(self._accept_contiguous_chunk(chunk))
+        while True:
+            next_chunk = self.pending.pop(self.expected, None)
+            if next_chunk is None:
+                break
+            self.missing.discard(self.expected)
+            self.expected = c16_inc(self.expected)
+            completed.extend(self._accept_contiguous_chunk(next_chunk))
+        if self.pending:
+            self.identify_missing()
+        else:
+            self._pending_highest = None
+            self.missing.clear()
+        return True, completed
+
+    def reset_sender(self) -> None:
+        super().reset_sender()
+        self._outbound_records.clear()
+        self._outbound_started_ns = 0
+        self._flush_scheduled = False
+
+    def reset_transport_epoch(self) -> None:
+        super().reset_transport_epoch()
+        self._stream_deserializer.reset()
+        self.batch_datagrams_sent = 0
+        self.batch_chunks_sent = 0
+        self.batch_datagrams_received = 0
+        self.batch_chunks_received = 0
+        self.malformed_batches = 0
+        self.batch_stream_bytes_sent = 0
+        self.batch_stream_bytes_received = 0
+        self.retransmitted_chunks = 0
+        self.stream_decode_errors = 0
 # -------------------- PeerProtocol --------------------
-FRAME_FIRST = 0x01
-FRAME_CONT = 0x02
 class PeerProtocol(asyncio.DatagramProtocol):
     """
     CONTROL emission policy (PeerProtocol-owned):
@@ -1224,7 +1145,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
     """
     def __init__(
         self,
-        session: Session,
+        session: MyUDP2Session,
         on_control_needed,
         on_complete,
         peer=None,
@@ -1457,11 +1378,14 @@ class PeerProtocol(asyncio.DatagramProtocol):
             return None, None, 0, 0
         ptype, payload, tx_ns, echo_ns = parsed
         if ptype == PTYPE_DATA:
-            dp = DataPacket.parse_payload(payload, data)
-            if dp is None:
+            try:
+                chunks = MyUDP2BatchCodec.decode_batch(payload)
+            except BatchDecodeError:
                 self._unidentified_frames += 1
+                if isinstance(self.session, MyUDP2Session):
+                    self.session.malformed_batches += 1
                 return None, None, 0, 0
-            return "data", dp, tx_ns, echo_ns
+            return "data", chunks, tx_ns, echo_ns
         if ptype == self.proto.PTYPE_CONTROL:
             cp = ControlPacket.parse_payload(payload, data)
             if cp is None:
@@ -1545,8 +1469,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
             if cnt == 0 or cnt in seen:
                 continue
             seen.add(cnt)
-            meta = s.send_meta.get(cnt)
-            if meta is None:
+            chunk_data = s.send_meta.get(cnt)
+            if chunk_data is None:
                 if self.session.log.isEnabledFor(logging.DEBUG):
                     self.session.log.debug("[RTX] skip cnt=%d reason=no_send_meta", cnt)
                 continue
@@ -1555,7 +1479,7 @@ class PeerProtocol(asyncio.DatagramProtocol):
             anchor = last_retx or first_tx
             if anchor and (now - anchor) < window_ns:
                 continue
-            frame = s._rebuild_data_frame(cnt, meta)
+            frame = s._rebuild_data_frame(cnt, chunk_data)
             try:
                 self.send_port.sendto(frame)
             except Exception:
@@ -1564,6 +1488,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
             s.last_retx_ns[cnt] = now
             s.last_send_ns = now
             s._bump_attempt(cnt)
+            if isinstance(s, MyUDP2Session):
+                s.retransmitted_chunks += 1
             retx_list.append(cnt)
         if self.session.log.isEnabledFor(logging.DEBUG) and retx_list:
             self.session.log.debug(
@@ -1803,9 +1729,26 @@ class PeerProtocol(asyncio.DatagramProtocol):
                 self._schedule_rx_pending()
             return
         if kind == "data" and pkt:
+            chunks: List[StreamChunk] = pkt
             prev_missing = set(self.session.missing)
-            _, completed = self.session.process_data(pkt)
-            if (pkt.pkt_counter in prev_missing) and (pkt.pkt_counter not in self.session.missing):
+            completed: List[bytes] = []
+            try:
+                for chunk in chunks:
+                    _, delivered = self.session.process_data(chunk)
+                    completed.extend(delivered)
+            except StreamDecodeError:
+                self._unidentified_frames += 1
+                if isinstance(self.session, MyUDP2Session):
+                    self.session._stream_deserializer.reset()
+                    self.session.stream_decode_errors += 1
+                if self._rx_pending:
+                    self._schedule_rx_pending()
+                return
+            if isinstance(self.session, MyUDP2Session):
+                self.session.batch_datagrams_received += 1
+                self.session.batch_chunks_received += len(chunks)
+                self.session.batch_stream_bytes_received += sum(len(chunk.data) for chunk in chunks)
+            if any(chunk.counter in prev_missing and chunk.counter not in self.session.missing for chunk in chunks):
                 self._emit_control(now_ns(), reason="gap_filled_ack")
             grew_missing = len(self.session.missing - prev_missing) > 0
             self._evaluate_control_policy_inbound(grew_missing)
@@ -1921,7 +1864,7 @@ class UdpSession(ISession):
         self._peer_candidate_fallback_task: Optional[asyncio.Task] = None
 
         # Inner reliability/session engine remains the same one from base module.
-        self.inner_session = Session(max_in_flight=args.max_inflight, proto=self._proto_state)
+        self.inner_session = MyUDP2Session(max_in_flight=args.max_inflight, proto=self._proto_state)
 
         # Callbacks
         self._on_app: Optional[Callable[[bytes], None]] = None
@@ -2042,6 +1985,17 @@ class UdpSession(ISession):
                     egress_curr_window_bytes=curr_bytes,
                     peer_missed_count=sum(int(getattr(s, "peer_missed_count", 0) or 0) for s in sessions),
                     our_missed_count=sum(len(getattr(s, "missing", [])) for s in sessions if hasattr(s, "missing")),
+                    batch_datagrams_sent=sum(int(getattr(s, "batch_datagrams_sent", 0) or 0) for s in sessions),
+                    batch_chunks_sent=sum(int(getattr(s, "batch_chunks_sent", 0) or 0) for s in sessions),
+                    batch_datagrams_received=sum(int(getattr(s, "batch_datagrams_received", 0) or 0) for s in sessions),
+                    batch_chunks_received=sum(int(getattr(s, "batch_chunks_received", 0) or 0) for s in sessions),
+                    malformed_batches=sum(int(getattr(s, "malformed_batches", 0) or 0) for s in sessions),
+                    batch_stream_bytes_sent=sum(int(getattr(s, "batch_stream_bytes_sent", 0) or 0) for s in sessions),
+                    batch_stream_bytes_received=sum(int(getattr(s, "batch_stream_bytes_received", 0) or 0) for s in sessions),
+                    queued_stream_bytes=sum(int(s._queued_stream_bytes()) for s in sessions if hasattr(s, "_queued_stream_bytes")),
+                    stream_queue_age_ms=max((float(s.stream_queue_age_ms()) for s in sessions if hasattr(s, "stream_queue_age_ms")), default=0.0),
+                    retransmitted_chunks=sum(int(getattr(s, "retransmitted_chunks", 0) or 0) for s in sessions),
+                    stream_decode_errors=sum(int(getattr(s, "stream_decode_errors", 0) or 0) for s in sessions),
                 )
             except Exception as e:
                 self._log.debug("[UdpSession] aggregated get_metrics failed %r", e)
@@ -2064,13 +2018,38 @@ class UdpSession(ISession):
                 expected          = getattr(s, "expected", None),
                 peer_missed_count = getattr(s, "peer_missed_count", None),
                 our_missed_count  = len(getattr(s, "missing", [])) if hasattr(s, "missing") else None,
+                batch_datagrams_sent = getattr(s, "batch_datagrams_sent", None),
+                batch_chunks_sent = getattr(s, "batch_chunks_sent", None),
+                batch_datagrams_received = getattr(s, "batch_datagrams_received", None),
+                batch_chunks_received = getattr(s, "batch_chunks_received", None),
+                malformed_batches = getattr(s, "malformed_batches", None),
+                batch_stream_bytes_sent = getattr(s, "batch_stream_bytes_sent", None),
+                batch_stream_bytes_received = getattr(s, "batch_stream_bytes_received", None),
+                queued_stream_bytes = s._queued_stream_bytes() if hasattr(s, "_queued_stream_bytes") else None,
+                stream_queue_age_ms = s.stream_queue_age_ms() if hasattr(s, "stream_queue_age_ms") else None,
+                retransmitted_chunks = getattr(s, "retransmitted_chunks", None),
+                stream_decode_errors = getattr(s, "stream_decode_errors", None),
             )
         except Exception as e:
             self._log.debug(f"[UdpSession] get_metrics failed on SessionMetrics(..) %r", e)
             return SessionMetrics()
 
     def get_max_app_payload_size(self) -> int:
-        return 65535
+        return self.get_stream_record_limit()
+
+    def get_stream_record_limit(self) -> int:
+        return MAX_STREAM_RECORD_BYTES
+
+    def get_transport_budget_snapshot(self) -> dict[str, int | float]:
+        session = self.inner_session
+        return {
+            "stream_record_limit": self.get_stream_record_limit(),
+            "chunk_payload_limit": MYUDP2_MAX_CHUNK_BYTES,
+            "batch_payload_limit": MYUDP2_MAX_BATCH_PAYLOAD_BYTES,
+            "batch_record_limit": MYUDP2_MAX_BATCH_RECORDS,
+            "queued_stream_bytes": int(session._queued_stream_bytes()) if hasattr(session, "_queued_stream_bytes") else 0,
+            "stream_queue_age_ms": float(session.stream_queue_age_ms()) if hasattr(session, "stream_queue_age_ms") else 0.0,
+        }
 
     @staticmethod
     def _format_peer_label(host: Optional[object], port: Optional[object]) -> Optional[str]:
@@ -2421,8 +2400,6 @@ class UdpSession(ISession):
     # ---- ISession: data path ----
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         self._log.debug(f"[UdpSession] send_app len {len(payload)}  on session id=%x", id(self))
-        if not payload:
-            return 0
         if self._listener_mode:
             if self._app_payload_passthrough and peer_id is not None:
                 ctx = self._server_peers.get(int(peer_id))
@@ -2779,7 +2756,7 @@ class UdpSession(ISession):
         if peer_id is None:
             peer_id = self._alloc_server_peer_id()
             proto_state = PROTO.__class__(BaseFrameV2)
-            session = Session(max_in_flight=self._args.max_inflight, proto=proto_state)
+            session = MyUDP2Session(max_in_flight=self._args.max_inflight, proto=proto_state)
             peer_proto = PeerProtocol(
                 session,
                 lambda _peer_id=peer_id: self._on_control_needed_for_peer(_peer_id),

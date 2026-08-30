@@ -1825,7 +1825,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     @staticmethod
     def _resolve_session_max_app_payload(session: ISession) -> int:
-        getter = getattr(session, "get_max_app_payload_size", None)
+        getter = getattr(session, "get_stream_record_limit", None)
+        if not callable(getter):
+            getter = getattr(session, "get_max_app_payload_size", None)
         if callable(getter):
             with contextlib.suppress(Exception):
                 return max(0, int(getter() or 0))

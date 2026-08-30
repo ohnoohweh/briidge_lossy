@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-from obstacle_bridge.bridge import BaseFrameV2, DataPacket, FRAME_CONT, Protocol, Session
+from obstacle_bridge.bridge import MyUDP2Session, StreamChunk
 
 
 _SNAPSHOT_RE = re.compile(
@@ -49,8 +49,6 @@ class DataEvent:
     line_no: int
     kind: str
     ctr: int
-    frame_type: int = FRAME_CONT
-    off_len: int = 0
     chunk_len: int = 1
     observed: Optional[Snapshot] = None
     popped: list[int] = None  # type: ignore[assignment]
@@ -108,8 +106,6 @@ def parse_log_events(path: Path) -> tuple[list[DataEvent], list[dict[str, Any]]]
                 line_no=line_no,
                 kind="queued",
                 ctr=int(queued_m.group("ctr")),
-                frame_type=int(queued_m.group("frame_type")),
-                off_len=int(queued_m.group("off_len")),
                 chunk_len=int(queued_m.group("chunk_len")),
                 observed=pending_snapshot,
             )
@@ -140,9 +136,9 @@ def parse_log_events(path: Path) -> tuple[list[DataEvent], list[dict[str, Any]]]
     return events, anomalies
 
 
-def _build_packet(event: DataEvent) -> DataPacket:
+def _build_chunk(event: DataEvent) -> StreamChunk:
     data = bytes(max(0, int(event.chunk_len)))
-    return DataPacket.build_full(event.ctr, int(event.frame_type), int(event.off_len), data)
+    return StreamChunk(event.ctr, data)
 
 
 def replay_events(
@@ -150,7 +146,7 @@ def replay_events(
     *,
     inject_reset_on_regression: bool = False,
 ) -> dict[str, Any]:
-    session = Session(proto=Protocol(BaseFrameV2))
+    session = MyUDP2Session()
     results: list[dict[str, Any]] = []
     previous_observed_expected: Optional[int] = None
 
@@ -163,15 +159,12 @@ def replay_events(
             and previous_observed_expected > 1
             and session.expected > 1
         ):
-            session.expected = 1
-            session.pending.clear()
-            session.missing.clear()
-            session.reass = None
+            session.reset_transport_epoch()
 
         previous_observed_expected = ev.observed.expected if ev.observed is not None else previous_observed_expected
 
-        pkt = _build_packet(ev)
-        _advanced, _completed = session.process_data(pkt)
+        chunk = _build_chunk(ev)
+        _advanced, _completed = session.process_data(chunk)
 
         replay_snapshot = {
             "expected": int(session.expected),

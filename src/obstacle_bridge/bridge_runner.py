@@ -1927,6 +1927,17 @@ class Runner:
                 expected=getattr(session_obj, "expected", None),
                 peer_missed_count=getattr(session_obj, "peer_missed_count", None),
                 our_missed_count=len(getattr(session_obj, "missing", [])) if hasattr(session_obj, "missing") else None,
+                batch_datagrams_sent=getattr(session_obj, "batch_datagrams_sent", None),
+                batch_chunks_sent=getattr(session_obj, "batch_chunks_sent", None),
+                batch_datagrams_received=getattr(session_obj, "batch_datagrams_received", None),
+                batch_chunks_received=getattr(session_obj, "batch_chunks_received", None),
+                malformed_batches=getattr(session_obj, "malformed_batches", None),
+                batch_stream_bytes_sent=getattr(session_obj, "batch_stream_bytes_sent", None),
+                batch_stream_bytes_received=getattr(session_obj, "batch_stream_bytes_received", None),
+                queued_stream_bytes=(session_obj._queued_stream_bytes() if hasattr(session_obj, "_queued_stream_bytes") else None),
+                stream_queue_age_ms=(session_obj.stream_queue_age_ms() if hasattr(session_obj, "stream_queue_age_ms") else None),
+                retransmitted_chunks=getattr(session_obj, "retransmitted_chunks", None),
+                stream_decode_errors=getattr(session_obj, "stream_decode_errors", None),
             )
         except Exception:
             return fallback or SessionMetrics()
@@ -1934,6 +1945,8 @@ class Runner:
     def _session_retransmit_stats(self, session_obj) -> dict:
         hist: dict = {}
         buffered_frames = 0
+        budget: dict = {}
+        inner = session_obj
         with contextlib.suppress(Exception):
             source = self._unwrap_snapshot_session(session_obj)
             inner = getattr(source, "inner_session", source)
@@ -1941,12 +1954,27 @@ class Runner:
             waiting_count = getattr(inner, "waiting_count", None)
             if callable(waiting_count):
                 buffered_frames = int(waiting_count())
+            budget_getter = getattr(source, "get_transport_budget_snapshot", None)
+            if callable(budget_getter):
+                budget = dict(budget_getter() or {})
         return {
             "buffered_frames": buffered_frames,
             "first_pass": int(hist.get("once", 0)),
             "repeated_once": int(hist.get("twice", 0)),
             "repeated_multiple": int(hist.get("thrice", 0)) + int(hist.get("gt3", 0)),
             "confirmed_total": int(hist.get("confirmed_total", 0)),
+            "batch_datagrams_sent": int(getattr(inner, "batch_datagrams_sent", 0) or 0),
+            "batch_chunks_sent": int(getattr(inner, "batch_chunks_sent", 0) or 0),
+            "batch_datagrams_received": int(getattr(inner, "batch_datagrams_received", 0) or 0),
+            "batch_chunks_received": int(getattr(inner, "batch_chunks_received", 0) or 0),
+            "malformed_batches": int(getattr(inner, "malformed_batches", 0) or 0),
+            "batch_stream_bytes_sent": int(getattr(inner, "batch_stream_bytes_sent", 0) or 0),
+            "batch_stream_bytes_received": int(getattr(inner, "batch_stream_bytes_received", 0) or 0),
+            "queued_stream_bytes": int(inner._queued_stream_bytes()) if hasattr(inner, "_queued_stream_bytes") else 0,
+            "stream_queue_age_ms": float(inner.stream_queue_age_ms()) if hasattr(inner, "stream_queue_age_ms") else 0.0,
+            "retransmitted_chunks": int(getattr(inner, "retransmitted_chunks", 0) or 0),
+            "stream_decode_errors": int(getattr(inner, "stream_decode_errors", 0) or 0),
+            "budget": budget,
         }
 
     def _overlay_listen_label(self, transport: str, session: ISession) -> Optional[str]:
