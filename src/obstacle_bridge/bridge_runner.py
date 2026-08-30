@@ -595,9 +595,14 @@ class Runner:
                 return
             helper_socket = str(payload.get("socket_path") or "").strip()
             helper_token = str(payload.get("session_token") or "").strip()
+            owner_pid = int(payload.get("owner_pid") or 0)
         except Exception:
             return
         if not helper_socket or not helper_token or helper_socket == socket_path:
+            return
+        if owner_pid > 0 and self._process_is_running(owner_pid):
+            # Another bridge process may still be starting its helper and has
+            # not authenticated a client yet. It is not a stale launch record.
             return
         if not self._helper_endpoint_candidate_exists(helper_socket):
             with contextlib.suppress(FileNotFoundError):
@@ -633,6 +638,18 @@ class Runner:
         if is_local_tcp_endpoint(helper_socket) or is_windows_pipe_path(helper_socket):
             return True
         return os.path.exists(helper_socket)
+
+    @staticmethod
+    def _process_is_running(pid: int) -> bool:
+        if int(pid) <= 0:
+            return False
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     async def _stop_tun_helper(self) -> None:
         if self._tun_helper_settings.mode == "helper":
@@ -871,6 +888,7 @@ class Runner:
     def _tun_helper_launch_config_payload(self) -> dict[str, Any]:
         return {
             "version": 1,
+            "owner_pid": int(os.getpid()),
             "socket_path": str(self._tun_helper_socket_path or ""),
             "session_token": str(self._tun_helper_session_token or ""),
             "backend": str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND),
@@ -3492,6 +3510,16 @@ class ConfigAwareCLI:
             if not isinstance(value, dict):
                 continue
             for kk, vv in value.items():
+                # The public tun_execution section uses concise keys, while
+                # argparse stores the corresponding CLI destination names.
+                if section == TUN_EXECUTION_SECTION:
+                    kk = {
+                        "mode": "tun_execution_mode",
+                        "helper_backend": "tun_helper_backend",
+                        "helper_socket": "tun_helper_socket",
+                        "helper_apply_network": "tun_helper_apply_network",
+                        "helper_log_level": "tun_helper_log_level",
+                    }.get(kk, kk)
                 flat[kk] = vv
         # Coerce/validate and set defaults
         defaults: Dict[str, Any] = {}

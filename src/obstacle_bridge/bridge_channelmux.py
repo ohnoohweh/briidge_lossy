@@ -3620,11 +3620,17 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if spec is None or str(getattr(spec, "l_proto", "") or "") != "tun":
             return False
         settings = self._tun_helper_settings
-        if not bool(getattr(settings, "helper_apply_network", False)):
+        if not self._tun_helper_network_apply_enabled():
             return False
         if dev is not None:
             return self._tun_helper_manages_device(dev)
         return False
+
+    def _tun_helper_network_apply_enabled(self) -> bool:
+        configured = getattr(self.args, "tun_helper_apply_network", None) if self.args is not None else None
+        if configured is not None:
+            return bool(configured)
+        return bool(getattr(self._tun_helper_settings, "helper_apply_network", False))
 
     def _tun_helper_open_device(self, dev: "ChannelMux.TunDevice") -> None:
         client = self._tun_helper_client
@@ -3643,7 +3649,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         settings = self._tun_helper_settings
         if not self._tun_helper_manages_device(dev):
             return
-        if not bool(getattr(settings, "helper_apply_network", False)):
+        if not self._tun_helper_network_apply_enabled():
             return
         backend = self._tun_helper_backend
         if backend is not None:
@@ -3750,12 +3756,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 if opened_mtu is not None:
                     dev.mtu = int(opened_mtu)
             self.log.info("[TUN/HELPER] helper open complete if=%s mtu=%s opened=%r", dev.ifname, dev.mtu, opened)
-            if self._tun_helper_backend is None and self._tun_helper_manages_device(dev) and bool(getattr(self._tun_helper_settings, "helper_apply_network", False)):
+            if self._tun_helper_network_apply_enabled():
+                # Keep OPEN and APPLY_NETWORK ordered so a peer channel cannot
+                # start passing packets through an unconfigured TUN.
                 dev.helper_network_applied = True
                 self.log.info("[TUN/HELPER] helper apply inline after open if=%s", dev.ifname)
                 await self._tun_helper_apply_network_async(client, dev)
-            else:
-                self._tun_helper_apply_network_for_device(dev, client_override=client)
         except asyncio.CancelledError:
             self.log.warning("[TUN/HELPER] helper open cancelled if=%s mtu=%s", dev.ifname, dev.mtu)
             raise

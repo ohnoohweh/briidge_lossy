@@ -78,16 +78,17 @@ def _with_option_value(args: list[str], option: str, value: str) -> list[str]:
 
 
 def _macos_tun_lifecycle_hooks(script_name: str) -> dict:
+    script_path = str((overlay_e2e.ROOT / "scripts" / script_name).resolve())
     return {
         "listener": {
             "on_created": {
                 "argv": {
-                    "darwin": [f"./scripts/{script_name}", "up", "{ifname}"],
+                    "darwin": [script_path, "up", "{ifname}"],
                 },
             },
             "on_stopped": {
                 "argv": {
-                    "darwin": [f"./scripts/{script_name}", "down", "{ifname}"],
+                    "darwin": [script_path, "down", "{ifname}"],
                 },
             },
         },
@@ -361,14 +362,24 @@ def _start_tun_bridge_pair(
     tuned_case = replace(
         materialized,
         bridge_server_args=_with_service_specs(
-            _strip_option_and_values(materialized.bridge_server_args, "--remote-servers"),
-            "--remote-servers",
-            [server_spec],
+            _strip_option_and_values(
+                _strip_option_and_values(materialized.bridge_server_args, "--remote-servers"),
+                "--own-servers",
+            ),
+            "--own-servers",
+            [],
         ),
         bridge_client_args=_with_service_specs(
-            _strip_option_and_values(materialized.bridge_client_args, "--remote-servers"),
-            "--own-servers",
-            [client_spec],
+            _with_service_specs(
+                _strip_option_and_values(
+                    _strip_option_and_values(materialized.bridge_client_args, "--remote-servers"),
+                    "--own-servers",
+                ),
+                "--own-servers",
+                [client_spec],
+            ),
+            "--remote-servers",
+            [server_spec],
         ),
     )
     server_spec_cmd, client_spec_cmd = overlay_e2e.build_commands(tuned_case, tmp_path, case_index, enable_admin=True)

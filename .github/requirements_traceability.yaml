@@ -645,6 +645,7 @@ REQ-LIFE-007:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_concise_tun_execution_keys
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
@@ -706,6 +707,7 @@ REQ-LIFE-010:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_concise_tun_execution_keys
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
@@ -733,6 +735,8 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
+    - tests/unit/test_runner_tun_helper.py::test_runner_does_not_reap_helper_owned_by_live_bridge_process
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
     - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file

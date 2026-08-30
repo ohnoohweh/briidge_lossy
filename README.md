@@ -548,7 +548,7 @@ Runtime behavior and caveats
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux and macOS, `python -m obstacle_bridge` now warns before relaunching itself through `sudo` for local desktop TUN startup when needed. On Windows that means a usable WinTun installation and either an Administrator session or approval of the automatic UAC relaunch.
 
-The runtime config surface also now reserves a `tun_execution` section for Linux-first helper-backed TUN privilege splitting. At the current delivered stage helper mode starts an authenticated local helper control plane, reports helper state through runtime snapshots, and can route `ChannelMux` local TUN traffic through the helper-backed Linux in-memory backend; the normal desktop inline backend still remains the default path.
+The runtime config surface reserves a `tun_execution` section for helper-backed TUN privilege splitting. Its concise configuration keys (`mode`, `helper_backend`, `helper_socket`, `helper_apply_network`, and `helper_log_level`) are equivalent to the CLI destination names. Helper mode starts an authenticated local helper control plane, reports helper state through runtime snapshots, applies network state only when enabled, and keeps live bridge-owned helper launch records during concurrent startup; the normal desktop inline backend remains the default path.
 
 ## Configuration
 
@@ -1494,7 +1494,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `58` | `911` |
+| Python CLI/runtime, including macOS Python | `58` | `914` |
 | macOS Swift app | `1` | `54` |
 | iOS app/extension | `26` | `170` |
 
