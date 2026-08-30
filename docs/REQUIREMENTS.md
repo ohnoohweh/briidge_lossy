@@ -175,6 +175,8 @@ Elevated TUN route and DNS verification shall assert the configured local host-n
 
   The `tun_execution` section shall accept both concise configuration keys (`mode`, `helper_backend`, `helper_socket`, `helper_apply_network`, and `helper_log_level`) and their CLI destination names. A live bridge process identified by a helper launch record shall not be reaped solely because its helper has not yet authenticated a client.
 
+  Native Darwin helper control requests shall allow sufficient time for privileged `utun` creation and activation before failing an `OPEN_TUN` request. Its runtime snapshot shall retain a bounded hook-execution history so operators and tests can verify required lifecycle hooks even after later TUN operations update the last-hook fields.
+
 - `REQ-LIFE-011`: On iOS, operator-triggered restart and reconnect actions exposed through Admin Web, including restart-after-save flows, shall continue to work when the Network Extension is running without the ObstacleBridge app process. The restart owner for that runtime shall therefore be the extension itself rather than the foreground app.
 - `REQ-LIFE-012`: When helper-owned TUN network application is active on a supported backend, WebAdmin shall expose a TUN / Routing control that suspends or enables only the configured included routes. Suspending shall remove those included routes while retaining the interface, tunnel addresses, excluded routes, DNS, and firewall state; enabling shall reapply the configured included routes. `TUN_routing.enabled_on_startup` shall control whether included routes are applied during startup. The control shall report its current and startup state, and shall be unavailable on a backend that cannot safely provide route-only toggling.
 

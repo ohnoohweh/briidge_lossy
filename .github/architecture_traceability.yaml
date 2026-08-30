@@ -309,6 +309,8 @@ ARC-CMP-004:
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
     - tests/unit/test_runner_tun_helper.py::test_runner_does_not_reap_helper_owned_by_live_bridge_process
+    - tests/unit/test_runner_tun_helper.py::test_darwin_native_helper_uses_extended_control_timeout
+    - tests/unit/test_tun_helper_macos_backend.py::test_apply_and_remove_local_network_uses_client_macos_hook_env
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
     - tests/unit/test_runner_config_persistence.py::test_cli_config_dump_discards_unregistered_effective_values
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back

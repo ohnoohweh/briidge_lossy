@@ -552,6 +552,14 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         runner = Runner(self._helper_args())
         self.assertEqual(runner._tun_helper_launch_config_payload()["owner_pid"], os.getpid())
 
+    def test_darwin_native_helper_uses_extended_control_timeout(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "darwin-native"
+        runner = Runner(args)
+
+        with mock.patch.object(bridge_runner.sys, "platform", "darwin"):
+            self.assertEqual(runner._tun_helper_response_timeout_s(), 10.0)
+
     async def test_runner_reaps_stale_windows_pipe_helper_with_no_other_authenticated_clients(self):
         args = self._helper_args()
         args.tun_helper_backend = "windows-native"

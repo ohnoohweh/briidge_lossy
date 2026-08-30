@@ -977,6 +977,10 @@ class Runner:
         backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
         if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}:
             return 20.0
+        if sys.platform.startswith("darwin") and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}:
+            # Creating and bringing up utun can take longer than the generic
+            # local IPC budget. Do not abandon OPEN_TUN before APPLY_NETWORK.
+            return 10.0
         return 1.0
 
     def _tun_helper_authenticated_client_idle_timeout_s(self) -> float:

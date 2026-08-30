@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import signal
 import shutil
 import socket
@@ -341,6 +342,7 @@ def _start_tun_bridge_pair(
     client_extra_args: Optional[list[str]] = None,
     server_lifecycle_hooks: Optional[dict] = None,
     client_lifecycle_hooks: Optional[dict] = None,
+    publish_server_service_from_client: bool = True,
 ) -> TunBridgePair:
     materialized = overlay_e2e.materialize_case_ports(base_case, case_index)
     client_spec = json.dumps(
@@ -362,12 +364,9 @@ def _start_tun_bridge_pair(
     tuned_case = replace(
         materialized,
         bridge_server_args=_with_service_specs(
-            _strip_option_and_values(
-                _strip_option_and_values(materialized.bridge_server_args, "--remote-servers"),
-                "--own-servers",
-            ),
-            "--own-servers",
-            [],
+            _strip_option_and_values(materialized.bridge_server_args, "--remote-servers"),
+            "--remote-servers",
+            [server_spec],
         ),
         bridge_client_args=_with_service_specs(
             _with_service_specs(
@@ -379,7 +378,7 @@ def _start_tun_bridge_pair(
                 [client_spec],
             ),
             "--remote-servers",
-            [server_spec],
+            [server_spec] if publish_server_service_from_client else [],
         ),
     )
     server_spec_cmd, client_spec_cmd = overlay_e2e.build_commands(tuned_case, tmp_path, case_index, enable_admin=True)
@@ -479,6 +478,21 @@ def _wait_interface_address(ifname: str, address: str, timeout: float = 12.0) ->
     raise RuntimeError(f"address {address} did not appear on {ifname}; last={last!r}")
 
 
+def _wait_interface_local_ipv4_address(ifname: str, timeout: float = 12.0) -> str:
+    end = time.time() + timeout
+    last = ""
+    while time.time() < end:
+        try:
+            last = _ifconfig(ifname)
+        except Exception as exc:
+            last = repr(exc)
+        match = re.search(r"^\s*inet\s+([0-9.]+)(?:\s+-->)?", last, flags=re.MULTILINE)
+        if match:
+            return str(match.group(1))
+        time.sleep(0.1)
+    raise RuntimeError(f"interface {ifname} did not report a local IPv4 address; last={last!r}")
+
+
 def _wait_interface_absent(ifname: str, timeout: float = 12.0) -> None:
     end = time.time() + timeout
     while time.time() < end:
@@ -514,6 +528,17 @@ def _wait_tun_helper_runtime(
             return helper
         time.sleep(0.2)
     raise RuntimeError(f"helper runtime did not reach expected state; last={last!r}")
+
+
+def _helper_hook_scripts(runtime: dict, *, action: str = "up") -> set[str]:
+    scripts: set[str] = set()
+    for entry in list(runtime.get("hook_history") or []):
+        if not isinstance(entry, dict) or str(entry.get("action") or "") != action:
+            continue
+        argv = list(entry.get("argv") or [])
+        if argv:
+            scripts.add(Path(str(argv[0])).name)
+    return scripts
 
 
 def _wait_tun_helper_runtime_counter(
@@ -822,6 +847,7 @@ def test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_h
         mtu=1400,
         server_extra_args=helper_args + server_routing_args,
         client_extra_args=helper_args + client_routing_args,
+        publish_server_service_from_client=False,
     )
     client_actual_ifname = ""
     server_actual_ifname = ""
@@ -846,12 +872,23 @@ def test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_h
         _wait_interface_address(server_actual_ifname, "198.18.65.2")
         assert str(client_runtime.get("last_hook_action") or "") == "up"
         assert str(server_runtime.get("last_hook_action") or "") == "up"
-        assert "client-tun-hook-macos.sh" in " ".join(client_runtime.get("last_hook_argv") or [])
-        assert "server-tun-hook-macos.sh" in " ".join(server_runtime.get("last_hook_argv") or [])
+        client_hooks = _helper_hook_scripts(client_runtime)
+        server_hooks = _helper_hook_scripts(server_runtime)
+        assert "client-tun-hook-macos.sh" in client_hooks
+        assert "server-tun-hook-macos.sh" in server_hooks
 
         client_before = int(client_runtime.get("packets_to_runtime") or 0)
         server_before = int(server_runtime.get("packets_from_runtime") or 0)
-        _send_udp("198.18.65.1", "198.18.65.2", b"darwin-native-packet-carry-501", port=50101)
+        client_local_address = _wait_interface_local_ipv4_address(client_actual_ifname)
+        server_local_address = _wait_interface_local_ipv4_address(server_actual_ifname)
+        assert client_local_address == "198.18.65.1"
+        assert server_local_address == "198.18.65.2"
+        _send_udp(
+            client_local_address,
+            server_local_address,
+            b"darwin-native-packet-carry-501",
+            port=50101,
+        )
         _wait_tun_helper_runtime_counter(
             pair.client_proc.admin_port or 0,
             "packets_to_runtime",

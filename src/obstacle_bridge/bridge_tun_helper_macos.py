@@ -50,6 +50,7 @@ class DarwinTunHelperBackend:
         self._last_hook_argv: list[str] = []
         self._last_hook_env: dict[str, str] = {}
         self._last_hook_action = ""
+        self._hook_history: list[dict[str, Any]] = []
 
     def set_packet_sink(self, sink: Callable[[bytes], Awaitable[None] | None]) -> None:
         self._packet_sink = sink
@@ -186,6 +187,7 @@ class DarwinTunHelperBackend:
             "last_hook_argv": list(self._last_hook_argv),
             "last_hook_env": dict(self._last_hook_env),
             "last_hook_action": self._last_hook_action,
+            "hook_history": [dict(entry) for entry in self._hook_history],
             "last_failure": dict(self._last_failure),
             "stopped": self._stopped,
         }
@@ -211,6 +213,7 @@ class DarwinTunHelperBackend:
         self._last_hook_argv = list(argv)
         self._last_hook_env = dict(env)
         self._last_hook_action = "up"
+        self._record_hook(action="up", argv=argv, env=env)
         snapshot = self.local_snapshot()
         snapshot.update({
             "applied": True,
@@ -242,6 +245,7 @@ class DarwinTunHelperBackend:
         self._last_hook_argv = list(argv)
         self._last_hook_env = dict(env)
         self._last_hook_action = "down"
+        self._record_hook(action="down", argv=argv, env=env)
         snapshot = self.local_snapshot()
         snapshot.update({
             "removed": True,
@@ -253,6 +257,17 @@ class DarwinTunHelperBackend:
             "last_failure": dict(self._last_failure),
         })
         return snapshot
+
+    def _record_hook(self, *, action: str, argv: list[str], env: dict[str, str]) -> None:
+        self._hook_history.append(
+            {
+                "action": str(action),
+                "argv": list(argv),
+                "env": dict(env),
+            }
+        )
+        # Keep Admin diagnostics bounded across reconnect and service refresh cycles.
+        del self._hook_history[:-16]
 
     async def set_tun_enabled(self, payload: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("TUN enable/suspend is not supported by the darwin-native helper backend")
