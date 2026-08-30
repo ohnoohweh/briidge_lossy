@@ -1485,6 +1485,8 @@ Testing statistics and traceability are now reported per product instead of as o
 
 The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
+
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
 
