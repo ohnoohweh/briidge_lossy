@@ -465,6 +465,154 @@ class DataPacket:
         if ptype != PTYPE_DATA:
             return None
         return DataPacket.parse_payload(payload, dat)
+
+
+# -------------------- myUDP2 stream boundary --------------------
+STREAM_RECORD_HEADER_BYTES = 4
+MAX_STREAM_RECORD_BYTES = 65535
+
+
+class StreamDecodeError(ValueError):
+    """A peer supplied bytes that cannot form a valid myUDP2 stream record."""
+
+
+class StreamSerializer:
+    """Encode upper-layer messages as bounded records in the reliable byte stream."""
+
+    def __init__(self, max_record_bytes: int = MAX_STREAM_RECORD_BYTES):
+        self.max_record_bytes = int(max_record_bytes)
+        if not (0 <= self.max_record_bytes <= MAX_STREAM_RECORD_BYTES):
+            raise ValueError("max_record_bytes out of range")
+
+    def encode(self, payload: bytes) -> bytes:
+        if not isinstance(payload, (bytes, bytearray, memoryview)):
+            raise TypeError("stream payload must be bytes-like")
+        body = bytes(payload)
+        if len(body) > self.max_record_bytes:
+            raise ValueError("stream record exceeds configured limit")
+        return struct.pack(">I", len(body)) + body
+
+
+class StreamDeserializer:
+    """Recreate complete upper-layer messages from arbitrary contiguous bytes."""
+
+    def __init__(self, max_record_bytes: int = MAX_STREAM_RECORD_BYTES):
+        self.max_record_bytes = int(max_record_bytes)
+        if not (0 <= self.max_record_bytes <= MAX_STREAM_RECORD_BYTES):
+            raise ValueError("max_record_bytes out of range")
+        self._buffer = bytearray()
+        self._expected_length: Optional[int] = None
+
+    @property
+    def buffered_bytes(self) -> int:
+        return len(self._buffer)
+
+    def reset(self) -> None:
+        self._buffer.clear()
+        self._expected_length = None
+
+    def feed(self, data: bytes) -> List[bytes]:
+        if not isinstance(data, (bytes, bytearray, memoryview)):
+            raise TypeError("stream bytes must be bytes-like")
+        self._buffer.extend(data)
+        completed: List[bytes] = []
+        while True:
+            if self._expected_length is None:
+                if len(self._buffer) < STREAM_RECORD_HEADER_BYTES:
+                    break
+                self._expected_length = struct.unpack(">I", self._buffer[:STREAM_RECORD_HEADER_BYTES])[0]
+                del self._buffer[:STREAM_RECORD_HEADER_BYTES]
+                if self._expected_length > self.max_record_bytes:
+                    self.reset()
+                    raise StreamDecodeError("stream record exceeds configured limit")
+            if len(self._buffer) < self._expected_length:
+                break
+            completed.append(bytes(self._buffer[:self._expected_length]))
+            del self._buffer[:self._expected_length]
+            self._expected_length = None
+        return completed
+
+
+# -------------------- myUDP2 DATA_BATCH codec --------------------
+MYUDP2_BATCH_VERSION = 1
+MYUDP2_MAX_BATCH_RECORDS = 64
+MYUDP2_BATCH_HEADER_BYTES = 2
+MYUDP2_RECORD_LENGTH_BYTES = 2
+MYUDP2_CHUNK_HEADER_BYTES = 4
+MYUDP2_MAX_BATCH_PAYLOAD_BYTES = 1433
+MYUDP2_MAX_CHUNK_BYTES = 1425
+
+
+class BatchDecodeError(ValueError):
+    """A DATA_BATCH payload violates the frozen myUDP2 wire contract."""
+
+
+class StreamChunk:
+    __slots__ = ("counter", "data")
+
+    def __init__(self, counter: int, data: bytes):
+        self.counter = int(counter)
+        self.data = bytes(data)
+
+
+class MyUDP2BatchCodec:
+    """Strict encoder/parser for the myUDP2 DATA_BATCH payload, not its envelope."""
+
+    @staticmethod
+    def encode_chunk(chunk: StreamChunk) -> bytes:
+        if not (1 <= chunk.counter <= 65535):
+            raise ValueError("chunk counter out of range")
+        if not (1 <= len(chunk.data) <= MYUDP2_MAX_CHUNK_BYTES):
+            raise ValueError("chunk length out of range")
+        return struct.pack(">HH", chunk.counter, len(chunk.data)) + chunk.data
+
+    @classmethod
+    def encode_batch(cls, chunks: List[StreamChunk]) -> bytes:
+        if not (1 <= len(chunks) <= MYUDP2_MAX_BATCH_RECORDS):
+            raise ValueError("batch record count out of range")
+        records = []
+        for chunk in chunks:
+            raw = cls.encode_chunk(chunk)
+            records.append(struct.pack(">H", len(raw)) + raw)
+        payload = bytes([MYUDP2_BATCH_VERSION, len(records)]) + b"".join(records)
+        if len(payload) > MYUDP2_MAX_BATCH_PAYLOAD_BYTES:
+            raise ValueError("batch exceeds payload budget")
+        return payload
+
+    @staticmethod
+    def decode_batch(payload: bytes) -> List[StreamChunk]:
+        view = memoryview(payload)
+        if view.nbytes < MYUDP2_BATCH_HEADER_BYTES:
+            raise BatchDecodeError("batch header truncated")
+        version, count = int(view[0]), int(view[1])
+        if version != MYUDP2_BATCH_VERSION:
+            raise BatchDecodeError("unsupported batch version")
+        if not (1 <= count <= MYUDP2_MAX_BATCH_RECORDS):
+            raise BatchDecodeError("record count out of range")
+        offset = MYUDP2_BATCH_HEADER_BYTES
+        chunks: List[StreamChunk] = []
+        for _ in range(count):
+            if offset + MYUDP2_RECORD_LENGTH_BYTES > view.nbytes:
+                raise BatchDecodeError("record length truncated")
+            record_length = struct.unpack(">H", view[offset:offset + 2])[0]
+            offset += MYUDP2_RECORD_LENGTH_BYTES
+            if record_length < MYUDP2_CHUNK_HEADER_BYTES + 1:
+                raise BatchDecodeError("record length too short")
+            if offset + record_length > view.nbytes:
+                raise BatchDecodeError("record length exceeds payload")
+            record = view[offset:offset + record_length]
+            counter, chunk_length = struct.unpack(">HH", record[:4])
+            if not (1 <= counter <= 65535):
+                raise BatchDecodeError("chunk counter out of range")
+            if not (1 <= chunk_length <= MYUDP2_MAX_CHUNK_BYTES):
+                raise BatchDecodeError("chunk length out of range")
+            if record_length != MYUDP2_CHUNK_HEADER_BYTES + chunk_length:
+                raise BatchDecodeError("chunk length mismatch")
+            chunks.append(StreamChunk(counter, record[4:].tobytes()))
+            offset += record_length
+        if offset != view.nbytes:
+            raise BatchDecodeError("trailing bytes")
+        return chunks
 # -------------------- Frames: ControlPacket --------------------
 class ControlPacket:
     __slots__ = ("last_in_order_rx", "highest_rx", "missed", "raw")

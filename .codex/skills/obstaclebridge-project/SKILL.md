@@ -90,6 +90,10 @@ state before finishing the turn.
 
 - When planned work is completed, remove or rewrite the outdated future-tense
   plan items.
+- A completed work package must not remain in a design document's pending work
+  package list. Fold its durable contract and implementation state into the
+  present-tense design, then remove the completed package; design documents are
+  descriptions of today's system and remaining work, not project history.
 - When TODOs or open activities move forward, update the document so it clearly
   separates delivered work, current limitations, and remaining follow-ups.
 - Do not leave design docs describing already-landed work as if it were still a

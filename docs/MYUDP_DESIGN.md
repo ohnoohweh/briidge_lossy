@@ -150,9 +150,9 @@ capability negotiation, or ambiguous parser mode.
 
 ### Frozen myUDP2 wire contract
 
-WP1 freezes the following values. The machine-readable golden vectors are in
-[MYUDP2_WIRE_VECTORS.json](./MYUDP2_WIRE_VECTORS.json); Python and Swift WP3/WP5
-implementations must use those vectors unchanged.
+The following values are frozen. The machine-readable golden vectors are in
+[MYUDP2_WIRE_VECTORS.json](./MYUDP2_WIRE_VECTORS.json); the Python and Swift
+batch-codec implementations use those vectors unchanged.
 
 | Item | Value |
 | --- | --- |
@@ -538,31 +538,6 @@ until every work package below is complete. The implementation is Python and
 Swift work from the first wire-format change; neither runtime is the fallback
 for the other.
 
-### WP1: Freeze the wire and stream contracts
-
-Define the batch header, record header, maximum record count, MTU budget,
-batching-delay cap, stream-record limit, reset/error codes, and all integer byte
-orders in one shared protocol-vector fixture. Define the `u32` serializer record
-format and the exact rule for an empty upper-layer payload. Update the existing
-version-2 Wireshark Lua dissector and provide a checked-in myUDP2 analysis
-profile for the frozen wire format.
-
-Definition of Done:
-
-- Python and Swift consume the same valid and invalid golden vectors.
-- The vectors cover one chunk, several chunks, a batch exactly at its byte limit,
-  a final chunk split across batches, and malformed length/count values.
-- The design document names every field and limit; no implementation chooses a
-  private default for a wire-visible value.
-- No one-record compatibility parser or emitter remains in the target codec.
-- The Wireshark dissector decodes the envelope, batch version, record count,
-  record length, chunk counter, chunk length, `CONTROL` ACK/loss fields, and
-  `IDLE` timestamps without treating opaque chunk bytes as upper-layer data.
-- The analysis profile supplies Decode As instructions for the selected UDP port,
-  display filters for malformed packets, batches, individual counters, missing
-  feedback, and retransmissions, plus columns for direction, `ptype`, batch
-  record count, counter range, `tx_ns`, and `echo_ns`.
-
 ### WP2: Implement the stream serializer boundary
 
 Add a per-peer `StreamSerializer`/`StreamDeserializer` wrapper immediately
@@ -630,7 +605,7 @@ through macOS host and iOS packet-tunnel owners.
 
 Definition of Done:
 
-- Swift passes the WP1 golden vectors byte-for-byte in both encode and decode
+- Swift passes the frozen golden vectors byte-for-byte in both encode and decode
   directions.
 - Swift unit/probe tests cover the same boundary, loss, reset, and invalid-input
   cases as the Python tests.

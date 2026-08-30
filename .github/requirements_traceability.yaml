@@ -1112,6 +1112,8 @@ REQ-MYU-004:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_to_channelmux_edge_reassembles_large_payload
+    - tests/unit/test_myudp_stream_boundary.py::test_stream_deserializer_accepts_every_split_of_length_prefix_and_body
+    - tests/unit/test_myudp_stream_boundary.py::test_stream_serializer_rejects_records_above_wire_limit
 
 REQ-MYU-005:
   integration_tests:
@@ -1127,6 +1129,7 @@ REQ-MYU-006:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_out_of_order_delivery_tracks_missing_and_reassembles_without_corruption
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives
     - tests/unit/test_replay_myudp_semantic_log.py::test_replay_myudp_semantic_log_detects_regression_and_reset_match
+    - tests/unit/test_myudp2_batch_codec.py::test_batch_codec_rejects_frozen_invalid_vectors
 
 REQ-MYU-007:
   integration_tests:

@@ -326,6 +326,8 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - TUN service parsing and mux packet forwarding logic that would otherwise require host-specific privileged interface setup in the test harness
 - websocket payload, proxy-env handling, and reconnect behavior
 - runner event/config helpers
+- myUDP2 stream-record boundaries and frozen batch-codec vectors, including
+  arbitrary prefix splits, empty records, malformed lengths, and the MTU budget
 
 ## Test catalog
 
@@ -617,7 +619,7 @@ This runtime slice is reflected by active `REQ-AUT-*` requirements, and the cert
 
 ## Unit tests
 
-Unit coverage currently collects `216` tests from `tests/unit/`.
+Unit coverage currently collects `797` tests from `tests/unit/`.
 
 ### Unit-side traceability
 
