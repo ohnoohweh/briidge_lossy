@@ -195,7 +195,7 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
         "server_disconnect_detail": "",
         "client_trust_validation_state": "validated",
         "server_trust_validation_state": "validated",
-        "client_frames_passed_total": 1,
+        "client_frames_passed_total": 2,
         "server_frames_passed_total": 2,
         "client_frames_dropped_total": 0,
         "server_frames_dropped_total": 0,
@@ -854,7 +854,11 @@ def test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authent
                     guard let clientProofFrame = clientAuth.emittedFrames.first else {
                         throw ProbeError.badState("missing client proof")
                     }
-                    _ = server.handleInboundFrame(clientProofFrame)
+                    let serverAuth = server.handleInboundFrame(clientProofFrame)
+                    guard let serverHandshakeAck = serverAuth.emittedFrames.first else {
+                        throw ProbeError.badState("missing server handshake acknowledgement")
+                    }
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     guard client.statusSnapshot().authenticated else {
                         throw ProbeError.badState("client did not authenticate")
                     }

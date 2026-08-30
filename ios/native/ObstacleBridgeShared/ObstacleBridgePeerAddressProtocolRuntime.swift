@@ -117,7 +117,8 @@ final class ObstacleBridgePeerAddressProtocolRuntime {
         }
         guard bytes.count == expectedSize + 2 else { return nil }
         var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-        let host = Data(bytes.prefix(expectedSize)).withUnsafeBytes { rawBuffer in
+        let addressBytes = Data(bytes.prefix(expectedSize))
+        let host = addressBytes.withUnsafeBytes { (rawBuffer: UnsafeRawBufferPointer) -> String? in
             guard let base = rawBuffer.baseAddress,
                   inet_ntop(addressFamily, base, &buffer, socklen_t(buffer.count)) != nil
             else {
