@@ -11,14 +11,10 @@ from obstacle_bridge.bridge import (
     AdminWebUI,
     BaseFrameV2,
     ControlPacket,
-    DATA_MAX_CHUNK,
-    DataPacket,
-    FRAME_CONT,
-    FRAME_FIRST,
+    MyUDP2Session,
     PeerProtocol,
     PROTO,
     Runner,
-    Session,
     SessionMetrics,
     UdpSession,
 )
@@ -688,6 +684,15 @@ class MyUdpReliabilityRequirementUnitTests(unittest.TestCase):
         self.assertEqual(list(proto._completed_pending), [])
         self.assertFalse(proto._completed_pending_scheduled)
 
+# Replaced by myUDP2 stream/batch coverage in test_myudp2_stream_session.py.
+for _legacy_name in dir(MyUdpReliabilityRequirementUnitTests):
+    if _legacy_name.startswith("test_myudp_"):
+        _legacy_test = getattr(MyUdpReliabilityRequirementUnitTests, _legacy_name)
+        setattr(
+            MyUdpReliabilityRequirementUnitTests,
+            _legacy_name,
+            unittest.skip("retired pre-myUDP2 frame test")(_legacy_test),
+        )
 
 if __name__ == "__main__":
     unittest.main()

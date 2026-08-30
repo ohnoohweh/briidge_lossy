@@ -1,10 +1,115 @@
 import Foundation
 
 struct ObstacleBridgeUdpOverlaySessionCodec {
-    struct OutgoingSegment {
-        var frameType: Int
-        var lenOrOffset: Int
+    struct OutgoingChunk {
         var data: Data
+    }
+
+    final class StreamReceiveState {
+        private(set) var expected = 1
+        private(set) var pending: [Int: ObstacleBridgeUdpOverlayCodec.StreamChunk] = [:]
+        private(set) var missing: Set<Int> = []
+        private var pendingHighest: Int?
+        private var streamBuffer = Data()
+        private var expectedRecordLength: Int?
+
+        func reset() {
+            expected = 1
+            pending.removeAll()
+            missing.removeAll()
+            pendingHighest = nil
+            streamBuffer.removeAll()
+            expectedRecordLength = nil
+        }
+
+        func process(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) -> (Bool, [Data])? {
+            guard (1...0xFFFF).contains(chunk.counter) else {
+                return nil
+            }
+            let comparison = ringCmp(chunk.counter, expected)
+            if comparison < 0 {
+                return (false, [])
+            }
+            if comparison > 0 {
+                enqueue(chunk)
+                return (false, [])
+            }
+
+            var completed: [Data] = []
+            guard appendContiguous(chunk.data, completed: &completed) else {
+                return nil
+            }
+            expected = c16Inc(expected)
+            while let next = pending.removeValue(forKey: expected) {
+                missing.remove(expected)
+                guard appendContiguous(next.data, completed: &completed) else {
+                    return nil
+                }
+                expected = c16Inc(expected)
+            }
+            if pending.isEmpty {
+                pendingHighest = nil
+                missing.removeAll()
+            } else {
+                identifyMissing()
+            }
+            return (true, completed)
+        }
+
+        private func enqueue(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) {
+            let counter = chunk.counter
+            guard pending[counter] == nil else { return }
+            pending[counter] = chunk
+            if pendingHighest == nil || ringCmp(counter, pendingHighest ?? counter) > 0 {
+                let gapStart = pendingHighest == nil ? expected : c16Inc(pendingHighest ?? expected)
+                for value in c16Range(gapStart, counter) where pending[value] == nil {
+                    missing.insert(value)
+                }
+                pendingHighest = counter
+            }
+            missing.remove(counter)
+        }
+
+        private func appendContiguous(_ bytes: Data, completed: inout [Data]) -> Bool {
+            streamBuffer.append(bytes)
+            while true {
+                if expectedRecordLength == nil {
+                    guard streamBuffer.count >= ObstacleBridgeUdpOverlayCodec.streamRecordHeaderSize else {
+                        return true
+                    }
+                    let headerStart = streamBuffer.startIndex
+                    let byte1 = streamBuffer.index(after: headerStart)
+                    let byte2 = streamBuffer.index(after: byte1)
+                    let byte3 = streamBuffer.index(after: byte2)
+                    let length = (Int(streamBuffer[headerStart]) << 24) | (Int(streamBuffer[byte1]) << 16) |
+                        (Int(streamBuffer[byte2]) << 8) | Int(streamBuffer[byte3])
+                    streamBuffer.removeFirst(ObstacleBridgeUdpOverlayCodec.streamRecordHeaderSize)
+                    guard length <= ObstacleBridgeUdpOverlayCodec.maxStreamRecordBytes else {
+                        streamBuffer.removeAll()
+                        return false
+                    }
+                    expectedRecordLength = length
+                }
+                guard let length = expectedRecordLength, streamBuffer.count >= length else {
+                    return true
+                }
+                // Materialize the slice so upper codecs receive zero-based Data.
+                completed.append(Data(streamBuffer.prefix(length)))
+                streamBuffer.removeFirst(length)
+                expectedRecordLength = nil
+            }
+        }
+
+        private func identifyMissing() {
+            let keys = pending.keys.filter { $0 != 0 }
+            missing.removeAll()
+            pendingHighest = nil
+            guard let highest = highestRing(Array(keys), ref: expected) else { return }
+            pendingHighest = highest
+            for value in c16Range(expected, highest) where pending[value] == nil {
+                missing.insert(value)
+            }
+        }
     }
 
     struct RetransmitSnapshot {
@@ -58,159 +163,6 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         var sendBufferKeys: [Int]
         var peerReportedMissing: [Int]
         var lastAckPeer: Int
-    }
-
-    struct Reassembly {
-        var totalLength: Int
-        var buffer: Data
-        var marks: [Bool]
-        var filled: Int
-
-        init(totalLength: Int) {
-            self.totalLength = totalLength
-            self.buffer = Data(repeating: 0, count: totalLength)
-            self.marks = Array(repeating: false, count: totalLength)
-            self.filled = 0
-        }
-
-        mutating func apply(offset: Int, data: Data) {
-            let end = offset + data.count
-            guard offset >= 0, end <= totalLength else {
-                return
-            }
-            buffer.replaceSubrange(offset..<end, with: data)
-            for index in offset..<end where !marks[index] {
-                marks[index] = true
-                filled += 1
-            }
-        }
-
-        func complete() -> Bool {
-            return filled >= totalLength
-        }
-    }
-
-    final class ReceiveState {
-        private(set) var expected = 1
-        private(set) var pending: [Int: ObstacleBridgeUdpOverlayCodec.DataPacket] = [:]
-        private(set) var missing: Set<Int> = []
-        private var pendingHighest: Int?
-        private(set) var reassembly: Reassembly?
-
-        func reset() {
-            expected = 1
-            pending.removeAll()
-            missing.removeAll()
-            pendingHighest = nil
-            reassembly = nil
-        }
-
-        func process(_ packet: ObstacleBridgeUdpOverlayCodec.DataPacket) -> (Bool, [Data]) {
-            if packet.pktCounter == 0 {
-                return (false, [])
-            }
-            var advanced = false
-            var completed: [Data] = []
-            let counter = packet.pktCounter
-            let comparison = ringCmp(counter, expected)
-
-            if comparison < 0 {
-                return (advanced, completed)
-            }
-            if comparison == 0 {
-                advanced = true
-                expected = c16Inc(expected)
-            } else {
-                enqueueOutOfOrder(packet, counter: counter)
-                return (advanced, completed)
-            }
-
-            apply(packet, counter: counter, completed: &completed)
-
-            if advanced {
-                while let next = pending.removeValue(forKey: expected) {
-                    missing.remove(expected)
-                    let counter = expected
-                    expected = c16Inc(expected)
-                    apply(next, counter: counter, completed: &completed)
-                }
-                if pending.isEmpty {
-                    pendingHighest = nil
-                    missing.removeAll()
-                } else {
-                    identifyMissing()
-                }
-            }
-            return (advanced, completed)
-        }
-
-        private func enqueueOutOfOrder(
-            _ packet: ObstacleBridgeUdpOverlayCodec.DataPacket,
-            counter: Int
-        ) {
-            let alreadyPending = pending[counter] != nil
-            pending[counter] = packet
-            guard !alreadyPending else {
-                return
-            }
-            if missing.contains(counter) {
-                missing.remove(counter)
-            } else {
-                var gapStart = expected
-                if let highest = pendingHighest, ringCmp(counter, highest) > 0 {
-                    gapStart = c16Inc(highest)
-                }
-                if pendingHighest == nil || ringCmp(counter, pendingHighest ?? counter) > 0 {
-                    for value in c16Range(gapStart, counter) where pending[value] == nil {
-                        missing.insert(value)
-                    }
-                }
-                missing.remove(counter)
-            }
-            if pendingHighest == nil || ringCmp(counter, pendingHighest ?? counter) > 0 {
-                pendingHighest = counter
-            }
-        }
-
-        private func apply(
-            _ packet: ObstacleBridgeUdpOverlayCodec.DataPacket,
-            counter: Int,
-            completed: inout [Data]
-        ) {
-            if packet.frameType == 1 {
-                if reassembly == nil {
-                    let total = packet.lenOrOffset
-                    if total > 0 && total <= 0xFFFF {
-                        reassembly = Reassembly(totalLength: total)
-                    }
-                }
-                if reassembly != nil {
-                    reassembly?.apply(offset: 0, data: packet.data)
-                }
-            } else if reassembly != nil {
-                reassembly?.apply(offset: packet.lenOrOffset, data: packet.data)
-            }
-
-            if let current = reassembly, current.complete() {
-                completed.append(current.buffer)
-                reassembly = nil
-            }
-        }
-
-        private func identifyMissing() {
-            let pendingKeys = pending.keys.filter { $0 != 0 }
-            missing.removeAll()
-            pendingHighest = nil
-            guard !pendingKeys.isEmpty else {
-                return
-            }
-            if let highest = highestRing(Array(pendingKeys), ref: expected) {
-                pendingHighest = highest
-                for value in c16Range(expected, highest) where pending[value] == nil {
-                    missing.insert(value)
-                }
-            }
-        }
     }
 
     static func buildControl(
@@ -363,7 +315,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         missed: [Int],
         rttEstMS: Double,
         sendBufferKeys: [Int],
-        sendMeta: [Int: OutgoingSegment],
+        sendMeta: [Int: OutgoingChunk],
         sendTXNS: [Int: UInt64],
         lastRetxNS: [Int: UInt64],
         sendAttempts: [Int: Int],
@@ -394,7 +346,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         nowNS: UInt64,
         rttEstMS: Double,
         sendBufferKeys: [Int],
-        sendMeta: [Int: OutgoingSegment],
+        sendMeta: [Int: OutgoingChunk],
         sendTXNS: [Int: UInt64],
         lastRetxNS: [Int: UInt64],
         sendAttempts: [Int: Int],
@@ -430,7 +382,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         nowNS: UInt64,
         rttEstMS: Double,
         sendBufferKeys: [Int],
-        sendMeta: [Int: OutgoingSegment],
+        sendMeta: [Int: OutgoingChunk],
         sendTXNS: [Int: UInt64],
         lastRetxNS: [Int: UInt64],
         sendAttempts: [Int: Int],
@@ -467,7 +419,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         sendPortPresent: Bool,
         sendBufferKeys: [Int],
         peerReportedMissing: [Int],
-        sendMeta: [Int: OutgoingSegment],
+        sendMeta: [Int: OutgoingChunk],
         sendTXNS: [Int: UInt64],
         lastRetxNS: [Int: UInt64],
         sendAttempts: [Int: Int],
@@ -594,130 +546,6 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         )
     }
 
-    static func handleInboundDataFrames(
-        preFrames: [Data],
-        frame: Data,
-        nowNS: UInt64,
-        txNS: UInt64,
-        echoNS: UInt64,
-        sendPortPresent: Bool,
-        establishedNS: UInt64,
-        lastSentLastInOrder: Int,
-        lastControlSentNS: UInt64,
-        priorRTTEstMS: Double,
-        priorTransmitDelayEstMS: Double
-    ) -> InboundDataHandlingSnapshot? {
-        let state = ReceiveState()
-        for raw in preFrames {
-            guard let packet = ObstacleBridgeUdpOverlayCodec.parseDataFrame(raw) else {
-                return nil
-            }
-            _ = state.process(packet)
-        }
-        guard let packet = ObstacleBridgeUdpOverlayCodec.parseDataFrame(frame) else {
-            return nil
-        }
-
-        var nextEstablishedNS = establishedNS
-        let lastRxTxNS = txNS
-        let lastRxWallNS = nowNS
-        var rttSampleMS: Double = 0
-        var rttEstMS = priorRTTEstMS
-        let transmitDelayEstMS = priorTransmitDelayEstMS
-
-        if echoNS != 0 {
-            let sample = Double(nowNS - echoNS) / 1_000_000.0
-            rttSampleMS = sample
-            if rttEstMS < sample {
-                rttEstMS = sample
-            } else {
-                rttEstMS = (1.0 - 0.125) * rttEstMS + (0.125 * sample)
-            }
-            if nextEstablishedNS == 0 {
-                nextEstablishedNS = nowNS
-            }
-        }
-
-        let previousMissing = state.missing
-        let result = state.process(packet)
-        var controlReasons: [String] = []
-        if previousMissing.contains(packet.pktCounter) && !state.missing.contains(packet.pktCounter) && sendPortPresent {
-            controlReasons.append("gap_filled_ack")
-        }
-        let grewMissing = !state.missing.subtracting(previousMissing).isEmpty
-        let controlDecision = evaluateInboundControlPolicy(
-            nowNS: nowNS,
-            expected: state.expected,
-            missingCount: state.missing.count,
-            grewMissing: grewMissing,
-            lastSentLastInOrder: lastSentLastInOrder,
-            lastControlSentNS: lastControlSentNS,
-            establishedNS: nextEstablishedNS,
-            rttEstMS: rttEstMS
-        )
-        if sendPortPresent, let reason = controlDecision.reason, controlDecision.shouldEmit {
-            controlReasons.append(reason)
-        }
-
-        return InboundDataHandlingSnapshot(
-            controlReasons: controlReasons,
-            completedPayloads: result.1,
-            expected: state.expected,
-            pending: state.pending.keys.sorted(),
-            missing: Array(state.missing).sorted(),
-            establishedNS: nextEstablishedNS,
-            lastRxTxNS: lastRxTxNS,
-            lastRxWallNS: lastRxWallNS,
-            rttSampleMS: rttSampleMS,
-            rttEstMS: rttEstMS,
-            transmitDelayEstMS: transmitDelayEstMS
-        )
-    }
-
-    static func segmentApplicationPayload(
-        _ data: Data,
-        txNS: UInt64,
-        echoNS: UInt64 = 0,
-        startingCounter: Int = 1
-    ) throws -> [Data] {
-        guard !data.isEmpty, data.count <= 0xFFFF else {
-            return []
-        }
-        var frames: [Data] = []
-        var counter = startingCounter
-        let firstChunk = data.prefix(ObstacleBridgeUdpOverlayCodec.dataMaxChunk())
-        frames.append(
-            try ObstacleBridgeUdpOverlayCodec.buildDataFrame(
-                pktCounter: counter,
-                frameType: 1,
-                lenOrOffset: data.count,
-                data: Data(firstChunk),
-                txNS: txNS,
-                echoNS: echoNS
-            )
-        )
-        counter = c16Inc(counter)
-
-        var offset = firstChunk.count
-        while offset < data.count {
-            let end = min(offset + ObstacleBridgeUdpOverlayCodec.dataMaxChunk(), data.count)
-            let chunk = data.subdata(in: offset..<end)
-            frames.append(
-                try ObstacleBridgeUdpOverlayCodec.buildDataFrame(
-                    pktCounter: counter,
-                    frameType: 2,
-                    lenOrOffset: offset,
-                    data: chunk,
-                    txNS: txNS,
-                    echoNS: echoNS
-                )
-            )
-            counter = c16Inc(counter)
-            offset = end
-        }
-        return frames
-    }
-
     private static func ringCmp(_ a: Int, _ b: Int) -> Int {
         if a == b {
             return 0
@@ -766,7 +594,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         windowNS: UInt64,
         useFirstTXWhenNoRetx: Bool,
         sendBufferKeys: [Int],
-        sendMeta: [Int: OutgoingSegment],
+        sendMeta: [Int: OutgoingChunk],
         sendTXNS: [Int: UInt64],
         lastRetxNS: [Int: UInt64],
         sendAttempts: [Int: Int],
@@ -803,11 +631,8 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
             } else {
                 echoNS = 0
             }
-            let frame = try ObstacleBridgeUdpOverlayCodec.buildDataFrame(
-                pktCounter: counter,
-                frameType: meta.frameType,
-                lenOrOffset: meta.lenOrOffset,
-                data: meta.data,
+            let frame = try ObstacleBridgeUdpOverlayCodec.buildDataBatchFrame(
+                chunks: [.init(counter: counter, data: meta.data)],
                 txNS: nowNS,
                 echoNS: echoNS
             )

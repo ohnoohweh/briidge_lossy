@@ -561,6 +561,45 @@ class StatsBoardSnapshotTests(unittest.TestCase):
 
 
 class RunnerPeerSnapshotTests(unittest.TestCase):
+    def test_myudp_stats_expose_stream_batch_budget_and_diagnostics(self):
+        class _Inner:
+            stats_hist = {"confirmed_total": 3, "once": 2, "twice": 1}
+            batch_datagrams_sent = 2
+            batch_chunks_sent = 3
+            batch_datagrams_received = 1
+            batch_chunks_received = 2
+            batch_stream_bytes_sent = 128
+            batch_stream_bytes_received = 64
+            retransmitted_chunks = 1
+            malformed_batches = 0
+            stream_decode_errors = 1
+
+            def waiting_count(self):
+                return 4
+
+            def _queued_stream_bytes(self):
+                return 32
+
+            def stream_queue_age_ms(self):
+                return 1.5
+
+        class _Session:
+            inner_session = _Inner()
+
+            def get_transport_budget_snapshot(self):
+                return {
+                    "stream_record_limit": 65535,
+                    "chunk_payload_limit": 1425,
+                    "batch_payload_limit": 1433,
+                }
+
+        stats = Runner(argparse.Namespace(no_dashboard=True, overlay_transport="myudp"))._session_retransmit_stats(_Session())
+
+        self.assertEqual(stats["batch_chunks_sent"], 3)
+        self.assertEqual(stats["batch_stream_bytes_received"], 64)
+        self.assertEqual(stats["stream_decode_errors"], 1)
+        self.assertEqual(stats["budget"]["stream_record_limit"], 65535)
+
     def test_peer_open_connections_excludes_idle_listeners(self):
         args = argparse.Namespace(no_dashboard=True, overlay_transport="myudp")
         runner = Runner(args)

@@ -202,11 +202,13 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
     async def test_helper_mode_network_payload_merges_auto_excluded_overlay_routes(self):
         args = build_runtime_args_from_config(
             {
-                "overlay_transport": "myudp",
-                "udp_peer": "198.51.100.5,[2001:db8::5]",
-                "udp_peer_port": 4433,
-                "udp_peer_resolve_family": "prefer-ipv6",
-                "udp_bind": "::",
+                "runner": {"overlay_transport": "myudp"},
+                "udp_session": {
+                    "udp_peer": "198.51.100.5,[2001:db8::5]",
+                    "udp_peer_port": 4433,
+                    "udp_peer_resolve_family": "prefer-ipv6",
+                    "udp_bind": "::",
+                },
                 "TUN_routing": {
                     "excluded_routes": ["127.0.0.0/8"],
                     "excluded_routes6": ["::1/128"],

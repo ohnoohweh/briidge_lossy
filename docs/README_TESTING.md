@@ -218,6 +218,10 @@ Notes for those commands:
 - the same Linux command is also available as the VS Code task `Linux Elevated Integration Tests`
 - the macOS slice requires macOS, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it now proves both the Python inline hook path and the Python `darwin-native` helper backend on real elevated Darwin state
 - the macOS script self-elevates with `sudo` when needed and sets the explicit opt-in flag so accidental local `pytest` runs still stay non-privileged
+- sectioned `tun_execution` settings accept both their concise configuration keys (`mode`, `helper_backend`, `helper_socket`, `helper_apply_network`, and `helper_log_level`) and their CLI destination names; a helper applies network state only when `helper_apply_network` is enabled
+- the native Darwin helper uses an extended local control timeout while `utun` is created and brought up, so `APPLY_NETWORK` follows a completed `OPEN_TUN` rather than being abandoned by the generic IPC timeout
+- Darwin helper snapshots retain a bounded lifecycle-hook history; elevated tests assert required hook execution from that history because a shared helper can perform more than one TUN lifecycle operation before status is polled
+- Darwin packet-carry probes derive each `utun` source address from the local `ifconfig` endpoint, rather than matching either side of the point-to-point address display
 - the macOS Swift elevated slice requires macOS, `swiftc`, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it builds the macOS app bundle, launches `ObstacleBridgeHostRunner` from inside the app bundle so the bundled Darwin hook scripts are used, pairs it with a Python `darwin-native` helper peer, verifies real Swift-owned `utun` creation plus packet-counter movement, verifies live route/DNS hook apply/remove effects plus Swift Admin TUN config/peer/global verification parity with Linux/Python, exercises the packaged XPC helper path when macOS reports `SMAppService` approval/reachability for the bundled helper, and runs Admin helper activation, unregister/re-register, and stale-version repair actions from a locally signed app installed under `/Applications`
 - the GitHub integration gate also runs the macOS elevated slice on `macos-latest`; that job verifies passwordless `sudo` first because hosted CI cannot answer an interactive password prompt, preserves the GitHub Actions marker through sudo, and treats hosted-runner refusal of privileged Darwin route/address/ping/helper-approval side effects as diagnostic while still requiring the Admin status payload to report the attempted TUN interface and verification state when the runner exposes the `utun` row; if hosted macOS leaves the inline TUN list empty after privileged setup, the job confirms the Admin diagnostics endpoint is responsive and skips that environment-only assertion
 - the GitHub integration gate also runs the macOS Swift elevated slice when Swift-relevant files changed, with the same passwordless `sudo` preflight and the same distinction between real-machine route/DNS/ping proof and hosted-runner diagnostic verification; packaged XPC assertions are skipped only when hosted macOS leaves the helper `not_registered` with `helper service is not enabled`, or resets the Admin status connection, after registration preflight
@@ -304,6 +308,13 @@ The `myudp` delay/loss coverage is part of the main integration harness. A loopb
 - add propagation delay
 - drop selected DATA frames
 - drop selected CONTROL frames
+- duplicate selected DATA_BATCH datagrams
+- delay selected DATA_BATCH datagrams to force deterministic reordering
+- retain sanitized DATA_BATCH framing metadata for E2E assertions
+
+`tc5a_small_records_batched_and_recovered` and
+`tc5b_small_records_reordered_and_duplicated` also run in both Swift/Python
+directions through `test_overlay_e2e_mixed_runtime_myudp_delay_loss`.
 
 This gives controlled reproduction of retransmission and missed-frame behavior using the real bridge processes instead of an in-memory simulator.
 
@@ -326,6 +337,16 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - TUN service parsing and mux packet forwarding logic that would otherwise require host-specific privileged interface setup in the test harness
 - websocket payload, proxy-env handling, and reconnect behavior
 - runner event/config helpers
+- myUDP2 stream-record boundaries and frozen batch-codec vectors, including
+  arbitrary prefix splits, empty records, malformed lengths, and the MTU budget
+- Python myUDP2 batch scheduling and loss recovery, including coalesced records,
+  final-space chunk splitting, reorder, duplicate suppression, counter rollover,
+  and fresh per-chunk retransmit envelopes after a lost multi-chunk datagram
+- myUDP2 upper-layer stream-record budgets through SecureLink, Compression, and
+  ChannelMux, plus peer-status diagnostics for batch, stream-byte, queue, retry,
+  malformed-batch, and malformed-stream counters
+- shared Swift myUDP2 batch vectors and reordered stream delivery through a
+  compiled probe of the macOS/iOS codec and peer-runtime sources
 
 ## Test catalog
 
@@ -359,7 +380,7 @@ The supporting project-level intent documents are:
 | `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding` | Structured service-definition and hook execution | Verify structured JSON `own_servers`/`remote_servers` execution paths end to end, including listener lifecycle-hook invocation for structured `own_servers` | `pytest -q tests/integration/test_overlay_e2e.py -k "structured_own_servers_lifecycle_hooks_execute or structured_remote_servers_udp_forwarding"` |
 | `test_overlay_e2e_admin_api_*` | Admin web auth/API | Verify auth-disabled, auth-required, authenticated, session-isolated API behavior, and live WebSocket telemetry availability for both open and cookie-authenticated sessions | `pytest -q tests/integration/test_overlay_e2e.py -k admin_api` |
 | `test_overlay_e2e_webadmin_cert_reload_buttons_drive_authenticated_reload_flow` | WebAdmin secure-link operator path | Verify the served Secure-Link tab exposes the documented cert reload controls and that an authenticated operator can drive the reload flow through that browser path | `pytest -q tests/integration/test_overlay_e2e.py -k webadmin_cert_reload_buttons` |
-| `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, preserves peer isolation for multi-client listener scenarios, and keeps `/api/peers` transport-specific secure-link peer stats aligned with live protected traffic | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
+| `test_overlay_e2e_*secure_link_psk*` | Secure-link Phase 1 PSK runtime slice | Verify the delivered PSK secure-link slice reaches protected connected state across supported transports, rejects mismatched PSKs, preserves peer isolation for multi-client listener scenarios, keeps `/api/peers` transport-specific secure-link peer stats aligned with live protected traffic, and proves oversized WS text-mode UDP payload fragmentation by exact bytes on both peers | `pytest -q tests/integration/test_overlay_e2e.py -k secure_link_psk` |
 | `test_overlay_e2e_ws_proxy_*` | WebSocket proxy behavior | Verify proxy success, bypass, scope, handshake ordering, failure handling, and explicit override behavior for WS peer clients, with Windows-only cases for system-default and Negotiate auth | `pytest -q tests/integration/test_overlay_e2e.py -k ws_proxy_` |
 | `test_overlay_e2e_ws_static_http_root_*` | WS listener static HTTP behavior | Verify repeated plain HTTP reads keep returning the static root page and that two plain HTTP requests on the same WS-listener TCP connection succeed before any upgrade, both in the simpler secure-link `ws` case and in the mixed `ws,myudp` listener case with an authenticated `myudp` peer while overlay traffic remains healthy | `pytest -q tests/integration/test_overlay_e2e.py -k ws_static_http_root` |
 | `test_overlay_e2e_ws_overlay_*proxy_env` | WebSocket proxy env behavior | Verify WS peer clients honor `HTTP_PROXY` and `NO_PROXY` in real subprocess runs | `pytest -q tests/integration/test_overlay_e2e.py -k "proxy_env"` |
@@ -394,7 +415,7 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_reconnect_regression` and `test_stream_peer_rotation` | `REQ-LIFE-002`, `REQ-LIFE-005`, `REQ-OVL-007` | Focused reconnect-task lifecycle and throttling guards: prove the legacy stale-task behavior fails after a second disconnect, validate delivered re-entry and peer-rotation behavior, verify configurable retry-delay enforcement, and close suspended TCP, QUIC, and WebSocket reconnect coroutines after loop shutdown without a secondary event-loop lookup |
 | `test_overlay_e2e_listener_two_clients` | `REQ-LST-001`, `REQ-LST-005`, `REQ-ADM-006` | First multi-client listener proof for WS listener behavior and peer reporting |
 | `test_overlay_e2e_concurrent_tcp_channels` | `REQ-LST-001`, `REQ-LST-002`, `REQ-LST-003`, `REQ-LST-004`, `REQ-LST-005`, `REQ-LST-006`, `REQ-LST-007`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-MUX-005`, `REQ-ADM-006` | Covers mixed-service concurrency, multi-client listener behavior, distinct peer visibility, and the baseline peer-independence model for WS/myudp/TCP/QUIC listeners |
-| `test_overlay_e2e_myudp_delay_loss` | `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-003`, `REQ-MYU-004`, `REQ-MYU-005`, `REQ-MYU-006` | Covers delayed path, dropped DATA/CONTROL frames, large payloads, and bidirectional loss behavior |
+| `test_overlay_e2e_myudp_delay_loss` | `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-003`, `REQ-MYU-004`, `REQ-MYU-005`, `REQ-MYU-006` | Covers delayed path, dropped DATA/CONTROL frames, large payloads, bidirectional loss behavior, and exact-once recovery after an observed multi-record batch drop |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | `REQ-LIFE-004`, `REQ-MUX-001`, `REQ-MUX-002` | Special restart regression for the concurrent WS case |
 | `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding`, plus [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) checks `test_parse_remote_servers_accepts_structured_specs`, `test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux`, `test_tcp_target_connection_default_system_honors_no_proxy_on_linux`, `test_tcp_target_connection_uses_system_proxy_egress`, `test_select_hook_argv_uses_platform_specific_mapping`, `test_render_hook_value_replaces_known_placeholders`, `test_hook_context_exposes_resolved_overlay_peer`, `test_open_payload_roundtrip_preserves_hook_metadata`, `test_remote_services_roundtrip_preserves_hook_metadata`, `test_chunked_remote_services_transfer_reassembles_metadata`, `test_chunked_open_transfer_reassembles_metadata`, and `test_peer_installed_tun_stop_runs_listener_on_stopped_before_close` | `REQ-MUX-009` | Verifies structured JSON service-definition coverage for both `own_servers` and `remote_servers`, listener lifecycle-hook execution for structured `own_servers`, ChannelMux TCP target egress through the shared system-proxy CONNECT path including Linux/POSIX env proxy and `NO_PROXY` behavior, overlay peer context exposure for route-preserving hook scripts, deterministic `listener.on_stopped` execution for peer-installed TUN teardown, metadata preservation (`name`/`lifecycle_hooks`/`options`) across OPEN and remote-catalog transfer, and chunked control reassembly when one control message exceeds a single mux frame budget |
 | `test_overlay_e2e_admin_api_available_when_auth_disabled` | `REQ-ADM-002` | Auth-disabled API accessibility |
@@ -494,6 +515,8 @@ This deeper mapping links concrete integration scenarios to requirement IDs. It 
 | `tc3_2000_client_to_server` | `REQ-MYU-004` | Verify medium payload over delayed path | 2000-byte payload survives fragmentation/reassembly path correctly | `pytest -q tests/integration/test_overlay_e2e.py -k tc3_2000_client_to_server` |
 | `tc4_2000_server_to_client` | `REQ-MYU-004` | Verify reverse-direction medium payload over delayed path | 2000-byte reverse payload arrives correctly | `pytest -q tests/integration/test_overlay_e2e.py -k tc4_2000_server_to_client` |
 | `tc5_concurrent_bidir` | `REQ-MYU-005` | Verify simultaneous bidirectional myudp traffic | Client-to-server and server-to-client probes both succeed concurrently | `pytest -q tests/integration/test_overlay_e2e.py -k tc5_concurrent_bidir` |
+| `tc5a_small_records_batched_and_recovered` | `REQ-MYU-002`, `REQ-MYU-005`, `REQ-MYU-006` | Verify small records coalesce and recover after a multi-record batch loss | The proxy observes a multi-chunk DATA_BATCH, drops one, and all 12 distinct payloads arrive exactly once | `pytest -q tests/integration/test_overlay_e2e.py -k tc5a_small_records_batched_and_recovered` |
+| `tc5b_small_records_reordered_and_duplicated` | `REQ-MYU-005`, `REQ-MYU-006` | Verify small records survive deterministic batch reordering and duplication | The proxy delays the first batch, duplicates the next multi-chunk batch, and all 12 distinct payloads arrive exactly once | `pytest -q tests/integration/test_overlay_e2e.py -k tc5b_small_records_reordered_and_duplicated` |
 | `tc6_20k_drop_2_3` | `REQ-MYU-002`, `REQ-MYU-004` | Verify large-payload retransmission with two dropped DATA frames | 20 KiB payload arrives correctly after dropping frames 2 and 3 | `pytest -q tests/integration/test_overlay_e2e.py -k tc6_20k_drop_2_3` |
 | `tc7_20k_drop_2_3_20` | `REQ-MYU-002`, `REQ-MYU-004` | Verify large-payload retransmission with three dropped DATA frames | 20 KiB payload arrives correctly after dropping frames 2, 3, and 20 | `pytest -q tests/integration/test_overlay_e2e.py -k tc7_20k_drop_2_3_20` |
 | `tc8_20k_drop_2_3_21` | `REQ-MYU-002`, `REQ-MYU-004` | Verify large-payload retransmission with another late drop pattern | 20 KiB payload arrives correctly after dropping frames 2, 3, and 21 | `pytest -q tests/integration/test_overlay_e2e.py -k tc8_20k_drop_2_3_21` |
@@ -617,7 +640,7 @@ This runtime slice is reflected by active `REQ-AUT-*` requirements, and the cert
 
 ## Unit tests
 
-Unit coverage currently collects `216` tests from `tests/unit/`.
+Unit coverage currently collects `797` tests from `tests/unit/`.
 
 ### Unit-side traceability
 

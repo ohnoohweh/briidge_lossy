@@ -478,7 +478,19 @@ class CompressLayerSession(ISession):
         return self._inner.get_metrics()
 
     def get_max_app_payload_size(self) -> int:
-        return int(getattr(self._inner, "get_max_app_payload_size", lambda: 65535)() or 65535)
+        return self.get_stream_record_limit()
+
+    def get_stream_record_limit(self) -> int:
+        getter = getattr(self._inner, "get_stream_record_limit", None)
+        if not callable(getter):
+            getter = getattr(self._inner, "get_max_app_payload_size", lambda: 65535)
+        return int(getter() or 65535)
+
+    def get_transport_budget_snapshot(self) -> dict:
+        getter = getattr(self._inner, "get_transport_budget_snapshot", None)
+        snapshot = dict(getter() or {}) if callable(getter) else {}
+        snapshot["stream_record_limit"] = self.get_stream_record_limit()
+        return snapshot
 
     def _compress_snapshot_from_counters(
         self,

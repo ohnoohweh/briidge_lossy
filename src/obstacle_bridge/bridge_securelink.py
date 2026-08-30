@@ -1852,11 +1852,24 @@ class SecureLinkPskSession(ISession):
         return self._inner.get_metrics()
 
     def get_max_app_payload_size(self) -> int:
+        return self.get_stream_record_limit()
+
+    def get_stream_record_limit(self) -> int:
         getter = getattr(self._inner, "get_max_app_payload_size", None)
+        stream_getter = getattr(self._inner, "get_stream_record_limit", None)
+        if callable(stream_getter):
+            getter = stream_getter
         inner_limit = int(getter() or 65535) if callable(getter) else 65535
         # Protected DATA frames add the secure-link header and AEAD tag before they
         # reach the wrapped transport session.
         return max(0, inner_limit - self._SL_HDR.size - 16)
+
+    def get_transport_budget_snapshot(self) -> dict:
+        getter = getattr(self._inner, "get_transport_budget_snapshot", None)
+        snapshot = dict(getter() or {}) if callable(getter) else {}
+        snapshot["stream_record_limit"] = self.get_stream_record_limit()
+        snapshot["secure_link_overhead_bytes"] = self._SL_HDR.size + 16
+        return snapshot
 
     @staticmethod
     def _snapshot_peer_host(row: dict) -> str:

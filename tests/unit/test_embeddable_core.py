@@ -109,6 +109,25 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         self.assertIn("tun_execution", args._config_sections)
         self.assertIn("tun_execution_mode", args._config_sections["tun_execution"])
 
+    def test_build_runtime_args_accepts_concise_tun_execution_keys(self) -> None:
+        args = build_runtime_args_from_config(
+            {
+                "tun_execution": {
+                    "mode": "helper",
+                    "helper_backend": "darwin-native",
+                    "helper_socket": "/tmp/obstaclebridge-helper.sock",
+                    "helper_apply_network": False,
+                    "helper_log_level": "debug",
+                }
+            }
+        )
+
+        self.assertEqual(args.tun_execution_mode, "helper")
+        self.assertEqual(args.tun_helper_backend, "darwin-native")
+        self.assertEqual(args.tun_helper_socket, "/tmp/obstaclebridge-helper.sock")
+        self.assertFalse(args.tun_helper_apply_network)
+        self.assertEqual(args.tun_helper_log_level, "debug")
+
     def test_build_runtime_args_prefers_runner_overlay_transport_over_legacy_root_value(self) -> None:
         args = build_runtime_args_from_config(
             {

@@ -864,19 +864,24 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "struct ObstacleBridgeUdpOverlayCodec" in codec
     assert "buildProtocolFrame(" in codec
     assert "parseProtocolFrame(" in codec
-    assert "buildDataFrame(" in codec
-    assert "parseDataFrame(" in codec
     assert "buildControlFrame(" in codec
     assert "parseControlFrame(" in codec
+    assert "encodeStreamRecord(" in codec
+    assert "encodeDataBatch(" in codec
+    assert "decodeDataBatch(" in codec
+    assert "buildDataFrame(" not in codec
+    assert "parseDataFrame(" not in codec
+    assert "struct DataPacket" not in codec
 
 
 def test_udp_overlay_session_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeUdpOverlaySessionCodec" in codec
-    assert "segmentApplicationPayload(" in codec
-    assert "final class ReceiveState" in codec
-    assert "struct Reassembly" in codec
+    assert "final class StreamReceiveState" in codec
+    assert "segmentApplicationPayload(" not in codec
+    assert "final class ReceiveState" not in codec
+    assert "struct Reassembly" not in codec
 
 
 def test_udp_overlay_peer_runtime_source_exists() -> None:
@@ -896,6 +901,8 @@ def test_udp_overlay_peer_runtime_source_exists() -> None:
     assert "handleInboundIdleFrame(" in runtime
     assert "handleInboundDataFrame(" in runtime
     assert "sendApplicationPayload(" in runtime
+    assert "enqueueApplicationPayload(" in runtime
+    assert "flushSendQueue(" in runtime
     assert "buildOutboundControl(" in runtime
     assert "updateControlTracking(" in runtime
     assert "noteControlSent(" in runtime

@@ -26,6 +26,10 @@ pytestmark = [
 ]
 
 
+def _running_in_github_actions() -> bool:
+    return str(os.environ.get("GITHUB_ACTIONS") or "").strip().lower() == "true"
+
+
 def _require_macos_swift_elevated_runtime() -> None:
     if sys.platform != "darwin":
         pytest.skip("macos Swift elevated tests are supported only on macOS")

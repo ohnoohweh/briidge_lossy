@@ -34,6 +34,7 @@ class _FakeMux:
     def udp_open_count(self) -> int: return 0
     def tcp_open_count(self) -> int: return 0
     def tun_open_count(self) -> int: return 0
+    def set_on_connection_rotation_result(self, _cb): pass
     async def start(self): return None
     async def stop(self, reason: str = ""):
         if self._on_stop is not None:
@@ -56,8 +57,8 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.addCleanup(lambda: shutil.rmtree(helper_dir, ignore_errors=True))
         return build_runtime_args_from_config(
             {
-                "admin_web": False,
-                "status": False,
+                "admin_web": {"admin_web": False},
+                "stats_board": {"status": False},
                 "tun_execution": {
                     "mode": "helper",
                     "helper_backend": "linux-python",
@@ -70,8 +71,8 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
     def _inline_args(self):
         return build_runtime_args_from_config(
             {
-                "admin_web": False,
-                "status": False,
+                "admin_web": {"admin_web": False},
+                "stats_board": {"status": False},
                 "tun_execution": {
                     "mode": "inline",
                 },
@@ -518,6 +519,46 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(_FakeReaperClient.instances[0].socket_path, stale_socket)
         self.assertEqual(_FakeReaperClient.instances[0].calls, [("STOP", {})])
         self.assertFalse(os.path.exists(stale_config))
+
+    async def test_runner_does_not_reap_helper_owned_by_live_bridge_process(self):
+        args = self._helper_args()
+        runner = Runner(args)
+
+        runtime_dir = tempfile.mkdtemp(prefix="obstaclebridge-reaper-live-")
+        self.addCleanup(lambda: shutil.rmtree(runtime_dir, ignore_errors=True))
+        planned_socket = os.path.join(runtime_dir, "planned.sock")
+        sibling_socket = os.path.join(runtime_dir, "sibling.sock")
+        sibling_config = os.path.join(runtime_dir, "tun-helper-launch-sibling.json")
+        with open(sibling_socket, "wb"):
+            pass
+        with open(sibling_config, "w", encoding="utf-8") as handle:
+            json.dump(
+                {
+                    "socket_path": sibling_socket,
+                    "session_token": "sibling-token",
+                    "owner_pid": os.getpid(),
+                },
+                handle,
+            )
+
+        with mock.patch.object(type(runner._tun_helper_settings), "resolved_runtime_dir", return_value=runtime_dir), \
+             mock.patch.object(bridge_runner, "TunHelperClient") as client_cls:
+            await runner._reap_stale_tun_helper_processes(planned_socket)
+
+        client_cls.assert_not_called()
+        self.assertTrue(os.path.exists(sibling_config))
+
+    def test_tun_helper_launch_record_identifies_its_owning_bridge_process(self):
+        runner = Runner(self._helper_args())
+        self.assertEqual(runner._tun_helper_launch_config_payload()["owner_pid"], os.getpid())
+
+    def test_darwin_native_helper_uses_extended_control_timeout(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "darwin-native"
+        runner = Runner(args)
+
+        with mock.patch.object(bridge_runner.sys, "platform", "darwin"):
+            self.assertEqual(runner._tun_helper_response_timeout_s(), 10.0)
 
     async def test_runner_reaps_stale_windows_pipe_helper_with_no_other_authenticated_clients(self):
         args = self._helper_args()

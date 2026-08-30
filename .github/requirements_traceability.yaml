@@ -645,6 +645,7 @@ REQ-LIFE-007:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_concise_tun_execution_keys
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
@@ -706,6 +707,7 @@ REQ-LIFE-010:
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_cli_metadata
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_tun_execution_section
+    - tests/unit/test_embeddable_core.py::test_build_runtime_args_accepts_concise_tun_execution_keys
     - tests/unit/test_embeddable_core.py::test_parse_runtime_args_exposes_tun_execution_cli_metadata
     - tests/unit/test_embeddable_core.py::test_client_lifecycle_uses_runner_without_process_entrypoint
     - tests/unit/test_embeddable_core.py::test_memory_packet_io_round_trip_boundaries
@@ -733,6 +735,10 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
+    - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
+    - tests/unit/test_runner_tun_helper.py::test_runner_does_not_reap_helper_owned_by_live_bridge_process
+    - tests/unit/test_runner_tun_helper.py::test_darwin_native_helper_uses_extended_control_timeout
+    - tests/unit/test_tun_helper_macos_backend.py::test_apply_and_remove_local_network_uses_client_macos_hook_env
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
     - tests/unit/test_tun_helper_client_server.py::test_server_stops_after_authenticated_client_disconnects
     - tests/unit/test_tun_helper_server_entrypoint.py::test_resolve_helper_launch_args_supports_compact_config_file
@@ -949,6 +955,8 @@ REQ-MUX-007:
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
 
 REQ-MUX-008:
+  # The WS SecureLink integration assertion uses peer byte counters because
+  # diagnostic logger routing is not part of the wire-fragmentation contract.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_over_ws_secure_link_fragments
@@ -1084,6 +1092,8 @@ REQ-MUX-010:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_runtime_snapshot_exposes_local_virtual_probe_owner
 
 REQ-MYU-001:
+  # The parameterized E2E entrypoint includes DATA_BATCH coalescing, loss,
+  # deterministic reorder, and duplicate recovery in Python and mixed runtimes.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
@@ -1097,6 +1107,7 @@ REQ-MYU-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_rebuilds_fresh_transport_timestamps
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
+    - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
 
 REQ-MYU-003:
   integration_tests:
@@ -1112,6 +1123,11 @@ REQ-MYU-004:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_large_payload_is_chunked_and_backpressured_by_inflight_window
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_to_channelmux_edge_reassembles_large_payload
+    - tests/unit/test_myudp_stream_boundary.py::test_stream_deserializer_accepts_every_split_of_length_prefix_and_body
+    - tests/unit/test_myudp_stream_boundary.py::test_stream_serializer_rejects_records_above_wire_limit
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_splits_final_record_to_use_remaining_batch_space
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
+    - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
 
 REQ-MYU-005:
   integration_tests:
@@ -1127,6 +1143,10 @@ REQ-MYU-006:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_out_of_order_delivery_tracks_missing_and_reassembles_without_corruption
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives
     - tests/unit/test_replay_myudp_semantic_log.py::test_replay_myudp_semantic_log_detects_regression_and_reset_match
+    - tests/unit/test_myudp2_batch_codec.py::test_batch_codec_rejects_frozen_invalid_vectors
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder
+    - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_counter_rollover_keeps_stream_delivery_contiguous
+    - tests/unit/test_myudp_processing_repro.py::test_malformed_stream_record_is_counted_and_not_delivered
 
 REQ-MYU-007:
   integration_tests:

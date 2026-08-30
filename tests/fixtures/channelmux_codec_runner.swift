@@ -63,25 +63,17 @@ private func parseIntKeyedIntMap(_ raw: Any?) throws -> [Int: Int] {
     return result
 }
 
-private func parseSendMeta(_ raw: Any?) throws -> [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment] {
+private func parseSendMeta(_ raw: Any?) throws -> [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk] {
     let items = try jsonArray(raw as Any)
-    var result: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment] = [:]
+    var result: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk] = [:]
     for item in items {
         let object = try jsonObject(item)
-        guard
-            let counter = object["counter"] as? NSNumber,
-            let frameType = object["frame_type"] as? NSNumber,
-            let lenOrOffset = object["len_or_offset"] as? NSNumber,
-            let dataHex = object["data_hex"] as? String,
-            let data = dataFromHex(dataHex)
-        else {
+        guard let counter = object["counter"] as? NSNumber,
+              let dataHex = object["data_hex"] as? String,
+              let data = dataFromHex(dataHex) else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        result[counter.intValue] = ObstacleBridgeUdpOverlaySessionCodec.OutgoingSegment(
-            frameType: frameType.intValue,
-            lenOrOffset: lenOrOffset.intValue,
-            data: data
-        )
+        result[counter.intValue] = ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk(data: data)
     }
     return result
 }
@@ -946,6 +938,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
                 "echo_ns": String(parsed.echoNS),
             ]
         ]
+    #if false // Removed pre-myUDP2 one-frame and fragment test commands.
     case "build_udp_data_frame":
         guard
             let pktCounter = request["pkt_counter"] as? NSNumber,
@@ -1072,6 +1065,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             "pending": state.pending.keys.sorted(),
             "missing": state.missing.sorted(),
         ]
+    #endif
     case "build_udp_session_control":
         guard
             let expected = request["expected"] as? NSNumber,
@@ -1456,6 +1450,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             "rtt_est_ms": snapshot.rttEstMS,
             "transmit_delay_est_ms": snapshot.transmitDelayEstMS,
         ]
+    #if false // Removed pre-myUDP2 message-fragment receive command.
     case "handle_udp_inbound_data":
         guard
             let frameHex = request["frame_hex"] as? String,
@@ -1509,6 +1504,8 @@ private func handle(_ request: [String: Any]) throws -> Any {
                 "transmit_delay_est_ms": snapshot.transmitDelayEstMS,
             ]
         ]
+    #endif
+    #if false // Removed pre-myUDP2 peer-runtime data sequence command.
     case "drive_udp_peer_runtime_data_sequence":
         guard
             let eventsRaw = request["events"],
@@ -1551,6 +1548,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             return inboundDataSnapshotObject(snapshot)
         }
         return ["snapshots": snapshots]
+    #endif
     case "drive_udp_peer_runtime_idle_sequence":
         guard
             let eventsRaw = request["events"],
@@ -1655,6 +1653,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             return inboundControlSnapshotObject(snapshot)
         }
         return ["snapshots": snapshots]
+    #if false // Removed pre-myUDP2 raw-frame control-timer setup.
     case "drive_udp_peer_runtime_control_timer":
         guard
             let preFramesRaw = request["pre_frames_hex"],
@@ -1697,6 +1696,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
         }
         return ["snapshot": controlTimerSnapshotObject(runtime.handleControlTimerTick(nowNS: nowNS.uint64Value, sendPortPresent: sendPortPresent))]
+    #endif
     case "drive_udp_peer_runtime_retransmit_timer":
         guard
             let sendPortPresent = request["send_port_present"] as? Bool,

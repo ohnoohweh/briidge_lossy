@@ -595,9 +595,14 @@ class Runner:
                 return
             helper_socket = str(payload.get("socket_path") or "").strip()
             helper_token = str(payload.get("session_token") or "").strip()
+            owner_pid = int(payload.get("owner_pid") or 0)
         except Exception:
             return
         if not helper_socket or not helper_token or helper_socket == socket_path:
+            return
+        if owner_pid > 0 and self._process_is_running(owner_pid):
+            # Another bridge process may still be starting its helper and has
+            # not authenticated a client yet. It is not a stale launch record.
             return
         if not self._helper_endpoint_candidate_exists(helper_socket):
             with contextlib.suppress(FileNotFoundError):
@@ -633,6 +638,18 @@ class Runner:
         if is_local_tcp_endpoint(helper_socket) or is_windows_pipe_path(helper_socket):
             return True
         return os.path.exists(helper_socket)
+
+    @staticmethod
+    def _process_is_running(pid: int) -> bool:
+        if int(pid) <= 0:
+            return False
+        try:
+            os.kill(int(pid), 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     async def _stop_tun_helper(self) -> None:
         if self._tun_helper_settings.mode == "helper":
@@ -871,6 +888,7 @@ class Runner:
     def _tun_helper_launch_config_payload(self) -> dict[str, Any]:
         return {
             "version": 1,
+            "owner_pid": int(os.getpid()),
             "socket_path": str(self._tun_helper_socket_path or ""),
             "session_token": str(self._tun_helper_session_token or ""),
             "backend": str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND),
@@ -959,6 +977,10 @@ class Runner:
         backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
         if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}:
             return 20.0
+        if sys.platform.startswith("darwin") and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}:
+            # Creating and bringing up utun can take longer than the generic
+            # local IPC budget. Do not abandon OPEN_TUN before APPLY_NETWORK.
+            return 10.0
         return 1.0
 
     def _tun_helper_authenticated_client_idle_timeout_s(self) -> float:
@@ -1927,6 +1949,17 @@ class Runner:
                 expected=getattr(session_obj, "expected", None),
                 peer_missed_count=getattr(session_obj, "peer_missed_count", None),
                 our_missed_count=len(getattr(session_obj, "missing", [])) if hasattr(session_obj, "missing") else None,
+                batch_datagrams_sent=getattr(session_obj, "batch_datagrams_sent", None),
+                batch_chunks_sent=getattr(session_obj, "batch_chunks_sent", None),
+                batch_datagrams_received=getattr(session_obj, "batch_datagrams_received", None),
+                batch_chunks_received=getattr(session_obj, "batch_chunks_received", None),
+                malformed_batches=getattr(session_obj, "malformed_batches", None),
+                batch_stream_bytes_sent=getattr(session_obj, "batch_stream_bytes_sent", None),
+                batch_stream_bytes_received=getattr(session_obj, "batch_stream_bytes_received", None),
+                queued_stream_bytes=(session_obj._queued_stream_bytes() if hasattr(session_obj, "_queued_stream_bytes") else None),
+                stream_queue_age_ms=(session_obj.stream_queue_age_ms() if hasattr(session_obj, "stream_queue_age_ms") else None),
+                retransmitted_chunks=getattr(session_obj, "retransmitted_chunks", None),
+                stream_decode_errors=getattr(session_obj, "stream_decode_errors", None),
             )
         except Exception:
             return fallback or SessionMetrics()
@@ -1934,6 +1967,8 @@ class Runner:
     def _session_retransmit_stats(self, session_obj) -> dict:
         hist: dict = {}
         buffered_frames = 0
+        budget: dict = {}
+        inner = session_obj
         with contextlib.suppress(Exception):
             source = self._unwrap_snapshot_session(session_obj)
             inner = getattr(source, "inner_session", source)
@@ -1941,12 +1976,27 @@ class Runner:
             waiting_count = getattr(inner, "waiting_count", None)
             if callable(waiting_count):
                 buffered_frames = int(waiting_count())
+            budget_getter = getattr(source, "get_transport_budget_snapshot", None)
+            if callable(budget_getter):
+                budget = dict(budget_getter() or {})
         return {
             "buffered_frames": buffered_frames,
             "first_pass": int(hist.get("once", 0)),
             "repeated_once": int(hist.get("twice", 0)),
             "repeated_multiple": int(hist.get("thrice", 0)) + int(hist.get("gt3", 0)),
             "confirmed_total": int(hist.get("confirmed_total", 0)),
+            "batch_datagrams_sent": int(getattr(inner, "batch_datagrams_sent", 0) or 0),
+            "batch_chunks_sent": int(getattr(inner, "batch_chunks_sent", 0) or 0),
+            "batch_datagrams_received": int(getattr(inner, "batch_datagrams_received", 0) or 0),
+            "batch_chunks_received": int(getattr(inner, "batch_chunks_received", 0) or 0),
+            "malformed_batches": int(getattr(inner, "malformed_batches", 0) or 0),
+            "batch_stream_bytes_sent": int(getattr(inner, "batch_stream_bytes_sent", 0) or 0),
+            "batch_stream_bytes_received": int(getattr(inner, "batch_stream_bytes_received", 0) or 0),
+            "queued_stream_bytes": int(inner._queued_stream_bytes()) if hasattr(inner, "_queued_stream_bytes") else 0,
+            "stream_queue_age_ms": float(inner.stream_queue_age_ms()) if hasattr(inner, "stream_queue_age_ms") else 0.0,
+            "retransmitted_chunks": int(getattr(inner, "retransmitted_chunks", 0) or 0),
+            "stream_decode_errors": int(getattr(inner, "stream_decode_errors", 0) or 0),
+            "budget": budget,
         }
 
     def _overlay_listen_label(self, transport: str, session: ISession) -> Optional[str]:
@@ -3464,6 +3514,16 @@ class ConfigAwareCLI:
             if not isinstance(value, dict):
                 continue
             for kk, vv in value.items():
+                # The public tun_execution section uses concise keys, while
+                # argparse stores the corresponding CLI destination names.
+                if section == TUN_EXECUTION_SECTION:
+                    kk = {
+                        "mode": "tun_execution_mode",
+                        "helper_backend": "tun_helper_backend",
+                        "helper_socket": "tun_helper_socket",
+                        "helper_apply_network": "tun_helper_apply_network",
+                        "helper_log_level": "tun_helper_log_level",
+                    }.get(kk, kk)
                 flat[kk] = vv
         # Coerce/validate and set defaults
         defaults: Dict[str, Any] = {}

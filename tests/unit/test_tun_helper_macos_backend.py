@@ -131,6 +131,10 @@ class DarwinTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(calls[0][1]["EXCLUDED_ROUTES"], "127.0.0.0/8,203.0.113.10/32")
         self.assertEqual(calls[0][1]["OB_OVERLAY_PEER_HOST"], "203.0.113.10")
         self.assertEqual(calls[1][0][-2:], ["down", "utun4"])
+        self.assertEqual(
+            [entry["action"] for entry in (await backend.snapshot())["hook_history"]],
+            ["up", "down"],
+        )
 
     async def test_apply_server_network_uses_server_macos_hook_env(self) -> None:
         backend = DarwinTunHelperBackend()

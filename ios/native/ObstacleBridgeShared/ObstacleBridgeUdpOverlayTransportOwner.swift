@@ -92,6 +92,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var lastInboundDatagramNS: UInt64 = 0
     private var lastIdleProbeNS: UInt64 = 0
     private var lastOverlayConnectedState = false
+    private var batchFlushScheduled = false
 
     init(
         bindHost: String,
@@ -1073,12 +1074,31 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func sendOverlayTransportPayload(_ payload: Data) {
         do {
-            let snapshot = try overlayRuntime.sendApplicationPayload(payload, nowNS: monotonicNowNS(), echoNS: currentEchoNS(monotonicNowNS()))
-            for frame in snapshot.frames {
-                sendDatagram(frame)
-            }
+            try overlayRuntime.enqueueApplicationPayload(payload, nowNS: monotonicNowNS())
+            scheduleBatchFlush()
         } catch {
             eventSink?("udp_overlay_send_payload_failed", ["error": error.localizedDescription, "packet_bytes": payload.count])
+        }
+    }
+
+    private func scheduleBatchFlush() {
+        guard !batchFlushScheduled else { return }
+        batchFlushScheduled = true
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.batchFlushScheduled = false
+            do {
+                let nowNS = self.monotonicNowNS()
+                let snapshot = try self.overlayRuntime.flushSendQueue(
+                    nowNS: nowNS,
+                    echoNS: self.currentEchoNS(nowNS)
+                )
+                for frame in snapshot.frames {
+                    self.sendDatagram(frame)
+                }
+            } catch {
+                self.eventSink?("udp_overlay_send_payload_failed", ["error": error.localizedDescription])
+            }
         }
     }
 

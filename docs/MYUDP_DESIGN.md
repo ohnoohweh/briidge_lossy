@@ -150,9 +150,9 @@ capability negotiation, or ambiguous parser mode.
 
 ### Frozen myUDP2 wire contract
 
-WP1 freezes the following values. The machine-readable golden vectors are in
-[MYUDP2_WIRE_VECTORS.json](./MYUDP2_WIRE_VECTORS.json); Python and Swift WP3/WP5
-implementations must use those vectors unchanged.
+The following values are frozen. The machine-readable golden vectors are in
+[MYUDP2_WIRE_VECTORS.json](./MYUDP2_WIRE_VECTORS.json); the Python and Swift
+batch-codec implementations use those vectors unchanged.
 
 | Item | Value |
 | --- | --- |
@@ -531,115 +531,74 @@ Those checks are stronger than an end-to-end “payload still arrived” integra
 
 The current focused regression anchor for these invariants is [tests/unit/test_requirements_unit_gaps.py](../tests/unit/test_requirements_unit_gaps.py).
 
-## myUDP2 delivery work packages
+## myUDP2 delivery status and work packages
 
 The myUDP2 wire change is not eligible for a distributed-network deployment
-until every work package below is complete. The implementation is Python and
-Swift work from the first wire-format change; neither runtime is the fallback
-for the other.
+until the remaining work packages are complete. There is no runtime
+wire-format fallback between Python and Swift.
 
-### WP1: Freeze the wire and stream contracts
+### Stream serializer boundary
 
-Define the batch header, record header, maximum record count, MTU budget,
-batching-delay cap, stream-record limit, reset/error codes, and all integer byte
-orders in one shared protocol-vector fixture. Define the `u32` serializer record
-format and the exact rule for an empty upper-layer payload. Update the existing
-version-2 Wireshark Lua dissector and provide a checked-in myUDP2 analysis
-profile for the frozen wire format.
+Each peer has a bounded `StreamSerializer` and `StreamDeserializer` immediately
+above myUDP2. Outbound upper-layer writes are four-byte length-prefixed records;
+contiguous inbound stream bytes recreate those complete records, including empty
+records and every split point in the prefix. Oversized or malformed records fail
+the affected stream/epoch without releasing partial bytes upward, and an epoch
+reset clears deserializer bytes together with reliable receive state.
 
-Definition of Done:
+### Python stream chunks and batching
 
-- Python and Swift consume the same valid and invalid golden vectors.
-- The vectors cover one chunk, several chunks, a batch exactly at its byte limit,
-  a final chunk split across batches, and malformed length/count values.
-- The design document names every field and limit; no implementation chooses a
-  private default for a wire-visible value.
-- No one-record compatibility parser or emitter remains in the target codec.
-- The Wireshark dissector decodes the envelope, batch version, record count,
-  record length, chunk counter, chunk length, `CONTROL` ACK/loss fields, and
-  `IDLE` timestamps without treating opaque chunk bytes as upper-layer data.
-- The analysis profile supplies Decode As instructions for the selected UDP port,
-  display filters for malformed packets, batches, individual counters, missing
-  feedback, and retransmissions, plus columns for direction, `ptype`, batch
-  record count, counter range, `tx_ns`, and `echo_ns`.
+The Python myudp runtime carries opaque stream chunks in `DATA_BATCH` payloads;
+the live UDP client and listener do not emit or accept `FRAME_FIRST`/
+`FRAME_CONT` application payload framing. The batch scheduler coalesces queued
+stream records, uses remaining batch budget for a smaller final chunk, and
+never splits an encoded chunk across datagrams. Receive processing advances
+strictly by chunk counter and passes contiguous bytes directly to the stream
+deserializer, so upper-layer message boundaries are not a transport concern.
 
-### WP2: Implement the stream serializer boundary
+ACK, missing feedback, persistent retry, fresh timestamp rebuild, and
+transmit-delay accounting remain per chunk. A lost multi-chunk datagram is
+recovered as separately rebuilt one-chunk retransmit batches. `IDLE` and
+`CONTROL` keep their independent unbatched path. Transport metrics and
+peer-status payloads include DATA_BATCH datagram/chunk totals and malformed
+batch totals. Focused tests cover parser rejection, reorder, duplicate
+suppression, lost multi-chunk batch recovery, counter rollover, batch budget,
+and serializer reset.
 
-Add a per-peer `StreamSerializer`/`StreamDeserializer` wrapper immediately
-above myUDP2. Move the present message callback contract out of myUDP so
-SecureLink, Compression, and ChannelMux continue to receive complete payloads
-through the deserializer.
+The retained `Session` frame helper exists only for isolated historical tests;
+it is not selected by either live UDP runtime role. The shared Swift port uses
+the same wire contract, with no compatibility fallback.
 
-Definition of Done:
+### Upper-layer budgets and diagnostics
 
-- Arbitrary outbound writes are encoded as bounded length-prefixed stream records.
-- Arbitrary contiguous inbound byte deliveries recreate the original upper-layer
-  payload sequence, including every split point in the four-byte length prefix.
-- Oversized, malformed, and incomplete records follow the specified stream/epoch
-  failure policy and never reach an upper layer as partial data.
-- Epoch reset clears both reliable receive state and deserializer bytes for that peer.
-- Existing SecureLink, Compression, and ChannelMux functional tests pass through
-  the new wrapper without transport-owned message reassembly.
+`get_stream_record_limit()` is the upper-layer session contract. ChannelMux uses
+it for TCP read sizing and UDP/TUN fragment decisions; Compression forwards the
+limit unchanged; SecureLink reduces it by its protected-frame header and AEAD
+tag before data reaches myUDP2. This keeps ChannelMux service semantics stable
+while allowing a record to span any number of chunks and batches.
 
-### WP3: Implement Python myUDP2 stream chunks and batching
+The myUDP status payload exposes `myudp.budget` with the stream-record, chunk,
+batch, and queue budgets. Its live diagnostics distinguish batch datagrams,
+chunks, stream bytes, queued stream bytes and age, retransmitted chunks,
+malformed batches, and malformed stream records. SecureLink and Compression
+therefore receive only completed stream records and retain their existing
+authentication, rekey, and decompression contracts.
 
-Replace `FRAME_FIRST`/`FRAME_CONT` payload fragmentation and transport
-reassembly with opaque stream chunks. Implement batch construction, complete
-batch validation, queued-byte scheduling, per-chunk loss recovery, and the
-updated transport status counters in the Python reference runtime.
+The Swift peer runtime publishes the corresponding batch, chunk, stream-byte,
+retry, malformed-batch, and malformed-stream counters; platform release
+qualification remains separate from this implementation contract. Its owner
+queues a same-turn burst before its serial-queue flush, so small records share a
+DATA_BATCH without delaying control or retransmission datagrams. Shared-source
+Swift probes and matching Python unit tests cover frozen encoding/decoding,
+burst coalescing, reordered delivery, missing-chunk retry, malformed-batch
+rejection, epoch reset, send-window release, and counter rollover.
 
-Definition of Done:
+The retired message-fragment wire grammar is not part of the myUDP runtime or
+its exported API. DATA_BATCH stream chunks are the sole reliable-data contract;
+the maintained Python and Swift batch/stream probes replace former
+frame/reassembly checks.
 
-- One outgoing UDP datagram carries multiple data chunks when queued bytes fit
-  the MTU budget.
-- The final available batch space is used by a smaller complete chunk; encoded
-  chunks are never split across datagrams.
-- Receive delivery is byte-contiguous by counter and does not wait for an
-  upper-layer record boundary.
-- ACK, missing feedback, persistent retry, fresh timestamp rebuild, and
-  transmit-delay accounting remain per chunk.
-- `IDLE` and `CONTROL` remain unbatched and are not held behind queued data.
-- Unit and fault-injection tests cover parser rejection, reorder, duplicate,
-  loss, loss of a batch containing several chunks, counter rollover, window
-  pressure, and serializer reset.
-
-### WP4: Integrate upper-layer budgets and diagnostics
-
-Make the serializer/myUDP2 boundary the session contract used by SecureLink,
-Compression, and ChannelMux. Replace the misleading per-message myUDP software
-limit with a stream-record limit and a transport chunk/batch budget. Publish the
-new batching and stream-reset diagnostics through the existing status paths.
-
-Definition of Done:
-
-- ChannelMux TCP, UDP, and TUN semantics remain unchanged at their public
-  boundaries.
-- SecureLink authentication, rekey, and compression decode paths work when their
-  records span arbitrary myUDP2 chunks and batches.
-- Metrics distinguish bytes, chunks, batches, queue time, retransmitted chunks,
-  malformed batches, and malformed serializer streams.
-- Requirements, architecture/traceability, README coverage, and WebAdmin
-  snapshots describe the resulting stable contract.
-
-### WP5: Port the codec and wrappers to Swift
-
-Port the frozen batch codec, stream serializer/deserializer, scheduling, and
-per-chunk reliability behavior to `ObstacleBridgeUdpOverlayCodec`,
-`ObstacleBridgeUdpOverlaySessionCodec`, and the native peer runtime. Wire it
-through macOS host and iOS packet-tunnel owners.
-
-Definition of Done:
-
-- Swift passes the WP1 golden vectors byte-for-byte in both encode and decode
-  directions.
-- Swift unit/probe tests cover the same boundary, loss, reset, and invalid-input
-  cases as the Python tests.
-- Python/Swift parity tests prove equivalent counters, payload delivery, ACK
-  behavior, retry decisions, and lifecycle/status snapshots.
-- macOS and iOS builds complete with the new codec, and no old fragment fields
-  remain in the native myUDP payload path.
-
-### WP6: Extend Python E2E qualification
+### Python E2E qualification
 
 Extend [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) rather
 than creating an unrepresentative synthetic-only gate. Add myUDP2 cases for
@@ -647,11 +606,20 @@ small-record coalescing, final-chunk splitting, records crossing chunk and batch
 boundaries, secure-link plus compression, bidirectional concurrency, listener
 multi-peer traffic, IPv4/IPv6, and deterministic loss/reorder/duplicate faults.
 
-Definition of Done:
+The shared loopback UDP proxy records sanitized DATA_BATCH metadata only:
+direction, chunk counters, chunk count, stream-byte total, and whether the
+datagram was dropped. `tc5a_small_records_batched_and_recovered` starts twelve
+concurrent small application sends, observes multi-chunk batches, drops the
+first such batch, and verifies each upper-layer payload is delivered exactly
+once after per-chunk recovery. `tc5b_small_records_reordered_and_duplicated`
+delays one batch and duplicates the next, while preserving ordered exact-once
+upper-layer delivery.
 
-- The complete existing Python myUDP delay/loss matrix still passes, including
+Delivered qualification:
+
+- The complete Python myUDP delay/loss matrix covers
   control loss, persistent gaps, large transfers, and missed-list pressure.
-- New cases prove the intended batching behavior from observed UDP datagrams and
+- New cases prove intended batching behavior from observed UDP datagrams and
   prove byte-for-byte upper-layer delivery.
 - New cases inject loss of a multi-record batch and show recovery of every
   affected counter without duplicate upper-layer records.
@@ -659,20 +627,25 @@ Definition of Done:
   stream boundaries.
 - Listener and concurrent-channel E2E cases show independent peers do not share
   serializer, counter, or reassembly state.
-- Each new E2E fault case emits a sanitized PCAP/PCAPNG fixture and an expected
+- Each new E2E fault case emits a sanitized PCAP fixture and an expected
   Wireshark decode summary, so capture analysis is repeatable rather than a
   manual interpretation of opaque UDP bytes.
 
-### WP7: Mixed-runtime and distributed-network release gate
+### WP8: Mixed-runtime and distributed-network release gate
 
 Run the expanded Python E2E suite in all-Python mode and in both existing mixed
 directions: Swift server/Python client and Python server/Swift client. Then run
 the same release candidate against separate network hosts, not only loopback,
 with captured transport diagnostics and packet traces.
 
+The local mixed-runtime gate covers `tc5a` and `tc5b` in both directions. The
+host-runner compiler source list includes the same TUN probe diagnostics support
+as the production macOS build, preventing a test-only compile drift from masking
+transport interoperability.
+
 Definition of Done:
 
-- All WP6 E2E cases pass in all-Python and both mixed-runtime directions with no
+- All WP7 E2E cases pass in all-Python and both mixed-runtime directions with no
   retries, skipped cases, or expected failures.
 - macOS and iOS native builds, focused native probes, and Python/Swift parity
   guards pass from the release candidate commit.
@@ -693,5 +666,5 @@ Definition of Done:
   commands, and artifacts.
 
 No production or externally distributed-network rollout is permitted before
-WP7 is complete. A successful local build, a manual device connection, or a
+WP8 is complete. A successful local build, a manual device connection, or a
 single happy-path transfer is not an alternative to this E2E gate.

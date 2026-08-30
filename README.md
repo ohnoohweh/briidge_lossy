@@ -548,7 +548,7 @@ Runtime behavior and caveats
 
 If your configuration includes any `tun,...` service entries, start ObstacleBridge with elevated operating-system privileges. On Linux and macOS, `python -m obstacle_bridge` now warns before relaunching itself through `sudo` for local desktop TUN startup when needed. On Windows that means a usable WinTun installation and either an Administrator session or approval of the automatic UAC relaunch.
 
-The runtime config surface also now reserves a `tun_execution` section for Linux-first helper-backed TUN privilege splitting. At the current delivered stage helper mode starts an authenticated local helper control plane, reports helper state through runtime snapshots, and can route `ChannelMux` local TUN traffic through the helper-backed Linux in-memory backend; the normal desktop inline backend still remains the default path.
+The runtime config surface reserves a `tun_execution` section for helper-backed TUN privilege splitting. Its concise configuration keys (`mode`, `helper_backend`, `helper_socket`, `helper_apply_network`, and `helper_log_level`) are equivalent to the CLI destination names. Helper mode starts an authenticated local helper control plane, reports helper state through runtime snapshots, applies network state only when enabled, and keeps live bridge-owned helper launch records during concurrent startup; the normal desktop inline backend remains the default path.
 
 ## Configuration
 
@@ -1068,6 +1068,7 @@ What the admin web shows:
 - A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
 - A peer-session table that separates Transport endpoint/state, Protocol status and timing, SecureLink reported status and phase, Compression reported status, ChannelMux traffic/channel counts plus candidate/restart timers, and TUN throttle diagnostics. Transport, Protocol, and ChannelMux remain visible for every non-listening peer, while enabled SecureLink and Compression layers remain visible throughout failed or reconnecting states. Connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
+- Python `myudp` peer diagnostics include the myUDP2 stream-record, chunk, batch, and queue budgets plus live batch/chunk/stream-byte totals, queue age, retransmitted-chunk, malformed-batch, and malformed-stream counters. These fields describe the Python reference runtime; Swift myUDP2 parity remains a release prerequisite.
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
 - The dedicated TUN / Routing view also shows shared-TUN ownership maps, active channel bindings, interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
@@ -1484,6 +1485,8 @@ Testing statistics and traceability are now reported per product instead of as o
 
 The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
+
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
 
@@ -1491,9 +1494,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `55` | `888` |
+| Python CLI/runtime, including macOS Python | `58` | `915` |
 | macOS Swift app | `1` | `54` |
-| iOS app/extension | `25` | `168` |
+| iOS app/extension | `26` | `170` |
 
 #### Requirement traceability
 
@@ -1501,7 +1504,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
-| iOS app/extension | `10/92 = 10.9%` | `12/92 = 13.0%` | `18/92 = 19.6%` |
+| iOS app/extension | `10/92 = 10.9%` | `14/92 = 15.2%` | `20/92 = 21.7%` |
 
 #### Architecture traceability
 
@@ -1509,7 +1512,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/7 = 100.0%` | `7/7 = 100.0%` | `7/7 = 100.0%` |
 | macOS Swift app | `1/7 = 14.3%` | `3/7 = 42.9%` | `3/7 = 42.9%` |
-| iOS app/extension | `4/7 = 57.1%` | `5/7 = 71.4%` | `5/7 = 71.4%` |
+| iOS app/extension | `4/7 = 57.1%` | `6/7 = 85.7%` | `6/7 = 85.7%` |
 
 The supporting manifests remain shared:
 

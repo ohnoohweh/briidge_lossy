@@ -98,6 +98,9 @@ class FakeInnerSession:
     def get_max_app_payload_size(self):
         return 65535
 
+    def get_transport_budget_snapshot(self):
+        return {"stream_record_limit": 65535, "chunk_payload_limit": 1425}
+
     def emit_state(self, connected: bool):
         self._connected = connected
         if callable(self._on_state):
@@ -134,6 +137,16 @@ def _args(**overrides):
 
 
 class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_secure_link_reports_protected_stream_record_budget(self):
+        session = SecureLinkPskSession(FakeInnerSession(), _args(tcp_peer='127.0.0.1'), 'myudp')
+
+        expected = 65535 - session._SL_HDR.size - 16
+        self.assertEqual(session.get_stream_record_limit(), expected)
+        self.assertEqual(session.get_max_app_payload_size(), expected)
+        budget = session.get_transport_budget_snapshot()
+        self.assertEqual(budget["stream_record_limit"], expected)
+        self.assertEqual(budget["secure_link_overhead_bytes"], session._SL_HDR.size + 16)
+
     async def test_lifecycle_forwards_transport_epoch_and_rotation_request(self):
         inner = FakeInnerSession()
         session = SecureLinkPskSession(inner, _args(tcp_peer='127.0.0.1'), 'tcp')
