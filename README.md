@@ -1098,7 +1098,7 @@ When the outer lifecycle remains disconnected, ChannelMux rotates the lower stac
 
 ### Own public IP
 
-Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address it observes. The Peer page’s Transport block presents that value as **Own Public IP**. It reports the IPv4 or IPv6 address for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.
+Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the IPv4 or IPv6 address for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.
 
 ### Compression layer
 

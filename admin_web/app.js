@@ -2950,18 +2950,19 @@ function renderPeerTable(rows) {
       connectionLine1.push(renderMetric('Transport Listen', row.listen));
     } else {
       connectionLine1.push(renderMetric('Resolved Peer', row.peer));
-      connectionLine1.push(renderMetric('Own Public IP', row.observed_public_ip));
     }
     const connectionLines = [connectionLine1];
     if (!isListeningPeer && isConnectingPeer) {
       connectionLines.push([
-        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds), { className: 'peer-transport-quarter' }),
+        renderMetric('Own Public IP', row.observed_public_ip, { className: 'peer-transport-half' }),
       ]);
     }
     if (!isListeningPeer && !isConnectingPeer) {
       connectionLines.push([
-        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)),
-        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds)),
+        renderMetric('Connection Uptime', fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts), { className: 'peer-transport-quarter' }),
+        renderMetric('Last Incoming', fmtAgeSeconds(row.last_incoming_age_seconds), { className: 'peer-transport-quarter' }),
+        renderMetric('Own Public IP', row.observed_public_ip, { className: 'peer-transport-half' }),
       ]);
     }
     const connectionLayers = Array.isArray(row.connection_layers) ? row.connection_layers : [];
