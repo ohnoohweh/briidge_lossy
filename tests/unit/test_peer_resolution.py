@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import errno
 import logging
 import socket
@@ -7,6 +8,40 @@ import pytest
 
 from obstacle_bridge.bridge import _resolve_peer_endpoint
 from obstacle_bridge.bridge_transport_udp import SendPort, UdpSession
+
+
+async def _rotate_client_socket() -> tuple[bool, bool, tuple, tuple]:
+    args = argparse.Namespace(
+        max_inflight=32,
+        udp_bind="127.0.0.1",
+        udp_own_port=0,
+        udp_peer="127.0.0.1",
+        udp_peer_port=4433,
+        udp_peer_resolve_family="ipv4",
+    )
+    session = UdpSession(args)
+    await session.start()
+    old_transport = session._transport
+    assert old_transport is not None
+    old_sockname = old_transport.get_extra_info("sockname")
+    try:
+        result = session.request_connection_rotation("channelmux_disconnected")
+        task = session._socket_rebuild_task
+        assert task is not None
+        await asyncio.wait_for(task, timeout=1.0)
+        new_transport = session._transport
+        assert new_transport is not None
+        return result.accepted, old_transport is not new_transport, old_sockname, new_transport.get_extra_info("sockname")
+    finally:
+        await session.stop()
+
+
+def test_udp_session_rotation_rebuilds_client_socket() -> None:
+    accepted, rebuilt, old_sockname, new_sockname = asyncio.run(_rotate_client_socket())
+
+    assert accepted is True
+    assert rebuilt is True
+    assert old_sockname != new_sockname
 
 
 def test_resolve_localhost_ipv6_uses_loopback_fallback_on_gaierror(monkeypatch: pytest.MonkeyPatch) -> None:
