@@ -245,6 +245,19 @@ def test_channel_mux_tun_runtime_source_exists() -> None:
     assert "handleInboundTunData(" in runtime
     assert "handleInboundTunFragment(" in runtime
     assert "handleInboundTunClose(" in runtime
+    assert "func resetTransportEpoch()" in runtime
+
+
+def test_swift_overlay_epoch_reset_reopens_local_tun_channels() -> None:
+    for owner_name in (
+        "ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+        "ObstacleBridgeQuicOverlayTransportOwner.swift",
+    ):
+        owner = (SHARED_NATIVE_DIR / owner_name).read_text(encoding="utf-8")
+        assert "tunRuntime?.resetTransportEpoch()" in owner
+        assert "activeTunChanIDs.removeAll()" in owner
 
 
 def test_channel_mux_udp_runtime_source_exists() -> None:

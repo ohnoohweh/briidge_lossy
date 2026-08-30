@@ -287,6 +287,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         peerCandidates.removeAll()
         peerCandidateIndex = 0
         overlayRuntime.resetTransportEpoch()
+        tunRuntime?.resetTransportEpoch()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
@@ -834,6 +835,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func resetOverlayTransportEpoch(reason: String) {
         overlayRuntime.resetTransportEpoch()
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false

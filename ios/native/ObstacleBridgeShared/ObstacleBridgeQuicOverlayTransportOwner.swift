@@ -182,6 +182,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard started else { return }
         started = false
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
+        tunRuntime?.resetTransportEpoch()
         overlayConnected = false
         reconnectScheduled = false
         nextReconnectAttemptDeadlineNS = nil
@@ -505,6 +506,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func handleDisconnected(schedule: Bool) {
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         overlayConnected = false
         overlayConnection?.cancel()
         overlayConnection = nil

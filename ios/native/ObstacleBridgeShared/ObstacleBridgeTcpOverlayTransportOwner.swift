@@ -821,6 +821,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     private func resetOverlayTransportEpoch() {
         overlayLayerTransportAdapter?.handleTransportDisconnected()
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         secureLinkHandshakePrimed = false
         lowerLayerFallbackWorkItem?.cancel()
         lowerLayerFallbackWorkItem = nil

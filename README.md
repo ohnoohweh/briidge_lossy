@@ -1519,7 +1519,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 | macOS Swift app | `1/8 = 12.5%` | `3/8 = 37.5%` | `3/8 = 37.5%` |
-| iOS app/extension | `4/8 = 50.0%` | `6/8 = 75.0%` | `6/8 = 75.0%` |
+| iOS app/extension | `4/8 = 50.0%` | `7/8 = 87.5%` | `7/8 = 87.5%` |
 
 The supporting manifests remain shared:
 
@@ -1602,6 +1602,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
+- Keep Swift TUN recovery covered for myUDP, TCP, WebSocket, and QUIC: a transport-epoch reset must discard stale mux channel state so the next local packet sends a fresh `OPEN` before `DATA`.
 - Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 

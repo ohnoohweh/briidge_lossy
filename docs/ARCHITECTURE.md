@@ -103,6 +103,10 @@ ChannelMux and TUN:
   gate
 - a newly reported `connected` state with a new epoch causes the normal mux
   resynchronization and service reopening path
+- a transport-epoch reset invalidates all prior TUN channel bindings before
+  local forwarding resumes; the next local packet opens a fresh channel before
+  sending data. This applies to the shared Swift ChannelMux runtime used by
+  myUDP, TCP, WebSocket, and QUIC as well as the Python runtime.
 
 #### Candidate budget and restart
 

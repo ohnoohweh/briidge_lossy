@@ -167,6 +167,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tun_epoch_reset_reopens_local_channel
+    - ios/tests/test_m3_native_sources.py::test_swift_overlay_epoch_reset_reopens_local_tun_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_retains_prestarted_server_owned_shared_tun_service
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_still_ignores_ambiguous_non_shared_own_services
     - tests/unit/test_channel_mux_listener_mode.py::test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected
