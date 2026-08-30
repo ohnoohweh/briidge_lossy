@@ -1663,6 +1663,12 @@ select.config-editor option:disabled {
   border-color: rgba(59, 130, 246, 0.22);
 }
 
+.conn-table .role-disconnected {
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  border-color: rgba(239, 68, 68, 0.22);
+}
+
 .conn-table .role-unknown {
   background: rgba(148, 163, 184, 0.12);
   color: #cbd5e1;

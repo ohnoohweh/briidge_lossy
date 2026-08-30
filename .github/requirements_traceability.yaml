@@ -1235,7 +1235,8 @@ REQ-ADM-006:
   # regular stats snapshot is temporarily unavailable before a cache exists.
   # Peer-detail coverage also pins persistent enabled-layer visibility and
   # ChannelMux-owned candidate/restart timers, including the Transport
-  # detail ordering for resolved and server-observed peer addresses.
+  # detail ordering and connected/disconnected pill semantics for resolved and
+  # server-observed peer addresses.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels

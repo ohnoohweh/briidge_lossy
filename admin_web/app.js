@@ -1468,6 +1468,8 @@ function fmtTunRoutingRouteList(routes) {
 
 function detailPillClass(value) {
   const normalized = String(value || '').toLowerCase();
+  if (normalized === 'connected') return 'role-pill role-server';
+  if (normalized === 'disconnected') return 'role-pill role-disconnected';
   if (
     normalized.includes('auth')
     || normalized.includes('connect')
