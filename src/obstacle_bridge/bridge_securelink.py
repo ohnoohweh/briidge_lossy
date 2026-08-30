@@ -283,6 +283,10 @@ class SecureLinkPskSession(ISession):
     _HANDSHAKE_TIMEOUT_S = 60.0
     _HANDSHAKE_WATCHDOG_INTERVAL_S = 0.25
 
+    def __getattr__(self, name: str):
+        """Keep transport diagnostics available through this transparent wrapper."""
+        return getattr(self._inner, name)
+
     @staticmethod
     def register_cli(p: argparse.ArgumentParser) -> None:
         def _has(opt: str) -> bool:

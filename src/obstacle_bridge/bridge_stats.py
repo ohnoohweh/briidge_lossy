@@ -247,7 +247,7 @@ class StatsBoard:
         now_s = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
         m = self.session_get_metrics()
         last_ok = (
-            ((self.session.last_rtt_ok_ns if self.session else 0) or 0)
+            ((getattr(self.session, "last_rtt_ok_ns", 0) if self.session else 0) or 0)
             or (m.last_rtt_ok_ns or 0)
             or self._last_rtt_ok_ns
         )
@@ -402,7 +402,7 @@ class StatsBoard:
         m = self.session_get_metrics()
 
         last_ok = (
-            ((self.session.last_rtt_ok_ns if self.session else 0) or 0)
+            ((getattr(self.session, "last_rtt_ok_ns", 0) if self.session else 0) or 0)
             or (m.last_rtt_ok_ns or 0)
             or self._last_rtt_ok_ns
         )

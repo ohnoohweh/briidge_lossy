@@ -78,3 +78,14 @@ class PeerAddressProtocolSessionTests(unittest.IsolatedAsyncioTestCase):
         wrapper = PeerAddressProtocolSession(_FakeInnerSession(peer_id=0, observed_host=""), transport_name="ws", client_mode=True)
         self.assertIsNone(wrapper._parse_control_frame(b"OBPA\x01\x02\x04short"))
         self.assertIsNone(wrapper._parse_control_frame(b"not-peer-address"))
+
+    def test_transparent_wrapper_delegates_required_session_methods(self) -> None:
+        inner = _FakeInnerSession(peer_id=0, observed_host="198.51.100.44")
+        metrics = object()
+        inner.get_metrics = lambda: metrics
+        inner.get_max_app_payload_size = lambda: 1234
+        wrapper = PeerAddressProtocolSession(inner, transport_name="myudp", client_mode=True)
+
+        self.assertTrue(wrapper.is_connected())
+        self.assertIs(wrapper.get_metrics(), metrics)
+        self.assertEqual(wrapper.get_max_app_payload_size(), 1234)

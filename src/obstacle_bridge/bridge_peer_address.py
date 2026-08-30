@@ -66,6 +66,41 @@ class PeerAddressProtocolSession(ISession):
     def set_on_state_change(self, cb) -> None:
         self._outer_on_state = cb
 
+    def set_on_connection_lifecycle(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_connection_lifecycle", None)
+        if callable(setter):
+            setter(cb)
+
+    def set_on_peer_rx(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_peer_rx", None)
+        if callable(setter):
+            setter(cb)
+
+    def set_on_peer_tx(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_peer_tx", None)
+        if callable(setter):
+            setter(cb)
+
+    def set_on_peer_set(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_peer_set", None)
+        if callable(setter):
+            setter(cb)
+
+    def set_on_peer_disconnect(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_peer_disconnect", None)
+        if callable(setter):
+            setter(cb)
+
+    def set_on_app_from_peer_bytes(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_app_from_peer_bytes", None)
+        if callable(setter):
+            setter(cb)
+
+    def set_on_transport_epoch_change(self, cb) -> None:
+        setter = getattr(self._inner, "set_on_transport_epoch_change", None)
+        if callable(setter):
+            setter(cb)
+
     def _on_inner_state_change(self, connected: bool) -> None:
         if not connected:
             self._request_sent = False
@@ -127,6 +162,25 @@ class PeerAddressProtocolSession(ISession):
         self._request_sent = False
         self._observed_public_ip = ""
         await self._inner.stop()
+
+    async def wait_connected(self, timeout: Optional[float] = None) -> bool:
+        waiter = getattr(self._inner, "wait_connected", None)
+        return bool(await waiter(timeout=timeout)) if callable(waiter) else self.is_connected()
+
+    def is_connected(self) -> bool:
+        return bool(getattr(self._inner, "is_connected", lambda: False)())
+
+    def get_metrics(self):
+        getter = getattr(self._inner, "get_metrics", None)
+        return getter() if callable(getter) else None
+
+    def get_max_app_payload_size(self) -> int:
+        getter = getattr(self._inner, "get_max_app_payload_size", None)
+        return int(getter() or 65535) if callable(getter) else 65535
+
+    def request_connection_rotation(self, reason: str = ""):
+        requester = getattr(self._inner, "request_connection_rotation", None)
+        return requester(reason) if callable(requester) else None
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         return self._inner.send_app(payload, peer_id=peer_id)

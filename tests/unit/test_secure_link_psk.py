@@ -147,6 +147,16 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(budget["stream_record_limit"], expected)
         self.assertEqual(budget["secure_link_overhead_bytes"], session._SL_HDR.size + 16)
 
+    async def test_transparent_wrapper_delegates_transport_diagnostics(self):
+        inner = FakeInnerSession(connected=True)
+        inner.last_rtt_ok_ns = 123456
+        inner.stats_hist = {"confirmed_total": 7}
+
+        session = SecureLinkPskSession(inner, _args(tcp_peer='127.0.0.1'), 'tcp')
+
+        self.assertEqual(session.last_rtt_ok_ns, 123456)
+        self.assertEqual(session.stats_hist, {"confirmed_total": 7})
+
     async def test_lifecycle_forwards_transport_epoch_and_rotation_request(self):
         inner = FakeInnerSession()
         session = SecureLinkPskSession(inner, _args(tcp_peer='127.0.0.1'), 'tcp')
