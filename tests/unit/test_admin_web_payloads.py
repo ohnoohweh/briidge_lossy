@@ -1610,6 +1610,8 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("const channelMuxMetrics = !isListeningPeer ? renderMetricStack", text)
                 self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", text)
                 self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", text)
+                self.assertIn("const negative = numeric < 0;", text)
+                self.assertIn("return negative ? `-${formatted}` : formatted;", text)
 
     def test_tun_routing_frontend_uses_dedicated_tab_and_api(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
@@ -1790,6 +1792,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("startRestartCountdown(delaySec, { embedded: Boolean(j.restart_embedded) });", text)
                 self.assertIn("function scheduleRestartProbe(maxProbeSeconds = 180)", text)
                 self.assertIn("fetch('/api/meta', {", text)
+                self.assertIn("finishRestartGate();", text)
 
     def test_config_save_requires_challenge_bound_to_update_block(self):
         args = argparse.Namespace(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import builtins
 import json
+import socket
 import urllib.request
 import urllib.error
 from types import SimpleNamespace
@@ -416,22 +417,27 @@ def test_discover_public_network_host_returns_none_when_services_fail(monkeypatc
 
 
 def test_restart_countdown_server_serves_html_and_api(tmp_path) -> None:
-    notice = {"bind": "127.0.0.1", "port": 18181, "path": "/"}
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = int(probe.getsockname()[1])
+    notice = {"bind": "127.0.0.1", "port": port, "path": "/"}
     server = launcher._RestartCountdownServer(notice, 2.5)
     server.start()
     try:
-        with urllib.request.urlopen("http://127.0.0.1:18181/", timeout=2.0) as response:
+        direct_http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with direct_http.open(f"http://127.0.0.1:{port}/", timeout=2.0) as response:
             body = response.read().decode("utf-8")
             assert response.status == 200
             assert "ObstacleBridge is restarting" in body
             assert "WebAdmin should return automatically" in body
 
-        with urllib.request.urlopen("http://127.0.0.1:18181/api/status", timeout=2.0) as response:
+        with direct_http.open(f"http://127.0.0.1:{port}/api/status", timeout=2.0) as response:
             payload = json.loads(response.read().decode("utf-8"))
             assert response.status == 200
             assert payload["restart_pending"] is True
-            assert payload["admin_web_url"] == "http://127.0.0.1:18181/"
+            assert payload["admin_web_url"] == f"http://127.0.0.1:{port}/"
             assert 0.0 <= float(payload["restart_in_seconds"]) <= 2.5
+            assert -3 <= int(payload["uptime_sec"]) <= -1
     finally:
         server.close()
 

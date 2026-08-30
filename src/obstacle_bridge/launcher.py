@@ -435,11 +435,15 @@ class _RestartCountdownServer:
             )
             return
         if request_path.startswith("/api/"):
+            restart_in_seconds = self._seconds_remaining()
             payload = json.dumps(
                 {
                     "ok": True,
                     "restart_pending": True,
-                    "restart_in_seconds": round(self._seconds_remaining(), 3),
+                    "restart_in_seconds": round(restart_in_seconds, 3),
+                    # Negative uptime is the remaining countdown while the
+                    # supervised child is absent, for the normal WebAdmin UI.
+                    "uptime_sec": -max(1, int(restart_in_seconds + 0.999)),
                     "admin_web_url": _format_url(_clickable_host(self.bind), self.port, self.path),
                 }
             ).encode("utf-8")

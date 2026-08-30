@@ -120,13 +120,14 @@ function fmtThrottleRateLimit(throttle) {
 
 function fmtUptime(sec) {
   if (sec == null || Number.isNaN(sec)) return 'n/a';
-  const s = Math.max(0, Math.floor(sec));
+  const numeric = Number(sec);
+  const negative = numeric < 0;
+  const s = Math.max(0, Math.floor(Math.abs(numeric)));
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   const r = s % 60;
-  if (h > 0) return `${h}h ${m}m ${r}s`;
-  if (m > 0) return `${m}m ${r}s`;
-  return `${r}s`;
+  const formatted = h > 0 ? `${h}h ${m}m ${r}s` : m > 0 ? `${m}m ${r}s` : `${r}s`;
+  return negative ? `-${formatted}` : formatted;
 }
 
 function fmtRouteList(routes) {
@@ -854,7 +855,8 @@ function startRestartCountdown(durationSec = 40, options = {}) {
       if (embedded) {
         scheduleRestartProbe();
       } else {
-        window.location.reload();
+        // The launcher keeps /api/status available with negative uptime.
+        finishRestartGate();
       }
     }
   };
