@@ -1434,16 +1434,31 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
           const addresses = [];
           if (Array.isArray(binding.ipv4) && binding.ipv4.length) addresses.push(...binding.ipv4);
           if (Array.isArray(binding.ipv6) && binding.ipv6.length) addresses.push(...binding.ipv6);
-          const header = addresses.length
-            ? `peer ${fmtInteger(binding.peer_id)} -> ${addresses.join(', ')}`
+          const connection = binding.connection_id
+            ? `connection ${binding.connection_id}`
             : `peer ${fmtInteger(binding.peer_id)}`;
+          const header = addresses.length ? `${connection} -> ${addresses.join(', ')}` : connection;
           const parts = [header];
           const bound = Array.isArray(binding.bound_chan_ids) ? binding.bound_chan_ids.join(', ') : '';
           parts.push(`preferred ${fmtChan(binding.preferred_chan_id)}`);
           if (bound) parts.push(`bound ${bound}`);
+          parts.push(`RX ${fmtInteger(binding.rx_packets ?? 0)} / ${fmtBytes(binding.rx_bytes ?? 0)}`);
+          parts.push(`TX ${fmtInteger(binding.tx_packets ?? 0)} / ${fmtBytes(binding.tx_bytes ?? 0)}`);
+          const learned = [
+            ...(Array.isArray(binding.learned_ipv4) ? binding.learned_ipv4 : []),
+            ...(Array.isArray(binding.learned_ipv6) ? binding.learned_ipv6 : []),
+          ];
+          if (learned.length) parts.push(`learned ${learned.join(', ')}`);
           return parts.join(' · ');
-        }).join('\n')
-      : 'none';
+        })
+      : [];
+    const unboundText = Array.isArray(shared.unbound_overlay_connections)
+      ? shared.unbound_overlay_connections.map((connection) =>
+          `connection ${connection.connection_id || '?'} (${connection.transport || 'overlay'}) · ${connection.state || 'connected'} · TUN channel not open`
+        )
+      : [];
+    const bindingSummary = [...bindingText, ...unboundText];
+    const bindingDisplay = bindingSummary.length ? bindingSummary.join('\n') : 'none';
     const flowText = fmtTunFlowSummary(row.stats || {});
     const dropText = fmtDropDiagnostics(shared);
     return `
@@ -1452,7 +1467,7 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
         <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
         <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
-        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
+        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingDisplay)}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(flowText)}</td>
         <td class="mono" style="white-space:pre-wrap;">${escapeHtml(dropText)}</td>
       </tr>

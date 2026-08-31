@@ -236,6 +236,10 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.mux._shared_tun_peer_id_by_ref[(self.tun_key, "linux-client")] = 7
         with patch.object(self.mux, "_register_tun_reader"):
             self.mux._bind_tun_channel(301, dev)
+        peer_packet = bytes.fromhex("450000140000000040010000c0a86b02c0a86b01")
+        reply_packet = bytes.fromhex("450000140000000040010000c0a86b01c0a86b02")
+        self.mux._record_shared_tun_peer_traffic(self.tun_key, 7, 301, peer_packet, direction="rx")
+        self.mux._record_shared_tun_peer_traffic(self.tun_key, 7, 301, reply_packet, direction="tx")
 
         snap = self.mux.snapshot_connections()
 
@@ -280,6 +284,12 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                         "ipv6": ["fd20:107::2"],
                         "address_count": 2,
                         "local_virtual": False,
+                        "rx_packets": 1,
+                        "rx_bytes": 20,
+                        "tx_packets": 1,
+                        "tx_bytes": 20,
+                        "learned_ipv4": ["192.168.107.2"],
+                        "learned_ipv6": [],
                         "throttle_prev_window_bytes": 0,
                         "throttle_curr_window_bytes": 0,
                         "throttle_drop_count": 0,
@@ -1188,6 +1198,45 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["peer"], _peer_endpoint("203.0.113.30", 8080))
+
+    def test_shared_tun_snapshot_labels_bound_and_unbound_overlay_connections(self):
+        class _Session:
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {"peer_id": 7, "connected": True, "state": "connected", "open_connections": {"tun": 1}},
+                    {"peer_id": 8, "connected": True, "state": "connected", "open_connections": {"tun": 0}},
+                ]
+
+        class _Mux:
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "tun": [
+                        {
+                            "state": "connected",
+                            "chan_id": 301,
+                            "channel_aliases": [301],
+                            "shared_tun_ownership": {
+                                "active_peer_bindings": [{"peer_id": 7, "bound_chan_ids": [301]}],
+                            },
+                        }
+                    ],
+                    "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 0},
+                }
+
+        runner = Runner(argparse.Namespace(no_dashboard=True, overlay_transport="ws"))
+        runner._sessions = [_Session()]
+        runner._muxes = [_Mux()]
+        runner._session_labels = ["ws"]
+
+        shared = runner.get_connections_snapshot()["tun"][0]["shared_tun_ownership"]
+        self.assertEqual(shared["active_peer_bindings"][0]["connection_id"], "0:7")
+        self.assertEqual(shared["active_peer_bindings"][0]["transport"], "ws")
+        self.assertEqual(
+            shared["unbound_overlay_connections"],
+            [{"connection_id": "0:8", "transport": "ws", "peer_id": 8, "state": "connected", "tun_channels": 0}],
+        )
 
 
 if __name__ == "__main__":

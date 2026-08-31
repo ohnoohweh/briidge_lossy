@@ -228,6 +228,15 @@ class ChannelMuxSharedTunMixin:
                     "ipv6": [str(v) for v in list(entry.get("ipv6") or [])],
                     "address_count": int(entry.get("address_count", 0) or 0),
                     "local_virtual": bool(entry.get("local_virtual")),
+                    # Server perspective: RX is peer -> shared TUN and TX is
+                    # shared TUN -> peer.  These counters deliberately live on
+                    # the peer binding, not the interface aggregate.
+                    "rx_packets": int(entry.get("rx_packets", 0) or 0),
+                    "rx_bytes": int(entry.get("rx_bytes", 0) or 0),
+                    "tx_packets": int(entry.get("tx_packets", 0) or 0),
+                    "tx_bytes": int(entry.get("tx_bytes", 0) or 0),
+                    "learned_ipv4": [str(v) for v in list(entry.get("learned_ipv4") or [])],
+                    "learned_ipv6": [str(v) for v in list(entry.get("learned_ipv6") or [])],
                     "throttle_prev_window_bytes": int(entry.get("throttle_prev_window_bytes", 0) or 0),
                     "throttle_curr_window_bytes": int(entry.get("throttle_curr_window_bytes", 0) or 0),
                     "throttle_drop_count": int(entry.get("throttle_drop_count", 0) or 0),
@@ -366,7 +375,16 @@ class ChannelMuxSharedTunMixin:
         key = (svc_key, int(peer_id))
         state = self._shared_tun_runtime_by_peer.setdefault(
             key,
-            {"preferred_chan_id": None, "bound_chan_ids": []},
+            {
+                "preferred_chan_id": None,
+                "bound_chan_ids": [],
+                "rx_packets": 0,
+                "rx_bytes": 0,
+                "tx_packets": 0,
+                "tx_bytes": 0,
+                "learned_ipv4": [],
+                "learned_ipv6": [],
+            },
         )
         bound_chan_ids = [int(v) for v in list(state.get("bound_chan_ids") or []) if int(v) != int(chan_id)]
         bound_chan_ids.append(int(chan_id))
@@ -374,6 +392,40 @@ class ChannelMuxSharedTunMixin:
         state["bound_chan_ids"] = bound_chan_ids
         preferred = state.get("preferred_chan_id")
         state["preferred_chan_id"] = int(preferred) if preferred in bound_chan_ids else bound_chan_ids[0]
+
+    def _record_shared_tun_peer_traffic(
+        self,
+        svc_key: Optional["ChannelMux.ServiceKey"],
+        peer_id: Optional[int],
+        chan_id: int,
+        packet: bytes,
+        *,
+        direction: str,
+    ) -> None:
+        """Record accepted shared-TUN traffic against its ChannelMux peer binding."""
+        if svc_key is None or peer_id is None or svc_key not in self._shared_tun_ownership_by_service:
+            return
+        if direction not in {"rx", "tx"}:
+            return
+        self._record_shared_tun_peer_binding(svc_key, peer_id, chan_id)
+        state = self._shared_tun_runtime_by_peer.get((svc_key, int(peer_id)))
+        if not isinstance(state, dict):
+            return
+        state[f"{direction}_packets"] = int(state.get(f"{direction}_packets", 0) or 0) + 1
+        state[f"{direction}_bytes"] = int(state.get(f"{direction}_bytes", 0) or 0) + len(packet)
+        if direction != "rx":
+            return
+        parsed, _ = self._parse_tun_packet_endpoints(packet)
+        if not isinstance(parsed, dict):
+            return
+        source_ip = str(parsed.get("source_ip") or "")
+        family = "learned_ipv4" if int(parsed.get("ip_version", 0) or 0) == 4 else "learned_ipv6"
+        if not source_ip:
+            return
+        learned = [str(v) for v in list(state.get(family) or [])]
+        if source_ip not in learned:
+            # Keep the snapshot bounded even if a diagnostic filter is disabled.
+            state[family] = (learned + [source_ip])[-8:]
     def _drop_shared_tun_peer_binding(
         self,
         svc_key: Optional["ChannelMux.ServiceKey"],

@@ -56,6 +56,12 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var peerID: Int
         var preferredChanID: Int?
         var boundChanIDs: [Int]
+        var rxPackets: Int = 0
+        var rxBytes: Int = 0
+        var txPackets: Int = 0
+        var txBytes: Int = 0
+        var learnedIPv4: [String] = []
+        var learnedIPv6: [String] = []
     }
 
     struct SharedTunDisconnectCleanupSnapshot {
@@ -260,6 +266,12 @@ final class ObstacleBridgeChannelMuxTunRuntime {
                     "ipv4": peerDetails["ipv4"] as? [String] ?? [],
                     "ipv6": peerDetails["ipv6"] as? [String] ?? [],
                     "address_count": peerDetails["address_count"] as? Int ?? 0,
+                    "rx_packets": state.rxPackets,
+                    "rx_bytes": state.rxBytes,
+                    "tx_packets": state.txPackets,
+                    "tx_bytes": state.txBytes,
+                    "learned_ipv4": state.learnedIPv4,
+                    "learned_ipv6": state.learnedIPv6,
                     "throttle_prev_window_bytes": 0,
                     "throttle_curr_window_bytes": 0,
                     "throttle_drop_count": 0,
@@ -840,8 +852,39 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         sharedTunRuntimeByPeer[peerID] = SharedTunPeerBindingState(
             peerID: peerID,
             preferredChanID: preferredChanID,
-            boundChanIDs: uniqueBound
+            boundChanIDs: uniqueBound,
+            rxPackets: sharedTunRuntimeByPeer[peerID]?.rxPackets ?? 0,
+            rxBytes: sharedTunRuntimeByPeer[peerID]?.rxBytes ?? 0,
+            txPackets: sharedTunRuntimeByPeer[peerID]?.txPackets ?? 0,
+            txBytes: sharedTunRuntimeByPeer[peerID]?.txBytes ?? 0,
+            learnedIPv4: sharedTunRuntimeByPeer[peerID]?.learnedIPv4 ?? [],
+            learnedIPv6: sharedTunRuntimeByPeer[peerID]?.learnedIPv6 ?? []
         )
+    }
+
+    func recordSharedTunPeerTraffic(peerID: Int?, chanID: Int, packet: Data, direction: String) {
+        guard sharedTunOwnership != nil, let peerID, direction == "rx" || direction == "tx" else {
+            return
+        }
+        recordSharedTunPeerBinding(peerID: peerID, chanID: chanID)
+        guard var state = sharedTunRuntimeByPeer[peerID] else {
+            return
+        }
+        if direction == "rx" {
+            state.rxPackets += 1
+            state.rxBytes += packet.count
+            if let endpoints = Self.parsePacketEndpoints(packet) {
+                if endpoints.ipVersion == 4, !state.learnedIPv4.contains(endpoints.sourceIP) {
+                    state.learnedIPv4 = Array((state.learnedIPv4 + [endpoints.sourceIP]).suffix(8))
+                } else if endpoints.ipVersion == 6, !state.learnedIPv6.contains(endpoints.sourceIP) {
+                    state.learnedIPv6 = Array((state.learnedIPv6 + [endpoints.sourceIP]).suffix(8))
+                }
+            }
+        } else {
+            state.txPackets += 1
+            state.txBytes += packet.count
+        }
+        sharedTunRuntimeByPeer[peerID] = state
     }
 
     func dropSharedTunPeerBinding(peerID: Int?, chanID: Int) {

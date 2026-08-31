@@ -527,6 +527,15 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
+
+        // A URLSession/NWConnection replacement is a new ChannelMux peer
+        // epoch even when the previous WebSocket did not deliver a close or
+        // completion callback.  The remote peer has discarded its channel
+        // table in that case; retaining the local preferred TUN channel would
+        // emit DATA without the OPEN required to bind Shared TUN routing.
+        // Reset before allocating the task so the first local packet on this
+        // connection necessarily emits a fresh TUN OPEN followed by DATA.
+        resetOverlayTransportEpoch()
         websocketTransportGeneration += 1
         let generation = websocketTransportGeneration
         do {

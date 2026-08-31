@@ -40,7 +40,7 @@ This guide should describe the current testing model, not act as a dated event l
 
 The active testing focus on this branch is:
 
-- overlay reconnect and stale-transport recovery on Python and Swift paths, including myUDP disconnected-epoch publication for every unsuccessful candidate rotation
+- overlay reconnect and stale-transport recovery on Python and Swift paths, including myUDP disconnected-epoch publication for every unsuccessful candidate rotation and a fresh Swift WebSocket ChannelMux TUN epoch before each connection attempt
 - typed Python lifecycle-contract normalization, Compression forwarding, ChannelMux epoch-gated rotation/TUN admission and full-stack candidate-cycle reset, Runner cycle-exhaustion restart, and myUDP event-order/epoch emission
 - WebAdmin peer ownership grouping for connection, protocol, ChannelMux, and TUN diagnostics, including ChannelMux-owned candidate/restart timers and persistent visibility for enabled SecureLink and Compression layers
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
@@ -67,6 +67,7 @@ Representative anchors for those areas:
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
 - current shared-TUN coverage also pins the server-side virtual-peer probe path so internally generated ICMP verification traffic is routed through the shared-TUN dispatcher, bound to explicit local-virtual ownership, and consumed locally on reply instead of surfacing as unknown-destination traffic
 - current overlay failover coverage pins ordered-peer rotation, completed candidate cycles, reset-on-connected behavior, and fresh-socket rotation for Python `myudp` clients and the native Swift UDP owner through [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py), [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py), and [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
+- the Swift WebSocket owner source guard also pins the fresh shared-TUN epoch at connection-attempt start, so a peer restart cannot leave the client sending `DATA` on a channel the server has not reopened and bound
 - the stream reconnect regression also closes suspended Python TCP, QUIC, and WebSocket reconnect coroutines after their event loops stop, ensuring shutdown cleanup uses the task identity captured while the loop was active and emits no secondary `no running event loop` exception
 - current coverage includes Linux hook assertions for IPv4-mapped IPv6 overlay exclusions, exact-route snapshotting for excluded routes, and preserving excluded local subnets on their original interfaces during full-tunnel route installation
 - current Linux elevated coverage now also includes helper-backed native TUN packet carry with `tun_execution.mode=helper`, plus a second elevated helper lane for excluded-route and full-tunnel policy install/cleanup, proving that the separate native helper subprocess can own the real TUN fd and its critical route mutations while the overlay path still forwards packets end to end

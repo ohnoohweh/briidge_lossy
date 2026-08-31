@@ -56,6 +56,7 @@ ARC-CMP-001:
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_flushes_only_current_task
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_uses_literal_endpoint_with_logical_http_and_tls_name
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_empty_address_list_preserves_dns_resolution
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_starts_every_connection_attempt_with_a_fresh_tun_epoch
     - ios/tests/test_m3_native_sources.py::test_websocket_overlay_transport_owner_source_exists
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip

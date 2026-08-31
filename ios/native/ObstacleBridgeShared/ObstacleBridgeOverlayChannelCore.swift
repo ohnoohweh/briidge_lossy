@@ -392,7 +392,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 return
             }
             let scopeID = tunRuntime.scopeID(for: sharedRoute)
-            for chanID in sharedRoute.selectedChanIDs {
+            for (index, chanID) in sharedRoute.selectedChanIDs.enumerated() {
                 guard let localSnapshot = try tunRuntime.handleLocalTunPacket(
                     packet: packet,
                     mtu: tunMTU,
@@ -408,6 +408,12 @@ enum ObstacleBridgeOverlayChannelCore {
                     continue
                 }
                 activeTunChanIDs.insert(localSnapshot.chanID)
+                tunRuntime.recordSharedTunPeerTraffic(
+                    peerID: index < sharedRoute.selectedPeerIDs.count ? sharedRoute.selectedPeerIDs[index] : nil,
+                    chanID: localSnapshot.chanID,
+                    packet: packet,
+                    direction: "tx"
+                )
                 onLocalForward?(TunLocalForwardEvent(
                     packet: packet,
                     chanID: localSnapshot.chanID,
@@ -567,6 +573,12 @@ enum ObstacleBridgeOverlayChannelCore {
                 return
             }
             if let packet = snapshot.packet {
+                tunRuntime.recordSharedTunPeerTraffic(
+                    peerID: currentTunPeerID,
+                    chanID: frame.chanID,
+                    packet: packet,
+                    direction: "rx"
+                )
                 handleDeliveredPacket(packet, chanID: frame.chanID)
             }
         case .dataFrag:

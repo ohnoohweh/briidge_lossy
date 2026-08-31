@@ -5266,6 +5266,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                     ctr.msgs_in += 1
                     ctr.bytes_in += len(packet)
+                    self._record_shared_tun_peer_traffic(
+                        getattr(dev, "service_key", None),
+                        selected_peer_id,
+                        chan,
+                        packet,
+                        direction="tx",
+                    )
                     self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet, peer_id=selected_peer_id)
                 self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
                 return
@@ -5509,6 +5516,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                 ctr.msgs_in += 1
                 ctr.bytes_in += len(data)
+                self._record_shared_tun_peer_traffic(
+                    getattr(dev, "service_key", None),
+                    owner_peer_id,
+                    chan,
+                    data,
+                    direction="rx",
+                )
                 dispatch_result = self._dispatch_shared_tun_inbound_packet(
                     dev,
                     data,
