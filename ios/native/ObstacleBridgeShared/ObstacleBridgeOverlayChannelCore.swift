@@ -317,6 +317,22 @@ enum ObstacleBridgeOverlayChannelCore {
         }
         let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: tunMTU)
         let nowNS = DispatchTime.now().uptimeNanoseconds
+        // This is the shared admission boundary for all local TUN traffic. Do not
+        // allocate ChannelMux state or emit frames until the lower stack is ready.
+        guard overlayConnected else {
+            tunRuntime.recordSharedTunDrop(
+                reason: "overlay_not_connected",
+                direction: "local_to_peer",
+                packetBytes: packet.count
+            )
+            onLocalDrop?(TunLocalDropEvent(
+                reason: "overlay_not_connected",
+                packet: packet,
+                sharedRoute: nil,
+                tunRuntime: tunRuntime
+            ))
+            return
+        }
         let backpressure = backpressure ?? simpleBackpressureSnapshot(bufferedFrames: bufferedFrames)
         let sharedRoute = tunRuntime.planSharedTunOutboundRoute(packet: packet)
         let throttle = tunRuntime.scopedTunThrottle(

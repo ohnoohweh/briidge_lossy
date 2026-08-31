@@ -1038,15 +1038,14 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"/api/tun-routing/control"' in control
     assert '"/api/tun-routing/status"' in control
     assert "iOS displays the extension's Admin API directly; no foreground proxy." in control
-    assert "_admin_api_request" in ios_app
-    assert '"/api/tun-routing/control"' in ios_app
-    assert '"/api/tun-routing/status"' in ios_app
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert "tunnelInflowAllowed()" in provider
     assert "packet_pump_dropped_before_overlay_ready" in provider
+    assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
+    assert "TUN verification waits for the connected overlay state." in provider
     assert "prepare_runtime()" in ios_app
     assert "Network extension active" in ios_app
-    assert "Network tunneling active" in ios_app
+    assert "Network tunneling active" not in ios_app
     assert "_refresh_native_controls_until_settled" in ios_app
     assert "extension_state = _extension_state(extension)" in ios_app
     assert "_monitor_extension_state" in ios_app

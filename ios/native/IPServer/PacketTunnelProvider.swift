@@ -3470,7 +3470,7 @@ private final class SwiftSimpleUDPPeerBridge {
 
     func sendTunPacketForProbe(_ packet: Data) {
         withState {
-            guard started else {
+            guard started, tunnelInflowAllowed() else {
                 return
             }
             if let udpOverlayTransportOwner {
@@ -3586,6 +3586,22 @@ private final class SwiftSimpleUDPPeerBridge {
                     summary: "\(label): skipped",
                     detail: "Swift TUN bridge is not active.",
                     nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "unknown")
+                ))
+            }
+            // Do not resolve names or inject verification packets until the shared
+            // ChannelMux admission state reports the lower stack as connected.
+            guard tunnelInflowAllowed() else {
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
+                    probeKind: probeKind,
+                    target: trimmedTarget,
+                    ok: false,
+                    state: "skipped",
+                    summary: "\(label): skipped",
+                    detail: "TUN verification waits for the connected overlay state.",
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
+                        status: "skipped",
+                        detail: "Name resolution waits for the connected overlay state."
+                    )
                 ))
             }
             let candidateFamilies = ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(
@@ -3830,6 +3846,13 @@ private final class SwiftSimpleUDPPeerBridge {
     private func handlePacketFlowRead(packets: [Data], protocols: [NSNumber]) {
         guard started, let provider else { return }
         if packets.isEmpty {
+            return
+        }
+        guard tunnelInflowAllowed() else {
+            provider.recordPacketBridgeEvent(
+                "swift_simple_udp_packetflow_dropped_before_overlay_ready",
+                fields: ["packet_count": packets.count]
+            )
             return
         }
         var totalBytes = 0

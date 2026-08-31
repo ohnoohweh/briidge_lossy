@@ -945,7 +945,7 @@ Startup sequence:
 Runtime ownership:
 
 - WebAdmin runs as an extension-owned local admin service. The app only displays it through a WebView or the user opens it in Safari. The app uses the same configured loopback URL as Safari, waits for an HTTP probe before retrying WebView navigation after extension startup, and never serves a foreground proxy copy.
-- While foregrounded, the app polls the OS Network Extension status at a low frequency and updates its native extension/TUN controls and offline surface when iOS stops or restarts the provider. This monitor is cancelled while suspended or exiting; the extension itself remains independent of app lifetime.
+- While foregrounded, the app polls the OS Network Extension status at a low frequency and updates its native extension control and offline surface when iOS stops or restarts the provider. TUN routing remains in the shared WebAdmin API rather than adding a second native control. This monitor is cancelled while suspended or exiting; the extension itself remains independent of app lifetime.
 - ChannelMux runs in the extension and owns TUN, TCP, and UDP service channels.
 - SecureLink runs in the extension so handshake state, rekeying, replay defense, and encryption are not tied to foreground-app lifetime.
 - TCP/UDP listeners that must survive app focus loss run in the extension. Foreground-only experiments may exist for development, but they are not the iOS product architecture.

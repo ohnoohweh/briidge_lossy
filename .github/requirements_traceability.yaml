@@ -1202,6 +1202,7 @@ REQ-ADM-001:
     - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
     - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
     - ios/tests/test_m3_native_sources.py::test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic
 
 
 REQ-ADM-009:

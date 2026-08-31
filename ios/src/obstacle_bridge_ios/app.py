@@ -11,7 +11,6 @@ import shutil
 import sys
 import traceback
 import urllib.error
-import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -113,29 +112,6 @@ def _probe_http_ok(url: str, timeout_sec: float = 1.0) -> bool:
             return 200 <= status < 500
     except (urllib.error.URLError, TimeoutError, ValueError):
         return False
-
-
-def _admin_api_request(base_url: str, path: str, *, method: str = "GET", body: Mapping[str, Any] | None = None) -> dict[str, Any]:
-    """Use the extension's public Admin API, matching the embedded WebAdmin page."""
-    target = urllib.parse.urljoin(base_url, path)
-    data = json.dumps(dict(body)).encode("utf-8") if body is not None else None
-    request = urllib.request.Request(
-        target,
-        data=data,
-        method=method,
-        headers={"Content-Type": "application/json"} if data is not None else {},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=1.5) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        try:
-            payload = json.loads(exc.read().decode("utf-8"))
-        except Exception:
-            payload = {"ok": False, "error": f"HTTP {exc.code}"}
-    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
-        return {"ok": False, "error": f"Admin API request failed: {type(exc).__name__}: {exc}"}
-    return payload if isinstance(payload, dict) else {"ok": False, "error": "Admin API response was not an object"}
 
 
 def _ios_documents_root() -> Path:
@@ -708,7 +684,6 @@ def main(argv: list[str] | None = None):
                         )
                     )
                     vpn_switch = None
-                    tun_switch = None
 
                     def _schedule_native_task(coroutine) -> None:
                         loop = getattr(self, "loop", None)
@@ -718,20 +693,9 @@ def main(argv: list[str] | None = None):
                     async def _refresh_native_controls() -> None:
                         extension = await asyncio.to_thread(runtime_status)
                         snapshot = bridge_app.connection_snapshot()
-                        webadmin_url = str(snapshot.get("webadmin_url") or "")
                         extension_state = _extension_state(extension)
-                        tun = (
-                            await asyncio.to_thread(_admin_api_request, webadmin_url, "/api/tun-routing/status")
-                            if extension_state == "active" and webadmin_url
-                            else {"enabled": bool(snapshot.get("config", {}).get("TUN_routing", {}).get("enabled_on_startup", True))}
-                        )
                         extension_active = extension_state == "active"
                         _set_switch_value(vpn_switch, extension_active)
-                        _set_switch_value(tun_switch, bool(tun.get("enabled") or tun.get("active")))
-                        try:
-                            tun_switch.enabled = extension_active
-                        except Exception:
-                            pass
                         _set_operational_surface(extension_state)
                         _refresh_webadmin(extension)
 
@@ -771,30 +735,9 @@ def main(argv: list[str] | None = None):
                         if enabled:
                             _schedule_webadmin_refresh()
 
-                    async def _change_tun(enabled: bool) -> None:
-                        webadmin_url = str(bridge_app.connection_snapshot().get("webadmin_url") or "")
-                        result = await asyncio.to_thread(
-                            _admin_api_request,
-                            webadmin_url,
-                            "/api/tun-routing/control",
-                            method="POST",
-                            body={"enabled": enabled},
-                        ) if webadmin_url else {"ok": False, "error": "Network Extension Admin API is unavailable"}
-                        log_event(
-                            ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.network_tunneling_control_requested",
-                            enabled=enabled,
-                            result=result,
-                        )
-                        await _refresh_native_controls_until_settled()
-
                     def _on_vpn_switch_change(widget: Any) -> None:
                         if not control_state["updating"]:
                             _schedule_native_task(_change_extension(bool(getattr(widget, "value", False))))
-
-                    def _on_tun_switch_change(widget: Any) -> None:
-                        if not control_state["updating"]:
-                            _schedule_native_task(_change_tun(bool(getattr(widget, "value", False))))
 
                     def _add_native_control(label: str, handler) -> Any:
                         row = toga.Box(style=_pack(direction="row", padding_top=8, padding_bottom=8))
@@ -814,7 +757,6 @@ def main(argv: list[str] | None = None):
                         return switch
 
                     vpn_switch = _add_native_control("Network extension active", _on_vpn_switch_change)
-                    tun_switch = _add_native_control("Network tunneling active", _on_tun_switch_change)
 
                     operational_box = toga.Box(
                         style=_pack(direction="column", flex=1, background_color="#0a1220")

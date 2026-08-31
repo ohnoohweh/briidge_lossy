@@ -47,6 +47,18 @@ def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     assert '"app_ready": transportLifecycle.state == .connected' in adapter
 
 
+def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:
+    channel_core = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayChannelCore.swift")
+    provider = _read("IPServer", "PacketTunnelProvider.swift")
+
+    assert "guard overlayConnected else" in channel_core
+    assert 'reason: "overlay_not_connected"' in channel_core
+    assert "guard started, tunnelInflowAllowed() else" in provider
+    assert "TUN verification waits for the connected overlay state." in provider
+    assert "Name resolution waits for the connected overlay state." in provider
+    assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
+
+
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:
     host_runner = _read("ObstacleBridgeApp", "ObstacleBridgeHostRunner.swift")
     packet_tunnel = _read("IPServer", "PacketTunnelProvider.swift")
@@ -62,7 +74,8 @@ def test_swift_admin_surfaces_consume_layered_readiness() -> None:
     assert "static func connectionLayers(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [[String: Any]]" in admin_support
     assert "static func appReady(from transportRuntime: [String: Any], preferredKind: String? = nil) -> Bool" in admin_support
 
-    assert '"connection_layers": ObstacleBridgeAdminSnapshotSupport.connectionLayers(' in packet_tunnel
+    assert "let connectionLayers = ObstacleBridgeAdminSnapshotSupport.connectionLayers(" in packet_tunnel
+    assert '"connection_layers": connectionLayers' in packet_tunnel
     assert "let layeredReady = ObstacleBridgeAdminSnapshotSupport.appReady(" in packet_tunnel
     assert '"observed_public_ip": sharedOverlayLayerTransportAdapter?.observedPublicIPSnapshot() ?? ""' in packet_tunnel
     assert '"observed_public_port": sharedOverlayLayerTransportAdapter?.observedPublicPortSnapshot() ?? NSNull()' in packet_tunnel

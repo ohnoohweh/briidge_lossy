@@ -1529,7 +1529,7 @@ The supporting manifests remain shared:
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
 This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
-It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations.
+It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
