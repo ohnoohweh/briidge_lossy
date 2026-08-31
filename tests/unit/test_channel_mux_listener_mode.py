@@ -5,6 +5,7 @@ import contextlib
 import ipaddress
 import socket
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, SessionMetrics
@@ -2932,6 +2933,26 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         stop_listener.assert_awaited_once_with(('peer', 7, 1), 'udp', spec=svc1)
         self.assertNotIn(('peer', 7, 1), self.mux._peer_installed_services)
         self.assertIn(('peer', 7, 2), self.mux._peer_installed_services)
+
+    async def test_concurrent_tcp_listener_starts_are_single_flight(self):
+        svc_key = ('peer', 2, 1)
+        spec = ChannelMux.ServiceSpec(1, 'tcp', '127.0.0.1', 13081, 'tcp', '127.0.0.1', 18090)
+
+        async def create_listener(_spec, key):
+            await asyncio.sleep(0)
+            self.mux._svc_tcp_servers[key] = SimpleNamespace(sockets=[object()])
+
+        with patch.object(
+            self.mux,
+            '_start_tcp_server_for_unlocked',
+            new=AsyncMock(side_effect=create_listener),
+        ) as start_listener:
+            await asyncio.gather(
+                self.mux._start_tcp_server_for(spec, svc_key),
+                self.mux._start_tcp_server_for(spec, svc_key),
+            )
+
+        start_listener.assert_awaited_once_with(spec, svc_key)
 
     async def test_per_peer_cleanup_on_disconnect(self):
         svc = ChannelMux.ServiceSpec(1, 'udp', '127.0.0.1', 10001, 'udp', '127.0.0.1', 20001)

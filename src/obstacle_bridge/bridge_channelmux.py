@@ -659,6 +659,11 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         # writer -> (svc_id, chan)
         self._tcp_by_writer: dict[asyncio.StreamWriter, tuple[int,int]] = {}
         self._tcp_pending_data: dict[int, list[bytes]] = {}
+        # Listener creation is reached both by remote-service installation and
+        # the self-healing watchdog.  ``asyncio.start_server`` yields, so a
+        # membership check before either caller enters it is not sufficient to
+        # prevent a second bind of the same endpoint.
+        self._tcp_listener_start_locks: dict[ChannelMux.ServiceKey, asyncio.Lock] = {}
 
         # Backpressure machinery (per TCP writer)
         self._tcp_send_locks: dict[int, asyncio.Lock] = {}
@@ -6125,6 +6130,14 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     # ---------- TCP server ----------
     async def _start_tcp_server_for(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
+        lock = self._tcp_listener_start_locks.setdefault(svc_key, asyncio.Lock())
+        async with lock:
+            existing = self._svc_tcp_servers.get(svc_key)
+            if existing is not None and getattr(existing, "sockets", None) not in (None, []):
+                return
+            await self._start_tcp_server_for_unlocked(spec, svc_key)
+
+    async def _start_tcp_server_for_unlocked(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
             if not self._overlay_connected or not self._accepting_enabled:
                 try:
