@@ -49,6 +49,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var swiftSimpleUDPPeerBridge: SwiftSimpleUDPPeerBridge?
     private var sharedOverlayBootstrapState: [String: Any] = [:]
     private var effectivePacketTunnelSettingsState: [String: Any] = [:]
+    private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?
+    private var tunRoutingEnabled = false
     private var sharedCompressLayerRuntime: ObstacleBridgeCompressLayerRuntime?
     private var sharedSecureLinkPskTransportAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private var sharedOverlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
@@ -472,6 +474,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         runtimeMode = "unconfigured"
         swiftSimpleUDPPeerBridge = nil
         effectivePacketTunnelSettingsState = [:]
+        packetTunnelConfiguration = nil
+        tunRoutingEnabled = false
         providerStartedAt = Date().timeIntervalSince1970
         recordNativeEvent(
             "startTunnel_entered",
@@ -493,6 +497,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 defaults: Self.packetTunnelDefaults
             )
             let settingsPayload = Self.packetTunnelSettingsSnapshot(configuration)
+            packetTunnelConfiguration = configuration
+            tunRoutingEnabled = true
             effectivePacketTunnelSettingsState = settingsPayload
             recordNativeEvent(
                 "tunnel_network_settings_prepared",
@@ -715,6 +721,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         swiftSimpleUDPPeerBridge?.stop()
         swiftSimpleUDPPeerBridge = nil
         packetPumpRunning = false
+        packetTunnelConfiguration = nil
+        tunRoutingEnabled = false
         if !nativeRuntimeActive {
             ObstacleBridgePacketFlowBridge.deactivate()
         }
@@ -1585,9 +1593,9 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             payload["excluded_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes6"])
         }
         payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(
-            enabled: adminPacketProcessingActive(),
+            enabled: tunRoutingEnabled && adminPacketProcessingActive(),
             startupEnabled: true,
-            supported: false
+            supported: true
         )
         payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)
         return payload
@@ -1786,6 +1794,55 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
         refreshAdminSnapshotCache(sync: true)
         return cachedTunRoutingOrBuild()
+    }
+
+    func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let enabled = payload["enabled"] as? Bool else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "enabled is required",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        guard adminPacketProcessingActive(), let configuration = packetTunnelConfiguration else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "enabled": false,
+                "startup_enabled": true,
+                "supported": true,
+                "error": "Network extension is not active",
+            ], statusLine: "HTTP/1.1 409 Conflict")
+        }
+
+        tunRoutingEnabled = enabled
+        let settings = enabled ? configuration.makeNetworkSettings() : nil
+        setTunnelNetworkSettings(settings) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.tunRoutingEnabled = !enabled
+                self.recordNativeEvent(
+                    "tun_routing_control_failed",
+                    fields: ["enabled": enabled, "error": error.localizedDescription]
+                )
+                self.updateProviderState(
+                    "tun_routing_control_failed",
+                    extraFields: ["enabled": enabled, "error": error.localizedDescription]
+                )
+                return
+            }
+            self.recordNativeEvent("tun_routing_control_applied", fields: ["enabled": enabled])
+            self.updateProviderState("tun_routing_control_applied", extraFields: ["enabled": enabled])
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": true,
+            "enabled": enabled,
+            "startup_enabled": true,
+            "supported": true,
+        ])
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {

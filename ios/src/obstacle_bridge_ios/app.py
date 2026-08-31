@@ -41,7 +41,7 @@ from .diagnostics import (
     snapshot as diagnostics_snapshot,
 )
 from .profiles import ProfileStore
-from .tunnel_control import harvest_runtime_logs, runtime_status, start_runtime
+from .tunnel_control import harvest_runtime_logs, prepare_runtime, runtime_status
 
 try:
     import toga
@@ -51,6 +51,7 @@ except Exception:  # pragma: no cover - exercised in iOS build/runtime, not unit
 
 WEBADMIN_DEFAULT_BIND = "127.0.0.1"
 WEBADMIN_DEFAULT_PORT = 18080
+IOS_APP_PROXY_PORT = 18081
 WEBADMIN_DEFAULT_PATH = "/"
 WEBADMIN_REMOTE_DEFAULT_NAME = "WebAdmin iphone"
 WEBADMIN_REMOTE_DEFAULT_PORT = 13081
@@ -459,16 +460,13 @@ class ObstacleBridgeIOSApp:
     def webadmin_url_from_config(config: Mapping[str, Any]) -> Optional[str]:
         if not isinstance(config, Mapping) or not bool(config.get("admin_web")):
             return None
-        bind = str(config.get("admin_web_bind") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_BIND).strip() or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_BIND
-        port = int(config.get("admin_web_port") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PORT)
+        # The app talks to its foreground proxy, while remote WebAdmin continues
+        # to target the Network Extension's configured control-server port.
+        port = IOS_APP_PROXY_PORT
         path = str(config.get("admin_web_path") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH).strip() or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH
         if not path.startswith("/"):
             path = "/" + path
-        if bind in {"0.0.0.0", "::", "*", "localhost"}:
-            host = "127.0.0.1"
-        else:
-            host = bind
-        return f"http://{host}:{port}{path}"
+        return f"http://127.0.0.1:{port}{path}"
 
     def save_profile(self, profile: Mapping[str, Any]) -> dict[str, Any]:
         return self.profile_store.save_profile(profile)
@@ -639,25 +637,25 @@ def main(argv: list[str] | None = None):
                         "toga.runtime_logs_harvested",
                         result=harvested_logs,
                     )
-                    tunnel_start = start_runtime()
+                    tunnel_prepare = prepare_runtime()
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                        "toga.runtime_start_requested",
-                        result=tunnel_start,
+                        "toga.runtime_prepare_requested",
+                        result=tunnel_prepare,
                     )
                     _refresh_webadmin()
 
-                    async def _log_tunnel_status_after_start() -> None:
+                    async def _log_tunnel_status_after_prepare() -> None:
                         await asyncio.sleep(3.0)
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
-                            "toga.runtime_status_after_start",
+                            "toga.runtime_status_after_prepare",
                             result=runtime_status(),
                         )
 
                     async def _on_running(app, **kwargs) -> None:
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_running")
-                        asyncio.create_task(_log_tunnel_status_after_start())
+                        asyncio.create_task(_log_tunnel_status_after_prepare())
                         _schedule_webadmin_refresh()
 
                     self.on_running = _on_running

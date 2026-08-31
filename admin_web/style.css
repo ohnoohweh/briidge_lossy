@@ -236,6 +236,80 @@ h1 {
   gap: 16px;
 }
 
+.ios-tunnel-controls {
+  display: grid;
+  gap: 12px;
+}
+
+.ios-tunnel-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 22px;
+  color: var(--text);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.ios-tunnel-control input {
+  appearance: none;
+  width: 52px;
+  height: 32px;
+  margin: 0;
+  border: 0;
+  border-radius: 999px;
+  background: #64748b;
+  cursor: pointer;
+  position: relative;
+  transition: background 160ms ease;
+}
+
+.ios-tunnel-control input::after {
+  content: '';
+  position: absolute;
+  width: 28px;
+  height: 28px;
+  top: 2px;
+  left: 2px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 160ms ease;
+}
+
+.ios-tunnel-control input:checked {
+  background: var(--good);
+}
+
+.ios-tunnel-control input:checked::after {
+  transform: translateX(20px);
+}
+
+.ios-tunnel-control input:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.shell.ios-extension-off .topbar-right,
+.layout.ios-extension-off .sidebar,
+.layout.ios-extension-off .mainview {
+  display: none;
+}
+
+.ios-extension-off-panel {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  min-height: 220px;
+  align-content: center;
+  text-align: center;
+}
+
+.ios-extension-off-panel p {
+  color: var(--muted);
+  font-size: 16px;
+}
+
 .quick-actions {
   display: flex;
   flex-wrap: wrap;

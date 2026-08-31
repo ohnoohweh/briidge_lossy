@@ -67,10 +67,20 @@
   </div>
   <div class="shell">
     <header class="topbar">
-      <div>
+      <div id="appIdentity">
         <div class="eyebrow">Network Appliance</div>
         <h1 id="appHeadline">ObstacleBridge</h1>
         <div id="buildBadge" class="build-badge">build unknown</div>
+      </div>
+      <div id="iosTunnelControls" class="ios-tunnel-controls hidden" aria-label="iOS tunnel controls">
+        <label class="ios-tunnel-control">
+          <span>Network extension active</span>
+          <input id="iosVpnToggle" type="checkbox" role="switch" aria-label="Network extension active">
+        </label>
+        <label class="ios-tunnel-control">
+          <span>Network tunneling active</span>
+          <input id="iosTunToggle" type="checkbox" role="switch" aria-label="Network tunneling active">
+        </label>
       </div>
       <div class="topbar-right">
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
@@ -78,7 +88,12 @@
       </div>
     </header>
 
-    <div class="layout">
+    <div id="adminLayout" class="layout">
+      <section id="iosExtensionOffPanel" class="ios-extension-off-panel card hidden" aria-live="polite">
+        <div class="eyebrow">ObstacleBridge</div>
+        <h2>Network extension is off</h2>
+        <p>Flip the switch above to enable the ObstacleBridge Network Extension.</p>
+      </section>
       <aside class="sidebar card">
         <nav class="nav-tabs" aria-label="Main navigation">
           <button class="nav-tab" data-tab="home" type="button">Home</button>

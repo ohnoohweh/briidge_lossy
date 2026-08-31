@@ -188,6 +188,9 @@ const liveState = {
 
 const uiState = {
   statusDoc: null,
+  iosVpnStatus: null,
+  iosAppControlsAvailable: false,
+  tunRoutingDoc: null,
   securityAdvisorShownOnce: false,
   initialTabApplied: false,
   setupAssistantAutoOpened: false,
@@ -3195,6 +3198,90 @@ async function loadTunRouting() {
   }
 }
 
+function applyIOSAppControls() {
+  const controls = document.getElementById('iosTunnelControls');
+  const identity = document.getElementById('appIdentity');
+  const vpnToggle = document.getElementById('iosVpnToggle');
+  const tunToggle = document.getElementById('iosTunToggle');
+  const layout = document.getElementById('adminLayout');
+  const extensionOffPanel = document.getElementById('iosExtensionOffPanel');
+  const shell = document.querySelector('.shell');
+  const isIOS = String(uiState.statusDoc?.admin_ui?.platform || '').toLowerCase() === 'ios';
+  const visible = isIOS && uiState.iosAppControlsAvailable;
+  const vpnActive = Boolean(uiState.iosVpnStatus?.active);
+  const extensionOff = visible && uiState.iosVpnStatus?.active === false;
+  if (controls) controls.classList.toggle('hidden', !visible);
+  if (identity) identity.classList.toggle('hidden', visible);
+  if (layout) layout.classList.toggle('ios-extension-off', extensionOff);
+  if (extensionOffPanel) extensionOffPanel.classList.toggle('hidden', !extensionOff);
+  if (shell) shell.classList.toggle('ios-extension-off', extensionOff);
+  if (!visible) return;
+  const tunControl = uiState.tunRoutingDoc?.tun_control || {};
+  if (vpnToggle instanceof HTMLInputElement) {
+    vpnToggle.checked = vpnActive;
+    vpnToggle.disabled = false;
+  }
+  if (tunToggle instanceof HTMLInputElement) {
+    tunToggle.checked = Boolean(tunControl.enabled);
+    tunToggle.disabled = !vpnActive || !Boolean(tunControl.supported);
+  }
+}
+
+async function loadIOSVPNStatus() {
+  if (String(uiState.statusDoc?.admin_ui?.platform || '').toLowerCase() !== 'ios') return;
+  try {
+    const response = await apiFetch('/api/ios/vpn/status', { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    uiState.iosVpnStatus = await response.json();
+    uiState.iosAppControlsAvailable = true;
+  } catch (e) {
+    uiState.iosAppControlsAvailable = false;
+  }
+  applyIOSAppControls();
+}
+
+async function toggleIOSVPN() {
+  const toggle = document.getElementById('iosVpnToggle');
+  if (!(toggle instanceof HTMLInputElement)) return;
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const response = await apiFetch('/api/ios/vpn/control', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(String(payload.error || ('HTTP ' + response.status)));
+    uiState.iosVpnStatus = { active: enabled };
+    await loadTunRouting();
+  } catch (e) {
+    window.alert(`Network extension update failed: ${e}`);
+  } finally {
+    applyIOSAppControls();
+    window.setTimeout(() => void loadIOSVPNStatus(), 1000);
+  }
+}
+
+async function toggleIOSTun() {
+  const toggle = document.getElementById('iosTunToggle');
+  if (!(toggle instanceof HTMLInputElement)) return;
+  const enabled = toggle.checked;
+  toggle.disabled = true;
+  try {
+    const response = await apiFetch('/api/tun-routing/control', {
+      method: 'POST',
+      body: JSON.stringify({ enabled }),
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) throw new Error(String(payload.error || ('HTTP ' + response.status)));
+    await loadTunRouting();
+  } catch (e) {
+    window.alert(`Network tunneling update failed: ${e}`);
+  } finally {
+    applyIOSAppControls();
+  }
+}
+
 function applyMetaDoc(j) {
   if (j.runtime_dependencies) {
     uiState.runtimeDependencies = j.runtime_dependencies;
@@ -3238,6 +3325,7 @@ function applyStatusDoc(j) {
   setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
   setText('secureLinkPeersDroppedTotal', fmtInteger(j.secure_link_peers_dropped_total));
   applyProxyDoc();
+  void loadIOSVPNStatus();
 }
 
 function applyConnectionsDoc(j) {
@@ -3257,6 +3345,7 @@ function applyPeersDoc(j) {
 }
 
 function applyTunRoutingDoc(j) {
+  uiState.tunRoutingDoc = j || {};
   renderTunRoutingConnectionTable('tunRoutingConnectionsBody', j.tun || []);
   renderTunRoutingSharedTable('tunRoutingSharedBody', j.shared_tun || []);
   setText('tunRoutingOpen', fmtInteger(j.summary?.tun_open ?? 0));
@@ -3358,6 +3447,7 @@ function applyTunRoutingDoc(j) {
     tunToggleBtn.disabled = !tunToggleSupported;
     tunToggleBtn.textContent = tunEnabled ? 'Suspend TUN' : 'Enable TUN';
   }
+  applyIOSAppControls();
 }
 
 function fmtTunNameResolutionSummary(info, verification) {
@@ -4840,6 +4930,8 @@ function initMetaToggle() {
 
 document.getElementById('restartBtn').addEventListener('click', restart);
 document.getElementById('tunRoutingToggleBtn')?.addEventListener('click', toggleTunRoutingEnabled);
+document.getElementById('iosVpnToggle')?.addEventListener('change', toggleIOSVPN);
+document.getElementById('iosTunToggle')?.addEventListener('change', toggleIOSTun);
 document.getElementById('tunHelperRepairBtn')?.addEventListener('click', repairTunHelperState);
 document.getElementById('logoutBtn')?.addEventListener('click', logoutAdmin);
 document.getElementById('exitBtn')?.addEventListener('click', exitProgram);

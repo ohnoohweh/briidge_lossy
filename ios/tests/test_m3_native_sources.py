@@ -527,9 +527,16 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert 'if let active = snapshot["active"] as? Bool {' in provider
     assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
     assert 'payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(' in provider
-    assert 'enabled: adminPacketProcessingActive()' in provider
+    assert 'private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?' in provider
+    assert 'private var tunRoutingEnabled = false' in provider
+    assert 'packetTunnelConfiguration = configuration' in provider
+    assert 'tunRoutingEnabled = true' in provider
+    assert 'let settings = enabled ? configuration.makeNetworkSettings() : nil' in provider
+    assert 'setTunnelNetworkSettings(settings)' in provider
+    assert 'func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest)' in provider
+    assert 'enabled: tunRoutingEnabled && adminPacketProcessingActive()' in provider
     assert 'startupEnabled: true' in provider
-    assert 'supported: false' in provider
+    assert 'supported: true' in provider
     assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
     assert 'private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)' in provider
     assert "private func startAdminTunVerificationPublisher()" in provider
@@ -1011,8 +1018,10 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
 def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread() -> None:
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
+    ios_app = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "app.py").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeTunnelControl" in control
+    assert 'private static let appWebAdminPort = 18081' in control
     assert "ObstacleBridgeWebAdminServer" in control
     assert "admin_api_request" in control
     assert "ObstacleBridgeIOSAppAdminWebProxy" in control
@@ -1020,6 +1029,13 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "queue.async" in control
     assert "prepareIPServerTunnel" in control
     assert "startIPServerTunnel" in control
+    assert "stopIPServerTunnel" in control
+    assert "ensureAdminWebProxy(selection.manager)" in control
+    assert "let port = appWebAdminPort" in control
+    assert "IOS_APP_PROXY_PORT = 18081" in ios_app
+    assert "port = IOS_APP_PROXY_PORT" in ios_app
+    assert "prepare_runtime()" in ios_app
+    assert "start_runtime()" not in ios_app
     assert "harvestSharedLogs" in control
     assert "runtimeExecutionMode()" in control
     assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control
@@ -1047,6 +1063,10 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "requestProviderSnapshot" in control
     assert "requestProviderMessage" in control
     assert "stopVPNTunnel" in control
+    assert 'path == "/api/ios/vpn/status"' in control
+    assert 'path == "/api/ios/vpn/control"' in control
+    assert "private func appProxyStatusPayload(_ payload: [String: Any]) -> [String: Any]" in control
+    assert 'adminUI["platform"] = "ios"' in control
     assert "scheduleAdminTunnelReload" in control
     assert "restart_after_save" in control
     assert "selectCanonicalManager" in control

@@ -49,6 +49,20 @@ def start_runtime() -> dict[str, Any]:
     return start_ipserver_tunnel()
 
 
+def stop_ipserver_tunnel() -> dict[str, Any]:
+    bridge = _load_bridge()
+    if bridge is None:
+        return {"ok": False, "error": _LAST_ERROR}
+    try:
+        return _decode_response(bridge.stopIPServerTunnel())
+    except Exception as exc:
+        return {"ok": False, "error": f"stopIPServerTunnel failed: {type(exc).__name__}: {exc}"}
+
+
+def stop_runtime() -> dict[str, Any]:
+    return stop_ipserver_tunnel()
+
+
 def prepare_ipserver_tunnel() -> dict[str, Any]:
     bridge = _load_bridge()
     if bridge is None:
