@@ -697,6 +697,45 @@ Design impact:
 - WebAdmin shutdown and recovery behavior must be reasoned about as extension-owned service behavior
 - frontend behavior should remain platform-agnostic and reflect backend/runtime truth
 
+### Outcome 13: Extension Controls Belong To The Native App Shell
+
+The containing iOS app now presents the two top-level lifecycle controls as
+native Toga rows above the embedded operational view:
+
+- `Network extension active` starts or stops the persisted
+  `NETunnelProviderManager` profile through the native tunnel-control bridge.
+- `Network tunneling active` enables or suspends only TUN route inclusion by
+  forwarding the existing `/api/tun-routing/control` request through the
+  provider-message boundary.
+
+The two controls deliberately represent different layers:
+
+- disabling the Network Extension stops the VPN/provider runtime;
+- disabling Network Tunneling keeps the provider, backend runtime, and
+  connectivity checks active, but removes the included route masks; and
+- `TUN_routing.enabled_on_startup` remains the startup policy used when the
+  Network Extension is enabled.
+
+When the extension is inactive, the app clears the embedded WebAdmin view and
+shows a native instruction to enable the extension. This avoids presenting
+stale runtime data as if it were live.
+
+The WebAdmin API and its normal page stay common across Python, iOS, and
+macOS. The iOS app uses its loopback-only foreground proxy for the embedded
+page; it adds only a native-shell display marker so that page hides its
+redundant ObstacleBridge identity banner. Native controls use the same native
+extension bridge and existing TUN-routing API contract rather than introducing
+an iOS-specific remote API.
+
+Design impact:
+
+- the containing app owns the small set of device-lifecycle controls that need
+  platform-native behavior;
+- WebAdmin remains the shared, detailed operational and configuration surface;
+- remote WebAdmin does not expose iOS-only extension start/stop controls; and
+- future native UX work should add controls only when they represent a real
+  Apple-platform boundary, not duplicate shared WebAdmin features.
+
 ## Target iOS Architecture
 
 The final app should have two installable iOS components:
