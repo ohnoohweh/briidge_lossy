@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import ipaddress
 import socket
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -4383,13 +4384,16 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
             mux._tun_by_chan[12] = ChannelMux.TunDevice(fd=44, ifname='obtun0', mtu=64)
-            payload = b'fragmented-tun-packet'
+            payload = b'\x45ragmented-tun-packet'
+            expected_device_frame = payload
+            if sys.platform == 'darwin':
+                expected_device_frame = int(socket.AF_INET).to_bytes(4, 'big') + payload
             with patch('obstacle_bridge.bridge.os.write') as os_write:
                 for offset in range(0, len(payload), 5):
                     frag_payload = ChannelMux.UDP_FRAG_HDR.pack(31, len(payload), offset) + payload[offset:offset + 5]
                     frame = mux._pack_mux(12, ChannelMux.Proto.TUN, offset // 5, ChannelMux.MType.DATA_FRAG, frag_payload)
                     mux.on_app_payload_from_peer(frame)
-                os_write.assert_called_once_with(44, payload)
+                os_write.assert_called_once_with(44, expected_device_frame)
         finally:
             mux.loop.close()
 
