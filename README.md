@@ -166,6 +166,8 @@ What the server hook does on `obtun1`:
 What the iPhone side does:
 
 - iOS `NEPacketTunnelNetworkSettings` owns the full-route device traffic capture
+- `TUN_routing.enabled_on_startup` controls the included route masks without stopping the Network Extension, packet processing, or TUN verification; enabling the extension restores those masks when startup tunneling is enabled
+- the iOS foreground app presents native Network Extension and Network Tunneling controls; when the extension is inactive it replaces the embedded WebAdmin view with an enablement card, while an active extension and Safari use the same configured extension Admin API and shared page
 - loopback remains excluded from the tunnel
 - the iOS tunnel address is derived from the local `own_servers` TUN service hook env `lifecycle_hooks.listener.on_created.env.TUN_ADDR` when present
 - for transition compatibility with older profiles, iOS can also infer its tunnel address from the matching remote TUN listener hook `PEER_ADDR`
@@ -1490,7 +1492,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
@@ -1501,9 +1503,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `57` | `903` |
+| Python CLI/runtime, including macOS Python | `60` | `928` |
 | macOS Swift app | `1` | `55` |
-| iOS app/extension | `26` | `172` |
+| iOS app/extension | `27` | `175` |
 
 #### Requirement traceability
 
@@ -1511,7 +1513,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
-| iOS app/extension | `10/92 = 10.9%` | `16/92 = 17.4%` | `21/92 = 22.8%` |
+| iOS app/extension | `10/92 = 10.9%` | `17/92 = 18.5%` | `22/92 = 23.9%` |
 
 #### Architecture traceability
 
@@ -1519,7 +1521,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 | macOS Swift app | `1/8 = 12.5%` | `3/8 = 37.5%` | `3/8 = 37.5%` |
-| iOS app/extension | `4/8 = 50.0%` | `6/8 = 75.0%` | `6/8 = 75.0%` |
+| iOS app/extension | `4/8 = 50.0%` | `7/8 = 87.5%` | `7/8 = 87.5%` |
 
 The supporting manifests remain shared:
 
@@ -1527,7 +1529,7 @@ The supporting manifests remain shared:
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
 This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
-It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations.
+It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. Python and iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached, and pauses connectivity-test DNS/ICMP work while local TUN throttling is active.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
@@ -1539,11 +1541,11 @@ This section is intentionally narrower than product coverage. It shows the evide
 
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
-| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `119` | `119` |
+| Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `54` | `0` | `54` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `55` | `0` | `55` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `31` | `31` |
-| Total parity-oriented evidence | Sum of the lanes above | `58` | `150` | `208` |
+| Total parity-oriented evidence | Sum of the lanes above | `59` | `151` | `210` |
 
 Important caveat:
 
@@ -1602,6 +1604,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
+- Keep Swift TUN recovery covered for myUDP, TCP, WebSocket, and QUIC: a transport-epoch reset must discard stale mux channel state, advance the ChannelMux connection sequence, and send a fresh `OPEN` before `DATA`.
 - Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 

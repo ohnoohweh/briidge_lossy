@@ -293,6 +293,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
     }
 
+    func tunConnectivityTestsAllowed() -> Bool {
+        withOwnerQueue {
+            ObstacleBridgeOverlayChannelCore.tunConnectivityTestsAllowed(
+                tunRuntime: tunRuntime,
+                backpressure: overlayBackpressureSnapshot()
+            )
+        }
+    }
+
     func transportSnapshot() -> [String: Any] {
         withOwnerQueue {
             let protocolStats = overlayProtocolStats()
@@ -821,6 +830,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
 
     private func resetOverlayTransportEpoch() {
         overlayLayerTransportAdapter?.handleTransportDisconnected()
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         secureLinkHandshakePrimed = false
         lowerLayerFallbackWorkItem?.cancel()
         lowerLayerFallbackWorkItem = nil

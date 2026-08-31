@@ -11,10 +11,12 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
     private static let webAdminBind = "127.0.0.1"
     private static let webAdminPort = 18080
+    private static let appWebAdminPort = 18081
     private static let remoteAdminName = "WebAdmin iphone"
     private static let remoteAdminPort = 13081
     private static let queue = DispatchQueue(label: "com.obstaclebridge.tunnel-control", qos: .utility)
     private static let statusDefaultsKey = "ObstacleBridgeTunnelControlStatus"
+    private static let tunRoutingStatusDefaultsKey = "ObstacleBridgeTunnelControlTunRoutingStatus"
     private static let appGroupIdentifier = "group.com.obstaclebridge.shared"
     private static let defaultTunnelAddress = "192.168.106.1"
     private static let defaultTunnelPrefix = 30
@@ -107,6 +109,40 @@ final class ObstacleBridgeTunnelControl: NSObject {
         ]) as NSString
     }
 
+    @objc class func stopIPServerTunnel() -> NSString {
+        recordEvent("stop_requested")
+        let mode = runtimeExecutionMode()
+        queue.async {
+#if os(macOS)
+            if mode == "swift_host_runner" {
+                hostRunner?.stop()
+                hostRunner = nil
+                updateStatus(ok: true, event: "swift_host_runner_stopped", extra: ["stopped": true])
+                return
+            }
+#endif
+            reloadCanonicalManager(event: "stop_manager_loaded") { manager in
+                guard let manager else {
+                    return
+                }
+                let status = manager.connection.status
+                switch status {
+                case .connected, .connecting, .reasserting, .disconnecting:
+                    manager.connection.stopVPNTunnel()
+                    updateStatus(ok: true, event: "stop_requested", manager: manager, extra: ["stopped": true])
+                default:
+                    updateStatus(ok: true, event: "already_stopped", manager: manager, extra: ["stopped": true])
+                }
+            }
+        }
+        return jsonString([
+            "ok": true,
+            "requested": true,
+            "provider_bundle_identifier": providerBundleIdentifier,
+            "mode": mode,
+        ]) as NSString
+    }
+
     @objc class func prepareIPServerTunnel() -> NSString {
         recordEvent("prepare_requested")
         let mode = runtimeExecutionMode()
@@ -129,6 +165,19 @@ final class ObstacleBridgeTunnelControl: NSObject {
             "mode": "prepare_only",
             "runtime_mode": mode,
         ]) as NSString
+    }
+
+    @objc class func enableIPServerTunRouting() -> NSString {
+        requestTunRoutingChange(enabled: true)
+    }
+
+    @objc class func suspendIPServerTunRouting() -> NSString {
+        requestTunRoutingChange(enabled: false)
+    }
+
+    @objc class func tunRoutingStatus() -> NSString {
+        refreshTunRoutingStatusAsync()
+        return jsonString(cachedTunRoutingStatus() ?? defaultTunRoutingStatus()) as NSString
     }
 
     @objc class func harvestSharedLogs() -> NSString {
@@ -200,9 +249,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
             }
 
             activeManager = selection.manager
-#if os(macOS)
             ensureAdminWebProxy(selection.manager)
-#endif
             if selection.needsSave {
 
                 configure(selection.manager)
@@ -1230,9 +1277,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
 
             let selection = selectCanonicalManager(from: managers ?? [])
             activeManager = selection.manager
-#if os(macOS)
                 ensureAdminWebProxy(selection.manager)
-#endif
             updateStatus(
                 ok: true,
                 event: event,
@@ -1290,9 +1335,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
         event: String,
         retriesRemaining: Int = 20
     ) {
-#if os(macOS)
         ensureAdminWebProxy(manager)
-#endif
         let status = manager.connection.status
         switch status {
         case .invalid:
@@ -1342,9 +1385,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func start(_ manager: NETunnelProviderManager) {
-#if os(macOS)
         ensureAdminWebProxy(manager)
-#endif
         let status = manager.connection.status
         if status == .connected || status == .connecting || status == .reasserting {
             updateStatus(ok: true, event: "already_started", manager: manager, extra: ["started": true])
@@ -1360,9 +1401,19 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func ensureAdminWebProxy(_ manager: NETunnelProviderManager?) {
+#if !os(macOS)
+        // iOS displays the extension's Admin API directly; no foreground proxy.
+        _ = manager
+        return
+#endif
+#if os(macOS)
         let runtimeConfig = loadRuntimeConfiguration()
         let bindHost = (runtimeConfig["admin_web_bind"] as? String) ?? webAdminBind
         let port = (runtimeConfig["admin_web_port"] as? Int) ?? webAdminPort
+#else
+        let bindHost = webAdminBind
+        let port = appWebAdminPort
+#endif
         let adminWebDirectory = resolveAdminWebDirectory()
         if adminWebProxy == nil {
             do {
@@ -1569,6 +1620,111 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 updateStatus(ok: true, event: "status_refreshed", manager: manager ?? activeManager)
             }
         }
+    }
+
+    private class func requestTunRoutingChange(enabled: Bool) -> NSString {
+        recordEvent("tun_routing_control_requested", payload: ["enabled": enabled])
+        queue.async {
+            reloadCanonicalManager(event: "tun_routing_control_manager_loaded") { manager in
+                guard let manager else {
+                    return
+                }
+                requestTunRouting(manager: manager, enabled: enabled)
+            }
+        }
+        return jsonString([
+            "ok": true,
+            "requested": true,
+            "enabled": enabled,
+        ]) as NSString
+    }
+
+    private class func refreshTunRoutingStatusAsync() {
+        queue.async {
+            reloadCanonicalManager(event: "tun_routing_status_manager_loaded") { manager in
+                guard let manager else {
+                    return
+                }
+                requestTunRouting(manager: manager, enabled: nil)
+            }
+        }
+    }
+
+    private class func requestTunRouting(manager: NETunnelProviderManager, enabled: Bool?) {
+        guard manager.connection.status == .connected else {
+            var payload = defaultTunRoutingStatus()
+            payload["ok"] = false
+            payload["active"] = false
+            payload["error"] = "Network extension is not active"
+            cacheTunRoutingStatus(payload)
+            return
+        }
+        guard let session = manager.connection as? NETunnelProviderSession else {
+            cacheTunRoutingStatus([
+                "ok": false,
+                "active": false,
+                "error": "VPN connection is not a NETunnelProviderSession",
+            ])
+            return
+        }
+
+        let path = enabled == nil ? "/api/tun-routing/status" : "/api/tun-routing/control"
+        var request: [String: Any] = [
+            "command": "admin_api_request",
+            "method": enabled == nil ? "GET" : "POST",
+            "path": path,
+        ]
+        if let enabled,
+           let body = try? JSONSerialization.data(withJSONObject: ["enabled": enabled]) {
+            request["body_base64"] = body.base64EncodedString()
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: request) else {
+            return
+        }
+        do {
+            try session.sendProviderMessage(data) { responseData in
+                guard let responseData,
+                      let response = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                      var body = response["body_json"] as? [String: Any] else {
+                    return
+                }
+                body["active"] = (body["enabled"] as? Bool) ?? false
+                cacheTunRoutingStatus(body)
+                recordEvent("tun_routing_control_response", payload: body)
+            }
+        } catch {
+            cacheTunRoutingStatus([
+                "ok": false,
+                "active": false,
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    private class func defaultTunRoutingStatus() -> [String: Any] {
+        let enabled = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: loadRuntimeConfigJSON())?.enabledOnStartup ?? true
+        return [
+            "ok": true,
+            "enabled": enabled,
+            "active": enabled,
+            "startup_enabled": enabled,
+            "cached": false,
+        ]
+    }
+
+    private class func cachedTunRoutingStatus() -> [String: Any]? {
+        guard let data = UserDefaults.standard.data(forKey: tunRoutingStatusDefaultsKey),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return payload
+    }
+
+    private class func cacheTunRoutingStatus(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: tunRoutingStatusDefaultsKey)
     }
 
     private class func updateStatus(
@@ -2178,12 +2334,28 @@ private final class ObstacleBridgeIOSAppAdminWebProxy {
 
     private func statusSnapshot() -> [String: Any] {
         if let payload = providerJSONBody(method: "GET", path: "/api/status") as? [String: Any] {
-            return payload
+            return appProxyStatusPayload(payload)
         }
-        return statusProvider()
+        return appProxyStatusPayload(statusProvider())
+    }
+
+    // Keep the foreground proxy identifiable while its packet tunnel is stopped,
+    // so the local UI can offer the switch that starts the extension again.
+    private func appProxyStatusPayload(_ payload: [String: Any]) -> [String: Any] {
+        var output = payload
+        var adminUI = output["admin_ui"] as? [String: Any] ?? [:]
+        adminUI["platform"] = "ios"
+        output["admin_ui"] = adminUI
+        return output
     }
 
     private func apiResponse(method: String, path: String, headers: [String: String], body: Data?) -> ObstacleBridgeAdminAPIResponse? {
+        if method.uppercased() == "GET", path == "/api/ios/vpn/status" {
+            return vpnStatusResponse()
+        }
+        if method.uppercased() == "POST", path == "/api/ios/vpn/control" {
+            return vpnControlResponse(body: body)
+        }
         guard let envelope = providerAdminAPIEnvelope(method: method, path: path, headers: headers, body: body) else {
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": false,
@@ -2201,10 +2373,43 @@ private final class ObstacleBridgeIOSAppAdminWebProxy {
         )
     }
 
+    private func vpnStatusResponse() -> ObstacleBridgeAdminAPIResponse {
+        let raw = ObstacleBridgeTunnelControl.status() as String
+        let statusPayload = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] ?? [:]
+        let status = String(describing: statusPayload["status"] ?? "unknown").lowercased()
+        let active = ["connected", "connecting", "reasserting"].contains(status)
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": statusPayload["ok"] as? Bool ?? false,
+            "active": active,
+            "status": status,
+            "provider_enabled": statusPayload["enabled"] as? Bool ?? false,
+        ])
+    }
+
+    private func vpnControlResponse(body: Data?) -> ObstacleBridgeAdminAPIResponse {
+        guard let body,
+              let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let enabled = payload["enabled"] as? Bool else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "enabled is required",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let raw = enabled
+            ? ObstacleBridgeTunnelControl.startIPServerTunnel() as String
+            : ObstacleBridgeTunnelControl.stopIPServerTunnel() as String
+        let result = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any] ?? [:]
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": result["ok"] as? Bool ?? false,
+            "active": enabled,
+            "requested": true,
+        ])
+    }
+
     private func liveTopicPayload(topic: String) -> Any? {
         switch topic {
         case "status":
-            return providerJSONBody(method: "GET", path: "/api/status")
+            return statusSnapshot()
         case "connections":
             return providerJSONBody(method: "GET", path: "/api/connections")
         case "peers":

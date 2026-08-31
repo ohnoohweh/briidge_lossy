@@ -182,6 +182,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard started else { return }
         started = false
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
+        tunRuntime?.resetTransportEpoch()
         overlayConnected = false
         reconnectScheduled = false
         nextReconnectAttemptDeadlineNS = nil
@@ -307,6 +308,15 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     func inflowAllowed() -> Bool {
         ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
+    }
+
+    func tunConnectivityTestsAllowed() -> Bool {
+        withOwnerQueue {
+            ObstacleBridgeOverlayChannelCore.tunConnectivityTestsAllowed(
+                tunRuntime: tunRuntime,
+                backpressure: overlayBackpressureSnapshot()
+            )
+        }
     }
 
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
@@ -505,6 +515,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
 
     private func handleDisconnected(schedule: Bool) {
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         overlayConnected = false
         overlayConnection?.cancel()
         overlayConnection = nil

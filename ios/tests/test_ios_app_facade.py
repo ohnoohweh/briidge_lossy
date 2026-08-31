@@ -215,7 +215,18 @@ def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> 
     assert ios_app_module._resolve_toga_webview_class() is sentinel
 
 
-def test_webadmin_url_from_config_normalizes_wildcard_bind() -> None:
+def test_resolve_toga_switch_class_uses_widget_module_fallback(monkeypatch) -> None:
+    sentinel = object()
+    fake_toga = types.SimpleNamespace()
+    fake_module = types.SimpleNamespace(Switch=sentinel)
+
+    monkeypatch.setattr(ios_app_module, "toga", fake_toga)
+    monkeypatch.setattr(ios_app_module.importlib, "import_module", lambda name: fake_module)
+
+    assert ios_app_module._resolve_toga_switch_class() is sentinel
+
+
+def test_webadmin_url_from_config_uses_extension_admin_api() -> None:
     assert (
         ObstacleBridgeIOSApp.webadmin_url_from_config(
             {
@@ -228,8 +239,19 @@ def test_webadmin_url_from_config_normalizes_wildcard_bind() -> None:
         == "http://127.0.0.1:19090/admin"
     )
 
+    assert (
+        ObstacleBridgeIOSApp.webadmin_url_from_config(
+            {
+                "admin_web": True,
+                "admin_web_bind": "192.0.2.10",
+                "admin_web_port": 19090,
+            }
+        )
+        == "http://127.0.0.1:19090/"
+    )
 
-def test_webadmin_url_from_config_uses_ios_tun_address_when_running_on_ios(monkeypatch) -> None:
+
+def test_webadmin_url_from_config_uses_extension_listener_when_running_on_ios(monkeypatch) -> None:
     monkeypatch.setattr(ios_app_module.sys, "platform", "ios")
 
     assert (

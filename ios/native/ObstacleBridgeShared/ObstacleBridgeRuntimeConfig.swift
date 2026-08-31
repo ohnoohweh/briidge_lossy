@@ -46,6 +46,7 @@ struct ObstacleBridgeTunnelRoutingOverride {
     let excludedRoutes6: [String]?
     let dnsServers: [String]?
     let mtu: Int?
+    let enabledOnStartup: Bool?
     let enableTCPMSS: Bool?
     let enableTunTcpdump: Bool?
     let tunTcpdumpPcapPath: String?
@@ -868,6 +869,7 @@ enum ObstacleBridgeRuntimeConfig {
                 "excluded_routes6",
                 "dns_servers",
                 "mtu",
+                "enabled_on_startup",
                 "enable_tcpmss",
                 "enable_tun_tcpdump",
                 "tun_tcpdump_pcap_path",
@@ -899,6 +901,7 @@ enum ObstacleBridgeRuntimeConfig {
             excludedRoutes6: override["excluded_routes6"] as? [String],
             dnsServers: override["dns_servers"] as? [String],
             mtu: intValue(from: override["mtu"]),
+            enabledOnStartup: boolValue(from: override["enabled_on_startup"]),
             enableTCPMSS: boolValue(from: override["enable_tcpmss"]),
             enableTunTcpdump: boolValue(from: override["enable_tun_tcpdump"]),
             tunTcpdumpPcapPath: optionalStringValueAllowEmpty(from: override["tun_tcpdump_pcap_path"]),

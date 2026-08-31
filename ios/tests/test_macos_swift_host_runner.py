@@ -58,9 +58,10 @@ def test_macos_swift_host_runner_passes_python_parity_hook_env() -> None:
     assert 'env["OB_OVERLAY_UNDERLAY_GW"] = context["overlay_underlay_gateway"] ?? ""' in source
     assert 'env["OB_OVERLAY_UNDERLAY_IF"] = context["overlay_underlay_interface"] ?? ""' in source
     assert 'env[index == 0 ? "DNS1" : "DNS2"] = dns' in source
-    assert 'env["INCLUDED_ROUTES"] = includedRoutes.joined(separator: ",")' in source
+    assert 'let startupEnabled = tunRouting.enabledOnStartup ?? true' in source
+    assert 'env["INCLUDED_ROUTES"] = startupEnabled ? includedRoutes.joined(separator: ",") : ""' in source
     assert 'env["EXCLUDED_ROUTES"] = effectiveExcludedRoutes.ipv4.joined(separator: ",")' in source
-    assert 'env["INCLUDED_ROUTES6"] = includedRoutes6.joined(separator: ",")' in source
+    assert 'env["INCLUDED_ROUTES6"] = startupEnabled ? includedRoutes6.joined(separator: ",") : ""' in source
     assert 'env["EXCLUDED_ROUTES6"] = effectiveExcludedRoutes.ipv6.joined(separator: ",")' in source
 
 
@@ -659,8 +660,12 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert '"probe_reply_unmatched"' in shared_probe_support
     assert '"overlay_rx_after_unpack"' in shared_probe_support
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
-    assert 'tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
-    assert 'payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'let tunHelper = status["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'tunRouting["tun_helper"] = tunHelper' in source
+    assert 'tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))' in source
+    assert 'let tunHelper = snapshotUncached()["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'payload["tun_helper"] = tunHelper' in source
+    assert 'payload["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))' in source
 
 
 def test_macos_swift_host_runner_keeps_quic_owner_iOS13_compilable() -> None:

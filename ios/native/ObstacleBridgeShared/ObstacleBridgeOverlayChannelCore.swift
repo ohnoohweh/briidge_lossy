@@ -296,6 +296,21 @@ enum ObstacleBridgeOverlayChannelCore {
         }
     }
 
+    static func tunConnectivityTestsAllowed(
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime?,
+        backpressure: ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot
+    ) -> Bool {
+        guard let tunRuntime else {
+            return false
+        }
+        let nowNS = DispatchTime.now().uptimeNanoseconds
+        let throttle = tunRuntime.sharedTunRuntimeSnapshot() != nil
+            ? tunRuntime.sharedTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
+            : tunRuntime.directTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
+        // Diagnostics must not compete with forwarded TUN packets under pressure.
+        return !(throttle["active"] as? Bool ?? false)
+    }
+
     static func sendLocalTunPacket(
         _ packet: Data,
         started: Bool,
@@ -317,6 +332,22 @@ enum ObstacleBridgeOverlayChannelCore {
         }
         let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: tunMTU)
         let nowNS = DispatchTime.now().uptimeNanoseconds
+        // This is the shared admission boundary for all local TUN traffic. Do not
+        // allocate ChannelMux state or emit frames until the lower stack is ready.
+        guard overlayConnected else {
+            tunRuntime.recordSharedTunDrop(
+                reason: "overlay_not_connected",
+                direction: "local_to_peer",
+                packetBytes: packet.count
+            )
+            onLocalDrop?(TunLocalDropEvent(
+                reason: "overlay_not_connected",
+                packet: packet,
+                sharedRoute: nil,
+                tunRuntime: tunRuntime
+            ))
+            return
+        }
         let backpressure = backpressure ?? simpleBackpressureSnapshot(bufferedFrames: bufferedFrames)
         let sharedRoute = tunRuntime.planSharedTunOutboundRoute(packet: packet)
         let throttle = tunRuntime.scopedTunThrottle(

@@ -142,7 +142,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private let instanceID: UInt64
-    private let connectionSeq: UInt32
+    private var connectionSeq: UInt32
     private let chanIDStart: Int
     private let chanIDStride: Int
     private let sessionMaxAppPayload: Int
@@ -169,7 +169,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private var sharedTunDropTotal: Int
     private var sharedTunDropByReason: [String: Int]
     private var sharedTunRecentDrops: [[String: Any]]
-    private let controlChunkReassembler: ObstacleBridgeChannelMuxCodec.ControlChunkReassembler
+    private var controlChunkReassembler: ObstacleBridgeChannelMuxCodec.ControlChunkReassembler
 
     init(
         instanceID: UInt64,
@@ -402,6 +402,26 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             ),
             nowNS: nowNS
         )
+    }
+
+    /// Drop channel state that belongs to the previous overlay transport epoch.
+    ///
+    /// A peer restart loses its ChannelMux channel table even when the local
+    /// tunnel interface remains open.  Retaining `preferredTunChanID` would
+    /// make the next local packet send DATA on that stale channel without a
+    /// replacement OPEN.
+    func resetTransportEpoch() {
+        connectionSeq &+= 1
+        counters.removeAll(keepingCapacity: true)
+        boundTunChanIDs.removeAll(keepingCapacity: true)
+        preferredTunChanID = nil
+        fragmentStates.removeAll(keepingCapacity: true)
+        controlChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
+        sharedTunRuntimeByPeer.removeAll(keepingCapacity: true)
+        sharedTunPeerRefByPeer.removeAll(keepingCapacity: true)
+        sharedTunPeerIDByRef.removeAll(keepingCapacity: true)
+        sharedTunScopeMetadata.removeAll(keepingCapacity: true)
+        tunInflowScopeStates.removeAll(keepingCapacity: true)
     }
 
     func handleLocalTunPacket(

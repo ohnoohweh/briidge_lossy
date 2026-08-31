@@ -225,6 +225,7 @@ REQ-MUX-011:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget
     - tests/unit/test_channel_mux_listener_mode.py::test_throttle_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
@@ -834,6 +835,7 @@ REQ-LIFE-010:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_restart_reloads_runtime_config_from_disk
     - ios/tests/test_ios_e2e_app_runner.py::test_e2e_runner_runtime_config_reports_webadmin_url_and_started_state
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup
 
 REQ-LIFE-011:
   integration_tests:
@@ -915,6 +917,7 @@ REQ-MUX-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic
@@ -945,6 +948,7 @@ REQ-MUX-006:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
+    # Includes the shared-device reader-owner return-route regression.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
@@ -979,7 +983,9 @@ REQ-MUX-008:
 
 REQ-MUX-009:
   # Includes Linux hook coverage for exact excluded-route snapshotting so
-  # full-tunnel installs preserve pre-existing local subnet ownership.
+  # full-tunnel installs preserve pre-existing local subnet ownership. Swift
+  # epoch-resync coverage also verifies a recovered TUN OPEN advances its
+  # ChannelMux connection sequence.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_structured_remote_servers_udp_forwarding
@@ -993,6 +999,7 @@ REQ-MUX-009:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
   unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer
     - tests/unit/test_channel_mux_listener_mode.py::test_parse_remote_servers_accepts_structured_specs
     - tests/unit/test_channel_mux_listener_mode.py::test_channel_mux_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_logs_state_transition_reason
@@ -1079,6 +1086,8 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_inbound_shared_tun_packet_sender_owned_destination_does_not_self_loop
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_inbound_peer_relay_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_inbound_peer_relay_avoids_self_loop
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tun_epoch_reset_reopens_local_channel
+    - ios/tests/test_m3_native_sources.py::test_swift_overlay_epoch_reset_reopens_local_tun_channels
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
 
 REQ-MUX-010:
@@ -1095,6 +1104,8 @@ REQ-MUX-010:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_passes_python_parity_hook_env
     - tests/unit/test_channel_mux_listener_mode.py::test_probe_tun_connectivity_uses_virtual_probe_source_for_local_shared_service
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification
     - tests/unit/test_channel_mux_listener_mode.py::test_local_virtual_probe_skips_when_transport_inactive
@@ -1185,10 +1196,15 @@ REQ-ADM-001:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
+    - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
+    - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
     - ios/tests/test_m3_native_sources.py::test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats
+    # Also covers paused iOS DNS/ICMP verification while TUN throttling is active.
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic
 
 
 REQ-ADM-009:

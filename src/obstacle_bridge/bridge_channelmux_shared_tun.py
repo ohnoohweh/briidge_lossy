@@ -828,6 +828,7 @@ class ChannelMuxSharedTunMixin:
         dev: "ChannelMux.TunDevice",
         chan: int,
         packet: bytes,
+        peer_id: Optional[int] = None,
     ) -> tuple[bool, Optional[dict[str, Any]], Optional[str]]:
         svc_key = getattr(dev, "service_key", None)
         ownership = self._shared_tun_ownership_by_service.get(svc_key) if svc_key is not None else None
@@ -850,7 +851,7 @@ class ChannelMuxSharedTunMixin:
                 return True, parsed, None
         source_ip = str(parsed.get("source_ip") or "")
         owner_ref = self._shared_tun_owner_ref_for_source_ip(svc_key, source_ip)
-        peer_id = self._chan_owner_peer_id.get(int(chan))
+        peer_id = int(peer_id) if peer_id is not None else self._chan_owner_peer_id.get(int(chan))
         if peer_id is None and owner_ref:
             recovered_peer_id, recovery_detail = self._recover_shared_tun_channel_owner(
                 svc_key,

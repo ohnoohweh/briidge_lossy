@@ -341,6 +341,15 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
     }
 
+    func tunConnectivityTestsAllowed() -> Bool {
+        withOwnerQueue {
+            ObstacleBridgeOverlayChannelCore.tunConnectivityTestsAllowed(
+                tunRuntime: tunRuntime,
+                backpressure: overlayBackpressureSnapshot()
+            )
+        }
+    }
+
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
         if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
             return body()
@@ -887,6 +896,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     private func resetOverlayTransportEpoch() {
         overlayLayerTransportAdapter?.handleTransportDisconnected()
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         secureLinkHandshakePrimed = false
         lowerLayerFallbackWorkItem?.cancel()
         lowerLayerFallbackWorkItem = nil

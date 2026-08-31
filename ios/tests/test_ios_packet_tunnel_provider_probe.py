@@ -1283,6 +1283,7 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
                                     "tunnel_prefix6": 124,
                                     "included_routes6": ["2001:db8:205::/64"],
                                     "excluded_routes6": ["::1/128"],
+                                    "enabled_on_startup": true,
                                     "dns_servers": ["9.9.9.9"],
                                     "mtu": 1600,
                                 ],
@@ -1299,6 +1300,29 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
                             excludedRoutes6: []
                         )
                     )
+                    let disabledConfiguration = try ObstacleBridgePacketTunnelConfiguration(
+                        [
+                            "peer": ["host": "127.0.0.1"],
+                            "runtime_config": [
+                                "TUN_routing": [
+                                    "enabled_on_startup": false,
+                                    "dns_servers": ["1.1.1.1"],
+                                ],
+                            ],
+                        ],
+                        defaults: ObstacleBridgePacketTunnelDefaults(
+                            tunnelAddress: "192.168.106.1",
+                            tunnelPrefix: 30,
+                            includedRoutes: ["0.0.0.0/0"],
+                            excludedRoutes: [],
+                            tunnelAddress6: "fd20:106::1",
+                            tunnelPrefix6: 126,
+                            includedRoutes6: ["::/0"],
+                            excludedRoutes6: []
+                        )
+                    )
+                    let enabledSettings = configuration.makeNetworkSettings()
+                    let disabledSettings = disabledConfiguration.makeNetworkSettings(includeRoutes: false)
 
                     let payload: [String: Any] = [
                         "tunnel_address": configuration.tunnelAddress,
@@ -1318,6 +1342,12 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
                             ["destination": $0.destinationAddress, "prefix": $0.networkPrefixLength]
                         },
                         "route_diagnostics": configuration.routeDiagnostics,
+                        "enabled_on_startup": configuration.enabledOnStartup,
+                        "disabled_enabled_on_startup": disabledConfiguration.enabledOnStartup,
+                        "enabled_ipv4_included_route_count": enabledSettings.ipv4Settings?.includedRoutes?.count ?? -1,
+                        "disabled_ipv4_included_route_count": disabledSettings.ipv4Settings?.includedRoutes?.count ?? -1,
+                        "disabled_ipv6_included_route_count": disabledSettings.ipv6Settings?.includedRoutes?.count ?? -1,
+                        "disabled_dns_servers": disabledSettings.dnsSettings?.servers ?? [],
                         "dns_servers": configuration.dnsServers,
                         "mtu": configuration.mtu,
                     ]
@@ -1360,6 +1390,12 @@ def test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_ad
     assert ipv6_probes["::1"]["included"] is False
     assert ipv6_probes["::1"]["excluded"] is True
     assert ipv6_probes["::1"]["routed_to_tunnel"] is False
+    assert payload["enabled_on_startup"] is True
+    assert payload["disabled_enabled_on_startup"] is False
+    assert payload["enabled_ipv4_included_route_count"] == 1
+    assert payload["disabled_ipv4_included_route_count"] == 0
+    assert payload["disabled_ipv6_included_route_count"] == 0
+    assert payload["disabled_dns_servers"] == ["1.1.1.1"]
     assert payload["dns_servers"] == ["9.9.9.9"]
     assert payload["mtu"] == 1600
 

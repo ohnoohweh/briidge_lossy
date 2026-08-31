@@ -16,7 +16,9 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
 
     assert "struct ObstacleBridgePacketTunnelDefaults" in shared
     assert "struct ObstacleBridgePacketTunnelConfiguration" in shared
-    assert "func makeNetworkSettings() -> NEPacketTunnelNetworkSettings" in shared
+    assert "func makeNetworkSettings(includeRoutes: Bool = true) -> NEPacketTunnelNetworkSettings" in shared
+    assert "let enabledOnStartup: Bool" in shared
+    assert "routingOverride?.enabledOnStartup ?? true" in shared
     assert "NEIPv6Settings" in shared
     assert "includedRoutes6" in shared
     assert "excludedRoutes6" in shared
@@ -70,7 +72,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgePacketTunnelConfiguration(" in provider
     assert '"effective_tunnel_network_settings"' in provider
     assert '"shared_overlay_bootstrap_state"' in provider
-    assert "configuration.makeNetworkSettings()" in provider
+    assert "configuration.makeNetworkSettings(includeRoutes: tunRoutingEnabled)" in provider
     assert "private var nativeRuntimeActive: Bool" in provider
     assert 'runtimeMode == "swift_simple_udp" || runtimeMode == "swift_udp"' in provider
     assert "private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any]" in provider
@@ -245,6 +247,19 @@ def test_channel_mux_tun_runtime_source_exists() -> None:
     assert "handleInboundTunData(" in runtime
     assert "handleInboundTunFragment(" in runtime
     assert "handleInboundTunClose(" in runtime
+    assert "func resetTransportEpoch()" in runtime
+
+
+def test_swift_overlay_epoch_reset_reopens_local_tun_channels() -> None:
+    for owner_name in (
+        "ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+        "ObstacleBridgeQuicOverlayTransportOwner.swift",
+    ):
+        owner = (SHARED_NATIVE_DIR / owner_name).read_text(encoding="utf-8")
+        assert "tunRuntime?.resetTransportEpoch()" in owner
+        assert "activeTunChanIDs.removeAll()" in owner
 
 
 def test_channel_mux_udp_runtime_source_exists() -> None:
@@ -439,12 +454,15 @@ def test_admin_api_source_exists() -> None:
     assert "struct ObstacleBridgeAdminAPIRequest" in runtime
     assert "struct ObstacleBridgeAdminAPIResponse" in runtime
     assert "enum ObstacleBridgeAdminAPI" in runtime
+    assert "static func tunControlSnapshot(enabled: Bool, startupEnabled: Bool, supported: Bool)" in runtime
     assert '"/api/meta"' in runtime
     assert '"/api/connections"' in runtime
     assert '"/api/tun-routing/status"' in runtime
+    assert '"/api/tun-routing/control"' in runtime
     assert '"/api/peers"' in runtime
     assert '"tun_routing"' in runtime
     assert "adminTunRoutingSnapshot()" in runtime
+    assert "adminTunRoutingControl(request:" in runtime
     assert "tunRoutingSnapshot(fromConnections:" in runtime
     assert '"shared_drop_by_reason": sharedDropByReason' in runtime
     assert '"icmp_stage_counts": icmpStageCounts' in runtime
@@ -510,6 +528,19 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
     assert 'if let active = snapshot["active"] as? Bool {' in provider
     assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
+    assert 'payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(' in provider
+    assert 'private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?' in provider
+    assert 'private var tunRoutingEnabled = false' in provider
+    assert 'packetTunnelConfiguration = configuration' in provider
+    assert 'tunRoutingEnabled = configuration.enabledOnStartup' in provider
+    assert 'let settings = configuration.makeNetworkSettings(includeRoutes: enabled)' in provider
+    assert 'setTunnelNetworkSettings(settings)' in provider
+    assert 'effectivePacketTunnelSettingsState = Self.packetTunnelSettingsSnapshot(' in provider
+    assert 'startupEnabled: packetTunnelConfiguration?.enabledOnStartup ?? true' in provider
+    assert 'func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest)' in provider
+    assert 'enabled: tunRoutingEnabled && adminPacketProcessingActive()' in provider
+    assert '"enabled_on_startup": configuration.enabledOnStartup' in provider
+    assert 'supported: true' in provider
     assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
     assert 'private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)' in provider
     assert "private func startAdminTunVerificationPublisher()" in provider
@@ -991,15 +1022,47 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
 def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread() -> None:
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
+    ios_app = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "app.py").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeTunnelControl" in control
     assert "ObstacleBridgeWebAdminServer" in control
     assert "admin_api_request" in control
-    assert "ObstacleBridgeIOSAppAdminWebProxy" in control
     assert "NETunnelProviderManager.loadAllFromPreferences" in control
     assert "queue.async" in control
     assert "prepareIPServerTunnel" in control
     assert "startIPServerTunnel" in control
+    assert "stopIPServerTunnel" in control
+    assert "enableIPServerTunRouting" in control
+    assert "suspendIPServerTunRouting" in control
+    assert "tunRoutingStatus" in control
+    assert '"/api/tun-routing/control"' in control
+    assert '"/api/tun-routing/status"' in control
+    assert "iOS displays the extension's Admin API directly; no foreground proxy." in control
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert "tunnelInflowAllowed()" in provider
+    assert "packet_pump_dropped_before_overlay_ready" in provider
+    assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
+    assert "TUN verification waits for the connected overlay state." in provider
+    assert "TUN verification is suspended while local TUN throttling is active." in provider
+    assert "Name resolution is suspended while local TUN throttling is active." in provider
+    assert "prepare_runtime()" in ios_app
+    assert "Network extension active" in ios_app
+    assert "Network tunneling active" not in ios_app
+    assert "_refresh_native_controls_until_settled" in ios_app
+    assert "extension_state = _extension_state(extension)" in ios_app
+    assert "_monitor_extension_state" in ios_app
+    assert "await asyncio.sleep(5.0)" in ios_app
+    assert "_start_extension_state_monitor()" in ios_app
+    assert "_refresh_webadmin(force=True)" in ios_app
+    assert 'MainWindow(title="")' in ios_app
+    assert 'background_color="#15233b"' in ios_app
+    assert "_set_operational_surface" in ios_app
+    assert "Turn on Network Extension" in ios_app
+    assert 'font_size=14, color="#e6edf7"' in ios_app
+    assert "OFFLINE" in ios_app
+    assert "_resolve_toga_switch_class" in ios_app
+    assert "start_runtime if enabled else stop_runtime" in ios_app
+    assert 'return _TogaObstacleBridgeApp("ObstacleBridge", "com.obstaclebridge")' in ios_app
     assert "harvestSharedLogs" in control
     assert "runtimeExecutionMode()" in control
     assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control
@@ -1027,6 +1090,10 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "requestProviderSnapshot" in control
     assert "requestProviderMessage" in control
     assert "stopVPNTunnel" in control
+    assert 'path == "/api/ios/vpn/status"' in control
+    assert 'path == "/api/ios/vpn/control"' in control
+    assert "private func appProxyStatusPayload(_ payload: [String: Any]) -> [String: Any]" in control
+    assert 'adminUI["platform"] = "ios"' in control
     assert "scheduleAdminTunnelReload" in control
     assert "restart_after_save" in control
     assert "selectCanonicalManager" in control
@@ -1105,6 +1172,12 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "deliverLocalTunPacketToActiveOverlay" in host_runner
     assert "deliverRemoteTunPacketToLocalAdapter" in host_runner
     assert '"tun": tunRows' in host_runner
+    assert 'tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))' in host_runner
+    assert 'payload["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))' in host_runner
+    assert 'routing: ObstacleBridgeTunnelRoutingOverride?' in host_runner
+    assert 'let startupEnabled = routing?.enabledOnStartup ?? true' in host_runner
+    assert 'env["INCLUDED_ROUTES"] = startupEnabled ? includedRoutes.joined(separator: ",") : ""' in host_runner
+    assert 'env["INCLUDED_ROUTES6"] = startupEnabled ? includedRoutes6.joined(separator: ",") : ""' in host_runner
     assert "final class ObstacleBridgeMacOSTunAdapter" in macos_tun
     assert "packet(fromUTUNFrame:" in macos_tun
     assert "utunFrame(for:" in macos_tun

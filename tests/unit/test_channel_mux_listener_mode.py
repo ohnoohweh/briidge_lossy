@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import ipaddress
 import socket
+import sys
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -339,6 +340,32 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.DISCONNECTED, 1, "failed"))
         mux._on_local_tun_packet(dev, packet)
         self.assertEqual(len(sent), 1)
+
+    def test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active(self):
+        asyncio.run(self._test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active())
+
+    async def _test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active(self):
+        session = _FakeSession(connected=True, waiting_count=1, inflight=1, max_inflight=1)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        dev = ChannelMux.TunDevice(fd=10, ifname="obtun0", mtu=1500)
+        mux._svc_tun_devices[("local", 0, 1)] = dev
+
+        with patch.object(mux, "_resolve_tun_probe_target", new=AsyncMock()) as resolve_target, \
+             patch.object(mux, "_send_mux") as send_mux:
+            result = await mux._probe_tun_connectivity_once(
+                probe_kind="global",
+                ifname="obtun0",
+                target="google.de",
+                timeout_s=0.1,
+            )
+
+        self.assertEqual(result["state"], "skipped")
+        self.assertIn("throttling is active", result["detail"])
+        self.assertEqual(result["name_resolution"]["status"], "skipped")
+        resolve_target.assert_not_awaited()
+        send_mux.assert_not_called()
 
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
         mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
@@ -2033,6 +2060,34 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(self.mux._svc_tun_devices[svc_key], dev)
         self.assertIs(mux2._svc_tun_devices[svc_key], dev)
 
+        # A peer-specific mux may receive the OPEN, but the process-shared
+        # server-owned mux keeps the one TUN reader.  Its routing state must
+        # therefore receive the peer binding and use its listener session for
+        # replies.
+        self.mux._tun_admission_epoch = self.mux._connection_lifecycle_epoch
+        mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
+        setattr(dev, '_reader_mux', self.mux)
+        with patch.object(self.mux, '_register_tun_reader') as owner_register, \
+             patch.object(mux2, '_register_tun_reader') as child_register, \
+             patch.object(self.mux, '_send_mux') as owner_send:
+            mux2._bind_tun_channel(1, dev, peer_id=77)
+            mux2._rx_tun_data(
+                1,
+                _ipv4_packet('192.168.106.2', '192.168.106.1'),
+                peer_id=77,
+            )
+            self.mux._on_local_tun_packet(dev, _ipv4_packet('192.168.106.1', '192.168.106.2'))
+
+        owner_register.assert_not_called()
+        child_register.assert_not_called()
+        owner_send.assert_called_once_with(
+            1,
+            ChannelMux.Proto.TUN,
+            ChannelMux.MType.DATA,
+            _ipv4_packet('192.168.106.1', '192.168.106.2'),
+            peer_id=77,
+        )
+
     async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
         self.mux.args = argparse.Namespace(
             TUN_routing={
@@ -3500,7 +3555,53 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             with patch.object(mux, '_send_mux') as send_mux:
                 mux._on_local_tun_packet(dev, _ipv4_packet('192.168.107.1', '192.168.107.4'))
 
-            send_mux.assert_called_once_with(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '192.168.107.4'))
+            send_mux.assert_called_once_with(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '192.168.107.4'), peer_id=88)
+        finally:
+            mux.loop.close()
+
+    def test_shared_tun_same_channel_id_routes_to_its_destination_peer(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.new_event_loop())
+        try:
+            mux._overlay_connected = True
+            mux._accepting_enabled = True
+            spec = ChannelMux.ServiceSpec(
+                5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500,
+                options={'shared_tun_ownership': {'mode': 'server_shared', 'peers': [
+                    {'peer_ref': 'iphone', 'ipv4': ['192.168.107.2']},
+                    {'peer_ref': 'ipad', 'ipv4': ['192.168.107.4']},
+                ]}},
+            )
+            svc_key = ('local', 0, 5)
+            mux._local_services[svc_key] = spec
+            dev = ChannelMux.TunDevice(fd=10, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._svc_tun_devices[svc_key] = dev
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+
+            # Every peer starts its own ChannelMux sequence at chan=1.  The
+            # server must keep both bindings instead of letting the later OPEN
+            # replace the earlier peer's state.
+            mux._bind_tun_channel(1, dev, peer_id=77)
+            mux._bind_tun_channel(1, dev, peer_id=88)
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev, chan=1,
+                packet=_ipv4_packet('192.168.107.2', '192.168.107.1'),
+                peer_id=77,
+            )
+            mux._shared_tun_guard_inbound_packet(
+                dev=dev, chan=1,
+                packet=_ipv4_packet('192.168.107.4', '192.168.107.1'),
+                peer_id=88,
+            )
+
+            reply = _ipv4_packet('192.168.107.1', '192.168.107.2')
+            with patch.object(mux, '_send_mux') as send_mux:
+                mux._on_local_tun_packet(dev, reply)
+
+            send_mux.assert_called_once_with(
+                1, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, reply,
+                peer_id=77,
+            )
         finally:
             mux.loop.close()
 
@@ -3555,8 +3656,8 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             self.assertEqual(
                 send_mux.call_args_list,
                 [
-                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '255.255.255.255')),
-                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '255.255.255.255')),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '255.255.255.255'), peer_id=77),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, _ipv4_packet('192.168.107.1', '255.255.255.255'), peer_id=88),
                 ],
             )
         finally:
@@ -3625,10 +3726,10 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             self.assertEqual(
                 send_mux.call_args_list,
                 [
-                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a),
-                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_seed),
-                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a_budget),
-                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_budget),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a, peer_id=77),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_seed, peer_id=88),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a_budget, peer_id=77),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_budget, peer_id=88),
                 ],
             )
             snapshot = mux._shared_tun_runtime_snapshot_for_service(svc_key)
@@ -3776,10 +3877,10 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             self.assertEqual(
                 send_mux.call_args_list,
                 [
-                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_seed),
-                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_seed),
-                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, unicast_seed),
-                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, unicast_budget),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_seed, peer_id=77),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_seed, peer_id=88),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, unicast_seed, peer_id=77),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, unicast_budget, peer_id=77),
                 ],
             )
             snapshot = mux._shared_tun_runtime_snapshot_for_service(svc_key)
@@ -3880,7 +3981,7 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             with patch.object(mux, '_send_mux') as send_mux:
                 mux._on_local_tun_packet(dev, packet)
 
-            send_mux.assert_called_once_with(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
+            send_mux.assert_called_once_with(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet, peer_id=77)
         finally:
             mux.loop.close()
 
@@ -4309,13 +4410,16 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
             mux._tun_by_chan[12] = ChannelMux.TunDevice(fd=44, ifname='obtun0', mtu=64)
-            payload = b'fragmented-tun-packet'
+            payload = b'\x45ragmented-tun-packet'
+            expected_device_frame = payload
+            if sys.platform == 'darwin':
+                expected_device_frame = int(socket.AF_INET).to_bytes(4, 'big') + payload
             with patch('obstacle_bridge.bridge.os.write') as os_write:
                 for offset in range(0, len(payload), 5):
                     frag_payload = ChannelMux.UDP_FRAG_HDR.pack(31, len(payload), offset) + payload[offset:offset + 5]
                     frame = mux._pack_mux(12, ChannelMux.Proto.TUN, offset // 5, ChannelMux.MType.DATA_FRAG, frag_payload)
                     mux.on_app_payload_from_peer(frame)
-                os_write.assert_called_once_with(44, payload)
+                os_write.assert_called_once_with(44, expected_device_frame)
         finally:
             mux.loop.close()
 

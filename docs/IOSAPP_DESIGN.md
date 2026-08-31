@@ -697,6 +697,49 @@ Design impact:
 - WebAdmin shutdown and recovery behavior must be reasoned about as extension-owned service behavior
 - frontend behavior should remain platform-agnostic and reflect backend/runtime truth
 
+### Outcome 13: Extension Controls Belong To The Native App Shell
+
+The containing iOS app now presents the two top-level lifecycle controls as
+native Toga rows above the embedded operational view:
+
+- `Network extension active` starts or stops the persisted
+  `NETunnelProviderManager` profile through the native tunnel-control bridge.
+- `Network tunneling active` enables or suspends only TUN route inclusion by
+  forwarding the existing `/api/tun-routing/control` request through the
+  provider-message boundary.
+
+The control panel reuses WebAdmin's dark panel, text, and muted-status palette
+so it reads as part of the same product, while the switch itself remains the
+platform-native iOS control. The app window has no redundant title row; the
+two lifecycle rows are the top-level foreground-app identity and control
+surface.
+
+The two controls deliberately represent different layers:
+
+- disabling the Network Extension stops the VPN/provider runtime;
+- disabling Network Tunneling keeps the provider, backend runtime, and
+  connectivity checks active, but removes the included route masks; and
+- `TUN_routing.enabled_on_startup` remains the startup policy used when the
+  Network Extension is enabled.
+
+When the extension is inactive, the app replaces the embedded WebAdmin view
+with a compact native dark offline card that directs the operator to enable the
+extension. This avoids presenting stale runtime data as if it were live.
+
+The WebAdmin API and its normal page stay common across Python, iOS, and
+macOS. The iOS app and Safari both use the extension's configured loopback
+Admin API directly. Native controls use the same TUN-routing API contract as
+WebAdmin rather than introducing an iOS-specific control API.
+
+Design impact:
+
+- the containing app owns the small set of device-lifecycle controls that need
+  platform-native behavior;
+- WebAdmin remains the shared, detailed operational and configuration surface;
+- remote WebAdmin does not expose iOS-only extension start/stop controls; and
+- future native UX work should add controls only when they represent a real
+  Apple-platform boundary, not duplicate shared WebAdmin features.
+
 ## Target iOS Architecture
 
 The final app should have two installable iOS components:
@@ -901,7 +944,8 @@ Startup sequence:
 
 Runtime ownership:
 
-- WebAdmin runs as an extension-owned local admin service. The app only displays it through a WebView or the user opens it in Safari.
+- WebAdmin runs as an extension-owned local admin service. The app only displays it through a WebView or the user opens it in Safari. The app uses the same configured loopback URL as Safari, waits for an HTTP probe before retrying WebView navigation after extension startup, and never serves a foreground proxy copy.
+- While foregrounded, the app polls the OS Network Extension status at a low frequency and updates its native extension control and offline surface when iOS stops or restarts the provider. TUN routing remains in the shared WebAdmin API rather than adding a second native control. This monitor is cancelled while suspended or exiting; the extension itself remains independent of app lifetime.
 - ChannelMux runs in the extension and owns TUN, TCP, and UDP service channels.
 - SecureLink runs in the extension so handshake state, rekeying, replay defense, and encryption are not tied to foreground-app lifetime.
 - TCP/UDP listeners that must survive app focus loss run in the extension. Foreground-only experiments may exist for development, but they are not the iOS product architecture.

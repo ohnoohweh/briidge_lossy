@@ -205,6 +205,9 @@ class _RunnerStub:
                     "mtu": 1500,
                     "packets_from_runtime": 12,
                     "packets_to_runtime": 9,
+                    "included_routes_active": True,
+                    "included_routes_startup_enabled": True,
+                    "included_routes_toggle_supported": True,
                     "last_failure": {
                         "operation": "apply_network",
                         "stage": "dns_apply",
@@ -1665,6 +1668,24 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("<th>Drop Diagnostics</th>", index_html)
         self.assertIn("topics.push('tun_routing')", app_js)
         self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
+
+    def test_admin_web_does_not_embed_ios_native_tunnel_controls(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+        style_css = (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="iosTunnelControls"', index_html)
+        self.assertNotIn('id="iosVpnToggle"', index_html)
+        self.assertNotIn('id="iosTunToggle"', index_html)
+        self.assertNotIn('id="iosExtensionOffPanel"', index_html)
+        self.assertNotIn("function loadIOSVPNStatus()", app_js)
+        self.assertNotIn("function toggleIOSVPN()", app_js)
+        self.assertNotIn("function toggleIOSTun()", app_js)
+        self.assertNotIn(".ios-tunnel-control", style_css)
+        self.assertNotIn("native_ios_shell", index_html)
+        self.assertNotIn("native-ios-shell", style_css)
+        self.assertNotIn("native-ios-shell", app_js)
 
     def test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

@@ -1379,7 +1379,7 @@ def _python_tcp_server_accept_snapshot(mux: ChannelMux, chan: int) -> dict[str, 
         "chan_id": chan,
         "frames_hex": [frame.hex() for frame in mux.session.sent],
         "next_tcp_id": mux._next_tcp_id,
-        "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.TCP)],
+        "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.TCP)],
         "active_channels": sorted(mux._tcp_by_chan.keys()),
     }
 
@@ -1388,7 +1388,7 @@ def _python_tcp_server_data_snapshot(mux: ChannelMux, chan: int, frames: list[by
     return {
         "sent": bool(frames),
         "frames_hex": [frame.hex() for frame in frames],
-        "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.TCP)],
+        "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.TCP)],
         "active_channels": sorted(mux._tcp_by_chan.keys()),
     }
 
@@ -1918,7 +1918,7 @@ def _python_channelmux_local_tun_packet_summary() -> dict[str, object]:
             "allocated_channel": True,
             "frames_hex": [frame.hex() for frame in mux.session.sent],
             "next_tun_id": mux._next_tun_id,
-            "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+            "next_counter": mux._mux_counters[(None, dev.chan_id, ChannelMux.Proto.TUN)],
             "spec": _service_spec_payload(spec),
         }
     finally:
@@ -1965,7 +1965,7 @@ def _python_channelmux_tun_open_then_local_packet_summary() -> dict[str, object]
                 "allocated_channel": False,
                 "frames_hex": [frame.hex() for frame in mux.session.sent],
                 "next_tun_id": mux._next_tun_id,
-                "next_counter": mux._mux_counters[(7, ChannelMux.Proto.TUN)],
+                "next_counter": mux._mux_counters[(None, 7, ChannelMux.Proto.TUN)],
             },
             "local_spec": _service_spec_payload(local_spec),
             "open_payload_hex": payload.hex(),
@@ -1998,7 +1998,7 @@ def _python_channelmux_local_tun_chunked_open_summary() -> dict[str, object]:
             "allocated_channel": True,
             "frames_hex": [frame.hex() for frame in mux.session.sent],
             "next_tun_id": mux._next_tun_id,
-            "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+            "next_counter": mux._mux_counters[(None, dev.chan_id, ChannelMux.Proto.TUN)],
             "spec": _service_spec_payload(spec),
         }
     finally:
@@ -2024,7 +2024,7 @@ def _python_channelmux_local_tun_throttle_sequence_summary() -> dict[str, object
                     "allocated_channel": True,
                     "frames_hex": [frame.hex() for frame in mux.session.sent],
                     "next_tun_id": mux._next_tun_id,
-                    "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                    "next_counter": mux._mux_counters[(None, dev.chan_id, ChannelMux.Proto.TUN)],
                 }
             )
             mux.session._metrics.waiting_count = 1
@@ -2036,7 +2036,7 @@ def _python_channelmux_local_tun_throttle_sequence_summary() -> dict[str, object
                     "allocated_channel": False,
                     "frames_hex": [frame.hex() for frame in mux.session.sent[before_second:]],
                     "next_tun_id": mux._next_tun_id,
-                    "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                    "next_counter": mux._mux_counters[(None, dev.chan_id, ChannelMux.Proto.TUN)],
                 }
             )
             before_third = len(mux.session.sent)
@@ -2047,7 +2047,7 @@ def _python_channelmux_local_tun_throttle_sequence_summary() -> dict[str, object
                     "allocated_channel": False,
                     "frames_hex": [frame.hex() for frame in mux.session.sent[before_third:]],
                     "next_tun_id": mux._next_tun_id,
-                    "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                    "next_counter": mux._mux_counters[(None, dev.chan_id, ChannelMux.Proto.TUN)],
                 }
             )
         return {
@@ -2120,7 +2120,7 @@ def _python_channelmux_tun_close_then_local_packet_summary() -> dict[str, object
                 "allocated_channel": True,
                 "frames_hex": [frame.hex() for frame in mux.session.sent],
                 "next_tun_id": mux._next_tun_id,
-                "next_counter": mux._mux_counters[(dev.chan_id, ChannelMux.Proto.TUN)],
+                "next_counter": mux._mux_counters[(None, dev.chan_id, ChannelMux.Proto.TUN)],
             },
             "local_spec": _service_spec_payload(local_spec),
             "open_payload_hex": payload.hex(),
@@ -2152,7 +2152,7 @@ def _python_channelmux_local_udp_server_datagram_summary() -> dict[str, object]:
             "allocated_channel": True,
             "frames_hex": [frame.hex() for frame in mux.session.sent],
             "next_udp_id": mux._next_udp_id,
-            "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.UDP)],
+            "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.UDP)],
             "spec": _service_spec_payload(spec),
             "service_key": "local:0:11",
             "addr_host": "127.0.0.1",
@@ -2185,7 +2185,7 @@ def _python_channelmux_local_udp_server_fragmented_datagram_summary() -> dict[st
             "allocated_channel": True,
             "frames_hex": [frame.hex() for frame in mux.session.sent],
             "next_udp_id": mux._next_udp_id,
-            "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.UDP)],
+            "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.UDP)],
             "spec": _service_spec_payload(spec),
             "service_key": "local:0:11",
             "addr_host": "127.0.0.1",
@@ -2224,7 +2224,7 @@ def _python_channelmux_udp_server_open_then_inbound_data_summary() -> dict[str, 
                 "allocated_channel": True,
                 "frames_hex": [frame.hex() for frame in mux.session.sent],
                 "next_udp_id": mux._next_udp_id,
-                "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.UDP)],
+                "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.UDP)],
             },
             "inbound_snapshot": {
                 "delivered": bool(sent),
@@ -2294,7 +2294,7 @@ def _python_channelmux_udp_server_open_then_inbound_fragment_summary() -> dict[s
                 "allocated_channel": True,
                 "frames_hex": [frame.hex() for frame in mux.session.sent],
                 "next_udp_id": mux._next_udp_id,
-                "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.UDP)],
+                "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.UDP)],
             },
             "snapshots": snapshots,
             "fragments_hex": [fragment.hex() for fragment in fragments],
@@ -2341,7 +2341,7 @@ def _python_channelmux_udp_server_close_then_local_datagram_summary() -> dict[st
                 "allocated_channel": True,
                 "frames_hex": [frame.hex() for frame in mux.session.sent[2:]],
                 "next_udp_id": mux._next_udp_id,
-                "next_counter": mux._mux_counters[(second_chan, ChannelMux.Proto.UDP)],
+                "next_counter": mux._mux_counters[(None, second_chan, ChannelMux.Proto.UDP)],
             },
             "spec": _service_spec_payload(spec),
             "service_key": "local:0:11",
@@ -2529,7 +2529,7 @@ def _python_channelmux_udp_client_open_connect_then_local_datagram_summary() -> 
             "connect_snapshot": connect_snapshot,
             "local_snapshot": {
                 "frames_hex": [frame.hex() for frame in mux.session.sent],
-                "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.UDP)],
+                "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.UDP)],
                 "next_fragment_datagram_id": mux._udp_frag_next_datagram_id,
             },
             "open_payload_hex": open_payload.hex(),
@@ -2849,7 +2849,7 @@ def _python_channelmux_tcp_client_open_connect_then_local_data_summary() -> dict
             "connect_snapshot": connect_snapshot,
             "local_snapshot": {
                 "frames_hex": [frame.hex() for frame in mux.session.sent],
-                "next_counter": mux._mux_counters[(chan, ChannelMux.Proto.TCP)],
+                "next_counter": mux._mux_counters[(None, chan, ChannelMux.Proto.TCP)],
             },
             "open_payload_hex": open_payload.hex(),
             "payload_hex": payload.hex(),
@@ -4518,6 +4518,39 @@ def test_swift_channelmux_tun_open_then_local_packet_matches_python(
     python.pop("local_spec")
     python.pop("open_payload_hex")
     assert swift == python
+
+
+def test_swift_channelmux_tun_epoch_reset_reopens_local_channel(
+    swift_channelmux_runner: Path,
+) -> None:
+    python_mux = _make_mux(connected=True)
+    try:
+        before_python_sequence = python_mux._mux_connection_seq
+        python_mux.loop.run_until_complete(python_mux.on_transport_epoch_change(1))
+        after_python_sequence = python_mux._mux_connection_seq
+    finally:
+        _close_mux(python_mux)
+    swift = _run_swift(
+        swift_channelmux_runner,
+        {
+            "action": "drive_channelmux_local_tun_packet_after_epoch_reset",
+            "packet_hex": "616263",
+            "mtu": 1600,
+            "instance_id": 0x1122334455667788,
+            "connection_seq": 0x10203040,
+            "next_tun_id": 1,
+            "spec": _python_channelmux_tun_open_then_local_packet_summary()["local_spec"],
+        },
+    )
+    before = swift["before_reset"]
+    after = swift["after_reset"]
+    assert before["allocated_channel"] is True
+    assert after["allocated_channel"] is True
+    assert before["chan_id"] != after["chan_id"]
+    assert len(before["frames_hex"]) == 2  # OPEN then DATA
+    assert len(after["frames_hex"]) == 2  # fresh OPEN then DATA
+    assert swift["before_connection_seq"] == before_python_sequence
+    assert swift["after_connection_seq"] == after_python_sequence
 
 
 def test_swift_channelmux_local_tun_chunked_open_matches_python(

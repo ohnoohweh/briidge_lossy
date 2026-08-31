@@ -117,11 +117,13 @@ ARC-CMP-003:
   # local subnet routes stay attached to their original interfaces. The WS
   # fragmentation integration proof relies on peer byte counters, not logs.
   unit_tests:
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer
     - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
     - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_operator_rotation_cascades_once_and_waits_for_new_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_connected_lifecycle_resets_transport_rotation_cycles
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_requires_connected_lifecycle_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active
     - tests/unit/test_runner_events.py::test_rotation_exhaustion_requests_restart_once
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
@@ -130,6 +132,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
+    # Includes the shared-device reader-owner return-route regression.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
@@ -167,6 +170,10 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
+    # The parity probe verifies that a recovered Swift TUN OPEN has a newer
+    # ChannelMux connection sequence, matching Python's transport resync.
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tun_epoch_reset_reopens_local_channel
+    - ios/tests/test_m3_native_sources.py::test_swift_overlay_epoch_reset_reopens_local_tun_channels
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_retains_prestarted_server_owned_shared_tun_service
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_still_ignores_ambiguous_non_shared_own_services
     - tests/unit/test_channel_mux_listener_mode.py::test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected
@@ -482,6 +489,8 @@ ARC-CMP-004:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_ignores_remote_tun_metadata
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_passes_python_parity_hook_env
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_immediately_rotates_after_unreachable_ipv6_send_error
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
     - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect
@@ -550,6 +559,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
+    - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
@@ -563,6 +574,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
+    # Includes pre-connected and throttle-active TUN verification admission.
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_admin_surfaces_consume_layered_readiness
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists

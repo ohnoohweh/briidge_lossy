@@ -43,12 +43,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     )
     private let errorDomain = "ObstacleBridge.IPServer"
     private var packetPumpRunning = false
+    private var packetPumpDroppedBeforeOverlay = 0
     private var providerStateUpdateCount = 0
     private var heartbeatTickCount = 0
     private var runtimeMode = "unconfigured"
     private var swiftSimpleUDPPeerBridge: SwiftSimpleUDPPeerBridge?
     private var sharedOverlayBootstrapState: [String: Any] = [:]
     private var effectivePacketTunnelSettingsState: [String: Any] = [:]
+    private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?
+    private var tunRoutingEnabled = false
     private var sharedCompressLayerRuntime: ObstacleBridgeCompressLayerRuntime?
     private var sharedSecureLinkPskTransportAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private var sharedOverlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
@@ -472,6 +475,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         runtimeMode = "unconfigured"
         swiftSimpleUDPPeerBridge = nil
         effectivePacketTunnelSettingsState = [:]
+        packetTunnelConfiguration = nil
+        tunRoutingEnabled = false
         providerStartedAt = Date().timeIntervalSince1970
         recordNativeEvent(
             "startTunnel_entered",
@@ -492,13 +497,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 fallbackRuntimeConfig: loadSharedRuntimeConfigJSON(),
                 defaults: Self.packetTunnelDefaults
             )
-            let settingsPayload = Self.packetTunnelSettingsSnapshot(configuration)
+            packetTunnelConfiguration = configuration
+            tunRoutingEnabled = configuration.enabledOnStartup
+            let settingsPayload = Self.packetTunnelSettingsSnapshot(
+                configuration,
+                includeRoutes: tunRoutingEnabled
+            )
             effectivePacketTunnelSettingsState = settingsPayload
             recordNativeEvent(
                 "tunnel_network_settings_prepared",
                 fields: settingsPayload
             )
-            let settings = configuration.makeNetworkSettings()
+            let settings = configuration.makeNetworkSettings(includeRoutes: tunRoutingEnabled)
             setTunnelNetworkSettings(settings) { [weak self] error in
                 guard let self else { return }
                 if let error {
@@ -715,6 +725,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         swiftSimpleUDPPeerBridge?.stop()
         swiftSimpleUDPPeerBridge = nil
         packetPumpRunning = false
+        packetTunnelConfiguration = nil
+        tunRoutingEnabled = false
         if !nativeRuntimeActive {
             ObstacleBridgePacketFlowBridge.deactivate()
         }
@@ -862,6 +874,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             if !packets.isEmpty {
+                guard self.swiftSimpleUDPPeerBridge?.tunnelInflowAllowed() == true else {
+                    self.packetPumpDroppedBeforeOverlay += packets.count
+                    if self.packetPumpDroppedBeforeOverlay <= 3 || self.packetPumpDroppedBeforeOverlay % 128 == 0 {
+                        self.recordNativeEvent(
+                            "packet_pump_dropped_before_overlay_ready",
+                            fields: ["packet_count": packets.count, "dropped_total": self.packetPumpDroppedBeforeOverlay]
+                        )
+                    }
+                    self.readPackets()
+                    return
+                }
                 var totalBytes = 0
                 for (index, packet) in packets.enumerated() {
                     totalBytes += packet.count
@@ -1584,6 +1607,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             payload["included_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["included_routes6"])
             payload["excluded_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes6"])
         }
+        payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(
+            enabled: tunRoutingEnabled && adminPacketProcessingActive(),
+            startupEnabled: packetTunnelConfiguration?.enabledOnStartup ?? true,
+            supported: true
+        )
         payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)
         return payload
     }
@@ -1781,6 +1809,62 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
         refreshAdminSnapshotCache(sync: true)
         return cachedTunRoutingOrBuild()
+    }
+
+    func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard request.method.uppercased() == "POST" else {
+            return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
+        }
+        guard let body = request.body,
+              let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let enabled = payload["enabled"] as? Bool else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "enabled is required",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        guard adminPacketProcessingActive(), let configuration = packetTunnelConfiguration else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "enabled": false,
+                "startup_enabled": true,
+                "supported": true,
+                "error": "Network extension is not active",
+            ], statusLine: "HTTP/1.1 409 Conflict")
+        }
+
+        let previousEnabled = tunRoutingEnabled
+        let previousSettingsState = effectivePacketTunnelSettingsState
+        tunRoutingEnabled = enabled
+        effectivePacketTunnelSettingsState = Self.packetTunnelSettingsSnapshot(
+            configuration,
+            includeRoutes: enabled
+        )
+        let settings = configuration.makeNetworkSettings(includeRoutes: enabled)
+        setTunnelNetworkSettings(settings) { [weak self] error in
+            guard let self else { return }
+            if let error {
+                self.tunRoutingEnabled = previousEnabled
+                self.effectivePacketTunnelSettingsState = previousSettingsState
+                self.recordNativeEvent(
+                    "tun_routing_control_failed",
+                    fields: ["enabled": enabled, "error": error.localizedDescription]
+                )
+                self.updateProviderState(
+                    "tun_routing_control_failed",
+                    extraFields: ["enabled": enabled, "error": error.localizedDescription]
+                )
+                return
+            }
+            self.recordNativeEvent("tun_routing_control_applied", fields: ["enabled": enabled])
+            self.updateProviderState("tun_routing_control_applied", extraFields: ["enabled": enabled])
+        }
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": true,
+            "enabled": enabled,
+            "startup_enabled": true,
+            "supported": true,
+        ])
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {
@@ -2426,20 +2510,24 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         )
     }
 
-    private static func packetTunnelSettingsSnapshot(_ configuration: ObstacleBridgePacketTunnelConfiguration) -> [String: Any] {
+    private static func packetTunnelSettingsSnapshot(
+        _ configuration: ObstacleBridgePacketTunnelConfiguration,
+        includeRoutes: Bool
+    ) -> [String: Any] {
         [
             "peer_host": configuration.peerHost,
             "peer_port": configuration.peerPort.map { Int($0) } ?? NSNull(),
             "tunnel_address": configuration.tunnelAddress,
             "tunnel_subnet_mask": configuration.tunnelSubnetMask,
-            "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+            "included_routes": (includeRoutes ? configuration.includedRoutes : []).map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
             "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
             "tunnel_address6": configuration.tunnelAddress6,
             "tunnel_prefix6": configuration.tunnelPrefix6,
-            "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+            "included_routes6": (includeRoutes ? configuration.includedRoutes6 : []).map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
             "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
             "dns_servers": configuration.dnsServers,
             "mtu": configuration.mtu,
+            "enabled_on_startup": configuration.enabledOnStartup,
             "route_diagnostics": configuration.routeDiagnostics,
         ]
     }
@@ -3370,9 +3458,29 @@ private final class SwiftSimpleUDPPeerBridge {
         }
     }
 
+    func tunnelInflowAllowed() -> Bool {
+        withState {
+            if let udpOverlayTransportOwner { return udpOverlayTransportOwner.inflowAllowed() }
+            if let tcpOverlayTransportOwner { return tcpOverlayTransportOwner.inflowAllowed() }
+            if let wsOverlayTransportOwner { return wsOverlayTransportOwner.inflowAllowed() }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner { return quicOverlayTransportOwner.inflowAllowed() }
+            return false
+        }
+    }
+
+    func tunConnectivityTestsAllowed() -> Bool {
+        withState {
+            if let udpOverlayTransportOwner { return udpOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            if let tcpOverlayTransportOwner { return tcpOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            if let wsOverlayTransportOwner { return wsOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner { return quicOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            return false
+        }
+    }
+
     func sendTunPacketForProbe(_ packet: Data) {
         withState {
-            guard started else {
+            guard started, tunnelInflowAllowed() else {
                 return
             }
             if let udpOverlayTransportOwner {
@@ -3488,6 +3596,36 @@ private final class SwiftSimpleUDPPeerBridge {
                     summary: "\(label): skipped",
                     detail: "Swift TUN bridge is not active.",
                     nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "unknown")
+                ))
+            }
+            // Do not resolve names or inject verification packets until the shared
+            // ChannelMux admission state reports the lower stack as connected.
+            guard tunnelInflowAllowed() else {
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
+                    probeKind: probeKind,
+                    target: trimmedTarget,
+                    ok: false,
+                    state: "skipped",
+                    summary: "\(label): skipped",
+                    detail: "TUN verification waits for the connected overlay state.",
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
+                        status: "skipped",
+                        detail: "Name resolution waits for the connected overlay state."
+                    )
+                ))
+            }
+            guard tunConnectivityTestsAllowed() else {
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
+                    probeKind: probeKind,
+                    target: trimmedTarget,
+                    ok: false,
+                    state: "skipped",
+                    summary: "\(label): skipped",
+                    detail: "TUN verification is suspended while local TUN throttling is active.",
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
+                        status: "skipped",
+                        detail: "Name resolution is suspended while local TUN throttling is active."
+                    )
                 ))
             }
             let candidateFamilies = ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(
@@ -3732,6 +3870,13 @@ private final class SwiftSimpleUDPPeerBridge {
     private func handlePacketFlowRead(packets: [Data], protocols: [NSNumber]) {
         guard started, let provider else { return }
         if packets.isEmpty {
+            return
+        }
+        guard tunnelInflowAllowed() else {
+            provider.recordPacketBridgeEvent(
+                "swift_simple_udp_packetflow_dropped_before_overlay_ready",
+                fields: ["packet_count": packets.count]
+            )
             return
         }
         var totalBytes = 0

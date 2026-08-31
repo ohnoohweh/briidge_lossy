@@ -1853,6 +1853,54 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
         }
         return ["snapshots": snapshots]
+    case "drive_channelmux_local_tun_packet_after_epoch_reset":
+        guard
+            let packetHex = request["packet_hex"] as? String,
+            let packet = dataFromHex(packetHex),
+            let mtu = request["mtu"] as? NSNumber,
+            let instanceID = request["instance_id"] as? NSNumber,
+            let connectionSeq = request["connection_seq"] as? NSNumber,
+            let nextTunID = request["next_tun_id"] as? NSNumber,
+            let specObject = request["spec"]
+        else {
+            throw ChannelMuxCodecRunnerError.invalidRequest
+        }
+        let runtime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: instanceID.uint64Value,
+            connectionSeq: connectionSeq.uint32Value,
+            nextTunID: nextTunID.intValue
+        )
+        let spec = try parseServiceSpec(specObject)
+        let beforeReset = try runtime.handleLocalTunPacket(
+            packet: packet,
+            mtu: mtu.intValue,
+            spec: spec,
+            overlayConnected: true,
+            acceptingEnabled: true
+        )
+        runtime.resetTransportEpoch()
+        let afterReset = try runtime.handleLocalTunPacket(
+            packet: packet,
+            mtu: mtu.intValue,
+            spec: spec,
+            overlayConnected: true,
+            acceptingEnabled: true
+        )
+        func openConnectionSeq(_ snapshot: ObstacleBridgeChannelMuxTunRuntime.LocalTunSendSnapshot?) -> Any {
+            guard let frame = snapshot?.frames.first,
+                  let mux = ObstacleBridgeChannelMuxCodec.unpackMux(frame),
+                  let open = ObstacleBridgeChannelMuxCodec.parseOpenPayload(mux.body)
+            else {
+                return NSNull()
+            }
+            return Int(open.connectionSeq)
+        }
+        return [
+            "before_reset": beforeReset.map(localTunSendSnapshotObject) ?? NSNull(),
+            "after_reset": afterReset.map(localTunSendSnapshotObject) ?? NSNull(),
+            "before_connection_seq": openConnectionSeq(beforeReset),
+            "after_connection_seq": openConnectionSeq(afterReset),
+        ]
     case "drive_channelmux_tun_open_then_local_packet":
         guard
             let openChanID = request["open_chan_id"] as? NSNumber,

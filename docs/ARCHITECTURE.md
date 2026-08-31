@@ -103,6 +103,20 @@ ChannelMux and TUN:
   gate
 - a newly reported `connected` state with a new epoch causes the normal mux
   resynchronization and service reopening path
+- a transport-epoch reset invalidates all prior TUN channel bindings and
+  advances the local ChannelMux connection sequence before local forwarding
+  resumes; the next local packet opens a fresh channel before sending data.
+  This applies to the shared Swift ChannelMux runtime used by myUDP, TCP,
+  WebSocket, and QUIC as well as the Python runtime.
+- listener-side shared-TUN state uses `(peer_id, chan_id)` as its channel
+  identity for bindings, OPEN lifecycle, fragments, counters, and outbound
+  routing. Each peer has an independent channel-number sequence, so `chan=1`
+  from two clients is two distinct TUN paths.
+- when a process shares one server-owned TUN device between listener and
+  peer-specific ChannelMux instances, the listener-owned reader retains the
+  mirrored peer/channel binding and emits replies through its peer-aware
+  listener session. Sharing a device never makes its routing state local to
+  the most recently attached mux instance.
 
 #### Candidate budget and restart
 

@@ -287,6 +287,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         peerCandidates.removeAll()
         peerCandidateIndex = 0
         overlayRuntime.resetTransportEpoch()
+        tunRuntime?.resetTransportEpoch()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
@@ -419,6 +420,23 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     func inflowAllowed() -> Bool {
         ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
+    }
+
+    func tunConnectivityTestsAllowed() -> Bool {
+        withOwnerQueue {
+            let protocolStats = overlayRuntime.protocolStatsSnapshot()
+            let backpressure = ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
+                waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),
+                inflight: Int(protocolStats["inflight"] as? Int ?? 0),
+                maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0),
+                egressWindow: ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState(),
+                transmitDelayEstMS: overlayRuntime.transmitDelayEstMS
+            )
+            return ObstacleBridgeOverlayChannelCore.tunConnectivityTestsAllowed(
+                tunRuntime: tunRuntime,
+                backpressure: backpressure
+            )
+        }
     }
 
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
@@ -834,6 +852,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
     private func resetOverlayTransportEpoch(reason: String) {
         overlayRuntime.resetTransportEpoch()
+        tunRuntime?.resetTransportEpoch()
+        activeTunChanIDs.removeAll()
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
