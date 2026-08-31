@@ -1048,6 +1048,11 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "Network extension active" in ios_app
     assert "Network tunneling active" in ios_app
     assert "_refresh_native_controls_until_settled" in ios_app
+    assert "extension_state = _extension_state(extension)" in ios_app
+    assert "_monitor_extension_state" in ios_app
+    assert "await asyncio.sleep(5.0)" in ios_app
+    assert "_start_extension_state_monitor()" in ios_app
+    assert "_refresh_webadmin(force=True)" in ios_app
     assert 'MainWindow(title="")' in ios_app
     assert 'background_color="#15233b"' in ios_app
     assert "_set_operational_surface" in ios_app

@@ -613,6 +613,7 @@ def main(argv: list[str] | None = None):
                     switch_cls = _resolve_toga_switch_class()
                     webadmin_view = None
                     webadmin_view_ready = False
+                    webadmin_load_state = {"url": None}
                     if webview_cls is not None:
                         try:
                             webadmin_view = webview_cls(style=_pack(flex=1))
@@ -646,7 +647,11 @@ def main(argv: list[str] | None = None):
                         finally:
                             control_state["updating"] = False
 
-                    def _refresh_webadmin(extension: Mapping[str, Any] | None = None) -> bool:
+                    def _refresh_webadmin(
+                        extension: Mapping[str, Any] | None = None,
+                        *,
+                        force: bool = False,
+                    ) -> bool:
                         try:
                             snap = bridge_app.connection_snapshot()
                             webadmin_url = str(snap.get("webadmin_url") or "").strip()
@@ -654,9 +659,15 @@ def main(argv: list[str] | None = None):
                                 return False
                             extension_state = _extension_state(extension or runtime_status())
                             if extension_state == "inactive":
+                                if webadmin_load_state["url"] == "about:blank":
+                                    return True
+                                webadmin_load_state["url"] = "about:blank"
                                 return _set_webview_url(webadmin_view, "about:blank")
                             if extension_state == "unknown":
                                 return False
+                            if not force and webadmin_load_state["url"] == webadmin_url:
+                                return True
+                            webadmin_load_state["url"] = webadmin_url
                             return _set_webview_url(webadmin_view, webadmin_url)
                         except Exception as exc:
                             _append_startup_crash_log(exc)
@@ -664,6 +675,7 @@ def main(argv: list[str] | None = None):
 
                     async def _await_and_refresh_webadmin() -> None:
                         deadline = asyncio.get_running_loop().time() + 15.0
+                        admin_available = False
                         while asyncio.get_running_loop().time() < deadline:
                             try:
                                 snap = bridge_app.connection_snapshot()
@@ -671,9 +683,13 @@ def main(argv: list[str] | None = None):
                             except Exception:
                                 webadmin_url = ""
                             if webadmin_url and await asyncio.to_thread(_probe_http_ok, webadmin_url, 0.75):
+                                admin_available = True
                                 break
                             await asyncio.sleep(0.25)
-                        _refresh_webadmin()
+                        if admin_available:
+                            # Retry after the extension listener is proven ready. WKWebView
+                            # does not automatically retry a navigation attempted during boot.
+                            _refresh_webadmin(force=True)
 
                     def _schedule_webadmin_refresh() -> None:
                         loop = getattr(self, "loop", None)
@@ -703,12 +719,12 @@ def main(argv: list[str] | None = None):
                         extension = await asyncio.to_thread(runtime_status)
                         snapshot = bridge_app.connection_snapshot()
                         webadmin_url = str(snapshot.get("webadmin_url") or "")
+                        extension_state = _extension_state(extension)
                         tun = (
                             await asyncio.to_thread(_admin_api_request, webadmin_url, "/api/tun-routing/status")
                             if extension_state == "active" and webadmin_url
                             else {"enabled": bool(snapshot.get("config", {}).get("TUN_routing", {}).get("enabled_on_startup", True))}
                         )
-                        extension_state = _extension_state(extension)
                         extension_active = extension_state == "active"
                         _set_switch_value(vpn_switch, extension_active)
                         _set_switch_value(tun_switch, bool(tun.get("enabled") or tun.get("active")))
@@ -724,6 +740,24 @@ def main(argv: list[str] | None = None):
                             if delay:
                                 await asyncio.sleep(delay)
                             await _refresh_native_controls()
+
+                    extension_monitor_task = None
+
+                    async def _monitor_extension_state() -> None:
+                        """Keep foreground controls aligned with OS-managed VPN lifecycle changes."""
+                        while True:
+                            try:
+                                await _refresh_native_controls()
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:
+                                _append_startup_crash_log(exc)
+                            await asyncio.sleep(5.0)
+
+                    def _start_extension_state_monitor() -> None:
+                        nonlocal extension_monitor_task
+                        if extension_monitor_task is None or extension_monitor_task.done():
+                            extension_monitor_task = asyncio.create_task(_monitor_extension_state())
 
                     async def _change_extension(enabled: bool) -> None:
                         result = await asyncio.to_thread(start_runtime if enabled else stop_runtime)
@@ -888,17 +922,26 @@ def main(argv: list[str] | None = None):
                     async def _on_running(app, **kwargs) -> None:
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_running")
                         asyncio.create_task(_log_tunnel_status_after_prepare())
+                        _start_extension_state_monitor()
                         _schedule_native_task(_refresh_native_controls_until_settled())
                         _schedule_webadmin_refresh()
 
                     self.on_running = _on_running
                     async def _on_exit(app, **kwargs) -> bool:
+                        nonlocal extension_monitor_task
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_exit")
+                        if extension_monitor_task is not None:
+                            extension_monitor_task.cancel()
+                            extension_monitor_task = None
                         bridge_app.close()
                         return True
 
                     async def _on_suspend(app, **kwargs) -> None:
+                        nonlocal extension_monitor_task
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_suspend")
+                        if extension_monitor_task is not None:
+                            extension_monitor_task.cancel()
+                            extension_monitor_task = None
 
                     async def _on_resume(app, **kwargs) -> None:
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_resume")
@@ -907,6 +950,7 @@ def main(argv: list[str] | None = None):
                             "toga.runtime_status",
                             result=runtime_status(),
                         )
+                        _start_extension_state_monitor()
                         _schedule_native_task(_refresh_native_controls_until_settled())
                         _schedule_webadmin_refresh()
 
