@@ -1195,13 +1195,11 @@ REQ-ADM-001:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
-    # Includes native-shell identity suppression once the iOS foreground proxy
-    # reports its platform status to the shared WebAdmin page.
     - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
-    - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_local_ios_app_proxy
+    - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
     - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
     - ios/tests/test_m3_native_sources.py::test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats
 

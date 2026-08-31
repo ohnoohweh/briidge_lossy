@@ -723,15 +723,13 @@ The two controls deliberately represent different layers:
   Network Extension is enabled.
 
 When the extension is inactive, the app replaces the embedded WebAdmin view
-with a native dark empty-state card that directs the operator to enable the
+with a compact native dark offline card that directs the operator to enable the
 extension. This avoids presenting stale runtime data as if it were live.
 
 The WebAdmin API and its normal page stay common across Python, iOS, and
-macOS. The iOS app uses its loopback-only foreground proxy for the embedded
-page; it adds only a native-shell display marker so that page hides its
-redundant ObstacleBridge identity banner. Native controls use the same native
-extension bridge and existing TUN-routing API contract rather than introducing
-an iOS-specific remote API.
+macOS. The iOS app and Safari both use the extension's configured loopback
+Admin API directly. Native controls use the same TUN-routing API contract as
+WebAdmin rather than introducing an iOS-specific control API.
 
 Design impact:
 

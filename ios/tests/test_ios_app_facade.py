@@ -124,7 +124,7 @@ def test_app_facade_reports_swift_host_runner_mode_from_config(tmp_path: Path, m
 
     assert snapshot["runtime_mode"] == "swift_host_runner"
     assert snapshot["runtime_owner"] == "ObstacleBridgeApp swift_host_runner"
-    assert snapshot["webadmin_url"] == "http://127.0.0.1:18081/"
+    assert snapshot["webadmin_url"] == "http://127.0.0.1:18090/"
 
 
 def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Path) -> None:
@@ -226,7 +226,7 @@ def test_resolve_toga_switch_class_uses_widget_module_fallback(monkeypatch) -> N
     assert ios_app_module._resolve_toga_switch_class() is sentinel
 
 
-def test_webadmin_url_from_config_uses_local_ios_app_proxy() -> None:
+def test_webadmin_url_from_config_uses_extension_admin_api() -> None:
     assert (
         ObstacleBridgeIOSApp.webadmin_url_from_config(
             {
@@ -236,7 +236,7 @@ def test_webadmin_url_from_config_uses_local_ios_app_proxy() -> None:
                 "admin_web_path": "admin",
             }
         )
-        == "http://127.0.0.1:18081/admin"
+        == "http://127.0.0.1:19090/admin"
     )
 
     assert (
@@ -247,11 +247,11 @@ def test_webadmin_url_from_config_uses_local_ios_app_proxy() -> None:
                 "admin_web_port": 19090,
             }
         )
-        == "http://127.0.0.1:18081/"
+        == "http://127.0.0.1:19090/"
     )
 
 
-def test_webadmin_url_from_config_uses_local_proxy_when_running_on_ios(monkeypatch) -> None:
+def test_webadmin_url_from_config_uses_extension_listener_when_running_on_ios(monkeypatch) -> None:
     monkeypatch.setattr(ios_app_module.sys, "platform", "ios")
 
     assert (
@@ -278,7 +278,7 @@ def test_webadmin_url_from_config_uses_local_proxy_when_running_on_ios(monkeypat
                 },
             }
         )
-        == "http://127.0.0.1:18081/"
+        == "http://127.0.0.1:18090/"
     )
 
 

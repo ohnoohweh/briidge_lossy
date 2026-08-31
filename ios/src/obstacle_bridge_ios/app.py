@@ -11,6 +11,7 @@ import shutil
 import sys
 import traceback
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -45,10 +46,8 @@ from .tunnel_control import (
     harvest_runtime_logs,
     prepare_runtime,
     runtime_status,
-    set_tun_routing_enabled,
     start_runtime,
     stop_runtime,
-    tun_routing_status,
 )
 
 try:
@@ -59,7 +58,6 @@ except Exception:  # pragma: no cover - exercised in iOS build/runtime, not unit
 
 WEBADMIN_DEFAULT_BIND = "127.0.0.1"
 WEBADMIN_DEFAULT_PORT = 18080
-IOS_APP_PROXY_PORT = 18081
 WEBADMIN_DEFAULT_PATH = "/"
 WEBADMIN_REMOTE_DEFAULT_NAME = "WebAdmin iphone"
 WEBADMIN_REMOTE_DEFAULT_PORT = 13081
@@ -115,6 +113,29 @@ def _probe_http_ok(url: str, timeout_sec: float = 1.0) -> bool:
             return 200 <= status < 500
     except (urllib.error.URLError, TimeoutError, ValueError):
         return False
+
+
+def _admin_api_request(base_url: str, path: str, *, method: str = "GET", body: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """Use the extension's public Admin API, matching the embedded WebAdmin page."""
+    target = urllib.parse.urljoin(base_url, path)
+    data = json.dumps(dict(body)).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        target,
+        data=data,
+        method=method,
+        headers={"Content-Type": "application/json"} if data is not None else {},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=1.5) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            payload = json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            payload = {"ok": False, "error": f"HTTP {exc.code}"}
+    except (urllib.error.URLError, TimeoutError, ValueError, json.JSONDecodeError) as exc:
+        return {"ok": False, "error": f"Admin API request failed: {type(exc).__name__}: {exc}"}
+    return payload if isinstance(payload, dict) else {"ok": False, "error": "Admin API response was not an object"}
 
 
 def _ios_documents_root() -> Path:
@@ -481,9 +502,8 @@ class ObstacleBridgeIOSApp:
     def webadmin_url_from_config(config: Mapping[str, Any]) -> Optional[str]:
         if not isinstance(config, Mapping) or not bool(config.get("admin_web")):
             return None
-        # The app talks to its foreground proxy, while remote WebAdmin continues
-        # to target the Network Extension's configured control-server port.
-        port = IOS_APP_PROXY_PORT
+        # The embedded app and Safari use the same extension-owned Admin API.
+        port = int(config.get("admin_web_port") or WEBADMIN_DEFAULT_PORT)
         path = str(config.get("admin_web_path") or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH).strip() or ObstacleBridgeIOSApp.WEBADMIN_DEFAULT_PATH
         if not path.startswith("/"):
             path = "/" + path
@@ -587,10 +607,6 @@ def main(argv: list[str] | None = None):
                                 pass
                     return False
 
-                def _native_shell_url(url: str) -> str:
-                    separator = "&" if "?" in url else "?"
-                    return f"{url}{separator}native_ios_shell=1"
-
                 try:
                     root = _write_startup_artifacts()
                     webview_cls = _resolve_toga_webview_class()
@@ -641,7 +657,7 @@ def main(argv: list[str] | None = None):
                                 return _set_webview_url(webadmin_view, "about:blank")
                             if extension_state == "unknown":
                                 return False
-                            return _set_webview_url(webadmin_view, _native_shell_url(webadmin_url))
+                            return _set_webview_url(webadmin_view, webadmin_url)
                         except Exception as exc:
                             _append_startup_crash_log(exc)
                             return False
@@ -685,7 +701,13 @@ def main(argv: list[str] | None = None):
 
                     async def _refresh_native_controls() -> None:
                         extension = await asyncio.to_thread(runtime_status)
-                        tun = await asyncio.to_thread(tun_routing_status)
+                        snapshot = bridge_app.connection_snapshot()
+                        webadmin_url = str(snapshot.get("webadmin_url") or "")
+                        tun = (
+                            await asyncio.to_thread(_admin_api_request, webadmin_url, "/api/tun-routing/status")
+                            if extension_state == "active" and webadmin_url
+                            else {"enabled": bool(snapshot.get("config", {}).get("TUN_routing", {}).get("enabled_on_startup", True))}
+                        )
                         extension_state = _extension_state(extension)
                         extension_active = extension_state == "active"
                         _set_switch_value(vpn_switch, extension_active)
@@ -716,7 +738,14 @@ def main(argv: list[str] | None = None):
                             _schedule_webadmin_refresh()
 
                     async def _change_tun(enabled: bool) -> None:
-                        result = await asyncio.to_thread(set_tun_routing_enabled, enabled)
+                        webadmin_url = str(bridge_app.connection_snapshot().get("webadmin_url") or "")
+                        result = await asyncio.to_thread(
+                            _admin_api_request,
+                            webadmin_url,
+                            "/api/tun-routing/control",
+                            method="POST",
+                            body={"enabled": enabled},
+                        ) if webadmin_url else {"ok": False, "error": "Network Extension Admin API is unavailable"}
                         log_event(
                             ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
                             "toga.network_tunneling_control_requested",
@@ -735,7 +764,7 @@ def main(argv: list[str] | None = None):
 
                     def _add_native_control(label: str, handler) -> Any:
                         row = toga.Box(style=_pack(direction="row", padding_top=8, padding_bottom=8))
-                        row.add(toga.Label(label, style=_pack(flex=1, font_size=16, color="#e6edf7")))
+                        row.add(toga.Label(label, style=_pack(flex=1, font_size=14, color="#e6edf7")))
                         if switch_cls is None:
                             row.add(_fallback_label("Unavailable"))
                             controls_box.add(row)
@@ -765,16 +794,29 @@ def main(argv: list[str] | None = None):
                         )
                     )
                     extension_off_card = toga.Box(
-                        style=_pack(direction="column", padding=24, background_color="#15233b")
+                        style=_pack(direction="column", padding=18, background_color="#15233b")
+                    )
+                    extension_off_badge = toga.Box(
+                        style=_pack(direction="row", height=24, padding_bottom=10)
+                    )
+                    extension_off_badge.add(
+                        toga.Box(style=_pack(width=8, height=8, background_color="#ef4444"))
+                    )
+                    extension_off_badge.add(
+                        toga.Label(
+                            "OFFLINE",
+                            style=_pack(font_size=12, color="#fca5a5", padding_left=8),
+                        )
                     )
                     extension_off_title = toga.Label(
                         "Checking Network Extension status...",
-                        style=_pack(font_size=18, color="#e6edf7", padding_bottom=8),
+                        style=_pack(font_size=16, color="#e6edf7", padding_bottom=6),
                     )
                     extension_off_message = toga.Label(
                         "Waiting for the Network Extension status.",
-                        style=_pack(font_size=14, color="#8ba0bd"),
+                        style=_pack(font_size=13, color="#8ba0bd"),
                     )
+                    extension_off_card.add(extension_off_badge)
                     extension_off_card.add(extension_off_title)
                     extension_off_card.add(extension_off_message)
                     extension_off_box.add(extension_off_card)
@@ -786,9 +828,9 @@ def main(argv: list[str] | None = None):
                         else:
                             target = extension_off_box
                             if extension_state == "inactive":
-                                extension_off_title.text = "Network Extension is off"
+                                extension_off_title.text = "Turn on Network Extension"
                                 extension_off_message.text = (
-                                    "Flip Network Extension active above to enable ObstacleBridge."
+                                    "Use the switch above to enable ObstacleBridge."
                                 )
                             else:
                                 extension_off_title.text = "Checking Network Extension status..."
@@ -882,7 +924,7 @@ def main(argv: list[str] | None = None):
                     _append_startup_crash_log(exc)
                     raise
 
-        return _TogaObstacleBridgeApp("ObstacleBridge", "com.obstaclebridge")
+        return _TogaObstacleBridgeApp("", "com.obstaclebridge")
     except Exception as exc:
         _append_startup_crash_log(exc)
         raise

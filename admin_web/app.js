@@ -3213,8 +3213,6 @@ function applyMetaDoc(j) {
 
 function applyStatusDoc(j) {
   uiState.statusDoc = j || {};
-  const isNativeIOSShell = String(j?.admin_ui?.platform || '').toLowerCase() === 'ios';
-  document.documentElement.classList.toggle('native-ios-shell', isNativeIOSShell);
   if (j?.admin_ui?.runtime_dependencies) {
     uiState.runtimeDependencies = j.admin_ui.runtime_dependencies;
     renderOnboardingDependencyWarnings();

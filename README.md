@@ -167,7 +167,7 @@ What the iPhone side does:
 
 - iOS `NEPacketTunnelNetworkSettings` owns the full-route device traffic capture
 - `TUN_routing.enabled_on_startup` controls the included route masks without stopping the Network Extension, packet processing, or TUN verification; enabling the extension restores those masks when startup tunneling is enabled
-- the iOS foreground app presents native Network Extension and Network Tunneling controls; when the extension is inactive it replaces the embedded WebAdmin view with an enablement card, while an active extension uses the same shared WebAdmin API and page as the other products
+- the iOS foreground app presents native Network Extension and Network Tunneling controls; when the extension is inactive it replaces the embedded WebAdmin view with an enablement card, while an active extension and Safari use the same configured extension Admin API and shared page
 - loopback remains excluded from the tunnel
 - the iOS tunnel address is derived from the local `own_servers` TUN service hook env `lifecycle_hooks.listener.on_created.env.TUN_ADDR` when present
 - for transition compatibility with older profiles, iOS can also infer its tunnel address from the matching remote TUN listener hook `PEER_ADDR`

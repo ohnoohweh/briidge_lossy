@@ -43,6 +43,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     )
     private let errorDomain = "ObstacleBridge.IPServer"
     private var packetPumpRunning = false
+    private var packetPumpDroppedBeforeOverlay = 0
     private var providerStateUpdateCount = 0
     private var heartbeatTickCount = 0
     private var runtimeMode = "unconfigured"
@@ -873,6 +874,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 return
             }
             if !packets.isEmpty {
+                guard self.swiftSimpleUDPPeerBridge?.tunnelInflowAllowed() == true else {
+                    self.packetPumpDroppedBeforeOverlay += packets.count
+                    if self.packetPumpDroppedBeforeOverlay <= 3 || self.packetPumpDroppedBeforeOverlay % 128 == 0 {
+                        self.recordNativeEvent(
+                            "packet_pump_dropped_before_overlay_ready",
+                            fields: ["packet_count": packets.count, "dropped_total": self.packetPumpDroppedBeforeOverlay]
+                        )
+                    }
+                    self.readPackets()
+                    return
+                }
                 var totalBytes = 0
                 for (index, packet) in packets.enumerated() {
                     totalBytes += packet.count
@@ -3442,6 +3454,16 @@ private final class SwiftSimpleUDPPeerBridge {
             if #available(iOS 15.0, *), let quicOverlayTransportOwner {
                 return (quicOverlayTransportOwner.transportSnapshot()["overlay_connected"] as? Bool) ?? false
             }
+            return false
+        }
+    }
+
+    func tunnelInflowAllowed() -> Bool {
+        withState {
+            if let udpOverlayTransportOwner { return udpOverlayTransportOwner.inflowAllowed() }
+            if let tcpOverlayTransportOwner { return tcpOverlayTransportOwner.inflowAllowed() }
+            if let wsOverlayTransportOwner { return wsOverlayTransportOwner.inflowAllowed() }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner { return quicOverlayTransportOwner.inflowAllowed() }
             return false
         }
     }

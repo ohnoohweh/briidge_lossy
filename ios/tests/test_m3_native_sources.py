@@ -1025,10 +1025,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     ios_app = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "app.py").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeTunnelControl" in control
-    assert 'private static let appWebAdminPort = 18081' in control
     assert "ObstacleBridgeWebAdminServer" in control
     assert "admin_api_request" in control
-    assert "ObstacleBridgeIOSAppAdminWebProxy" in control
     assert "NETunnelProviderManager.loadAllFromPreferences" in control
     assert "queue.async" in control
     assert "prepareIPServerTunnel" in control
@@ -1039,10 +1037,13 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "tunRoutingStatus" in control
     assert '"/api/tun-routing/control"' in control
     assert '"/api/tun-routing/status"' in control
-    assert "ensureAdminWebProxy(selection.manager)" in control
-    assert "let port = appWebAdminPort" in control
-    assert "IOS_APP_PROXY_PORT = 18081" in ios_app
-    assert "port = IOS_APP_PROXY_PORT" in ios_app
+    assert "iOS displays the extension's Admin API directly; no foreground proxy." in control
+    assert "_admin_api_request" in ios_app
+    assert '"/api/tun-routing/control"' in ios_app
+    assert '"/api/tun-routing/status"' in ios_app
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert "tunnelInflowAllowed()" in provider
+    assert "packet_pump_dropped_before_overlay_ready" in provider
     assert "prepare_runtime()" in ios_app
     assert "Network extension active" in ios_app
     assert "Network tunneling active" in ios_app
@@ -1050,12 +1051,12 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert 'MainWindow(title="")' in ios_app
     assert 'background_color="#15233b"' in ios_app
     assert "_set_operational_surface" in ios_app
-    assert "Flip Network Extension active above" in ios_app
+    assert "Turn on Network Extension" in ios_app
+    assert 'font_size=14, color="#e6edf7"' in ios_app
+    assert "OFFLINE" in ios_app
     assert "_resolve_toga_switch_class" in ios_app
-    assert "set_tun_routing_enabled" in ios_app
     assert "start_runtime if enabled else stop_runtime" in ios_app
-    assert "native_ios_shell=1" in ios_app
-    assert '"about:blank"' in ios_app
+    assert 'return _TogaObstacleBridgeApp("", "com.obstaclebridge")' in ios_app
     assert "harvestSharedLogs" in control
     assert "runtimeExecutionMode()" in control
     assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control

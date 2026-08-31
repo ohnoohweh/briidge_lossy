@@ -1401,6 +1401,11 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func ensureAdminWebProxy(_ manager: NETunnelProviderManager?) {
+#if !os(macOS)
+        // iOS displays the extension's Admin API directly; no foreground proxy.
+        _ = manager
+        return
+#endif
 #if os(macOS)
         let runtimeConfig = loadRuntimeConfiguration()
         let bindHost = (runtimeConfig["admin_web_bind"] as? String) ?? webAdminBind
