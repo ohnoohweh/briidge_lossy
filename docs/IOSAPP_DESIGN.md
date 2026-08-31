@@ -722,9 +722,9 @@ The two controls deliberately represent different layers:
 - `TUN_routing.enabled_on_startup` remains the startup policy used when the
   Network Extension is enabled.
 
-When the extension is inactive, the app clears the embedded WebAdmin view and
-shows a native instruction to enable the extension. This avoids presenting
-stale runtime data as if it were live.
+When the extension is inactive, the app replaces the embedded WebAdmin view
+with a native dark empty-state card that directs the operator to enable the
+extension. This avoids presenting stale runtime data as if it were live.
 
 The WebAdmin API and its normal page stay common across Python, iOS, and
 macOS. The iOS app uses its loopback-only foreground proxy for the embedded

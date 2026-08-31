@@ -669,18 +669,12 @@ def main(argv: list[str] | None = None):
                         style=_pack(
                             direction="column",
                             padding_top=12,
-                            padding_bottom=8,
+                            padding_bottom=12,
                             padding_left=16,
                             padding_right=16,
                             background_color="#15233b",
                         )
                     )
-                    native_status_label = toga.Label(
-                        "Checking Network Extension status...",
-                        style=_pack(padding=0, font_size=14, color="#8ba0bd"),
-                    )
-                    native_status_label.style.padding = 0
-                    controls_box.add(native_status_label)
                     vpn_switch = None
                     tun_switch = None
 
@@ -700,14 +694,7 @@ def main(argv: list[str] | None = None):
                             tun_switch.enabled = extension_active
                         except Exception:
                             pass
-                        if extension_active:
-                            native_status_label.text = "Network extension is active."
-                        elif extension_state == "inactive":
-                            native_status_label.text = (
-                                "Flip the Network Extension switch to enable ObstacleBridge."
-                            )
-                        else:
-                            native_status_label.text = "Checking Network Extension status..."
+                        _set_operational_surface(extension_state)
                         _refresh_webadmin(extension)
 
                     async def _refresh_native_controls_until_settled() -> None:
@@ -766,22 +753,66 @@ def main(argv: list[str] | None = None):
                     vpn_switch = _add_native_control("Network extension active", _on_vpn_switch_change)
                     tun_switch = _add_native_control("Network tunneling active", _on_tun_switch_change)
 
+                    operational_box = toga.Box(
+                        style=_pack(direction="column", flex=1, background_color="#0a1220")
+                    )
+                    extension_off_box = toga.Box(
+                        style=_pack(
+                            direction="column",
+                            flex=1,
+                            padding=16,
+                            background_color="#0a1220",
+                        )
+                    )
+                    extension_off_card = toga.Box(
+                        style=_pack(direction="column", padding=24, background_color="#15233b")
+                    )
+                    extension_off_title = toga.Label(
+                        "Checking Network Extension status...",
+                        style=_pack(font_size=18, color="#e6edf7", padding_bottom=8),
+                    )
+                    extension_off_message = toga.Label(
+                        "Waiting for the Network Extension status.",
+                        style=_pack(font_size=14, color="#8ba0bd"),
+                    )
+                    extension_off_card.add(extension_off_title)
+                    extension_off_card.add(extension_off_message)
+                    extension_off_box.add(extension_off_card)
+                    operational_surface = {"widget": None}
+
+                    def _set_operational_surface(extension_state: str) -> None:
+                        if extension_state == "active":
+                            target = webadmin_view if webadmin_view_ready and webadmin_view is not None else fallback_box
+                        else:
+                            target = extension_off_box
+                            if extension_state == "inactive":
+                                extension_off_title.text = "Network Extension is off"
+                                extension_off_message.text = (
+                                    "Flip Network Extension active above to enable ObstacleBridge."
+                                )
+                            else:
+                                extension_off_title.text = "Checking Network Extension status..."
+                                extension_off_message.text = "Waiting for the Network Extension status."
+                        if operational_surface["widget"] is target:
+                            return
+                        operational_box.clear()
+                        operational_box.add(target)
+                        operational_surface["widget"] = target
+
                     root_box = toga.Box(
                         style=_pack(direction="column", flex=1, padding=0, background_color="#0a1220")
                     )
                     root_box.add(controls_box)
-                    if webadmin_view_ready and webadmin_view is not None:
-                        root_box.add(webadmin_view)
-                    else:
-                        fallback_box = toga.Box(
-                            style=_pack(direction="column", flex=1, background_color="#0a1220")
+                    fallback_box = toga.Box(
+                        style=_pack(direction="column", flex=1, background_color="#0a1220")
+                    )
+                    fallback_box.add(
+                        _fallback_label(
+                            f"Embedded WebAdmin is unavailable. Shared files are in {root}."
                         )
-                        fallback_box.add(
-                            _fallback_label(
-                                f"Embedded WebAdmin is unavailable. Shared files are in {root}."
-                            )
-                        )
-                        root_box.add(fallback_box)
+                    )
+                    _set_operational_surface("unknown")
+                    root_box.add(operational_box)
 
                     log_event(
                         ObstacleBridgeIOSApp.DOCUMENTS_ROOT,

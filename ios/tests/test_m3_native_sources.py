@@ -1049,6 +1049,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "_refresh_native_controls_until_settled" in ios_app
     assert 'MainWindow(title="")' in ios_app
     assert 'background_color="#15233b"' in ios_app
+    assert "_set_operational_surface" in ios_app
+    assert "Flip Network Extension active above" in ios_app
     assert "_resolve_toga_switch_class" in ios_app
     assert "set_tun_routing_enabled" in ios_app
     assert "start_runtime if enabled else stop_runtime" in ios_app

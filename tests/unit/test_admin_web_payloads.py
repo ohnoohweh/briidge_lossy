@@ -1685,6 +1685,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertNotIn(".ios-tunnel-control", style_css)
         self.assertIn("native_ios_shell", index_html)
         self.assertIn(".native-ios-shell #appIdentity", style_css)
+        self.assertIn("document.documentElement.classList.toggle('native-ios-shell'", app_js)
 
     def test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
