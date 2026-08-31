@@ -40,6 +40,7 @@ struct ObstacleBridgePacketTunnelConfiguration {
     let excludedRoutes6: [ObstacleBridgePacketTunnelIPv6RouteSpec]
     let dnsServers: [String]
     let mtu: Int
+    let enabledOnStartup: Bool
     let routeDiagnostics: [String: Any]
 
     init(
@@ -119,6 +120,7 @@ struct ObstacleBridgePacketTunnelConfiguration {
         mtu = ((network["mtu"] as? NSNumber)?.intValue ?? (network["mtu"] as? Int))
             ?? runtimeNetworkFallback.mtu
             ?? 1500
+        enabledOnStartup = routingOverride?.enabledOnStartup ?? true
         routeDiagnostics = Self.routeDiagnostics(
             includedIPv4: resolvedIncludedRoutes,
             baseExcludedIPv4: baseExcludedRoutes,
@@ -131,12 +133,12 @@ struct ObstacleBridgePacketTunnelConfiguration {
         )
     }
 
-    func makeNetworkSettings() -> NEPacketTunnelNetworkSettings {
+    func makeNetworkSettings(includeRoutes: Bool = true) -> NEPacketTunnelNetworkSettings {
         let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: peerHost)
         settings.mtu = NSNumber(value: mtu)
 
         let ipv4 = NEIPv4Settings(addresses: [tunnelAddress], subnetMasks: [tunnelSubnetMask])
-        ipv4.includedRoutes = includedRoutes.map { route in
+        ipv4.includedRoutes = (includeRoutes ? includedRoutes : []).map { route in
             NEIPv4Route(destinationAddress: route.destinationAddress, subnetMask: route.subnetMask)
         }
         ipv4.excludedRoutes = excludedRoutes.map { route in
@@ -149,7 +151,7 @@ struct ObstacleBridgePacketTunnelConfiguration {
                 addresses: [tunnelAddress6],
                 networkPrefixLengths: [NSNumber(value: tunnelPrefix6)]
             )
-            ipv6.includedRoutes = includedRoutes6.map { route in
+            ipv6.includedRoutes = (includeRoutes ? includedRoutes6 : []).map { route in
                 NEIPv6Route(
                     destinationAddress: route.destinationAddress,
                     networkPrefixLength: NSNumber(value: route.networkPrefixLength)

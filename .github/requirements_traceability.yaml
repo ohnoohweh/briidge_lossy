@@ -1103,6 +1103,8 @@ REQ-MUX-010:
     - ios/tests/test_m3_tunnel.py::test_network_settings_from_runtime_config_applies_tun_routing_override
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
     - ios/tests/test_m3_native_sources.py::test_ios_packet_tunnel_tun_routing_verification_source_exists
+    - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_uses_tun_routing_for_full_route_and_address_setup
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_passes_python_parity_hook_env
     - tests/unit/test_channel_mux_listener_mode.py::test_probe_tun_connectivity_uses_virtual_probe_source_for_local_shared_service
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_probe_uses_virtual_probe_source_for_server_local_tun_verification
     - tests/unit/test_channel_mux_listener_mode.py::test_local_virtual_probe_skips_when_transport_inactive

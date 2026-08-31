@@ -16,7 +16,9 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
 
     assert "struct ObstacleBridgePacketTunnelDefaults" in shared
     assert "struct ObstacleBridgePacketTunnelConfiguration" in shared
-    assert "func makeNetworkSettings() -> NEPacketTunnelNetworkSettings" in shared
+    assert "func makeNetworkSettings(includeRoutes: Bool = true) -> NEPacketTunnelNetworkSettings" in shared
+    assert "let enabledOnStartup: Bool" in shared
+    assert "routingOverride?.enabledOnStartup ?? true" in shared
     assert "NEIPv6Settings" in shared
     assert "includedRoutes6" in shared
     assert "excludedRoutes6" in shared
@@ -70,7 +72,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "ObstacleBridgePacketTunnelConfiguration(" in provider
     assert '"effective_tunnel_network_settings"' in provider
     assert '"shared_overlay_bootstrap_state"' in provider
-    assert "configuration.makeNetworkSettings()" in provider
+    assert "configuration.makeNetworkSettings(includeRoutes: tunRoutingEnabled)" in provider
     assert "private var nativeRuntimeActive: Bool" in provider
     assert 'runtimeMode == "swift_simple_udp" || runtimeMode == "swift_udp"' in provider
     assert "private func nativeAppMessageResponse(for payload: [String: Any]) throws -> [String: Any]" in provider
@@ -530,12 +532,14 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert 'private var packetTunnelConfiguration: ObstacleBridgePacketTunnelConfiguration?' in provider
     assert 'private var tunRoutingEnabled = false' in provider
     assert 'packetTunnelConfiguration = configuration' in provider
-    assert 'tunRoutingEnabled = true' in provider
-    assert 'let settings = enabled ? configuration.makeNetworkSettings() : nil' in provider
+    assert 'tunRoutingEnabled = configuration.enabledOnStartup' in provider
+    assert 'let settings = configuration.makeNetworkSettings(includeRoutes: enabled)' in provider
     assert 'setTunnelNetworkSettings(settings)' in provider
+    assert 'effectivePacketTunnelSettingsState = Self.packetTunnelSettingsSnapshot(' in provider
+    assert 'startupEnabled: packetTunnelConfiguration?.enabledOnStartup ?? true' in provider
     assert 'func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest)' in provider
     assert 'enabled: tunRoutingEnabled && adminPacketProcessingActive()' in provider
-    assert 'startupEnabled: true' in provider
+    assert '"enabled_on_startup": configuration.enabledOnStartup' in provider
     assert 'supported: true' in provider
     assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
     assert 'private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)' in provider
@@ -1145,9 +1149,12 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "deliverLocalTunPacketToActiveOverlay" in host_runner
     assert "deliverRemoteTunPacketToLocalAdapter" in host_runner
     assert '"tun": tunRows' in host_runner
-    assert 'tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper)' in host_runner
-    assert 'payload["tun_control"] = tunControlSnapshot(for: tunHelper)' in host_runner
-    assert 'private func tunControlSnapshot(for helper: [String: Any]) -> [String: Any]' in host_runner
+    assert 'tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))' in host_runner
+    assert 'payload["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))' in host_runner
+    assert 'routing: ObstacleBridgeTunnelRoutingOverride?' in host_runner
+    assert 'let startupEnabled = routing?.enabledOnStartup ?? true' in host_runner
+    assert 'env["INCLUDED_ROUTES"] = startupEnabled ? includedRoutes.joined(separator: ",") : ""' in host_runner
+    assert 'env["INCLUDED_ROUTES6"] = startupEnabled ? includedRoutes6.joined(separator: ",") : ""' in host_runner
     assert "final class ObstacleBridgeMacOSTunAdapter" in macos_tun
     assert "packet(fromUTUNFrame:" in macos_tun
     assert "utunFrame(for:" in macos_tun

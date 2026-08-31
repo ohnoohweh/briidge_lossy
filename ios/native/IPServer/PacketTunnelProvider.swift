@@ -496,15 +496,18 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 fallbackRuntimeConfig: loadSharedRuntimeConfigJSON(),
                 defaults: Self.packetTunnelDefaults
             )
-            let settingsPayload = Self.packetTunnelSettingsSnapshot(configuration)
             packetTunnelConfiguration = configuration
-            tunRoutingEnabled = true
+            tunRoutingEnabled = configuration.enabledOnStartup
+            let settingsPayload = Self.packetTunnelSettingsSnapshot(
+                configuration,
+                includeRoutes: tunRoutingEnabled
+            )
             effectivePacketTunnelSettingsState = settingsPayload
             recordNativeEvent(
                 "tunnel_network_settings_prepared",
                 fields: settingsPayload
             )
-            let settings = configuration.makeNetworkSettings()
+            let settings = configuration.makeNetworkSettings(includeRoutes: tunRoutingEnabled)
             setTunnelNetworkSettings(settings) { [weak self] error in
                 guard let self else { return }
                 if let error {
@@ -1594,7 +1597,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         }
         payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(
             enabled: tunRoutingEnabled && adminPacketProcessingActive(),
-            startupEnabled: true,
+            startupEnabled: packetTunnelConfiguration?.enabledOnStartup ?? true,
             supported: true
         )
         payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)
@@ -1818,12 +1821,19 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             ], statusLine: "HTTP/1.1 409 Conflict")
         }
 
+        let previousEnabled = tunRoutingEnabled
+        let previousSettingsState = effectivePacketTunnelSettingsState
         tunRoutingEnabled = enabled
-        let settings = enabled ? configuration.makeNetworkSettings() : nil
+        effectivePacketTunnelSettingsState = Self.packetTunnelSettingsSnapshot(
+            configuration,
+            includeRoutes: enabled
+        )
+        let settings = configuration.makeNetworkSettings(includeRoutes: enabled)
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { return }
             if let error {
-                self.tunRoutingEnabled = !enabled
+                self.tunRoutingEnabled = previousEnabled
+                self.effectivePacketTunnelSettingsState = previousSettingsState
                 self.recordNativeEvent(
                     "tun_routing_control_failed",
                     fields: ["enabled": enabled, "error": error.localizedDescription]
@@ -2488,20 +2498,24 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         )
     }
 
-    private static func packetTunnelSettingsSnapshot(_ configuration: ObstacleBridgePacketTunnelConfiguration) -> [String: Any] {
+    private static func packetTunnelSettingsSnapshot(
+        _ configuration: ObstacleBridgePacketTunnelConfiguration,
+        includeRoutes: Bool
+    ) -> [String: Any] {
         [
             "peer_host": configuration.peerHost,
             "peer_port": configuration.peerPort.map { Int($0) } ?? NSNull(),
             "tunnel_address": configuration.tunnelAddress,
             "tunnel_subnet_mask": configuration.tunnelSubnetMask,
-            "included_routes": configuration.includedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
+            "included_routes": (includeRoutes ? configuration.includedRoutes : []).map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
             "excluded_routes": configuration.excludedRoutes.map { ["destination": $0.destinationAddress, "subnet_mask": $0.subnetMask] },
             "tunnel_address6": configuration.tunnelAddress6,
             "tunnel_prefix6": configuration.tunnelPrefix6,
-            "included_routes6": configuration.includedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
+            "included_routes6": (includeRoutes ? configuration.includedRoutes6 : []).map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
             "excluded_routes6": configuration.excludedRoutes6.map { ["destination": $0.destinationAddress, "network_prefix_length": $0.networkPrefixLength] },
             "dns_servers": configuration.dnsServers,
             "mtu": configuration.mtu,
+            "enabled_on_startup": configuration.enabledOnStartup,
             "route_diagnostics": configuration.routeDiagnostics,
         ]
     }

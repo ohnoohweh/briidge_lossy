@@ -58,9 +58,10 @@ def test_macos_swift_host_runner_passes_python_parity_hook_env() -> None:
     assert 'env["OB_OVERLAY_UNDERLAY_GW"] = context["overlay_underlay_gateway"] ?? ""' in source
     assert 'env["OB_OVERLAY_UNDERLAY_IF"] = context["overlay_underlay_interface"] ?? ""' in source
     assert 'env[index == 0 ? "DNS1" : "DNS2"] = dns' in source
-    assert 'env["INCLUDED_ROUTES"] = includedRoutes.joined(separator: ",")' in source
+    assert 'let startupEnabled = tunRouting.enabledOnStartup ?? true' in source
+    assert 'env["INCLUDED_ROUTES"] = startupEnabled ? includedRoutes.joined(separator: ",") : ""' in source
     assert 'env["EXCLUDED_ROUTES"] = effectiveExcludedRoutes.ipv4.joined(separator: ",")' in source
-    assert 'env["INCLUDED_ROUTES6"] = includedRoutes6.joined(separator: ",")' in source
+    assert 'env["INCLUDED_ROUTES6"] = startupEnabled ? includedRoutes6.joined(separator: ",") : ""' in source
     assert 'env["EXCLUDED_ROUTES6"] = effectiveExcludedRoutes.ipv6.joined(separator: ",")' in source
 
 

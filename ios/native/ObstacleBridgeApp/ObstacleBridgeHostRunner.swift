@@ -654,14 +654,15 @@ final class ObstacleBridgeHostRunner {
                 baseIPv4: tunRoutingConfig.excludedRoutes ?? [],
                 baseIPv6: tunRoutingConfig.excludedRoutes6 ?? []
             )
-            tunRouting["included_routes"] = tunRoutingConfig.includedRoutes ?? []
+            let startupEnabled = tunRoutingConfig.enabledOnStartup ?? true
+            tunRouting["included_routes"] = startupEnabled ? (tunRoutingConfig.includedRoutes ?? []) : []
             tunRouting["excluded_routes"] = effectiveExcluded.ipv4
-            tunRouting["included_routes6"] = tunRoutingConfig.includedRoutes6 ?? []
+            tunRouting["included_routes6"] = startupEnabled ? (tunRoutingConfig.includedRoutes6 ?? []) : []
             tunRouting["excluded_routes6"] = effectiveExcluded.ipv6
         }
         let tunHelper = status["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()
         tunRouting["tun_helper"] = tunHelper
-        tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper)
+        tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))
         let updateCache = { [weak self] in
             self?.cachedStatusSnapshot = status
             self?.cachedConnectionsSnapshot = connections
@@ -723,25 +724,29 @@ final class ObstacleBridgeHostRunner {
                 baseIPv4: tunRouting.excludedRoutes ?? [],
                 baseIPv6: tunRouting.excludedRoutes6 ?? []
             )
-            payload["included_routes"] = tunRouting.includedRoutes ?? []
+            let startupEnabled = tunRouting.enabledOnStartup ?? true
+            payload["included_routes"] = startupEnabled ? (tunRouting.includedRoutes ?? []) : []
             payload["excluded_routes"] = effectiveExcluded.ipv4
-            payload["included_routes6"] = tunRouting.includedRoutes6 ?? []
+            payload["included_routes6"] = startupEnabled ? (tunRouting.includedRoutes6 ?? []) : []
             payload["excluded_routes6"] = effectiveExcluded.ipv6
         }
         let tunHelper = snapshotUncached()["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()
         payload["tun_helper"] = tunHelper
-        payload["tun_control"] = tunControlSnapshot(for: tunHelper)
+        payload["tun_control"] = tunControlSnapshot(for: tunHelper, routing: ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: runtimeConfig))
         return payload
     }
 
-    private func tunControlSnapshot(for helper: [String: Any]) -> [String: Any] {
+    private func tunControlSnapshot(
+        for helper: [String: Any],
+        routing: ObstacleBridgeTunnelRoutingOverride?
+    ) -> [String: Any] {
         let runtime = helper["runtime"] as? [String: Any] ?? [:]
         let enabled = (helper["apply_network"] as? Bool)
             ?? (runtime["network_applied"] as? Bool)
             ?? false
-        let startupEnabled = helper["enabled"] as? Bool ?? false
+        let startupEnabled = routing?.enabledOnStartup ?? true
         return ObstacleBridgeAdminAPI.tunControlSnapshot(
-            enabled: enabled,
+            enabled: startupEnabled && enabled,
             startupEnabled: startupEnabled,
             supported: false
         )
@@ -3289,6 +3294,7 @@ final class ObstacleBridgeHostRunner {
             let dnsServers = tunRouting.dnsServers ?? []
             let includedRoutes = tunRouting.includedRoutes ?? []
             let includedRoutes6 = tunRouting.includedRoutes6 ?? []
+            let startupEnabled = tunRouting.enabledOnStartup ?? true
             let effectiveExcludedRoutes = ObstacleBridgeRuntimeConfig.effectiveExcludedRoutes(
                 from: runtimeConfig,
                 baseIPv4: tunRouting.excludedRoutes ?? [],
@@ -3326,15 +3332,11 @@ final class ObstacleBridgeHostRunner {
             for (index, dns) in dnsServers.prefix(2).enumerated() {
                 env[index == 0 ? "DNS1" : "DNS2"] = dns
             }
-            if !includedRoutes.isEmpty {
-                env["INCLUDED_ROUTES"] = includedRoutes.joined(separator: ",")
-            }
+            env["INCLUDED_ROUTES"] = startupEnabled ? includedRoutes.joined(separator: ",") : ""
             if !effectiveExcludedRoutes.ipv4.isEmpty {
                 env["EXCLUDED_ROUTES"] = effectiveExcludedRoutes.ipv4.joined(separator: ",")
             }
-            if !includedRoutes6.isEmpty {
-                env["INCLUDED_ROUTES6"] = includedRoutes6.joined(separator: ",")
-            }
+            env["INCLUDED_ROUTES6"] = startupEnabled ? includedRoutes6.joined(separator: ",") : ""
             if !effectiveExcludedRoutes.ipv6.isEmpty {
                 env["EXCLUDED_ROUTES6"] = effectiveExcludedRoutes.ipv6.joined(separator: ",")
             }
