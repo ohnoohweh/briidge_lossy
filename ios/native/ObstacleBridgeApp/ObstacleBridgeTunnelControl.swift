@@ -16,6 +16,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
     private static let remoteAdminPort = 13081
     private static let queue = DispatchQueue(label: "com.obstaclebridge.tunnel-control", qos: .utility)
     private static let statusDefaultsKey = "ObstacleBridgeTunnelControlStatus"
+    private static let tunRoutingStatusDefaultsKey = "ObstacleBridgeTunnelControlTunRoutingStatus"
     private static let appGroupIdentifier = "group.com.obstaclebridge.shared"
     private static let defaultTunnelAddress = "192.168.106.1"
     private static let defaultTunnelPrefix = 30
@@ -164,6 +165,19 @@ final class ObstacleBridgeTunnelControl: NSObject {
             "mode": "prepare_only",
             "runtime_mode": mode,
         ]) as NSString
+    }
+
+    @objc class func enableIPServerTunRouting() -> NSString {
+        requestTunRoutingChange(enabled: true)
+    }
+
+    @objc class func suspendIPServerTunRouting() -> NSString {
+        requestTunRoutingChange(enabled: false)
+    }
+
+    @objc class func tunRoutingStatus() -> NSString {
+        refreshTunRoutingStatusAsync()
+        return jsonString(cachedTunRoutingStatus() ?? defaultTunRoutingStatus()) as NSString
     }
 
     @objc class func harvestSharedLogs() -> NSString {
@@ -1601,6 +1615,111 @@ final class ObstacleBridgeTunnelControl: NSObject {
                 updateStatus(ok: true, event: "status_refreshed", manager: manager ?? activeManager)
             }
         }
+    }
+
+    private class func requestTunRoutingChange(enabled: Bool) -> NSString {
+        recordEvent("tun_routing_control_requested", payload: ["enabled": enabled])
+        queue.async {
+            reloadCanonicalManager(event: "tun_routing_control_manager_loaded") { manager in
+                guard let manager else {
+                    return
+                }
+                requestTunRouting(manager: manager, enabled: enabled)
+            }
+        }
+        return jsonString([
+            "ok": true,
+            "requested": true,
+            "enabled": enabled,
+        ]) as NSString
+    }
+
+    private class func refreshTunRoutingStatusAsync() {
+        queue.async {
+            reloadCanonicalManager(event: "tun_routing_status_manager_loaded") { manager in
+                guard let manager else {
+                    return
+                }
+                requestTunRouting(manager: manager, enabled: nil)
+            }
+        }
+    }
+
+    private class func requestTunRouting(manager: NETunnelProviderManager, enabled: Bool?) {
+        guard manager.connection.status == .connected else {
+            var payload = defaultTunRoutingStatus()
+            payload["ok"] = false
+            payload["active"] = false
+            payload["error"] = "Network extension is not active"
+            cacheTunRoutingStatus(payload)
+            return
+        }
+        guard let session = manager.connection as? NETunnelProviderSession else {
+            cacheTunRoutingStatus([
+                "ok": false,
+                "active": false,
+                "error": "VPN connection is not a NETunnelProviderSession",
+            ])
+            return
+        }
+
+        let path = enabled == nil ? "/api/tun-routing/status" : "/api/tun-routing/control"
+        var request: [String: Any] = [
+            "command": "admin_api_request",
+            "method": enabled == nil ? "GET" : "POST",
+            "path": path,
+        ]
+        if let enabled,
+           let body = try? JSONSerialization.data(withJSONObject: ["enabled": enabled]) {
+            request["body_base64"] = body.base64EncodedString()
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: request) else {
+            return
+        }
+        do {
+            try session.sendProviderMessage(data) { responseData in
+                guard let responseData,
+                      let response = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                      var body = response["body_json"] as? [String: Any] else {
+                    return
+                }
+                body["active"] = (body["enabled"] as? Bool) ?? false
+                cacheTunRoutingStatus(body)
+                recordEvent("tun_routing_control_response", payload: body)
+            }
+        } catch {
+            cacheTunRoutingStatus([
+                "ok": false,
+                "active": false,
+                "error": error.localizedDescription,
+            ])
+        }
+    }
+
+    private class func defaultTunRoutingStatus() -> [String: Any] {
+        let enabled = ObstacleBridgeRuntimeConfig.tunnelRoutingOverride(from: loadRuntimeConfigJSON())?.enabledOnStartup ?? true
+        return [
+            "ok": true,
+            "enabled": enabled,
+            "active": enabled,
+            "startup_enabled": enabled,
+            "cached": false,
+        ]
+    }
+
+    private class func cachedTunRoutingStatus() -> [String: Any]? {
+        guard let data = UserDefaults.standard.data(forKey: tunRoutingStatusDefaultsKey),
+              let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        return payload
+    }
+
+    private class func cacheTunRoutingStatus(_ payload: [String: Any]) {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+            return
+        }
+        UserDefaults.standard.set(data, forKey: tunRoutingStatusDefaultsKey)
     }
 
     private class func updateStatus(

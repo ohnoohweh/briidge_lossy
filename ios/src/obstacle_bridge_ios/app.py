@@ -41,7 +41,15 @@ from .diagnostics import (
     snapshot as diagnostics_snapshot,
 )
 from .profiles import ProfileStore
-from .tunnel_control import harvest_runtime_logs, prepare_runtime, runtime_status
+from .tunnel_control import (
+    harvest_runtime_logs,
+    prepare_runtime,
+    runtime_status,
+    set_tun_routing_enabled,
+    start_runtime,
+    stop_runtime,
+    tun_routing_status,
+)
 
 try:
     import toga
@@ -77,6 +85,19 @@ def _resolve_toga_webview_class() -> Any:
     except Exception:
         return None
     return getattr(module, "WebView", None)
+
+
+def _resolve_toga_switch_class() -> Any:
+    """Resolve Toga's native Switch without relying on a lazy top-level export."""
+    if toga is not None:
+        switch_cls = getattr(toga, "Switch", None)
+        if switch_cls is not None:
+            return switch_cls
+    try:
+        module = importlib.import_module("toga.widgets.switch")
+    except Exception:
+        return None
+    return getattr(module, "Switch", None)
 
 
 def _configure_ios_safe_locale() -> None:
@@ -566,9 +587,14 @@ def main(argv: list[str] | None = None):
                                 pass
                     return False
 
+                def _native_shell_url(url: str) -> str:
+                    separator = "&" if "?" in url else "?"
+                    return f"{url}{separator}native_ios_shell=1"
+
                 try:
                     root = _write_startup_artifacts()
                     webview_cls = _resolve_toga_webview_class()
+                    switch_cls = _resolve_toga_switch_class()
                     webadmin_view = None
                     webadmin_view_ready = False
                     if webview_cls is not None:
@@ -579,13 +605,35 @@ def main(argv: list[str] | None = None):
                             webadmin_view = None
                             webadmin_view_ready = False
 
+                    control_state = {"updating": False}
+
+                    def _extension_is_active(payload: Mapping[str, Any]) -> bool:
+                        return str(payload.get("status") or "").lower() in {
+                            "connected",
+                            "connecting",
+                            "reasserting",
+                        }
+
+                    def _set_switch_value(widget: Any, value: bool) -> None:
+                        if widget is None:
+                            return
+                        control_state["updating"] = True
+                        try:
+                            widget.value = value
+                        except Exception:
+                            pass
+                        finally:
+                            control_state["updating"] = False
+
                     def _refresh_webadmin() -> bool:
                         try:
                             snap = bridge_app.connection_snapshot()
                             webadmin_url = str(snap.get("webadmin_url") or "").strip()
                             if not webadmin_url or not webadmin_view_ready:
                                 return False
-                            return _set_webview_url(webadmin_view, webadmin_url)
+                            if not _extension_is_active(runtime_status()):
+                                return _set_webview_url(webadmin_view, "about:blank")
+                            return _set_webview_url(webadmin_view, _native_shell_url(webadmin_url))
                         except Exception as exc:
                             _append_startup_crash_log(exc)
                             return False
@@ -609,9 +657,100 @@ def main(argv: list[str] | None = None):
                             return
                         loop.call_soon_threadsafe(asyncio.create_task, _await_and_refresh_webadmin())
 
+                    controls_box = toga.Box(
+                        style=_pack(
+                            direction="column",
+                            padding_top=12,
+                            padding_bottom=8,
+                            padding_left=16,
+                            padding_right=16,
+                        )
+                    )
+                    native_status_label = _fallback_label("Checking Network Extension status...")
+                    native_status_label.style.padding = 0
+                    controls_box.add(native_status_label)
+                    vpn_switch = None
+                    tun_switch = None
+
+                    def _schedule_native_task(coroutine) -> None:
+                        loop = getattr(self, "loop", None)
+                        if loop is not None:
+                            loop.call_soon_threadsafe(asyncio.create_task, coroutine)
+
+                    async def _refresh_native_controls() -> None:
+                        extension = await asyncio.to_thread(runtime_status)
+                        tun = await asyncio.to_thread(tun_routing_status)
+                        extension_active = _extension_is_active(extension)
+                        _set_switch_value(vpn_switch, extension_active)
+                        _set_switch_value(tun_switch, bool(tun.get("enabled") or tun.get("active")))
+                        try:
+                            tun_switch.enabled = extension_active
+                        except Exception:
+                            pass
+                        if extension_active:
+                            native_status_label.text = "Network extension is active."
+                        else:
+                            native_status_label.text = (
+                                "Flip the Network Extension switch to enable ObstacleBridge."
+                            )
+                        _refresh_webadmin()
+
+                    async def _change_extension(enabled: bool) -> None:
+                        result = await asyncio.to_thread(start_runtime if enabled else stop_runtime)
+                        log_event(
+                            ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
+                            "toga.network_extension_control_requested",
+                            enabled=enabled,
+                            result=result,
+                        )
+                        await asyncio.sleep(1.0)
+                        await _refresh_native_controls()
+                        if enabled:
+                            _schedule_webadmin_refresh()
+
+                    async def _change_tun(enabled: bool) -> None:
+                        result = await asyncio.to_thread(set_tun_routing_enabled, enabled)
+                        log_event(
+                            ObstacleBridgeIOSApp.DOCUMENTS_ROOT,
+                            "toga.network_tunneling_control_requested",
+                            enabled=enabled,
+                            result=result,
+                        )
+                        await asyncio.sleep(0.5)
+                        await _refresh_native_controls()
+
+                    def _on_vpn_switch_change(widget: Any) -> None:
+                        if not control_state["updating"]:
+                            _schedule_native_task(_change_extension(bool(getattr(widget, "value", False))))
+
+                    def _on_tun_switch_change(widget: Any) -> None:
+                        if not control_state["updating"]:
+                            _schedule_native_task(_change_tun(bool(getattr(widget, "value", False))))
+
+                    def _add_native_control(label: str, handler) -> Any:
+                        row = toga.Box(style=_pack(direction="row", padding_top=8, padding_bottom=8))
+                        row.add(toga.Label(label, style=_pack(flex=1, font_size=16, color="#111827")))
+                        if switch_cls is None:
+                            row.add(_fallback_label("Unavailable"))
+                            controls_box.add(row)
+                            return None
+                        try:
+                            switch = switch_cls("", value=False, on_change=handler)
+                        except TypeError:
+                            switch = switch_cls("")
+                            switch.value = False
+                            switch.on_change = handler
+                        row.add(switch)
+                        controls_box.add(row)
+                        return switch
+
+                    vpn_switch = _add_native_control("Network extension active", _on_vpn_switch_change)
+                    tun_switch = _add_native_control("Network tunneling active", _on_tun_switch_change)
+
                     root_box = toga.Box(
                         style=_pack(direction="column", flex=1, padding=0, background_color="#ffffff")
                     )
+                    root_box.add(controls_box)
                     if webadmin_view_ready and webadmin_view is not None:
                         root_box.add(webadmin_view)
                     else:
@@ -644,6 +783,7 @@ def main(argv: list[str] | None = None):
                         result=tunnel_prepare,
                     )
                     _refresh_webadmin()
+                    _schedule_native_task(_refresh_native_controls())
 
                     async def _log_tunnel_status_after_prepare() -> None:
                         await asyncio.sleep(3.0)
@@ -656,6 +796,7 @@ def main(argv: list[str] | None = None):
                     async def _on_running(app, **kwargs) -> None:
                         log_event(ObstacleBridgeIOSApp.DOCUMENTS_ROOT, "toga.on_running")
                         asyncio.create_task(_log_tunnel_status_after_prepare())
+                        _schedule_native_task(_refresh_native_controls())
                         _schedule_webadmin_refresh()
 
                     self.on_running = _on_running
@@ -674,6 +815,7 @@ def main(argv: list[str] | None = None):
                             "toga.runtime_status",
                             result=runtime_status(),
                         )
+                        _schedule_native_task(_refresh_native_controls())
                         _schedule_webadmin_refresh()
 
                     self.on_exit = _on_exit

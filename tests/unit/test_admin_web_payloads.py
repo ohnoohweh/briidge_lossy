@@ -1669,31 +1669,22 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("topics.push('tun_routing')", app_js)
         self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
 
-    def test_ios_app_proxy_exposes_local_vpn_and_tun_switches(self):
+    def test_admin_web_does_not_embed_ios_native_tunnel_controls(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
         style_css = (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8")
 
-        self.assertIn('id="iosTunnelControls"', index_html)
-        self.assertIn('id="iosVpnToggle"', index_html)
-        self.assertIn('id="iosTunToggle"', index_html)
-        self.assertIn('id="iosExtensionOffPanel"', index_html)
-        self.assertIn("Network extension active", index_html)
-        self.assertIn("Network tunneling active", index_html)
-        self.assertIn("Flip the switch above to enable the ObstacleBridge Network Extension.", index_html)
-        self.assertIn("function loadIOSVPNStatus()", app_js)
-        self.assertIn("function toggleIOSVPN()", app_js)
-        self.assertIn("function toggleIOSTun()", app_js)
-        self.assertIn("apiFetch('/api/ios/vpn/status'", app_js)
-        self.assertIn("apiFetch('/api/ios/vpn/control'", app_js)
-        self.assertIn("apiFetch('/api/tun-routing/control'", app_js)
-        self.assertIn("String(uiState.statusDoc?.admin_ui?.platform || '').toLowerCase() === 'ios'", app_js)
-        self.assertIn("const extensionOff = visible && uiState.iosVpnStatus?.active === false;", app_js)
-        self.assertIn("layout.classList.toggle('ios-extension-off', extensionOff);", app_js)
-        self.assertIn(".ios-tunnel-control input:checked", style_css)
-        self.assertIn(".shell.ios-extension-off .topbar-right", style_css)
-        self.assertIn("transform: translateX(20px);", style_css)
+        self.assertNotIn('id="iosTunnelControls"', index_html)
+        self.assertNotIn('id="iosVpnToggle"', index_html)
+        self.assertNotIn('id="iosTunToggle"', index_html)
+        self.assertNotIn('id="iosExtensionOffPanel"', index_html)
+        self.assertNotIn("function loadIOSVPNStatus()", app_js)
+        self.assertNotIn("function toggleIOSVPN()", app_js)
+        self.assertNotIn("function toggleIOSTun()", app_js)
+        self.assertNotIn(".ios-tunnel-control", style_css)
+        self.assertIn("native_ios_shell", index_html)
+        self.assertIn(".native-ios-shell #appIdentity", style_css)
 
     def test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

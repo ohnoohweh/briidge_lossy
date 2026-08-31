@@ -1034,12 +1034,23 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "prepareIPServerTunnel" in control
     assert "startIPServerTunnel" in control
     assert "stopIPServerTunnel" in control
+    assert "enableIPServerTunRouting" in control
+    assert "suspendIPServerTunRouting" in control
+    assert "tunRoutingStatus" in control
+    assert '"/api/tun-routing/control"' in control
+    assert '"/api/tun-routing/status"' in control
     assert "ensureAdminWebProxy(selection.manager)" in control
     assert "let port = appWebAdminPort" in control
     assert "IOS_APP_PROXY_PORT = 18081" in ios_app
     assert "port = IOS_APP_PROXY_PORT" in ios_app
     assert "prepare_runtime()" in ios_app
-    assert "start_runtime()" not in ios_app
+    assert "Network extension active" in ios_app
+    assert "Network tunneling active" in ios_app
+    assert "_resolve_toga_switch_class" in ios_app
+    assert "set_tun_routing_enabled" in ios_app
+    assert "start_runtime if enabled else stop_runtime" in ios_app
+    assert "native_ios_shell=1" in ios_app
+    assert '"about:blank"' in ios_app
     assert "harvestSharedLogs" in control
     assert "runtimeExecutionMode()" in control
     assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control

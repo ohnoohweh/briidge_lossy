@@ -103,3 +103,24 @@ def ipserver_tunnel_status() -> dict[str, Any]:
 
 def runtime_status() -> dict[str, Any]:
     return ipserver_tunnel_status()
+
+
+def tun_routing_status() -> dict[str, Any]:
+    bridge = _load_bridge()
+    if bridge is None:
+        return {"ok": False, "error": _LAST_ERROR}
+    try:
+        return _decode_response(bridge.tunRoutingStatus())
+    except Exception as exc:
+        return {"ok": False, "error": f"tunRoutingStatus failed: {type(exc).__name__}: {exc}"}
+
+
+def set_tun_routing_enabled(enabled: bool) -> dict[str, Any]:
+    bridge = _load_bridge()
+    if bridge is None:
+        return {"ok": False, "error": _LAST_ERROR}
+    method_name = "enableIPServerTunRouting" if enabled else "suspendIPServerTunRouting"
+    try:
+        return _decode_response(getattr(bridge, method_name)())
+    except Exception as exc:
+        return {"ok": False, "error": f"{method_name} failed: {type(exc).__name__}: {exc}"}

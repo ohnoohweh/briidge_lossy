@@ -215,6 +215,17 @@ def test_resolve_toga_webview_class_uses_widget_module_fallback(monkeypatch) -> 
     assert ios_app_module._resolve_toga_webview_class() is sentinel
 
 
+def test_resolve_toga_switch_class_uses_widget_module_fallback(monkeypatch) -> None:
+    sentinel = object()
+    fake_toga = types.SimpleNamespace()
+    fake_module = types.SimpleNamespace(Switch=sentinel)
+
+    monkeypatch.setattr(ios_app_module, "toga", fake_toga)
+    monkeypatch.setattr(ios_app_module.importlib, "import_module", lambda name: fake_module)
+
+    assert ios_app_module._resolve_toga_switch_class() is sentinel
+
+
 def test_webadmin_url_from_config_uses_local_ios_app_proxy() -> None:
     assert (
         ObstacleBridgeIOSApp.webadmin_url_from_config(

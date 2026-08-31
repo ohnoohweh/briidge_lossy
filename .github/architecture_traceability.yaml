@@ -558,7 +558,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_tun_helper_repair_endpoint_returns_runner_payload
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_ui_binds_tun_helper_fields
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
-    - tests/unit/test_admin_web_payloads.py::test_ios_app_proxy_exposes_local_vpn_and_tun_switches
+    - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
+    - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
