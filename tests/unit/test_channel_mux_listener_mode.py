@@ -341,6 +341,32 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._on_local_tun_packet(dev, packet)
         self.assertEqual(len(sent), 1)
 
+    def test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active(self):
+        asyncio.run(self._test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active())
+
+    async def _test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active(self):
+        session = _FakeSession(connected=True, waiting_count=1, inflight=1, max_inflight=1)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        dev = ChannelMux.TunDevice(fd=10, ifname="obtun0", mtu=1500)
+        mux._svc_tun_devices[("local", 0, 1)] = dev
+
+        with patch.object(mux, "_resolve_tun_probe_target", new=AsyncMock()) as resolve_target, \
+             patch.object(mux, "_send_mux") as send_mux:
+            result = await mux._probe_tun_connectivity_once(
+                probe_kind="global",
+                ifname="obtun0",
+                target="google.de",
+                timeout_s=0.1,
+            )
+
+        self.assertEqual(result["state"], "skipped")
+        self.assertIn("throttling is active", result["detail"])
+        self.assertEqual(result["name_resolution"]["status"], "skipped")
+        resolve_target.assert_not_awaited()
+        send_mux.assert_not_called()
+
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
         mux = ChannelMux(_FakeSession(connected=True), argparse.Namespace())
 

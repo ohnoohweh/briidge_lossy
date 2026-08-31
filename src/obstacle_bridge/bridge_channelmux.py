@@ -4642,6 +4642,23 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 return dev
         return None
 
+    def _tun_connectivity_tests_allowed(self, dev: "ChannelMux.TunDevice") -> bool:
+        """Keep verification traffic out of an actively throttled local TUN path."""
+        now_ns = time.monotonic_ns()
+        svc_key = getattr(dev, "service_key", None)
+        shared_snapshot = self._shared_tun_runtime_snapshot_for_service(svc_key)
+        if isinstance(shared_snapshot, dict) and isinstance(svc_key, tuple):
+            throttle = self._local_ingress_throttle_snapshot_for_shared_tun_service(
+                svc_key,
+                now_ns=now_ns,
+            )
+        else:
+            throttle = self._local_ingress_throttle_snapshot_for_scope(
+                self._direct_tun_inflow_scope_key(svc_key, getattr(dev, "chan_id", None)),
+                now_ns=now_ns,
+            )
+        return not bool(throttle.get("active"))
+
     async def _resolve_tun_probe_target(self, target: str, *, family: int) -> str:
         infos = await self.loop.getaddrinfo(
             str(target or "").strip(),
@@ -4854,6 +4871,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 summary=f"{label}: skipped",
                 detail=f"TUN interface {text_ifname} is not active on this runtime.",
                 name_resolution=self._tun_probe_name_resolution(status="unknown"),
+            )
+        if not self._tun_connectivity_tests_allowed(dev):
+            return self._tun_probe_result(
+                probe_kind=probe_kind,
+                target=text_target,
+                ok=False,
+                state="skipped",
+                summary=f"{label}: skipped",
+                detail="TUN verification is suspended while local TUN throttling is active.",
+                name_resolution=self._tun_probe_name_resolution(
+                    status="skipped",
+                    detail="Name resolution is suspended while local TUN throttling is active.",
+                ),
             )
         candidate_families: list[int] = []
         configured_v4 = str(self._tun_routing_config().tunnel_address or "").strip()
