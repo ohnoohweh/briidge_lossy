@@ -422,6 +422,23 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
     }
 
+    func tunConnectivityTestsAllowed() -> Bool {
+        withOwnerQueue {
+            let protocolStats = overlayRuntime.protocolStatsSnapshot()
+            let backpressure = ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
+                waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),
+                inflight: Int(protocolStats["inflight"] as? Int ?? 0),
+                maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0),
+                egressWindow: ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState(),
+                transmitDelayEstMS: overlayRuntime.transmitDelayEstMS
+            )
+            return ObstacleBridgeOverlayChannelCore.tunConnectivityTestsAllowed(
+                tunRuntime: tunRuntime,
+                backpressure: backpressure
+            )
+        }
+    }
+
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
         if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
             return body()

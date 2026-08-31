@@ -1043,6 +1043,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "packet_pump_dropped_before_overlay_ready" in provider
     assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
     assert "TUN verification waits for the connected overlay state." in provider
+    assert "TUN verification is suspended while local TUN throttling is active." in provider
+    assert "Name resolution is suspended while local TUN throttling is active." in provider
     assert "prepare_runtime()" in ios_app
     assert "Network extension active" in ios_app
     assert "Network tunneling active" not in ios_app

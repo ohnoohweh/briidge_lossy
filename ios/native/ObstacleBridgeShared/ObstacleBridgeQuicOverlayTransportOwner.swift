@@ -310,6 +310,15 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         ObstacleBridgeOverlayLayerTransportAdapter.inflowAllowed(from: connectionLayersSnapshot())
     }
 
+    func tunConnectivityTestsAllowed() -> Bool {
+        withOwnerQueue {
+            ObstacleBridgeOverlayChannelCore.tunConnectivityTestsAllowed(
+                tunRuntime: tunRuntime,
+                backpressure: overlayBackpressureSnapshot()
+            )
+        }
+    }
+
     private func withOwnerQueue<T>(_ body: () -> T) -> T {
         if DispatchQueue.getSpecific(key: Self.queueSpecificKey) != nil {
             return body()

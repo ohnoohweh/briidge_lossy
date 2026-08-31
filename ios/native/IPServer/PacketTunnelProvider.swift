@@ -3468,6 +3468,16 @@ private final class SwiftSimpleUDPPeerBridge {
         }
     }
 
+    func tunConnectivityTestsAllowed() -> Bool {
+        withState {
+            if let udpOverlayTransportOwner { return udpOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            if let tcpOverlayTransportOwner { return tcpOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            if let wsOverlayTransportOwner { return wsOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            if #available(iOS 15.0, *), let quicOverlayTransportOwner { return quicOverlayTransportOwner.tunConnectivityTestsAllowed() }
+            return false
+        }
+    }
+
     func sendTunPacketForProbe(_ packet: Data) {
         withState {
             guard started, tunnelInflowAllowed() else {
@@ -3601,6 +3611,20 @@ private final class SwiftSimpleUDPPeerBridge {
                     nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
                         status: "skipped",
                         detail: "Name resolution waits for the connected overlay state."
+                    )
+                ))
+            }
+            guard tunConnectivityTestsAllowed() else {
+                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
+                    probeKind: probeKind,
+                    target: trimmedTarget,
+                    ok: false,
+                    state: "skipped",
+                    summary: "\(label): skipped",
+                    detail: "TUN verification is suspended while local TUN throttling is active.",
+                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
+                        status: "skipped",
+                        detail: "Name resolution is suspended while local TUN throttling is active."
                     )
                 ))
             }

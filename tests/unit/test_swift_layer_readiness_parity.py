@@ -57,6 +57,10 @@ def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic(
     assert "TUN verification waits for the connected overlay state." in provider
     assert "Name resolution waits for the connected overlay state." in provider
     assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
+    assert "func tunConnectivityTestsAllowed() -> Bool" in provider
+    assert "TUN verification is suspended while local TUN throttling is active." in provider
+    assert "Name resolution is suspended while local TUN throttling is active." in provider
+    assert "static func tunConnectivityTestsAllowed(" in channel_core
 
 
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:

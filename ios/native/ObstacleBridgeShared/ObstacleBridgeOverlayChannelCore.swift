@@ -296,6 +296,21 @@ enum ObstacleBridgeOverlayChannelCore {
         }
     }
 
+    static func tunConnectivityTestsAllowed(
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime?,
+        backpressure: ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot
+    ) -> Bool {
+        guard let tunRuntime else {
+            return false
+        }
+        let nowNS = DispatchTime.now().uptimeNanoseconds
+        let throttle = tunRuntime.sharedTunRuntimeSnapshot() != nil
+            ? tunRuntime.sharedTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
+            : tunRuntime.directTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
+        // Diagnostics must not compete with forwarded TUN packets under pressure.
+        return !(throttle["active"] as? Bool ?? false)
+    }
+
     static func sendLocalTunPacket(
         _ packet: Data,
         started: Bool,
