@@ -4,6 +4,7 @@ protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
     func adminStatusSnapshot() -> [String: Any]
     func adminConnectionsSnapshot() -> [String: Any]
     func adminTunRoutingSnapshot() -> [String: Any]
+    func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminPeersSnapshot() -> [[String: Any]]
     func adminMetaSnapshot() -> [String: Any]
     func adminConfigSnapshot() -> [String: Any]
@@ -39,6 +40,25 @@ extension ObstacleBridgeAdminAPIStateProvider {
 
     func adminTunRoutingSnapshot() -> [String: Any] {
         ObstacleBridgeAdminAPI.tunRoutingSnapshot(fromConnections: adminConnectionsSnapshot())
+    }
+
+    func adminTunRoutingControl(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse {
+        guard let body = request.body,
+              let doc = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              doc["enabled"] is Bool else {
+            return ObstacleBridgeAdminAPI.jsonResponse([
+                "ok": false,
+                "error": "enabled is required",
+            ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        let tunControl = (adminTunRoutingSnapshot()["tun_control"] as? [String: Any]) ?? [:]
+        return ObstacleBridgeAdminAPI.jsonResponse([
+            "ok": false,
+            "enabled": tunControl["enabled"] as? Bool ?? false,
+            "startup_enabled": tunControl["startup_enabled"] as? Bool ?? false,
+            "supported": false,
+            "error": "TUN route control unsupported",
+        ], statusLine: "HTTP/1.1 409 Conflict")
     }
 
     func adminPeersSnapshot() -> [[String: Any]] {
@@ -233,6 +253,14 @@ struct ObstacleBridgeAdminAPIResponse {
 }
 
 enum ObstacleBridgeAdminAPI {
+    static func tunControlSnapshot(enabled: Bool, startupEnabled: Bool, supported: Bool) -> [String: Any] {
+        [
+            "enabled": enabled,
+            "startup_enabled": startupEnabled,
+            "supported": supported,
+        ]
+    }
+
     static func response(
         for request: ObstacleBridgeAdminAPIRequest,
         provider: ObstacleBridgeAdminAPIStateProvider
@@ -252,6 +280,8 @@ enum ObstacleBridgeAdminAPI {
             return jsonResponse(provider.adminConnectionsSnapshot())
         case ("GET", "/api/tun-routing/status"):
             return jsonResponse(provider.adminTunRoutingSnapshot())
+        case ("POST", "/api/tun-routing/control"):
+            return provider.adminTunRoutingControl(request: request)
         case ("GET", "/api/tun-helper/status"):
             return provider.adminTunHelperStatus(request: request)
         case ("POST", "/api/tun-helper/action"):

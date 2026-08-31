@@ -452,12 +452,15 @@ def test_admin_api_source_exists() -> None:
     assert "struct ObstacleBridgeAdminAPIRequest" in runtime
     assert "struct ObstacleBridgeAdminAPIResponse" in runtime
     assert "enum ObstacleBridgeAdminAPI" in runtime
+    assert "static func tunControlSnapshot(enabled: Bool, startupEnabled: Bool, supported: Bool)" in runtime
     assert '"/api/meta"' in runtime
     assert '"/api/connections"' in runtime
     assert '"/api/tun-routing/status"' in runtime
+    assert '"/api/tun-routing/control"' in runtime
     assert '"/api/peers"' in runtime
     assert '"tun_routing"' in runtime
     assert "adminTunRoutingSnapshot()" in runtime
+    assert "adminTunRoutingControl(request:" in runtime
     assert "tunRoutingSnapshot(fromConnections:" in runtime
     assert '"shared_drop_by_reason": sharedDropByReason' in runtime
     assert '"icmp_stage_counts": icmpStageCounts' in runtime
@@ -523,6 +526,10 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "private func adminPacketProcessingActive(bridgeSnapshot: [String: Any]? = nil) -> Bool" in provider
     assert 'if let active = snapshot["active"] as? Bool {' in provider
     assert 'payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)' in provider
+    assert 'payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(' in provider
+    assert 'enabled: adminPacketProcessingActive()' in provider
+    assert 'startupEnabled: true' in provider
+    assert 'supported: false' in provider
     assert "private func adminTunRoutingVerificationPayload(payload: [String: Any]) -> [String: Any]" in provider
     assert 'private let adminTunVerificationRefreshQueue = DispatchQueue(label: "PacketTunnelProvider.AdminTunVerificationRefresh", qos: .utility)' in provider
     assert "private func startAdminTunVerificationPublisher()" in provider
@@ -1118,6 +1125,9 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "deliverLocalTunPacketToActiveOverlay" in host_runner
     assert "deliverRemoteTunPacketToLocalAdapter" in host_runner
     assert '"tun": tunRows' in host_runner
+    assert 'tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper)' in host_runner
+    assert 'payload["tun_control"] = tunControlSnapshot(for: tunHelper)' in host_runner
+    assert 'private func tunControlSnapshot(for helper: [String: Any]) -> [String: Any]' in host_runner
     assert "final class ObstacleBridgeMacOSTunAdapter" in macos_tun
     assert "packet(fromUTUNFrame:" in macos_tun
     assert "utunFrame(for:" in macos_tun

@@ -659,8 +659,12 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert '"probe_reply_unmatched"' in shared_probe_support
     assert '"overlay_rx_after_unpack"' in shared_probe_support
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
-    assert 'tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
-    assert 'payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'let tunHelper = status["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'tunRouting["tun_helper"] = tunHelper' in source
+    assert 'tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper)' in source
+    assert 'let tunHelper = snapshotUncached()["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()' in source
+    assert 'payload["tun_helper"] = tunHelper' in source
+    assert 'payload["tun_control"] = tunControlSnapshot(for: tunHelper)' in source
 
 
 def test_macos_swift_host_runner_keeps_quic_owner_iOS13_compilable() -> None:

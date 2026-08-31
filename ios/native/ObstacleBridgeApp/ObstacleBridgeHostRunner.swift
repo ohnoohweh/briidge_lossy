@@ -659,7 +659,9 @@ final class ObstacleBridgeHostRunner {
             tunRouting["included_routes6"] = tunRoutingConfig.includedRoutes6 ?? []
             tunRouting["excluded_routes6"] = effectiveExcluded.ipv6
         }
-        tunRouting["tun_helper"] = status["tun_helper"] ?? macOSTunHelperStatusSnapshot()
+        let tunHelper = status["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()
+        tunRouting["tun_helper"] = tunHelper
+        tunRouting["tun_control"] = tunControlSnapshot(for: tunHelper)
         let updateCache = { [weak self] in
             self?.cachedStatusSnapshot = status
             self?.cachedConnectionsSnapshot = connections
@@ -726,8 +728,23 @@ final class ObstacleBridgeHostRunner {
             payload["included_routes6"] = tunRouting.includedRoutes6 ?? []
             payload["excluded_routes6"] = effectiveExcluded.ipv6
         }
-        payload["tun_helper"] = snapshotUncached()["tun_helper"] ?? macOSTunHelperStatusSnapshot()
+        let tunHelper = snapshotUncached()["tun_helper"] as? [String: Any] ?? macOSTunHelperStatusSnapshot()
+        payload["tun_helper"] = tunHelper
+        payload["tun_control"] = tunControlSnapshot(for: tunHelper)
         return payload
+    }
+
+    private func tunControlSnapshot(for helper: [String: Any]) -> [String: Any] {
+        let runtime = helper["runtime"] as? [String: Any] ?? [:]
+        let enabled = (helper["apply_network"] as? Bool)
+            ?? (runtime["network_applied"] as? Bool)
+            ?? false
+        let startupEnabled = helper["enabled"] as? Bool ?? false
+        return ObstacleBridgeAdminAPI.tunControlSnapshot(
+            enabled: enabled,
+            startupEnabled: startupEnabled,
+            supported: false
+        )
     }
 
     private func tunRoutingSnapshotWithVerification(_ payload: [String: Any]) -> [String: Any] {

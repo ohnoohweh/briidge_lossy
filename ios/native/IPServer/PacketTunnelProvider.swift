@@ -1584,6 +1584,11 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
             payload["included_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["included_routes6"])
             payload["excluded_routes6"] = Self.ipv6RouteCIDRList(effectivePacketTunnelSettingsState["excluded_routes6"])
         }
+        payload["tun_control"] = ObstacleBridgeAdminAPI.tunControlSnapshot(
+            enabled: adminPacketProcessingActive(),
+            startupEnabled: true,
+            supported: false
+        )
         payload["verification"] = adminTunRoutingVerificationPayload(payload: payload)
         return payload
     }
