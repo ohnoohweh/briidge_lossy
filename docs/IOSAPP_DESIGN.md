@@ -708,6 +708,12 @@ native Toga rows above the embedded operational view:
   forwarding the existing `/api/tun-routing/control` request through the
   provider-message boundary.
 
+The control panel reuses WebAdmin's dark panel, text, and muted-status palette
+so it reads as part of the same product, while the switch itself remains the
+platform-native iOS control. The app window has no redundant title row; the
+two lifecycle rows are the top-level foreground-app identity and control
+surface.
+
 The two controls deliberately represent different layers:
 
 - disabling the Network Extension stops the VPN/provider runtime;
