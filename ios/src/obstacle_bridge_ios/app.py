@@ -924,7 +924,8 @@ def main(argv: list[str] | None = None):
                     _append_startup_crash_log(exc)
                     raise
 
-        return _TogaObstacleBridgeApp("", "com.obstaclebridge")
+        # Toga requires a non-empty formal name even though the iOS window has no title.
+        return _TogaObstacleBridgeApp("ObstacleBridge", "com.obstaclebridge")
     except Exception as exc:
         _append_startup_crash_log(exc)
         raise

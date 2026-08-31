@@ -1056,7 +1056,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "OFFLINE" in ios_app
     assert "_resolve_toga_switch_class" in ios_app
     assert "start_runtime if enabled else stop_runtime" in ios_app
-    assert 'return _TogaObstacleBridgeApp("", "com.obstaclebridge")' in ios_app
+    assert 'return _TogaObstacleBridgeApp("ObstacleBridge", "com.obstaclebridge")' in ios_app
     assert "harvestSharedLogs" in control
     assert "runtimeExecutionMode()" in control
     assert "ObstacleBridgeRuntimeConfig.runtimeExecutionMode" in control
