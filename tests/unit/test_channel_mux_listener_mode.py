@@ -2039,6 +2039,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         # replies.
         self.mux._tun_admission_epoch = self.mux._connection_lifecycle_epoch
         mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
+        setattr(dev, '_reader_mux', self.mux)
         with patch.object(self.mux, '_register_tun_reader') as owner_register, \
              patch.object(mux2, '_register_tun_reader') as child_register, \
              patch.object(self.mux, '_send_mux') as owner_send:

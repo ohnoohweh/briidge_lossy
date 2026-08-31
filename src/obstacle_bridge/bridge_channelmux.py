@@ -3958,6 +3958,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self._send_mux(chan_id, ChannelMux.Proto.TUN, ChannelMux.MType.DATA_FRAG, frag_payload, peer_id=peer_id)
 
     def _shared_tun_reader_owner_for_device(self, dev: "ChannelMux.TunDevice") -> Optional["ChannelMux"]:
+        # Reader ownership is the authoritative routing owner.  A process
+        # registry can retain the mux that first created the device while a
+        # later listener owns its active read loop.
+        reader_owner = getattr(dev, "_reader_mux", None)
+        if reader_owner is not None and reader_owner is not self:
+            return reader_owner
         registry = self._process_shared_tun_registry
         if registry is None:
             return None
