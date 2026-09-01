@@ -63,7 +63,6 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private var lowerLayerFallbackDeadlineNS: UInt64?
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
-    private var startupMuxFramesReplayedWithTunOpen = false
     private var connectedURI = ""
     private var resolvedPeerHost = ""
     private var resolvedPeerPort = 0
@@ -376,7 +375,6 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames,
-                startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen,
                 onLocalDrop: { [weak self] event in
                     self?.logTunLocalDrop(
                         reason: event.reason,
@@ -917,7 +915,6 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         lowerLayerFallbackWorkItem = nil
         lowerLayerFallbackDeadlineNS = nil
         startupMuxFramesSent = false
-        startupMuxFramesReplayedWithTunOpen = false
         pendingOutboundMessages.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
@@ -984,19 +981,6 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
-    }
-
-    private func startupMuxFramesForNewTunOpen() -> [Data] {
-        guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
-        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
-        guard !frames.isEmpty else { return [] }
-        startupMuxFramesReplayedWithTunOpen = true
-        eventSink?("ws_overlay_startup_mux_replayed_with_tun_open", [
-            "connection_seq": String(connectionSeq),
-            "frame_count": frames.count,
-        ])
-        return frames
     }
 
     private func currentTunPeerID() -> Int? {
