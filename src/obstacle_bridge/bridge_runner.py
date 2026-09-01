@@ -1738,6 +1738,7 @@ class Runner:
         tun_probe_last_timeout_diag: dict[str, Any] = {}
         tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
         session_labels = list(getattr(self, "_session_labels", []) or [])
+        mux_index_by_id = {id(mux): index for index, mux in enumerate(self._muxes)}
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
@@ -1829,12 +1830,21 @@ class Runner:
                             binding_copy["connection_id"] = "local-probe"
                         else:
                             binding_peer_id = int(binding_copy.get("peer_id", 0) or 0)
-                            connection_id = owner_peer_to_label.get(binding_peer_id, f"{idx}:{binding_peer_id}")
+                            target_idx = idx
+                            target_peer_id = binding_peer_id
+                            registry = getattr(mux, "_process_shared_tun_registry", None)
+                            route_for = getattr(registry, "shared_peer_route_for", None)
+                            route = route_for(binding_peer_id) if callable(route_for) else None
+                            if isinstance(route, tuple) and len(route) == 2:
+                                target_mux, route_peer_id = route
+                                target_idx = mux_index_by_id.get(id(target_mux), idx)
+                                target_peer_id = int(route_peer_id)
+                            connection_id = f"{target_idx}:{target_peer_id}"
                             binding_copy["connection_id"] = connection_id
                             binding_copy["transport"] = (
-                                str(session_labels[idx])
-                                if idx < len(session_labels)
-                                else f"session-{idx}"
+                                str(session_labels[target_idx])
+                                if target_idx < len(session_labels)
+                                else f"session-{target_idx}"
                             )
                             binding_labels.add(connection_id)
                         bindings.append(binding_copy)
