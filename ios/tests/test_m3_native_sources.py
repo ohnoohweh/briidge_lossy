@@ -272,6 +272,19 @@ def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() ->
     )
 
 
+def test_swift_websocket_remote_service_catalog_uses_current_tun_epoch() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    assert "func currentConnectionSeq() -> UInt32" in tun_runtime
+    assert "remoteServiceCatalogMuxFramesProvider" in owner
+    assert "tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq" in owner
+    assert "remoteServiceCatalogMuxFramesProvider: { [weak self] instanceID, connectionSeq in" in host_runner
+    assert "remoteServiceCatalogMuxFramesProvider: { [weak self] instanceID, connectionSeq in" in provider
+
+
 def test_channel_mux_udp_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift").read_text(encoding="utf-8")
 

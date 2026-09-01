@@ -2660,6 +2660,13 @@ final class ObstacleBridgeHostRunner {
                 instanceID: muxInstanceID,
                 connectionSeq: muxConnectionSeq
             ),
+            remoteServiceCatalogMuxFramesProvider: { [weak self] instanceID, connectionSeq in
+                guard let self else { return [] }
+                return self.remoteServiceCatalogMuxFrames(
+                    instanceID: instanceID,
+                    connectionSeq: connectionSeq
+                )
+            },
             queue: serviceStateQueue,
             serviceNameByID: Dictionary(uniqueKeysWithValues: ownServerSpecs.map { ($0.svcID, $0.name ?? "") }),
             tunServiceSpec: tunService?.toChannelMuxServiceSpec(),

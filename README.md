@@ -1505,7 +1505,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `60` | `935` |
 | macOS Swift app | `1` | `56` |
-| iOS app/extension | `27` | `176` |
+| iOS app/extension | `27` | `177` |
 
 #### Requirement traceability
 

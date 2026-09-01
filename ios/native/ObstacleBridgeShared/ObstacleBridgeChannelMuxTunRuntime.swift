@@ -436,6 +436,10 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         tunInflowScopeStates.removeAll(keepingCapacity: true)
     }
 
+    func currentConnectionSeq() -> UInt32 {
+        connectionSeq
+    }
+
     func handleLocalTunPacket(
         packet: Data,
         mtu: Int,

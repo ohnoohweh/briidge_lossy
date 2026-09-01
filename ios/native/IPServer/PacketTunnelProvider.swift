@@ -3099,6 +3099,14 @@ private final class SwiftSimpleUDPPeerBridge {
                     sessionMaxAppPayload: sessionMaxAppPayload,
                     overlayLayerTransportAdapter: overlayLayerTransportAdapter,
                     startupMuxFrames: startupMuxFrames,
+                    remoteServiceCatalogMuxFramesProvider: { [weak self] instanceID, connectionSeq in
+                        guard let self else { return [] }
+                        return ObstacleBridgeRuntimeConfig.remoteServiceCatalogMuxFrames(
+                            from: self.settings.runtimeConfig,
+                            instanceID: instanceID,
+                            connectionSeq: connectionSeq
+                        )
+                    },
                     queue: queue,
                     serviceNameByID: Dictionary(uniqueKeysWithValues: tcpServiceSpecs.map { ($0.svcID, $0.name ?? "") }),
                     tunServiceSpec: settings.tunServiceSpec,

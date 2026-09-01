@@ -935,6 +935,7 @@ REQ-MUX-004:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer
+    - ios/tests/test_m3_native_sources.py::test_swift_websocket_remote_service_catalog_uses_current_tun_epoch
 
 REQ-MUX-006:
   integration_tests:
