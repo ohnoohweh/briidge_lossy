@@ -2068,8 +2068,8 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
         setattr(dev, '_reader_mux', self.mux)
         with patch.object(self.mux, '_register_tun_reader') as owner_register, \
-             patch.object(mux2, '_register_tun_reader') as child_register, \
-             patch.object(self.mux, '_send_mux') as owner_send:
+            patch.object(mux2, '_register_tun_reader') as child_register, \
+            patch.object(mux2, '_send_mux') as child_send:
             mux2._bind_tun_channel(1, dev, peer_id=77)
             mux2._rx_tun_data(
                 1,
@@ -2080,7 +2080,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         owner_register.assert_not_called()
         child_register.assert_not_called()
-        owner_send.assert_called_once_with(
+        child_send.assert_called_once_with(
             1,
             ChannelMux.Proto.TUN,
             ChannelMux.MType.DATA,

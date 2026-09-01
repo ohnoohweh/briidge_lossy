@@ -261,7 +261,7 @@ Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE
 
 Implementation note: the Peer-page Transport layout keeps Transport State, Reconnect, and Resolved Peer on its first line. Its second line uses one-quarter width each for Connection Uptime and Last Incoming, and one-half width for Own Public IP.
 
-Implementation note: shared-TUN binding RX/TX counters are mirrored across every in-process ChannelMux holder of the same server-owned device. This keeps the virtual-peer mux that receives inbound overlay traffic and the reader-owner mux that sends local-TUN replies observationally consistent, regardless of which holder supplies the Admin snapshot.
+Implementation note: shared-TUN bindings use a process-wide identity composed from the owning ChannelMux holder and its mux-local peer id. This prevents equal peer ids from independent WS and myUDP listener muxes from being conflated; local-TUN replies route through the holder that owns the selected binding, and RX/TX counters are mirrored across device holders so either holder supplies an observationally consistent Admin snapshot.
 
 Implementation note: the connected/disconnected pills for Transport State, Protocol Status, and layer Reported Status use green for `connected` and red for `disconnected`; transitional states retain their neutral or progress color.
 
