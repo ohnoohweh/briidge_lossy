@@ -611,6 +611,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             receiveFromOverlay()
         case .failed(let error):
             overlayConnected = false
@@ -751,6 +752,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
             updateLowerLayerFallback()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             return
         }
         handleOverlayPayload(payload)
@@ -906,6 +908,25 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("tcp_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("tcp_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func startupMuxFramesForNewTunOpen() -> [Data] {

@@ -236,12 +236,14 @@ def test_channel_mux_tun_runtime_source_exists() -> None:
 
     assert "final class ObstacleBridgeChannelMuxTunRuntime" in runtime
     assert "struct LocalTunSendSnapshot" in runtime
+    assert "struct LocalTunOpenSnapshot" in runtime
     assert "struct InboundTunOpenSnapshot" in runtime
     assert "struct InboundTunOpenChunkSnapshot" in runtime
     assert "struct InboundTunDataSnapshot" in runtime
     assert "struct InboundTunFragmentSnapshot" in runtime
     assert "struct CloseSnapshot" in runtime
     assert "handleLocalTunPacket(" in runtime
+    assert "openLocalTunChannelIfNeeded(" in runtime
     assert "handleInboundTunOpen(" in runtime
     assert "handleInboundTunOpenChunk(" in runtime
     assert "handleInboundTunData(" in runtime
@@ -292,6 +294,7 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     assert "func currentConnectionSeq() -> UInt32" in tun_runtime
     assert "startupMuxFramesForNewTunOpen: (() -> [Data])? = nil" in overlay_core
     assert "sendMuxFrames(startupFrames + localSnapshot.frames)" in overlay_core
+    assert "openConfiguredLocalTunIfReady(" in overlay_core
     for owner in owners:
         assert "startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?" in owner
         assert "tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq" in owner
@@ -299,6 +302,8 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
         assert "startupMuxFramesReplayedWithTunOpen = false" in owner
         assert "private func startupMuxFramesForNewTunOpen() -> [Data]" in owner
         assert "startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen" in owner
+        assert "private func maybeOpenConfiguredTunIfReady()" in owner
+        assert "maybeOpenConfiguredTunIfReady()" in owner
 
     assert host_runner.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
     assert provider.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4

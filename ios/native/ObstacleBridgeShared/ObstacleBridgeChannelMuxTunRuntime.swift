@@ -21,6 +21,13 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var nextCounter: Int
     }
 
+    struct LocalTunOpenSnapshot {
+        var chanID: Int
+        var frames: [Data]
+        var nextTunID: Int
+        var nextCounter: Int
+    }
+
     struct InboundTunOpenSnapshot {
         var accepted: Bool
         var chanID: Int
@@ -441,6 +448,31 @@ final class ObstacleBridgeChannelMuxTunRuntime {
 
     func currentConnectionSeq() -> UInt32 {
         connectionSeq
+    }
+
+    /// Allocate and announce the configured local TUN endpoint for this epoch.
+    ///
+    /// A TUN interface is long-lived, unlike a TCP connection accepted on demand.
+    /// Publishing its OPEN after authenticated readiness prevents the peer from
+    /// receiving the first TUN DATA before it has bound the channel.
+    func openLocalTunChannelIfNeeded(
+        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec
+    ) throws -> LocalTunOpenSnapshot? {
+        guard preferredTunChanID == nil else {
+            return nil
+        }
+        let chanID = allocateTunID()
+        guard let frames = try buildOpenFrames(chanID: chanID, spec: spec) else {
+            return nil
+        }
+        boundTunChanIDs.insert(chanID)
+        preferredTunChanID = chanID
+        return LocalTunOpenSnapshot(
+            chanID: chanID,
+            frames: frames,
+            nextTunID: nextTunID,
+            nextCounter: counters[chanID] ?? 0
+        )
     }
 
     func handleLocalTunPacket(

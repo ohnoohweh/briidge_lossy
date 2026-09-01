@@ -311,6 +311,29 @@ enum ObstacleBridgeOverlayChannelCore {
         return !(throttle["active"] as? Bool ?? false)
     }
 
+    static func openConfiguredLocalTunIfReady(
+        started: Bool,
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime?,
+        tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?,
+        tunIfname: String?,
+        tunMTU: Int,
+        overlayConnected: Bool,
+        activeTunChanIDs: inout Set<Int>
+    ) throws -> ObstacleBridgeChannelMuxTunRuntime.LocalTunOpenSnapshot? {
+        guard started, overlayConnected, let tunRuntime, let tunIfname, tunMTU > 0 else {
+            return nil
+        }
+        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(
+            ifname: tunIfname,
+            mtu: tunMTU
+        )
+        guard let snapshot = try tunRuntime.openLocalTunChannelIfNeeded(spec: localTunSpec) else {
+            return nil
+        }
+        activeTunChanIDs.insert(snapshot.chanID)
+        return snapshot
+    }
+
     static func sendLocalTunPacket(
         _ packet: Data,
         started: Bool,
