@@ -50,6 +50,9 @@ class ProcessSharedTunRegistry:
     def __init__(self) -> None:
         self._by_key: dict[tuple[str, int], dict[str, Any]] = {}
         self._by_dev_id: dict[int, tuple[str, int]] = {}
+        self._shared_peer_ids: dict[tuple[int, int], int] = {}
+        self._shared_peer_routes: dict[int, tuple["ChannelMux", int]] = {}
+        self._next_shared_peer_id = 1
 
     @staticmethod
     def _key(ifname: str, mtu: int) -> tuple[str, int]:
@@ -101,6 +104,31 @@ class ProcessSharedTunRegistry:
             return None
         owner = entry.get("owner_mux")
         return owner if owner is not None else None
+
+    def holders_for_dev(self, dev: Any) -> list["ChannelMux"]:
+        """Return every mux currently sharing ``dev`` in this process."""
+        key = self._by_dev_id.get(id(dev))
+        if key is None:
+            return []
+        entry = self._by_key.get(key)
+        if not isinstance(entry, dict):
+            return []
+        return [holder for holder in dict(entry.get("holders") or {}).values() if holder is not None]
+
+    def shared_peer_id_for(self, mux: "ChannelMux", peer_id: int) -> int:
+        """Allocate a process-wide identity for a mux-local listener peer."""
+        key = (id(mux), int(peer_id))
+        existing = self._shared_peer_ids.get(key)
+        if existing is not None:
+            return existing
+        shared_peer_id = self._next_shared_peer_id
+        self._next_shared_peer_id += 1
+        self._shared_peer_ids[key] = shared_peer_id
+        self._shared_peer_routes[shared_peer_id] = (mux, int(peer_id))
+        return shared_peer_id
+
+    def shared_peer_route_for(self, shared_peer_id: int) -> Optional[tuple["ChannelMux", int]]:
+        return self._shared_peer_routes.get(int(shared_peer_id))
 
     def release(self, mux: "ChannelMux", dev: Any) -> bool:
         key = self._by_dev_id.get(id(dev))
@@ -3985,11 +4013,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if owner is None:
             return
         svc_key = getattr(dev, "service_key", None)
-        owner._record_shared_tun_peer_binding(svc_key, int(peer_id), int(chan))
-        peer_ref = self._shared_tun_peer_ref_by_peer.get((svc_key, int(peer_id)))
+        shared_peer_id = self._shared_tun_peer_id_for_device(dev, int(peer_id))
+        owner._record_shared_tun_peer_binding(svc_key, shared_peer_id, int(chan))
+        peer_ref = self._shared_tun_peer_ref_by_peer.get((svc_key, shared_peer_id))
         if peer_ref:
-            owner._shared_tun_peer_ref_by_peer[(svc_key, int(peer_id))] = str(peer_ref)
-            owner._shared_tun_peer_id_by_ref[(svc_key, str(peer_ref))] = int(peer_id)
+            owner._shared_tun_peer_ref_by_peer[(svc_key, shared_peer_id)] = str(peer_ref)
+            owner._shared_tun_peer_id_by_ref[(svc_key, str(peer_ref))] = shared_peer_id
         self.log.info(
             "[TUN/SHARED] mirror binding if=%s chan=%s peer_id=%s reader_owner=%s peer_ref=%s",
             str(getattr(dev, "ifname", "") or ""),
@@ -3998,6 +4027,58 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             hex(id(owner)),
             str(peer_ref or ""),
         )
+
+    def _shared_tun_peer_id_for_device(self, dev: "ChannelMux.TunDevice", peer_id: Optional[int]) -> Optional[int]:
+        if peer_id is None:
+            return None
+        registry = self._process_shared_tun_registry
+        if registry is None:
+            return int(peer_id)
+        return registry.shared_peer_id_for(self, int(peer_id))
+
+    def _shared_tun_route_for_peer_id(
+        self, dev: "ChannelMux.TunDevice", shared_peer_id: Optional[int]
+    ) -> tuple["ChannelMux", Optional[int]]:
+        if shared_peer_id is None:
+            return self, None
+        registry = self._process_shared_tun_registry
+        route = registry.shared_peer_route_for(int(shared_peer_id)) if registry is not None else None
+        return route if route is not None else (self, int(shared_peer_id))
+
+    def _record_shared_tun_peer_traffic_for_device(
+        self,
+        dev: "ChannelMux.TunDevice",
+        peer_id: Optional[int],
+        chan: int,
+        packet: bytes,
+        *,
+        direction: str,
+    ) -> None:
+        """Keep shared-TUN binding counters identical across its mux holders.
+
+        A virtual-peer mux receives overlay packets, while the mux with the
+        single device read loop sends replies. Either mux can supply the
+        WebAdmin row, so accounting on only the executing mux loses one half
+        of the duplex flow.
+        """
+        targets: list["ChannelMux"] = [self]
+        registry = self._process_shared_tun_registry
+        if registry is not None:
+            targets.extend(registry.holders_for_dev(dev))
+        seen: set[int] = set()
+        svc_key = getattr(dev, "service_key", None)
+        for target in targets:
+            marker = id(target)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            target._record_shared_tun_peer_traffic(
+                svc_key,
+                peer_id,
+                chan,
+                packet,
+                direction=direction,
+            )
 
     def _bind_tun_channel(self, chan: int, dev: "ChannelMux.TunDevice", *, peer_id: Optional[int] = None) -> None:
         # A full-duplex TUN pair can temporarily create symmetric OPENs from both
@@ -4008,7 +4089,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self._tun_by_peer_chan[(int(peer_id), int(chan))] = dev
         self._record_shared_tun_peer_binding(
             getattr(dev, "service_key", None),
-            peer_id if peer_id is not None else self._chan_owner_peer_id.get(int(chan)),
+            self._shared_tun_peer_id_for_device(
+                dev,
+                peer_id if peer_id is not None else self._chan_owner_peer_id.get(int(chan)),
+            ),
             int(chan),
         )
         reader_owner = self._shared_tun_reader_owner_for_device(dev)
@@ -5266,14 +5350,15 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                     ctr.msgs_in += 1
                     ctr.bytes_in += len(packet)
-                    self._record_shared_tun_peer_traffic(
-                        getattr(dev, "service_key", None),
+                    self._record_shared_tun_peer_traffic_for_device(
+                        dev,
                         selected_peer_id,
                         chan,
                         packet,
                         direction="tx",
                     )
-                    self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet, peer_id=selected_peer_id)
+                    target_mux, target_peer_id = self._shared_tun_route_for_peer_id(dev, selected_peer_id)
+                    target_mux._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet, peer_id=target_peer_id)
                 self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
                 return
             chan = dev.chan_id
@@ -5464,7 +5549,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 self.log.warning("[TUN] chan=%s DATA not routed yet (no device)", chan)
                 return
             owner_peer_id = int(peer_id) if peer_id is not None else self._chan_owner_peer_id.get(int(chan))
-            allowed, parsed, drop_reason = self._shared_tun_guard_inbound_packet(dev=dev, chan=chan, packet=data, peer_id=owner_peer_id)
+            shared_owner_peer_id = self._shared_tun_peer_id_for_device(dev, owner_peer_id)
+            allowed, parsed, drop_reason = self._shared_tun_guard_inbound_packet(dev=dev, chan=chan, packet=data, peer_id=shared_owner_peer_id)
             if not allowed:
                 self._log_tun_flow_sample(
                     direction="drop_peer_to_local",
@@ -5516,9 +5602,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                 ctr.msgs_in += 1
                 ctr.bytes_in += len(data)
-                self._record_shared_tun_peer_traffic(
-                    getattr(dev, "service_key", None),
-                    owner_peer_id,
+                self._record_shared_tun_peer_traffic_for_device(
+                    dev,
+                    shared_owner_peer_id,
                     chan,
                     data,
                     direction="rx",
@@ -5526,7 +5612,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 dispatch_result = self._dispatch_shared_tun_inbound_packet(
                     dev,
                     data,
-                    source_peer_id=int(owner_peer_id or 0),
+                    source_peer_id=int(shared_owner_peer_id or 0),
                     source_chan_id=chan,
                     source_note="peer",
                 )

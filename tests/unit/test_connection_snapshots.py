@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
+from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
 
 
 def _peer_endpoint(host: str, port: int) -> dict:
@@ -303,6 +303,45 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                 "recent_drops": [],
             },
         )
+
+    def test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder(self):
+        self.tun_spec = ChannelMux.ServiceSpec(
+            3,
+            "tun",
+            "obtun0",
+            1400,
+            "tun",
+            "obtun1",
+            1400,
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [{"peer_ref": "linux-client", "ipv4": ["192.168.107.2"]}],
+                }
+            },
+        )
+        reader_loop = asyncio.new_event_loop()
+        reader_mux = ChannelMux(_FakeSession(), reader_loop)
+        registry = ProcessSharedTunRegistry()
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
+        try:
+            for mux in (self.mux, reader_mux):
+                mux._local_services[self.tun_key] = self.tun_spec
+                mux._install_shared_tun_ownership_for_service(self.tun_key, self.tun_spec)
+                mux._process_shared_tun_registry = registry
+            registry.register(reader_mux, self.tun_key, dev)
+            registry.attach_existing(self.mux, "obtun0", 1400)
+
+            packet = bytes.fromhex("450000140000000040010000c0a86b01c0a86b02")
+            reader_mux._record_shared_tun_peer_traffic_for_device(dev, 7, 301, packet, direction="tx")
+            self.mux._record_shared_tun_peer_traffic_for_device(dev, 7, 301, packet, direction="rx")
+
+            for mux in (self.mux, reader_mux):
+                binding = mux._shared_tun_runtime_by_peer[(self.tun_key, 7)]
+                self.assertEqual((binding["rx_packets"], binding["tx_packets"]), (1, 1))
+                self.assertEqual((binding["rx_bytes"], binding["tx_bytes"]), (20, 20))
+        finally:
+            reader_loop.close()
 
     def test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection(self):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
