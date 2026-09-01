@@ -2250,6 +2250,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         await self._start_prestaged_listener_shared_tun_services()
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
+            self._open_configured_tun_services_if_ready()
             self._send_remote_services_catalog_if_any()
         self._sweeper_task = self.loop.create_task(self._udp_idle_sweeper())
         self._ensure_task = self.loop.create_task(self._ensure_servers_task())
@@ -2330,6 +2331,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             new_accepting_enabled=self._accepting_enabled,
         )
         await self._start_all_services()
+        self._open_configured_tun_services_if_ready()
         self._send_remote_services_catalog_if_any()
 
     def _cancel_connection_rotation(self) -> None:
@@ -2443,6 +2445,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         )
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
+            self._open_configured_tun_services_if_ready()
         self._send_remote_services_catalog_if_any()
 
 
@@ -3052,6 +3055,41 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 )
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V2: %r", e)
+
+    def _open_configured_tun_services_if_ready(self) -> None:
+        """Bind and announce each configured TUN listener for this mux epoch.
+
+        TCP sends its OPEN as soon as a local accepted socket gives it a
+        channel.  A TUN listener is its own long-lived local endpoint, so
+        waiting for its first packet creates an unnecessary asymmetry: a peer
+        can receive DATA for a retained channel without ever seeing the OPEN
+        that binds that channel to its shared-TUN owner.  Announce it once the
+        authenticated overlay is ready, and let normal channel teardown clear
+        the preferred channel before the next epoch.
+        """
+        if not (
+            self._overlay_connected
+            and self._accepting_enabled
+            and self.session.is_connected()
+            and self._session_app_ready()
+        ):
+            return
+        for svc_key, spec in list(self._effective_services_by_id().items()):
+            if str(spec.l_proto) != "tun":
+                continue
+            dev = self._svc_tun_devices.get(svc_key)
+            if dev is None or dev.chan_id is not None:
+                continue
+            chan = self._alloc_tun_id()
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
+            self._bind_tun_channel(chan, dev)
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
+            self._send_open_for_service(chan, ChannelMux.Proto.TUN, spec)
+            self.log.info(
+                "[TUN/OPEN] proactive local listener bind chan=%s service_key=%s after overlay readiness",
+                chan,
+                svc_key,
+            )
 
     async def _stop_listener_for_service_id(
         self,

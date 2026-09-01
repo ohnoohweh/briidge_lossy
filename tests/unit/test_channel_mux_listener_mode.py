@@ -2197,6 +2197,37 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(mtype, ChannelMux.MType.REMOTE_SERVICES_SET_V2)
         self.assertEqual(self.mux._decode_remote_services_set_v2(payload)[2], [spec])
 
+    async def test_overlay_ready_proactively_opens_configured_tun_listener(self):
+        spec = ChannelMux.ServiceSpec(
+            svc_id=7,
+            l_proto="tun",
+            l_bind="obtun0",
+            l_port=1500,
+            r_proto="tun",
+            r_host="obtun1",
+            r_port=1500,
+        )
+        svc_key = ("local", 0, 7)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1500, service_key=svc_key)
+        self.mux._local_services[svc_key] = spec
+        self.mux._svc_tun_devices[svc_key] = dev
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+
+        with patch.object(self.mux, "_start_all_services", new=AsyncMock()):
+            await self.mux.on_overlay_state(True)
+
+        self.assertIsNotNone(dev.chan_id)
+        self.assertEqual(len(self.session.sent), 1)
+        frame = self.mux._unpack_mux(self.session.sent[0])
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame[1], ChannelMux.Proto.TUN)
+        self.assertEqual(frame[3], ChannelMux.MType.OPEN)
+
+        with patch.object(self.mux, "_start_all_services", new=AsyncMock()):
+            await self.mux.on_overlay_state(True)
+        self.assertEqual(len(self.session.sent), 1)
+
     async def test_overlay_connect_uses_reported_lifecycle_state(self):
         spec = ChannelMux.ServiceSpec(
             svc_id=1,
@@ -2261,7 +2292,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         start_all.assert_awaited_once()
         send_catalog.assert_called_once()
-        schedule_hook.assert_not_called()
+        schedule_hook.assert_called_once_with(spec, svc_key, 'listener', 'on_channel_connected', channel_id=1)
 
     async def test_local_tun_reader_activation_waits_for_on_created_hook_success(self):
         spec = ChannelMux.ServiceSpec(
