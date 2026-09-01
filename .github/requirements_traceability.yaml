@@ -1308,6 +1308,7 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_exposes_tun_support_diagnostics
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_shared_ownership_renders_one_row_per_configured_peer
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python

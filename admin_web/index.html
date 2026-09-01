@@ -553,7 +553,7 @@
             <div class="section-header">
               <div>
                 <h2>Shared Ownership</h2>
-                <p>Per-service peer ownership maps and active channel bindings</p>
+                <p>One row per configured peer with its live shared-TUN binding and flow state</p>
               </div>
             </div>
             <div class="table-card card">
@@ -564,15 +564,18 @@
                       <th>Svc</th>
                       <th>Name</th>
                       <th>Interface</th>
-                      <th>Ownership</th>
-                      <th>Active Bindings</th>
-                      <th>ChannelMux Flow</th>
-                      <th>Drop Diagnostics</th>
+                      <th>Configured Peer</th>
+                      <th>Configured Addresses</th>
+                      <th>TUN State</th>
+                      <th>Connection</th>
+                      <th>RX</th>
+                      <th>TX</th>
+                      <th>Learned Addresses</th>
                     </tr>
                   </thead>
                   <tbody id="tunRoutingSharedBody">
                     <tr class="empty-row">
-                      <td colspan="7">No shared TUN routing state</td>
+                      <td colspan="11">No shared TUN routing state</td>
                     </tr>
                   </tbody>
                 </table>
