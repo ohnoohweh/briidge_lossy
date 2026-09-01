@@ -105,10 +105,10 @@ ChannelMux and TUN:
   resynchronization and service reopening path
 - a transport-epoch reset invalidates all prior TUN channel bindings and
   advances the local ChannelMux connection sequence before local forwarding
-  resumes. The Python runtime proactively opens every configured local TUN
-  listener after the authenticated overlay becomes ready, matching TCP's
-  accepted-socket OPEN timing; Swift retains its first-post-reset-packet OPEN
-  behavior. Both send a fresh `OPEN` before any TUN `DATA` on a new channel.
+  resumes. Python proactively opens every configured local TUN listener and
+  Swift proactively opens its configured client TUN endpoint after the
+  authenticated overlay becomes ready; both send a fresh `OPEN` before any
+  TUN `DATA` on a new channel.
 - listener-side shared-TUN state uses `(peer_id, chan_id)` as its channel
   identity for bindings, OPEN lifecycle, fragments, counters, and outbound
   routing. Each peer has an independent channel-number sequence, so `chan=1`

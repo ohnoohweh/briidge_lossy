@@ -1604,7 +1604,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
-- Keep TUN recovery covered across runtimes: Python announces each configured local TUN listener with `OPEN` after authenticated overlay readiness, while Swift recovery for myUDP, TCP, WebSocket, and QUIC discards stale mux channel state, advances the ChannelMux connection sequence, regenerates ChannelMux startup control frames after app readiness, and sends a fresh `OPEN` before `DATA`.
+- Keep TUN recovery covered across runtimes: Python announces each configured local TUN listener with `OPEN` after authenticated overlay readiness; Swift does the same for myUDP, TCP, WebSocket, and QUIC after discarding stale mux state, advancing the ChannelMux connection sequence, regenerating startup control frames, and replaying the catalog immediately before the fresh TUN `OPEN`.
 - Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 

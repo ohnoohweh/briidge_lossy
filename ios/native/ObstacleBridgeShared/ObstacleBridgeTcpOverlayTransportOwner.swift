@@ -71,6 +71,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private var resolvedPeerFamily = ""
     private var secureLinkHandshakePrimed = false
     private var startupMuxFramesSent = false
+    private var startupMuxFramesReplayedWithTunOpen = false
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
         runtime: ObstacleBridgeChannelMuxTcpRuntime(
             instanceID: muxInstanceID,
@@ -364,7 +365,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
-                sendMuxFrames: sendMuxFrames
+                sendMuxFrames: sendMuxFrames,
+                startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen
             )
         } catch {
             eventSink?("tcp_overlay_tun_send_failed", [
@@ -609,6 +611,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             receiveFromOverlay()
         case .failed(let error):
             overlayConnected = false
@@ -749,6 +752,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
             updateLowerLayerFallback()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             return
         }
         handleOverlayPayload(payload)
@@ -840,6 +844,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         lowerLayerFallbackWorkItem = nil
         lowerLayerFallbackDeadlineNS = nil
         startupMuxFramesSent = false
+        startupMuxFramesReplayedWithTunOpen = false
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
@@ -903,6 +908,38 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("tcp_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("tcp_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func startupMuxFramesForNewTunOpen() -> [Data] {
+        guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return [] }
+        startupMuxFramesReplayedWithTunOpen = true
+        eventSink?("tcp_overlay_startup_mux_replayed_with_tun_open", [
+            "connection_seq": String(connectionSeq),
+            "frame_count": frames.count,
+        ])
+        return frames
     }
 
     private func currentTunPeerID() -> Int? {

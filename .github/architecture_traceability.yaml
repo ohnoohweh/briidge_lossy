@@ -133,6 +133,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
     - ios/tests/test_m3_native_sources.py::test_swift_overlay_remote_service_catalog_uses_current_tun_epoch
+    - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_connect_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_buffer_connect_then_data_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python

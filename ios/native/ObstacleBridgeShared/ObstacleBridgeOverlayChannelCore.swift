@@ -311,6 +311,29 @@ enum ObstacleBridgeOverlayChannelCore {
         return !(throttle["active"] as? Bool ?? false)
     }
 
+    static func openConfiguredLocalTunIfReady(
+        started: Bool,
+        tunRuntime: ObstacleBridgeChannelMuxTunRuntime?,
+        tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?,
+        tunIfname: String?,
+        tunMTU: Int,
+        overlayConnected: Bool,
+        activeTunChanIDs: inout Set<Int>
+    ) throws -> ObstacleBridgeChannelMuxTunRuntime.LocalTunOpenSnapshot? {
+        guard started, overlayConnected, let tunRuntime, let tunIfname, tunMTU > 0 else {
+            return nil
+        }
+        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(
+            ifname: tunIfname,
+            mtu: tunMTU
+        )
+        guard let snapshot = try tunRuntime.openLocalTunChannelIfNeeded(spec: localTunSpec) else {
+            return nil
+        }
+        activeTunChanIDs.insert(snapshot.chanID)
+        return snapshot
+    }
+
     static func sendLocalTunPacket(
         _ packet: Data,
         started: Bool,
@@ -324,6 +347,7 @@ enum ObstacleBridgeOverlayChannelCore {
         activeTunChanIDs: inout Set<Int>,
         tunStats: inout [String: Int],
         sendMuxFrames: ([Data]) -> Void,
+        startupMuxFramesForNewTunOpen: (() -> [Data])? = nil,
         onLocalDrop: ((TunLocalDropEvent) -> Void)? = nil,
         onLocalForward: ((TunLocalForwardEvent) -> Void)? = nil
     ) throws {
@@ -421,7 +445,11 @@ enum ObstacleBridgeOverlayChannelCore {
                     sharedRoute: sharedRoute,
                     tunRuntime: tunRuntime
                 ))
-                sendMuxFrames(localSnapshot.frames)
+                let startupFrames = localSnapshot.allocatedChannel
+                    ? (startupMuxFramesForNewTunOpen?() ?? [])
+                    : []
+                // Keep catalog install and the first TUN OPEN in one ordered batch.
+                sendMuxFrames(startupFrames + localSnapshot.frames)
             }
             tunRuntime.recordLocalTunForward(packetBytes: packet.count, nowNS: nowNS, route: sharedRoute)
             tunStats["tx_msgs", default: 0] += 1
@@ -449,7 +477,11 @@ enum ObstacleBridgeOverlayChannelCore {
             sharedRoute: nil,
             tunRuntime: tunRuntime
         ))
-        sendMuxFrames(localSnapshot.frames)
+        let startupFrames = localSnapshot.allocatedChannel
+            ? (startupMuxFramesForNewTunOpen?() ?? [])
+            : []
+        // Keep catalog install and the first TUN OPEN in one ordered batch.
+        sendMuxFrames(startupFrames + localSnapshot.frames)
     }
 
     static func handleInboundTunMuxFrame(

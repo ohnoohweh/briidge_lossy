@@ -64,6 +64,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var lowerLayerFallbackWorkItem: DispatchWorkItem?
     private var lowerLayerFallbackDeadlineNS: UInt64?
     private var startupMuxFramesSent = false
+    private var startupMuxFramesReplayedWithTunOpen = false
     private var resolvedPeerHost = ""
     private var resolvedPeerPort = 0
     private var resolvedPeerFamily = ""
@@ -207,6 +208,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
         startupMuxFramesSent = false
+        startupMuxFramesReplayedWithTunOpen = false
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
@@ -343,7 +345,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 backpressure: overlayBackpressureSnapshot(),
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
-                sendMuxFrames: sendMuxFrames
+                sendMuxFrames: sendMuxFrames,
+                startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen
             )
         } catch {
             eventSink?("quic_overlay_tun_send_failed", [
@@ -503,6 +506,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                     sendTransportFrames(adapterSnapshot.emittedFrames)
                 }
                 flushStartupMuxFramesIfNeeded()
+                maybeOpenConfiguredTunIfReady()
             } catch {
                 eventSink?("quic_overlay_transport_adapter_connect_failed", ["error": error.localizedDescription])
             }
@@ -527,6 +531,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+        startupMuxFramesSent = false
+        startupMuxFramesReplayedWithTunOpen = false
         if let adapter = overlayLayerTransportAdapter {
             adapter.handleTransportDisconnected()
         }
@@ -670,6 +676,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 handleInboundMuxPayload(inboundPayload)
             }
             flushStartupMuxFramesIfNeeded()
+            maybeOpenConfiguredTunIfReady()
         }
     }
 
@@ -886,6 +893,38 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("quic_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("quic_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func startupMuxFramesForNewTunOpen() -> [Data] {
+        guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return [] }
+        startupMuxFramesReplayedWithTunOpen = true
+        eventSink?("quic_overlay_startup_mux_replayed_with_tun_open", [
+            "connection_seq": String(connectionSeq),
+            "frame_count": frames.count,
+        ])
+        return frames
     }
 
     private func serviceName(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> String {

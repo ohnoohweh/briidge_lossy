@@ -89,6 +89,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var secureLinkHandshakePrimed = false
     private var lastSecureLinkPrimeNS: UInt64 = 0
     private var startupMuxFramesSent = false
+    private var startupMuxFramesReplayedWithTunOpen = false
     private var currentPeerSelectedAtNS: UInt64 = 0
     private var lastInboundDatagramNS: UInt64 = 0
     private var lastIdleProbeNS: UInt64 = 0
@@ -294,6 +295,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
+        startupMuxFramesReplayedWithTunOpen = false
         currentPeerSelectedAtNS = 0
         lastInboundDatagramNS = 0
         lastIdleProbeNS = 0
@@ -471,7 +473,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 backpressure: backpressure,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
-                sendMuxFrames: sendMuxFrames
+                sendMuxFrames: sendMuxFrames,
+                startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen
             )
         } catch {
             eventSink?("udp_overlay_tun_send_failed", [
@@ -792,6 +795,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             ])
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
         }
         lastOverlayConnectedState = overlayConnected
     }
@@ -811,6 +815,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             }
             maybePrimeSecureLinkHandshake(nowNS: nowNS)
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
         }
         guard !connected, started, currentPeerAddress != nil else {
             return
@@ -860,6 +865,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
+        startupMuxFramesReplayedWithTunOpen = false
         overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
     }
@@ -949,6 +955,38 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("udp_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("udp_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func startupMuxFramesForNewTunOpen() -> [Data] {
+        guard appReady(), !startupMuxFramesReplayedWithTunOpen else { return [] }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return [] }
+        startupMuxFramesReplayedWithTunOpen = true
+        eventSink?("udp_overlay_startup_mux_replayed_with_tun_open", [
+            "connection_seq": String(connectionSeq),
+            "frame_count": frames.count,
+        ])
+        return frames
     }
 
     private func handleOverlayPayload(_ payload: Data) {
