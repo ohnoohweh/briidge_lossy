@@ -500,6 +500,10 @@ def test_admin_api_source_exists() -> None:
     assert "adminTunRoutingSnapshot()" in runtime
     assert "adminTunRoutingControl(request:" in runtime
     assert "tunRoutingSnapshot(fromConnections:" in runtime
+    assert "physicalSharedTunRows(from: sharedRows)" in runtime
+    assert 'physical["physical_interface"] = true' in runtime
+    assert 'physical["peer_id"] = "physical"' in runtime
+    assert 'physical["chan_id"] = NSNull()' in runtime
     assert '"shared_drop_by_reason": sharedDropByReason' in runtime
     assert '"icmp_stage_counts": icmpStageCounts' in runtime
     assert '"probe_boundary_counts": probeBoundaryCounts' in runtime
