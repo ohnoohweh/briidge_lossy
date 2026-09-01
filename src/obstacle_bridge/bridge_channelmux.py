@@ -5774,6 +5774,16 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 owner = self._shared_tun_reader_owner_for_device(dev)
                 if owner is not None:
                     owner._drop_shared_tun_peer_binding(getattr(dev, "service_key", None), int(peer_id), int(chan))
+                # Inbound peer TUN channels are indexed both by (peer, chan)
+                # for listener routing and by chan for the device snapshot.
+                # Drop the latter too once no other peer owns this channel id;
+                # otherwise a closed channel remains visible as a live alias.
+                still_bound_for_chan = any(
+                    int(peer_chan[1]) == int(chan)
+                    for peer_chan in self._tun_by_peer_chan
+                )
+                if self._tun_by_chan.get(int(chan)) is dev and not still_bound_for_chan:
+                    self._unbind_tun_channel(int(chan))
         else:
             dev = self._unbind_tun_channel(chan)
         self._finalize_channel_stats(chan, ChannelMux.Proto.TUN)

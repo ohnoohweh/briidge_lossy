@@ -4423,6 +4423,29 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_peer_tun_close_removes_closed_channel_from_interface_aliases(self):
+        mux = ChannelMux(_FakeSession(), asyncio.new_event_loop())
+        try:
+            svc_key = ('local', 0, 5)
+            spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
+            dev = ChannelMux.TunDevice(fd=-1, ifname='obtun0', mtu=1500, service_key=svc_key)
+            mux._local_services[svc_key] = spec
+            mux._svc_tun_devices[svc_key] = dev
+            mux._chan_owner_peer_id[3] = 12
+            mux._bind_tun_channel(3, dev, peer_id=12)
+            mux._chan_owner_peer_id[5] = 12
+            mux._bind_tun_channel(5, dev, peer_id=12)
+
+            mux._rx_tun_close(3, peer_id=12)
+
+            self.assertNotIn((12, 3), mux._tun_by_peer_chan)
+            self.assertNotIn(3, mux._tun_by_chan)
+            self.assertEqual(dev.chan_id, 5)
+            row = mux.snapshot_tun_connections()[0]
+            self.assertEqual(row['channel_aliases'], [5])
+        finally:
+            mux.loop.close()
+
     def test_send_mux_fragments_oversized_tun_packet(self):
         session = _FakeSession(connected=True, max_app_payload_size=32)
         mux = ChannelMux(session, asyncio.new_event_loop())
