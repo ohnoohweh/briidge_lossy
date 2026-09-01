@@ -261,6 +261,8 @@ Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE
 
 Implementation note: the Peer-page Transport layout keeps Transport State, Reconnect, and Resolved Peer on its first line. Its second line uses one-quarter width each for Connection Uptime and Last Incoming, and one-half width for Own Public IP.
 
+Implementation note: shared-TUN binding RX/TX counters are mirrored across every in-process ChannelMux holder of the same server-owned device. This keeps the virtual-peer mux that receives inbound overlay traffic and the reader-owner mux that sends local-TUN replies observationally consistent, regardless of which holder supplies the Admin snapshot.
+
 Implementation note: the connected/disconnected pills for Transport State, Protocol Status, and layer Reported Status use green for `connected` and red for `disconnected`; transitional states retain their neutral or progress color.
 
 Implementation note: when a dual-stack listener reports an IPv4 client as an IPv4-mapped IPv6 socket address such as `::ffff:198.51.100.44`, the peer-address protocol shall publish the canonical IPv4 address so Own Public IP matches the IPv4 resolved peer. Own Public IP shall also include the peer-observed outgoing source port, with IPv6 rendered as `[address]:port`, so operators can match the client transport tuple on the server peer list.

@@ -102,6 +102,16 @@ class ProcessSharedTunRegistry:
         owner = entry.get("owner_mux")
         return owner if owner is not None else None
 
+    def holders_for_dev(self, dev: Any) -> list["ChannelMux"]:
+        """Return every mux currently sharing ``dev`` in this process."""
+        key = self._by_dev_id.get(id(dev))
+        if key is None:
+            return []
+        entry = self._by_key.get(key)
+        if not isinstance(entry, dict):
+            return []
+        return [holder for holder in dict(entry.get("holders") or {}).values() if holder is not None]
+
     def release(self, mux: "ChannelMux", dev: Any) -> bool:
         key = self._by_dev_id.get(id(dev))
         if key is None:
@@ -3999,6 +4009,41 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             str(peer_ref or ""),
         )
 
+    def _record_shared_tun_peer_traffic_for_device(
+        self,
+        dev: "ChannelMux.TunDevice",
+        peer_id: Optional[int],
+        chan: int,
+        packet: bytes,
+        *,
+        direction: str,
+    ) -> None:
+        """Keep shared-TUN binding counters identical across its mux holders.
+
+        A virtual-peer mux receives overlay packets, while the mux with the
+        single device read loop sends replies. Either mux can supply the
+        WebAdmin row, so accounting on only the executing mux loses one half
+        of the duplex flow.
+        """
+        targets: list["ChannelMux"] = [self]
+        registry = self._process_shared_tun_registry
+        if registry is not None:
+            targets.extend(registry.holders_for_dev(dev))
+        seen: set[int] = set()
+        svc_key = getattr(dev, "service_key", None)
+        for target in targets:
+            marker = id(target)
+            if marker in seen:
+                continue
+            seen.add(marker)
+            target._record_shared_tun_peer_traffic(
+                svc_key,
+                peer_id,
+                chan,
+                packet,
+                direction=direction,
+            )
+
     def _bind_tun_channel(self, chan: int, dev: "ChannelMux.TunDevice", *, peer_id: Optional[int] = None) -> None:
         # A full-duplex TUN pair can temporarily create symmetric OPENs from both
         # peers. Keep every inbound channel routable; dev.chan_id is only the
@@ -5266,8 +5311,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                     ctr.msgs_in += 1
                     ctr.bytes_in += len(packet)
-                    self._record_shared_tun_peer_traffic(
-                        getattr(dev, "service_key", None),
+                    self._record_shared_tun_peer_traffic_for_device(
+                        dev,
                         selected_peer_id,
                         chan,
                         packet,
@@ -5516,8 +5561,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 ctr = self._ctr(ChannelMux.Proto.TUN, chan)
                 ctr.msgs_in += 1
                 ctr.bytes_in += len(data)
-                self._record_shared_tun_peer_traffic(
-                    getattr(dev, "service_key", None),
+                self._record_shared_tun_peer_traffic_for_device(
+                    dev,
                     owner_peer_id,
                     chan,
                     data,

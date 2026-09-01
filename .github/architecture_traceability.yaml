@@ -219,6 +219,7 @@ ARC-CMP-003:
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
+    - tests/unit/test_connection_snapshots.py::test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
     - tests/unit/test_bridge_tun_ios.py::test_open_tun_device_uses_active_bridge
     - tests/unit/test_bridge_tun_ios.py::test_write_tun_packet_uses_bridge_backend
