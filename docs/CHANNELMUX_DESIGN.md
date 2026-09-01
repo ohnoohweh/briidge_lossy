@@ -1683,7 +1683,9 @@ Current Swift parity status for this recipe:
     transport owner path:
     stale `didOpen`, `didClose`, `didCompleteWithError`, and receive callbacks
     are pinned to the active `websocketTask`, and outbound queue flushing is
-    pinned to the same current task identity
+    pinned to the same current task identity; every new WebSocket connection
+    attempt resets local TUN channel state so the first packet carries a fresh
+    shared-TUN `OPEN` before its `DATA`
   - macOS mixed-process control-plane visibility across `tcp`, `myudp`, `ws`,
     and `quic`
   - iOS probe visibility across `tcp`, `myudp`, `ws`, and `quic`

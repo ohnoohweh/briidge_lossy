@@ -1737,6 +1737,8 @@ class Runner:
         tun_local_reply_stage_counts: dict[str, int] = {}
         tun_probe_last_timeout_diag: dict[str, Any] = {}
         tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        session_labels = list(getattr(self, "_session_labels", []) or [])
+        mux_index_by_id = {id(mux): index for index, mux in enumerate(self._muxes)}
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
@@ -1746,6 +1748,7 @@ class Runner:
 
             chan_to_peer_id: dict[int, str] = {}
             owner_peer_to_label: dict[int, str] = {}
+            overlay_rows: list[dict] = []
             with contextlib.suppress(Exception):
                 session = self._sessions[idx] if idx < len(self._sessions) else None
                 getter = getattr(session, "get_overlay_peers_snapshot", None) if session is not None else None
@@ -1814,6 +1817,71 @@ class Runner:
                         with contextlib.suppress(Exception):
                             owner_peer_id = int(owner_peer_id)
                         r["peer_id"] = owner_peer_to_label.get(owner_peer_id, f"{idx}:{owner_peer_id}")
+                shared = r.get("shared_tun_ownership")
+                if isinstance(shared, dict):
+                    shared = dict(shared)
+                    binding_labels: set[str] = set()
+                    bindings: list[dict] = []
+                    for binding in list(shared.get("active_peer_bindings") or []):
+                        if not isinstance(binding, dict):
+                            continue
+                        binding_copy = dict(binding)
+                        if bool(binding_copy.get("local_virtual")):
+                            binding_copy["connection_id"] = "local-probe"
+                        else:
+                            binding_peer_id = int(binding_copy.get("peer_id", 0) or 0)
+                            target_idx = idx
+                            target_peer_id = binding_peer_id
+                            registry = getattr(mux, "_process_shared_tun_registry", None)
+                            route_for = getattr(registry, "shared_peer_route_for", None)
+                            route = route_for(binding_peer_id) if callable(route_for) else None
+                            if isinstance(route, tuple) and len(route) == 2:
+                                target_mux, route_peer_id = route
+                                target_idx = mux_index_by_id.get(id(target_mux), idx)
+                                target_peer_id = int(route_peer_id)
+                            connection_id = f"{target_idx}:{target_peer_id}"
+                            binding_copy["connection_id"] = connection_id
+                            binding_copy["transport"] = (
+                                str(session_labels[target_idx])
+                                if target_idx < len(session_labels)
+                                else f"session-{target_idx}"
+                            )
+                            binding_labels.add(connection_id)
+                        bindings.append(binding_copy)
+                    shared["active_peer_bindings"] = bindings
+                    # A connected overlay without a TUN OPEN is diagnostically
+                    # important: it is available to ChannelMux but cannot carry
+                    # shared-TUN replies yet.  Keep it separate from a binding
+                    # so counters never imply that packets were delivered.
+                    unbound: list[dict] = []
+                    for overlay_peer in overlay_rows:
+                        if not isinstance(overlay_peer, dict) or not bool(overlay_peer.get("connected")):
+                            continue
+                        peer_id = int(overlay_peer.get("peer_id", 0) or 0)
+                        connection_id = f"{idx}:{peer_id}"
+                        if connection_id in binding_labels:
+                            continue
+                        open_connections = overlay_peer.get("open_connections")
+                        tun_channels = (
+                            int(open_connections.get("tun", 0) or 0)
+                            if isinstance(open_connections, dict)
+                            else 0
+                        )
+                        unbound.append(
+                            {
+                                "connection_id": connection_id,
+                                "transport": (
+                                    str(session_labels[idx])
+                                    if idx < len(session_labels)
+                                    else f"session-{idx}"
+                                ),
+                                "peer_id": peer_id,
+                                "state": str(overlay_peer.get("state") or "connected"),
+                                "tun_channels": tun_channels,
+                            }
+                        )
+                    shared["unbound_overlay_connections"] = unbound
+                    r["shared_tun_ownership"] = shared
                 tun_rows.append(r)
 
             counts = snap.get("counts", {}) or {}
@@ -1834,7 +1902,6 @@ class Runner:
                     tun_local_reply_stage_counts[stage] = int(tun_local_reply_stage_counts.get(stage, 0) or 0) + int(value or 0)
             timeout_diag = dict(snap.get("tun_probe_last_timeout_diag") or {})
             if timeout_diag:
-                session_labels = list(getattr(self, "_session_labels", []) or [])
                 label = str(session_labels[idx] if idx < len(session_labels) else f"session-{idx}").strip()
                 tun_probe_last_timeout_diag_by_transport[label] = timeout_diag
                 captured_at = float(timeout_diag.get("captured_at_unix_ts") or 0.0)

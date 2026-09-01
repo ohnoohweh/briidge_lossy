@@ -1074,7 +1074,7 @@ What the admin web shows:
 - Transport State, Protocol Status, and layer Reported Status pills use green for connected and red for disconnected, keeping transitions distinct from definitive connection state.
 - Accepted listener peers retain their peer-local transport metrics while their SecureLink and compression pills use that peer’s authenticated wrapper state.
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
-- The dedicated TUN / Routing view also shows shared-TUN ownership maps, active channel bindings, interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
+- The dedicated TUN / Routing view also renders each configured shared-TUN ownership peer separately with bound/not-bound state, protocol-qualified connection ID, learned addresses, and binding-specific RX/TX counters. A process-wide shared binding identity keeps same-number peers from independent WS and myUDP listener muxes distinct, while the TUN page resolves it back to the true binding transport and connection id; disconnect cleanup removes closed bindings from every shared-device holder, and counters remain consistent when an in-process virtual-peer mux receives traffic while the shared-device reader-owner observes the device, alongside interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
 - Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation. Removing a service commits immediately and, when another entry remains, keeps the popup open on the next valid service so multi-entry cleanup stays fast.
@@ -1503,16 +1503,16 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `60` | `928` |
-| macOS Swift app | `1` | `55` |
-| iOS app/extension | `27` | `175` |
+| Python CLI/runtime, including macOS Python | `60` | `935` |
+| macOS Swift app | `1` | `56` |
+| iOS app/extension | `27` | `177` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
-| macOS Swift app | `3/92 = 3.3%` | `6/92 = 6.5%` | `9/92 = 9.8%` |
+| macOS Swift app | `3/92 = 3.3%` | `7/92 = 7.6%` | `10/92 = 10.9%` |
 | iOS app/extension | `10/92 = 10.9%` | `17/92 = 18.5%` | `22/92 = 23.9%` |
 
 #### Architecture traceability
@@ -1543,9 +1543,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `55` | `0` | `55` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `56` | `0` | `56` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `31` | `31` |
-| Total parity-oriented evidence | Sum of the lanes above | `59` | `151` | `210` |
+| Total parity-oriented evidence | Sum of the lanes above | `60` | `151` | `211` |
 
 Important caveat:
 
@@ -1604,7 +1604,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
-- Keep Swift TUN recovery covered for myUDP, TCP, WebSocket, and QUIC: a transport-epoch reset must discard stale mux channel state, advance the ChannelMux connection sequence, and send a fresh `OPEN` before `DATA`.
+- Keep Swift TUN recovery covered for myUDP, TCP, WebSocket, and QUIC: a transport-epoch reset must discard stale mux channel state, advance the ChannelMux connection sequence, regenerate ChannelMux startup control frames after app readiness, and send a fresh `OPEN` before `DATA`.
 - Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 

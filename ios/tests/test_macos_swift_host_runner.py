@@ -513,6 +513,18 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "runtime.handleTransportDisconnected()" in secure_adapter
 
 
+def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:
+    ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = ws_owner[
+        ws_owner.index("    private func connectOverlay() {") : ws_owner.index("    private func connectNetworkWebSocket(")
+    ]
+
+    assert "resetOverlayTransportEpoch()" in connect_overlay
+    assert connect_overlay.index("resetOverlayTransportEpoch()") < connect_overlay.index(
+        "websocketTransportGeneration += 1"
+    )
+
+
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")

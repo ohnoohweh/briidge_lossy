@@ -20,6 +20,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
+    private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let reconnectRetryDelayMS: Int
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
@@ -117,6 +118,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
+        startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider? = nil,
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeWebSocketOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
@@ -147,6 +149,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         self.startupMuxFrames = startupMuxFrames
+        self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.serviceNameByID = serviceNameByID
         self.tunServiceSpec = tunServiceSpec
@@ -527,6 +530,15 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
         reconnectAttempts += 1
+
+        // A URLSession/NWConnection replacement is a new ChannelMux peer
+        // epoch even when the previous WebSocket did not deliver a close or
+        // completion callback.  The remote peer has discarded its channel
+        // table in that case; retaining the local preferred TUN channel would
+        // emit DATA without the OPEN required to bind Shared TUN routing.
+        // Reset before allocating the task so the first local packet on this
+        // connection necessarily emits a fresh TUN OPEN followed by DATA.
+        resetOverlayTransportEpoch()
         websocketTransportGeneration += 1
         let generation = websocketTransportGeneration
         do {
@@ -964,8 +976,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
 
     private func maybeSendStartupMuxFrames() {
         guard appReady(), !startupMuxFramesSent else { return }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
-        sendMuxFrames(startupMuxFrames)
+        sendMuxFrames(frames)
     }
 
     private func currentTunPeerID() -> Int? {

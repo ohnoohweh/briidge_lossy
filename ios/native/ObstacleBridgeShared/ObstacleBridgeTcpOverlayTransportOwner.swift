@@ -16,6 +16,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let overlayRuntime: ObstacleBridgeTcpOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
+    private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let reconnectRetryDelayMS: Int
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
@@ -105,6 +106,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
+        startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider? = nil,
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeTcpOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
@@ -131,6 +133,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         self.startupMuxFrames = startupMuxFrames
+        self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.serviceNameByID = serviceNameByID
         self.tunServiceSpec = tunServiceSpec
@@ -892,11 +895,14 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func maybeSendStartupMuxFrames() {
-        guard appReady(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
+        guard appReady(), !startupMuxFramesSent else {
             return
         }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
-        sendMuxFrames(startupMuxFrames)
+        sendMuxFrames(frames)
     }
 
     private func currentTunPeerID() -> Int? {

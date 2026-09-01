@@ -1660,14 +1660,38 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn("setText('tunVerificationGlobalResolutionDetail', fmtTunNameResolutionDetail(globalNameResolution, globalVerification));", app_js)
         self.assertIn("function fmtTunFlowSummary(stats) {", app_js)
         self.assertIn("function fmtDropDiagnostics(shared) {", app_js)
+        self.assertIn("const bindingsByPeerRef = new Map();", app_js)
+        self.assertIn("const peerRows = configuredPeers.map", app_js)
+        self.assertIn("isBound ? 'bound' : 'not bound'", app_js)
+        self.assertIn("unassigned active overlay", app_js)
         self.assertIn("function fmtDropReasonStats(summary) {", app_js)
         self.assertIn("function fmtIcmpStageCounters(summary) {", app_js)
         self.assertIn("function fmtProbeBoundaryCounters(summary) {", app_js)
         self.assertIn("function fmtLocalReplyStageCounters(summary) {", app_js)
-        self.assertIn("<th>ChannelMux Flow</th>", index_html)
-        self.assertIn("<th>Drop Diagnostics</th>", index_html)
+        self.assertIn("<th>Configured Peer</th>", index_html)
+        self.assertIn("<th>TUN State</th>", index_html)
+        self.assertIn("<th>Connection</th>", index_html)
+        self.assertIn("<th>RX</th>", index_html)
+        self.assertIn("<th>TX</th>", index_html)
         self.assertIn("topics.push('tun_routing')", app_js)
         self.assertNotIn("applyTunRoutingConfigSummary(", app_js)
+
+    def test_tun_routing_shared_ownership_renders_one_row_per_configured_peer(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("const bindingsByPeerRef = new Map();", app_js)
+        self.assertIn("const peerRows = configuredPeers.map", app_js)
+        self.assertIn("isBound ? 'bound' : 'not bound'", app_js)
+        self.assertIn("binding.transport || 'overlay'", app_js)
+        self.assertIn("binding.rx_bytes ?? 0", app_js)
+        self.assertIn("binding.tx_bytes ?? 0", app_js)
+        self.assertIn("unassigned active overlay", app_js)
+        self.assertIn("<th>Configured Peer</th>", index_html)
+        self.assertIn("<th>Configured Addresses</th>", index_html)
+        self.assertIn("<th>TUN State</th>", index_html)
+        self.assertIn("<th>Connection</th>", index_html)
 
     def test_admin_web_does_not_embed_ios_native_tunnel_controls(self):
         repo_root = pathlib.Path(__file__).resolve().parents[2]

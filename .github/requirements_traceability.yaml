@@ -607,6 +607,7 @@ REQ-LIFE-002:
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_completion_callbacks
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_rejects_stale_receive_callbacks
     - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_flushes_only_current_task
+    - tests/unit/test_swift_ws_transport_owner_source_guards.py::test_swift_ws_owner_starts_every_connection_attempt_with_a_fresh_tun_epoch
     - tests/unit/test_launcher_entrypoint.py::test_launcher_restarts_for_code_75
 
 REQ-LIFE-003:
@@ -856,6 +857,10 @@ REQ-LST-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
   unit_tests:
     - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_connect_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_buffer_connect_then_data_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_local_eof_matches_python
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
 
 REQ-LST-002:
@@ -930,6 +935,7 @@ REQ-MUX-004:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer
+    - ios/tests/test_m3_native_sources.py::test_swift_overlay_remote_service_catalog_uses_current_tun_epoch
 
 REQ-MUX-006:
   integration_tests:
@@ -948,7 +954,7 @@ REQ-MUX-006:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
-    # Includes the shared-device reader-owner return-route regression.
+    # Includes cross-transport shared binding/return-route behavior, Admin connection-id resolution, and disconnect cleanup.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
@@ -1067,6 +1073,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_can_be_disabled
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_source_normalization_disabled_warns_once
     - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_shared_tun_ownership_and_active_binding
+    - tests/unit/test_connection_snapshots.py::test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_remote_services_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_listener_mode.py::test_chunked_open_transfer_reassembles_metadata
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_shared_tun_ownership_metadata_roundtrip_matches_python
@@ -1286,6 +1293,7 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
+    - tests/unit/test_connection_snapshots.py::test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected
     - tests/unit/test_connection_snapshots.py::test_snapshot_exposes_requested_remote_servers_as_client_listeners
     - tests/unit/test_connection_snapshots.py::test_snapshot_hides_requested_remote_servers_when_overlay_disconnected
@@ -1307,6 +1315,7 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_exposes_tun_support_diagnostics
     - tests/unit/test_admin_web_payloads.py::test_tun_routing_frontend_uses_dedicated_tab_and_api
+    - tests/unit/test_admin_web_payloads.py::test_tun_routing_shared_ownership_renders_one_row_per_configured_peer
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_security_advisor_payload_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python

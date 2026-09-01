@@ -26,6 +26,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let overlayRuntime: ObstacleBridgeQuicOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
+    private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let reconnectRetryDelayMS: Int
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
@@ -110,6 +111,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
+        startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider? = nil,
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeQuicOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
@@ -138,6 +140,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         self.sessionMaxAppPayload = max(1, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         self.startupMuxFrames = startupMuxFrames
+        self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.eventSink = eventSink
         self.serviceNameByID = serviceNameByID
@@ -877,9 +880,12 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func flushStartupMuxFramesIfNeeded() {
-        guard appReady(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else { return }
+        guard appReady(), !startupMuxFramesSent else { return }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
-        sendMuxFrames(startupMuxFrames)
+        sendMuxFrames(frames)
     }
 
     private func serviceName(_ spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> String {

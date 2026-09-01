@@ -2068,8 +2068,8 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
         setattr(dev, '_reader_mux', self.mux)
         with patch.object(self.mux, '_register_tun_reader') as owner_register, \
-             patch.object(mux2, '_register_tun_reader') as child_register, \
-             patch.object(self.mux, '_send_mux') as owner_send:
+            patch.object(mux2, '_register_tun_reader') as child_register, \
+            patch.object(mux2, '_send_mux') as child_send:
             mux2._bind_tun_channel(1, dev, peer_id=77)
             mux2._rx_tun_data(
                 1,
@@ -2080,13 +2080,20 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         owner_register.assert_not_called()
         child_register.assert_not_called()
-        owner_send.assert_called_once_with(
+        child_send.assert_called_once_with(
             1,
             ChannelMux.Proto.TUN,
             ChannelMux.MType.DATA,
             _ipv4_packet('192.168.106.1', '192.168.106.2'),
             peer_id=77,
         )
+        shared_peer_id = registry.shared_peer_id_for(mux2, 77, create=False)
+        self.assertIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
+
+        mux2.on_peer_disconnected(77)
+
+        self.assertNotIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
+        self.assertNotIn((svc_key, shared_peer_id), mux2._shared_tun_runtime_by_peer)
 
     async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
         self.mux.args = argparse.Namespace(
@@ -2496,6 +2503,12 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
                     'ipv6': ['fd20:107::2'],
                     'address_count': 2,
                     'local_virtual': False,
+                    'rx_packets': 0,
+                    'rx_bytes': 0,
+                    'tx_packets': 0,
+                    'tx_bytes': 0,
+                    'learned_ipv4': [],
+                    'learned_ipv6': [],
                     'throttle_prev_window_bytes': 0,
                     'throttle_curr_window_bytes': 0,
                     'throttle_drop_count': 0,

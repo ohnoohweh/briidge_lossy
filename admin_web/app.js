@@ -1415,49 +1415,63 @@ function renderTunRoutingSharedTable(tbodyId, rows) {
   if (!tbody) return;
 
   if (!rows || rows.length === 0) {
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No shared TUN routing state</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="11">No shared TUN routing state</td></tr>';
     return;
   }
 
-  tbody.innerHTML = rows.map((row) => {
+  const renderedRows = rows.flatMap((row) => {
     const shared = row.shared_tun_ownership || {};
-    const ownershipText = Array.isArray(shared.peers) && shared.peers.length
-      ? shared.peers.map((peer) => {
-          const parts = [];
-          if (Array.isArray(peer.ipv4) && peer.ipv4.length) parts.push(`IPv4 ${peer.ipv4.join(', ')}`);
-          if (Array.isArray(peer.ipv6) && peer.ipv6.length) parts.push(`IPv6 ${peer.ipv6.join(', ')}`);
-          return `${peer.peer_ref}: ${parts.join(' · ') || 'no addresses'}`;
-        }).join('\n')
-      : 'n/a';
-    const bindingText = Array.isArray(shared.active_peer_bindings) && shared.active_peer_bindings.length
-      ? shared.active_peer_bindings.map((binding) => {
-          const addresses = [];
-          if (Array.isArray(binding.ipv4) && binding.ipv4.length) addresses.push(...binding.ipv4);
-          if (Array.isArray(binding.ipv6) && binding.ipv6.length) addresses.push(...binding.ipv6);
-          const header = addresses.length
-            ? `peer ${fmtInteger(binding.peer_id)} -> ${addresses.join(', ')}`
-            : `peer ${fmtInteger(binding.peer_id)}`;
-          const parts = [header];
-          const bound = Array.isArray(binding.bound_chan_ids) ? binding.bound_chan_ids.join(', ') : '';
-          parts.push(`preferred ${fmtChan(binding.preferred_chan_id)}`);
-          if (bound) parts.push(`bound ${bound}`);
-          return parts.join(' · ');
-        }).join('\n')
-      : 'none';
-    const flowText = fmtTunFlowSummary(row.stats || {});
-    const dropText = fmtDropDiagnostics(shared);
-    return `
+    const bindingsByPeerRef = new Map();
+    for (const binding of Array.isArray(shared.active_peer_bindings) ? shared.active_peer_bindings : []) {
+      if (!binding || binding.local_virtual) continue;
+      const peerRef = String(binding.peer_ref || '').trim();
+      if (peerRef) bindingsByPeerRef.set(peerRef, binding);
+    }
+    const configuredPeers = Array.isArray(shared.peers) ? shared.peers : [];
+    const peerRows = configuredPeers.map((peer) => ({ peer, binding: bindingsByPeerRef.get(String(peer.peer_ref || '').trim()) }));
+    const unboundRows = (Array.isArray(shared.unbound_overlay_connections) ? shared.unbound_overlay_connections : [])
+      .map((connection) => ({ peer: { peer_ref: 'unassigned active overlay', ipv4: [], ipv6: [] }, connection }));
+    const displayRows = [...peerRows, ...unboundRows];
+    if (!displayRows.length) displayRows.push({ peer: { peer_ref: 'no configured peers', ipv4: [], ipv6: [] } });
+    return displayRows.map(({ peer, binding, connection }) => {
+      const configuredAddresses = [
+        ...(Array.isArray(peer.ipv4) ? peer.ipv4 : []),
+        ...(Array.isArray(peer.ipv6) ? peer.ipv6 : []),
+      ];
+      const learnedAddresses = binding ? [
+        ...(Array.isArray(binding.learned_ipv4) ? binding.learned_ipv4 : []),
+        ...(Array.isArray(binding.learned_ipv6) ? binding.learned_ipv6 : []),
+      ] : [];
+      const isBound = Boolean(binding);
+      const connectionText = isBound
+        ? `${binding.transport || 'overlay'}:${binding.connection_id || fmtInteger(binding.peer_id)}`
+        : connection
+          ? `${connection.transport || 'overlay'}:${connection.connection_id || '?'}`
+          : '—';
+      const channelText = isBound
+        ? `preferred ${fmtChan(binding.preferred_chan_id)} · bound ${(binding.bound_chan_ids || []).map(fmtChan).join(', ') || '—'}`
+        : connection
+          ? 'TUN channel not open'
+          : 'awaiting TUN OPEN';
+      const rxText = isBound ? `${fmtBytes(binding.rx_bytes ?? 0)} · ${fmtInteger(binding.rx_packets ?? 0)} pkt` : '—';
+      const txText = isBound ? `${fmtBytes(binding.tx_bytes ?? 0)} · ${fmtInteger(binding.tx_packets ?? 0)} pkt` : '—';
+      return `
       <tr>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
         <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
         <td class="mono">${escapeHtml(fmtText(row.local?.ifname))}</td>
-        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(ownershipText)}</td>
-        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(bindingText)}</td>
-        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(flowText)}</td>
-        <td class="mono" style="white-space:pre-wrap;">${escapeHtml(dropText)}</td>
+        <td class="mono">${escapeHtml(fmtText(peer.peer_ref || 'n/a'))}</td>
+        <td class="mono">${escapeHtml(configuredAddresses.join(', ') || '—')}</td>
+        <td><span class="${isBound ? 'role-pill role-client' : 'role-pill role-unknown'}">${isBound ? 'bound' : 'not bound'}</span><div class="muted mono">${escapeHtml(channelText)}</div></td>
+        <td class="mono">${escapeHtml(connectionText)}</td>
+        <td class="mono">${escapeHtml(rxText)}</td>
+        <td class="mono">${escapeHtml(txText)}</td>
+        <td class="mono">${escapeHtml(learnedAddresses.join(', ') || '—')}</td>
       </tr>
     `;
-  }).join('');
+    }).join('');
+  });
+  tbody.innerHTML = renderedRows.join('');
 }
 
 function fmtTunRoutingRouteList(routes) {

@@ -262,6 +262,42 @@ def test_swift_overlay_epoch_reset_reopens_local_tun_channels() -> None:
         assert "activeTunChanIDs.removeAll()" in owner
 
 
+def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() -> None:
+    owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    connect_overlay = owner[owner.index("    private func connectOverlay() {") : owner.index("    private func connectNetworkWebSocket(")]
+
+    assert "resetOverlayTransportEpoch()" in connect_overlay
+    assert connect_overlay.index("resetOverlayTransportEpoch()") < connect_overlay.index(
+        "websocketTransportGeneration += 1"
+    )
+
+
+def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
+    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    owners = [
+        (SHARED_NATIVE_DIR / name).read_text(encoding="utf-8")
+        for name in (
+            "ObstacleBridgeUdpOverlayTransportOwner.swift",
+            "ObstacleBridgeTcpOverlayTransportOwner.swift",
+            "ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+            "ObstacleBridgeQuicOverlayTransportOwner.swift",
+        )
+    ]
+
+    assert "typealias ObstacleBridgeChannelMuxStartupFramesProvider" in tun_runtime
+    assert "func currentConnectionSeq() -> UInt32" in tun_runtime
+    for owner in owners:
+        assert "startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?" in owner
+        assert "tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq" in owner
+        assert "startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames" in owner
+
+    assert host_runner.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
+    assert provider.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
+
+
 def test_channel_mux_udp_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift").read_text(encoding="utf-8")
 

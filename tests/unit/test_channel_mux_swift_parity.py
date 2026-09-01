@@ -2693,6 +2693,7 @@ def _python_channelmux_tcp_client_open_then_connect_summary() -> dict[str, objec
         with (
             mock.patch.object(mux.loop, "create_task", side_effect=_track_task),
             mock.patch.object(mux.loop, "create_connection", side_effect=_fake_create_connection),
+            mock.patch.object(mux, "_resolve_channel_mux_egress_proxy", return_value=None),
             mock.patch.object(mux, "_ensure_backpressure_task", return_value=None),
         ):
             mux._rx_tcp_open(chan, payload, peer_id=0)
@@ -2749,6 +2750,7 @@ def _python_channelmux_tcp_client_buffer_connect_then_data_summary() -> dict[str
         with (
             mock.patch.object(mux.loop, "create_task", side_effect=_track_task),
             mock.patch.object(mux.loop, "create_connection", side_effect=_fake_create_connection),
+            mock.patch.object(mux, "_resolve_channel_mux_egress_proxy", return_value=None),
             mock.patch.object(mux, "_ensure_backpressure_task", return_value=None),
         ):
             mux._rx_tcp_open(chan, payload, peer_id=0)
@@ -2826,6 +2828,7 @@ def _python_channelmux_tcp_client_open_connect_then_local_data_summary() -> dict
         with (
             mock.patch.object(mux.loop, "create_task", side_effect=_track_task),
             mock.patch.object(mux.loop, "create_connection", side_effect=_fake_create_connection),
+            mock.patch.object(mux, "_resolve_channel_mux_egress_proxy", return_value=None),
             mock.patch.object(mux, "_ensure_backpressure_task", return_value=None),
             mock.patch.object(mux, "_schedule_service_hook", return_value=None),
         ):
@@ -2931,6 +2934,7 @@ def _python_channelmux_tcp_client_open_then_local_eof_summary() -> dict[str, obj
         with (
             mock.patch.object(mux.loop, "create_task", side_effect=_track_task),
             mock.patch.object(mux.loop, "create_connection", side_effect=_fake_create_connection),
+            mock.patch.object(mux, "_resolve_channel_mux_egress_proxy", return_value=None),
             mock.patch.object(mux, "_ensure_backpressure_task", return_value=None),
             mock.patch.object(mux, "_schedule_service_hook", return_value=None),
         ):

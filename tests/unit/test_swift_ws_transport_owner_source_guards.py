@@ -58,3 +58,13 @@ def test_swift_ws_owner_empty_address_list_preserves_dns_resolution() -> None:
     assert "if !peerAddresses.isEmpty {" in source
     assert "host: peerHost," in source
     assert "strictFamily: false," in source
+
+
+def test_swift_ws_owner_starts_every_connection_attempt_with_a_fresh_tun_epoch() -> None:
+    source = _source()
+    connect_overlay = source[source.index("    private func connectOverlay() {") : source.index("    private func connectNetworkWebSocket(")]
+
+    assert "resetOverlayTransportEpoch()" in connect_overlay
+    assert connect_overlay.index("resetOverlayTransportEpoch()") < connect_overlay.index(
+        "websocketTransportGeneration += 1"
+    )

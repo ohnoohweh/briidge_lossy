@@ -5,7 +5,7 @@ import types
 import unittest
 from unittest.mock import patch
 
-from obstacle_bridge.bridge import ChannelMux, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
+from obstacle_bridge.bridge import ChannelMux, ProcessSharedTunRegistry, Runner, SessionMetrics, StatsBoard, TcpStreamSession, QuicSession, UdpSession, WebSocketSession
 
 
 def _peer_endpoint(host: str, port: int) -> dict:
@@ -236,6 +236,10 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
         self.mux._shared_tun_peer_id_by_ref[(self.tun_key, "linux-client")] = 7
         with patch.object(self.mux, "_register_tun_reader"):
             self.mux._bind_tun_channel(301, dev)
+        peer_packet = bytes.fromhex("450000140000000040010000c0a86b02c0a86b01")
+        reply_packet = bytes.fromhex("450000140000000040010000c0a86b01c0a86b02")
+        self.mux._record_shared_tun_peer_traffic(self.tun_key, 7, 301, peer_packet, direction="rx")
+        self.mux._record_shared_tun_peer_traffic(self.tun_key, 7, 301, reply_packet, direction="tx")
 
         snap = self.mux.snapshot_connections()
 
@@ -280,6 +284,12 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                         "ipv6": ["fd20:107::2"],
                         "address_count": 2,
                         "local_virtual": False,
+                        "rx_packets": 1,
+                        "rx_bytes": 20,
+                        "tx_packets": 1,
+                        "tx_bytes": 20,
+                        "learned_ipv4": ["192.168.107.2"],
+                        "learned_ipv6": [],
                         "throttle_prev_window_bytes": 0,
                         "throttle_curr_window_bytes": 0,
                         "throttle_drop_count": 0,
@@ -293,6 +303,45 @@ class ChannelMuxSnapshotTests(unittest.TestCase):
                 "recent_drops": [],
             },
         )
+
+    def test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder(self):
+        self.tun_spec = ChannelMux.ServiceSpec(
+            3,
+            "tun",
+            "obtun0",
+            1400,
+            "tun",
+            "obtun1",
+            1400,
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [{"peer_ref": "linux-client", "ipv4": ["192.168.107.2"]}],
+                }
+            },
+        )
+        reader_loop = asyncio.new_event_loop()
+        reader_mux = ChannelMux(_FakeSession(), reader_loop)
+        registry = ProcessSharedTunRegistry()
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
+        try:
+            for mux in (self.mux, reader_mux):
+                mux._local_services[self.tun_key] = self.tun_spec
+                mux._install_shared_tun_ownership_for_service(self.tun_key, self.tun_spec)
+                mux._process_shared_tun_registry = registry
+            registry.register(reader_mux, self.tun_key, dev)
+            registry.attach_existing(self.mux, "obtun0", 1400)
+
+            packet = bytes.fromhex("450000140000000040010000c0a86b01c0a86b02")
+            reader_mux._record_shared_tun_peer_traffic_for_device(dev, 7, 301, packet, direction="tx")
+            self.mux._record_shared_tun_peer_traffic_for_device(dev, 7, 301, packet, direction="rx")
+
+            for mux in (self.mux, reader_mux):
+                binding = mux._shared_tun_runtime_by_peer[(self.tun_key, 7)]
+                self.assertEqual((binding["rx_packets"], binding["tx_packets"]), (1, 1))
+                self.assertEqual((binding["rx_bytes"], binding["tx_bytes"]), (20, 20))
+        finally:
+            reader_loop.close()
 
     def test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection(self):
         dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1400, service_key=self.tun_key)
@@ -1188,6 +1237,45 @@ class TransportPeerSnapshotLastIncomingTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["peer"], _peer_endpoint("203.0.113.30", 8080))
+
+    def test_shared_tun_snapshot_labels_bound_and_unbound_overlay_connections(self):
+        class _Session:
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {"peer_id": 7, "connected": True, "state": "connected", "open_connections": {"tun": 1}},
+                    {"peer_id": 8, "connected": True, "state": "connected", "open_connections": {"tun": 0}},
+                ]
+
+        class _Mux:
+            def snapshot_connections(self):
+                return {
+                    "udp": [],
+                    "tcp": [],
+                    "tun": [
+                        {
+                            "state": "connected",
+                            "chan_id": 301,
+                            "channel_aliases": [301],
+                            "shared_tun_ownership": {
+                                "active_peer_bindings": [{"peer_id": 7, "bound_chan_ids": [301]}],
+                            },
+                        }
+                    ],
+                    "counts": {"udp": 0, "tcp": 0, "tun": 1, "udp_listening": 0, "tcp_listening": 0, "tun_listening": 0},
+                }
+
+        runner = Runner(argparse.Namespace(no_dashboard=True, overlay_transport="ws"))
+        runner._sessions = [_Session()]
+        runner._muxes = [_Mux()]
+        runner._session_labels = ["ws"]
+
+        shared = runner.get_connections_snapshot()["tun"][0]["shared_tun_ownership"]
+        self.assertEqual(shared["active_peer_bindings"][0]["connection_id"], "0:7")
+        self.assertEqual(shared["active_peer_bindings"][0]["transport"], "ws")
+        self.assertEqual(
+            shared["unbound_overlay_connections"],
+            [{"connection_id": "0:8", "transport": "ws", "peer_id": 8, "state": "connected", "tun_channels": 0}],
+        )
 
 
 if __name__ == "__main__":
