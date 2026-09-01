@@ -101,6 +101,7 @@ Representative anchors for those areas:
   - [tests/unit/test_proxy_server.py](../tests/unit/test_proxy_server.py)
   - [ios/tests/test_ios_packet_tunnel_provider_probe.py](../ios/tests/test_ios_packet_tunnel_provider_probe.py)
 - ChannelMux TCP target egress through system proxy settings is pinned in [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py); on Linux/POSIX the default `system` mode honors `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY`, while UDP target egress remains direct until a UDP-capable proxy relay is introduced.
+- Swift/Python TCP ChannelMux parity simulations explicitly force direct egress for their mocked local dials, keeping state-transition comparisons independent of host proxy configuration while the production `system` egress behavior remains covered separately.
 - WebSocket comma-separated peer candidates and dual-stack `::` listener setup are pinned in [tests/unit/test_ws_payload_mode.py](../tests/unit/test_ws_payload_mode.py) so the selected resolved IPv4/IPv6 candidate, not the raw host list, feeds websocket URL construction, PAC/system-proxy lookup, proxy CONNECT targeting, and direct preflight host headers, while `::` binds through an IPv6 socket with `IPV6_V6ONLY=0`.
 
 Use Git history for rollout chronology. Keep this document focused on what to run, what each lane proves, and where the active coverage lives.
