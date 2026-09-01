@@ -113,6 +113,10 @@ ChannelMux and TUN:
   identity for bindings, OPEN lifecycle, fragments, counters, and outbound
   routing. Each peer has an independent channel-number sequence, so `chan=1`
   from two clients is two distinct TUN paths.
+- the TUN/routing operator surface collapses all in-process holders of one
+  shared device into one physical-interface row. Its overall traffic is
+  derived from the configured peer bindings; per-holder channel aliases stay
+  in the configured-peer detail rather than becoming duplicate interfaces.
 - when a process shares one server-owned TUN device between listener and
   peer-specific ChannelMux instances, the listener-owned reader retains the
   mirrored peer/channel binding and emits replies through its peer-aware

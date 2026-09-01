@@ -1169,7 +1169,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         shared = {
             "mode": "server_shared",
             "peer_count": 1,
-            "active_peer_bindings": [{"peer_id": 7}],
+            "active_peer_bindings": [{"peer_id": 7, "rx_packets": 2, "tx_packets": 3, "rx_bytes": 200, "tx_bytes": 300}],
             "drop_counters": {"total": 0, "by_reason": {}},
         }
         runner.get_connections_snapshot = lambda: {
@@ -1201,13 +1201,17 @@ class AdminWebPayloadTests(unittest.TestCase):
 
         payload = ui._build_tun_routing_payload()
 
-        self.assertEqual(payload["summary"]["tun_total"], 2)
+        self.assertEqual(payload["summary"]["tun_total"], 1)
         self.assertEqual(payload["summary"]["tun_open"], 1)
-        self.assertEqual(payload["summary"]["tun_listening"], 1)
+        self.assertEqual(payload["summary"]["tun_listening"], 0)
         self.assertEqual(payload["summary"]["shared_services"], 1)
         self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
         self.assertEqual(len(payload["shared_tun"]), 1)
         self.assertEqual(payload["shared_tun"][0]["state"], "connected")
+        self.assertEqual(len(payload["tun"]), 1)
+        self.assertTrue(payload["tun"][0]["physical_interface"])
+        self.assertEqual(payload["tun"][0]["peer_id"], "physical")
+        self.assertEqual(payload["tun"][0]["stats"], {"rx_msgs": 2, "tx_msgs": 3, "rx_bytes": 200, "tx_bytes": 300})
 
     def test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes(self):
         args = argparse.Namespace(

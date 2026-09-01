@@ -1282,6 +1282,7 @@ function renderConnectionTable(tbodyId, rows, protocolLabel = 'Connection') {
   }
 
   tbody.innerHTML = rows.map((row) => {
+    const isPhysicalInterface = Boolean(row.physical_interface);
     const rxBytes = row.stats?.rx_bytes ?? 0;
     const txBytes = row.stats?.tx_bytes ?? 0;
     const rxMsgs = row.stats?.rx_msgs ?? 0;
@@ -1319,6 +1320,7 @@ function renderTunConnectionTable(tbodyId, rows) {
   }
 
   tbody.innerHTML = rows.map((row) => {
+    const isPhysicalInterface = Boolean(row.physical_interface);
     const rxBytes = row.stats?.rx_bytes ?? 0;
     const txBytes = row.stats?.tx_bytes ?? 0;
     const rxMsgs = row.stats?.rx_msgs ?? 0;
@@ -1327,12 +1329,12 @@ function renderTunConnectionTable(tbodyId, rows) {
     const isListening = state === 'listening';
     const local = row.local || {};
     const remote = row.remote_destination || {};
-    const chanText = Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
+    const chanText = isPhysicalInterface ? 'per-peer below' : (Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
       ? row.channel_aliases.map((v) => fmtChan(v)).join(', ')
-      : fmtChan(row.chan_id);
+      : fmtChan(row.chan_id));
     return `
       <tr>
-        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(isPhysicalInterface ? 'physical' : fmtConnectionId(row.peer_id))}</td>
         <td class="mono">${escapeHtml(chanText)}</td>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
         <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>
@@ -1365,6 +1367,7 @@ function renderTunRoutingConnectionTable(tbodyId, rows) {
   }
 
   tbody.innerHTML = rows.map((row) => {
+    const isPhysicalInterface = Boolean(row.physical_interface);
     const rxBytes = row.stats?.rx_bytes ?? 0;
     const txBytes = row.stats?.tx_bytes ?? 0;
     const rxMsgs = row.stats?.rx_msgs ?? 0;
@@ -1373,12 +1376,12 @@ function renderTunRoutingConnectionTable(tbodyId, rows) {
     const isListening = state === 'listening';
     const local = row.local || {};
     const remote = row.remote_destination || {};
-    const chanText = Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
+    const chanText = isPhysicalInterface ? 'per-peer below' : (Array.isArray(row.channel_aliases) && row.channel_aliases.length > 1
       ? row.channel_aliases.map((v) => fmtChan(v)).join(', ')
-      : fmtChan(row.chan_id);
+      : fmtChan(row.chan_id));
     return `
       <tr>
-        <td class="mono">${escapeHtml(fmtConnectionId(row.peer_id))}</td>
+        <td class="mono">${escapeHtml(isPhysicalInterface ? 'physical' : fmtConnectionId(row.peer_id))}</td>
         <td class="mono">${escapeHtml(chanText)}</td>
         <td class="mono">${escapeHtml(fmtInteger(row.svc_id))}</td>
         <td class="mono">${escapeHtml(fmtText(row.service_name || ''))}</td>

@@ -304,6 +304,7 @@ ARC-CMP-004:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
   unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row
     - tests/unit/test_runner_tun_helper.py::test_runner_can_toggle_tun_enabled_state_through_helper_backend
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
