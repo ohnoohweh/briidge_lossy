@@ -5,6 +5,9 @@ import Darwin
 import Glibc
 #endif
 
+// Rebuild ChannelMux control-plane frames whenever an overlay starts a new epoch.
+typealias ObstacleBridgeChannelMuxStartupFramesProvider = (UInt64, UInt32) -> [Data]
+
 final class ObstacleBridgeChannelMuxTunRuntime {
     private static let tunFragmentHeaderSize = 8
     private static let tunInflowThrottleWindowNS: UInt64 = 100_000_000

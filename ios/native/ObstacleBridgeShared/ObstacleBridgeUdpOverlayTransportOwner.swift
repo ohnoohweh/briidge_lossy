@@ -21,6 +21,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let configuredPeerResolveFamily: String
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
+    private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let sessionMaxAppPayload: Int
     private let maxInFlight: Int
     private let queue: DispatchQueue
@@ -104,6 +105,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         maxInFlight: Int = 200,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
+        startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider? = nil,
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeUdpOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
@@ -130,6 +132,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.configuredPeerResolveFamily = peerResolveFamily
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         self.startupMuxFrames = startupMuxFrames
+        self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.serviceNameByID = serviceNameByID
         self.tunServiceSpec = tunServiceSpec
@@ -938,11 +941,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func maybeSendStartupMuxFrames() {
-        guard appReady(), !startupMuxFramesSent, !startupMuxFrames.isEmpty else {
+        guard appReady(), !startupMuxFramesSent else {
             return
         }
+        let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
-        sendMuxFrames(startupMuxFrames)
+        sendMuxFrames(frames)
     }
 
     private func handleOverlayPayload(_ payload: Data) {

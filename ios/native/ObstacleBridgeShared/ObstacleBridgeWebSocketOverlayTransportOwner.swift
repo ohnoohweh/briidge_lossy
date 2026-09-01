@@ -6,7 +6,6 @@ import Darwin
 final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
-    typealias RemoteServiceCatalogMuxFramesProvider = (UInt64, UInt32) -> [Data]
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
     private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
@@ -21,7 +20,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private let overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter?
     private let startupMuxFrames: [Data]
-    private let remoteServiceCatalogMuxFramesProvider: RemoteServiceCatalogMuxFramesProvider?
+    private let startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?
     private let reconnectRetryDelayMS: Int
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
@@ -119,7 +118,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         sessionMaxAppPayload: Int = 65535,
         overlayLayerTransportAdapter: ObstacleBridgeOverlayLayerTransportAdapter? = nil,
         startupMuxFrames: [Data] = [],
-        remoteServiceCatalogMuxFramesProvider: RemoteServiceCatalogMuxFramesProvider? = nil,
+        startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider? = nil,
         queue: DispatchQueue = DispatchQueue(label: "ObstacleBridgeWebSocketOverlayTransportOwner"),
         serviceNameByID: [Int: String] = [:],
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec? = nil,
@@ -150,7 +149,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.sessionMaxAppPayload = max(0, sessionMaxAppPayload)
         self.overlayLayerTransportAdapter = overlayLayerTransportAdapter
         self.startupMuxFrames = startupMuxFrames
-        self.remoteServiceCatalogMuxFramesProvider = remoteServiceCatalogMuxFramesProvider
+        self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.serviceNameByID = serviceNameByID
         self.tunServiceSpec = tunServiceSpec
@@ -978,7 +977,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private func maybeSendStartupMuxFrames() {
         guard appReady(), !startupMuxFramesSent else { return }
         let connectionSeq = tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq
-        let frames = remoteServiceCatalogMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        let frames = startupMuxFramesProvider?(muxInstanceID, connectionSeq) ?? startupMuxFrames
+        guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
     }
