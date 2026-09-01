@@ -240,6 +240,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot()
             )
