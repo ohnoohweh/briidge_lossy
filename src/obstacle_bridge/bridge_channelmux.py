@@ -115,16 +115,33 @@ class ProcessSharedTunRegistry:
             return []
         return [holder for holder in dict(entry.get("holders") or {}).values() if holder is not None]
 
-    def shared_peer_id_for(self, mux: "ChannelMux", peer_id: int) -> int:
+    def shared_peer_id_for(self, mux: "ChannelMux", peer_id: int, *, create: bool = True) -> Optional[int]:
         """Allocate a process-wide identity for a mux-local listener peer."""
         key = (id(mux), int(peer_id))
         existing = self._shared_peer_ids.get(key)
         if existing is not None:
             return existing
+        if not create:
+            return None
         shared_peer_id = self._next_shared_peer_id
         self._next_shared_peer_id += 1
         self._shared_peer_ids[key] = shared_peer_id
         self._shared_peer_routes[shared_peer_id] = (mux, int(peer_id))
+        return shared_peer_id
+
+    def holders(self) -> list["ChannelMux"]:
+        holders: dict[int, "ChannelMux"] = {}
+        for entry in self._by_key.values():
+            for holder in dict(entry.get("holders") or {}).values():
+                if holder is not None:
+                    holders[id(holder)] = holder
+        return list(holders.values())
+
+    def forget_shared_peer(self, mux: "ChannelMux", peer_id: int) -> Optional[int]:
+        key = (id(mux), int(peer_id))
+        shared_peer_id = self._shared_peer_ids.pop(key, None)
+        if shared_peer_id is not None:
+            self._shared_peer_routes.pop(shared_peer_id, None)
         return shared_peer_id
 
     def shared_peer_route_for(self, shared_peer_id: int) -> Optional[tuple["ChannelMux", int]]:
@@ -3158,7 +3175,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._pending_peer_service_catalogs.pop(int(peer_id), None)
         self._peer_mux_epochs.pop(int(peer_id), None)
         self._reset_peer_open_channels(int(peer_id))
-        self._drop_shared_tun_state_for_peer(int(peer_id))
+        self._drop_shared_tun_state_for_local_peer(int(peer_id))
         try:
             self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_id))
         except Exception as e:
@@ -4035,6 +4052,17 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if registry is None:
             return int(peer_id)
         return registry.shared_peer_id_for(self, int(peer_id))
+
+    def _drop_shared_tun_state_for_local_peer(self, peer_id: int) -> None:
+        registry = self._process_shared_tun_registry
+        if registry is None:
+            self._drop_shared_tun_state_for_peer(int(peer_id))
+            return
+        shared_peer_id = registry.forget_shared_peer(self, int(peer_id))
+        if shared_peer_id is None:
+            return
+        for holder in registry.holders():
+            holder._drop_shared_tun_state_for_peer(int(shared_peer_id))
 
     def _shared_tun_route_for_peer_id(
         self, dev: "ChannelMux.TunDevice", shared_peer_id: Optional[int]

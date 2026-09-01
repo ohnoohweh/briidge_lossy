@@ -2087,6 +2087,13 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             _ipv4_packet('192.168.106.1', '192.168.106.2'),
             peer_id=77,
         )
+        shared_peer_id = registry.shared_peer_id_for(mux2, 77, create=False)
+        self.assertIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
+
+        mux2.on_peer_disconnected(77)
+
+        self.assertNotIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
+        self.assertNotIn((svc_key, shared_peer_id), mux2._shared_tun_runtime_by_peer)
 
     async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
         self.mux.args = argparse.Namespace(
