@@ -282,6 +282,9 @@ ARC-CMP-004:
   # packaged-XPC Admin status polling, or inline TUN-row publication side effects.
   # The macOS elevated scripts preserve CI identity through sudo so those
   # hosted-runner branches remain active after privilege escalation.
+  # GitHub-hosted macOS cannot grant the Swift host runner permission for real
+  # utun packet injection, so that packet-carry case remains a local-authorized
+  # integration assertion and skips in the hosted lane.
   # Synology wrapper coverage also pins the declared python314 package
   # dependency, beta-package metadata, DSM-acceptable outer archive shape,
   # restart-exit-code handling, package-managed dependency-bootstrap

@@ -999,6 +999,12 @@ def _run_swift_elevated_packet_carry(
 
 
 def test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets(tmp_path: Path) -> None:
+    if _running_in_github_actions():
+        pytest.skip(
+            "GitHub-hosted macOS cannot grant the Swift host runner permission required "
+            "for real utun packet injection; run this elevated packet-carry lane on an "
+            "authorized local macOS host"
+        )
     _run_swift_elevated_packet_carry(tmp_path, require_packaged_xpc=False)
 
 

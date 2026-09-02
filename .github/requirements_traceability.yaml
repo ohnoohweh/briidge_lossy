@@ -687,7 +687,9 @@ REQ-LIFE-010:
   # paired packet-carry tests cover overlay delivery independently of ICMP policy.
   # Swift macOS packet carry waits for the configured peer route to resolve
   # through the created utun before injecting traffic, establishing that local
-  # route contract before overlay carriage is asserted.
+  # route contract before overlay carriage is asserted on authorized local
+  # macOS. GitHub-hosted macOS cannot grant the Swift host runner's packet-
+  # injection permission, so that one packet-carry case skips there.
   # macOS elevated scripts preserve CI identity across sudo so hosted-runner
   # diagnostics remain scoped to the CI privilege boundary, including the
   # inline case where hosted macOS leaves the TUN row empty and the Swift
