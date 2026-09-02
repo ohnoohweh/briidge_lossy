@@ -14,6 +14,7 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   exec sudo env \
     OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1 \
     OBSTACLEBRIDGE_GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
+    OBSTACLEBRIDGE_MACOS_ELEVATED_TEST_TARGET="${OBSTACLEBRIDGE_MACOS_ELEVATED_TEST_TARGET:-}" \
     "$0" "$@"
 fi
 
@@ -22,6 +23,7 @@ export GITHUB_ACTIONS="${GITHUB_ACTIONS:-${OBSTACLEBRIDGE_GITHUB_ACTIONS:-}}"
 export OBSTACLEBRIDGE_ELEVATED_TEST_PROGRESS=1
 export PYTHONUNBUFFERED=1
 export TERM="${TERM:-dumb}"
+TEST_TARGET="${OBSTACLEBRIDGE_MACOS_ELEVATED_TEST_TARGET:-tests/integration/test_macos_elevated.py}"
 
 diagnose_exit() {
   status=$?
@@ -39,4 +41,4 @@ trap diagnose_exit EXIT
 
 cd "$ROOT_DIR"
 "$PYTHON_BIN" -m pytest -vv -s -rs --durations=20 \
-  tests/integration/test_macos_elevated.py -m macos_elevated --run-macos-elevated "$@"
+  "$TEST_TARGET" -m macos_elevated --run-macos-elevated "$@"
