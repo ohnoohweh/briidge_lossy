@@ -192,6 +192,20 @@ def _route_get_interface(host: str) -> str:
     return ""
 
 
+def _wait_route_interface(host: str, expected_ifname: str, timeout: float = 12.0) -> None:
+    end = time.time() + timeout
+    last_interface = ""
+    while time.time() < end:
+        last_interface = _route_get_interface(host)
+        if last_interface == expected_ifname:
+            return
+        time.sleep(0.2)
+    raise RuntimeError(
+        f"route to {host!r} did not resolve through {expected_ifname!r}; "
+        f"last_interface={last_interface!r}\n{_route_diag(host)}"
+    )
+
+
 def _route_get_interface6(host: str) -> str:
     result = subprocess.run(
         ["route", "-n", "get", "-inet6", host],
@@ -944,6 +958,7 @@ def _run_swift_elevated_packet_carry(
         assert "client-tun-hook-macos.sh" in " ".join(swift_runtime.get("last_hook_argv") or [])
         _wait_interface(swift_actual_ifname)
         _wait_interface_address(swift_actual_ifname, "198.18.78.1")
+        _wait_route_interface("198.18.78.2", swift_actual_ifname)
 
         python_status = _local_admin_json(python_admin_port, "/api/status")
         python_helper = dict(python_status.get("tun_helper") or {})

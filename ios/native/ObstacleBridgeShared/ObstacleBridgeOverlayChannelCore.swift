@@ -245,6 +245,7 @@ enum ObstacleBridgeOverlayChannelCore {
         tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?,
         tunIfname: String?,
         tunMTU: Int,
+        serviceNameByID: [Int: String] = [:],
         bufferedFrames: Int = 0,
         backpressure: ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot? = nil,
         transmitDelayEstMS: Double = 0.0,
@@ -257,6 +258,7 @@ enum ObstacleBridgeOverlayChannelCore {
         let ifname = tunIfname ?? "tun"
         let mtu = tunMTU
         let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
+        let configuredServiceName = serviceNameByID[spec.svcID]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let nowNS = DispatchTime.now().uptimeNanoseconds
         let sharedOwnership = tunRuntime?.sharedTunRuntimeSnapshot()
         let backpressure = backpressure ?? simpleBackpressureSnapshot(
@@ -281,7 +283,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 state: "connected",
                 chanID: chanID,
                 svcID: spec.svcID,
-                serviceName: "TUN",
+                serviceName: (configuredServiceName?.isEmpty == false) ? configuredServiceName! : "TUN",
                 sourceHost: nil,
                 sourcePort: nil,
                 localHost: ifname,

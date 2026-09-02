@@ -5635,13 +5635,16 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
         connections = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/connections")
 
         assert tun_status["summary"]["shared_services"] == 1
-        assert tun_status["summary"]["tun_listening"] >= 1
+        # A configured Swift TUN endpoint announces OPEN as soon as the overlay
+        # is app-ready, so the shared physical interface is already connected.
+        assert tun_status["summary"]["tun_open"] >= 1
+        assert tun_status["summary"]["tun_listening"] == 0
         assert tun_status["summary"]["shared_active_peer_bindings"] == 0
         assert tun_status["summary"]["shared_drop_by_reason"] == {}
         assert len(tun_status["shared_tun"]) == 1
         shared_row = tun_status["shared_tun"][0]
         ownership = shared_row["shared_tun_ownership"]
-        assert shared_row["state"] == "listening"
+        assert shared_row["state"] == "connected"
         assert shared_row["service_name"] == "Shared TUN Control Plane"
         assert ownership["mode"] == "server_shared"
         assert ownership["peer_refs"] == ["linux-client"]

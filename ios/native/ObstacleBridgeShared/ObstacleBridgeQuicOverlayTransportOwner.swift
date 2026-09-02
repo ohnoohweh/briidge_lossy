@@ -220,6 +220,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot()
             )

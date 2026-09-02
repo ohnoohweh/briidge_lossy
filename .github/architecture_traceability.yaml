@@ -272,6 +272,9 @@ ARC-CMP-003:
 ARC-CMP-004:
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
+  # Swift macOS packet carriage waits for its configured peer route to resolve
+  # through the created utun, establishing the local routing contract before
+  # it asserts overlay delivery.
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
   # Hosted macOS elevated gates keep Admin/helper state assertions even when

@@ -319,6 +319,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
                 backpressure: ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
                     waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),

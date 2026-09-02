@@ -685,6 +685,9 @@ REQ-LIFE-009:
 REQ-LIFE-010:
   # Elevated route/DNS verification is host-local and deterministic; the
   # paired packet-carry tests cover overlay delivery independently of ICMP policy.
+  # Swift macOS packet carry waits for the configured peer route to resolve
+  # through the created utun before injecting traffic, establishing that local
+  # route contract before overlay carriage is asserted.
   # macOS elevated scripts preserve CI identity across sudo so hosted-runner
   # diagnostics remain scoped to the CI privilege boundary, including the
   # inline case where hosted macOS leaves the TUN row empty and the Swift
