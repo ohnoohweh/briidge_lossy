@@ -34,6 +34,29 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     )
 
 
+def _elevated_progress_enabled() -> bool:
+    return str(os.environ.get("OBSTACLEBRIDGE_ELEVATED_TEST_PROGRESS") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def pytest_runtest_logstart(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    if _elevated_progress_enabled():
+        print(f"[elevated-test] START {nodeid}", flush=True)
+
+
+def pytest_runtest_logreport(report: pytest.TestReport) -> None:
+    if _elevated_progress_enabled() and report.when in {"setup", "call", "teardown"}:
+        print(
+            f"[elevated-test] {report.outcome.upper()} {report.when} "
+            f"{report.nodeid} duration={report.duration:.2f}s",
+            flush=True,
+        )
+
+
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     want_linux_elevated = bool(config.getoption("--run-linux-elevated"))
     if not want_linux_elevated:
