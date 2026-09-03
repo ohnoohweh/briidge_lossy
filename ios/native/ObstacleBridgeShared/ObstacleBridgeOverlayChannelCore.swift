@@ -306,7 +306,7 @@ enum ObstacleBridgeOverlayChannelCore {
         tunRuntime: ObstacleBridgeChannelMuxTunRuntime?,
         backpressure: ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot
     ) -> Bool {
-        guard let tunRuntime else {
+        guard tunRuntime != nil else {
             return false
         }
         // TUN no longer has an ingress throttle. Packet and diagnostic reads

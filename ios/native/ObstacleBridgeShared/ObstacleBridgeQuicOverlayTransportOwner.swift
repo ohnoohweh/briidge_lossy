@@ -571,7 +571,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard let adapter = overlayLayerTransportAdapter else {
             return
         }
-        let protocolStats = overlayRuntime.protocolStatsSnapshot()
+        let protocolStats = overlayProtocolStats()
         let transmitDelayEstMS = protocolStats["transmit_delay_est_ms"] as? Double ?? 0.0
         guard let result = adapter.transportDelayRotationDue(
             transmitDelayEstMS: transmitDelayEstMS,
