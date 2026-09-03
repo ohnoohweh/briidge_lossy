@@ -1164,6 +1164,11 @@ function fmtThrottleSummary(throttle) {
   return fmtThrottleRateLimit(throttle);
 }
 
+function fmtThrottleIndicator(throttle) {
+  if (!throttle || throttle.applicable === false) return 'n/a';
+  return throttle.active ? 'active' : 'inactive';
+}
+
 function fmtTunFlowSummary(stats) {
   const rxMsgs = fmtInteger(stats?.rx_msgs ?? 0);
   const txMsgs = fmtInteger(stats?.tx_msgs ?? 0);
@@ -1395,7 +1400,7 @@ function renderTunRoutingConnectionTable(tbodyId, rows) {
         <td class="mono">${escapeHtml(fmtBytes(txBytes))}</td>
         <td class="mono">${escapeHtml(fmtInteger(rxMsgs))}</td>
         <td class="mono">${escapeHtml(fmtInteger(txMsgs))}</td>
-        <td class="mono">${escapeHtml(fmtThrottleSummary(row.throttle))}</td>
+        <td class="mono">${escapeHtml(fmtThrottleIndicator(row.throttle))}</td>
       </tr>
     `;
   }).join('');
@@ -1497,6 +1502,8 @@ function detailPillClass(value) {
   const normalized = String(value || '').toLowerCase();
   if (normalized === 'connected') return 'role-pill role-server';
   if (normalized === 'disconnected') return 'role-pill role-disconnected';
+  if (normalized === 'active') return 'role-pill role-client';
+  if (normalized === 'inactive') return 'role-pill role-server';
   if (
     normalized.includes('auth')
     || normalized.includes('connect')
@@ -3011,12 +3018,10 @@ function renderPeerTable(rows) {
       renderMetric('UDP Open', fmtInteger(row.open_connections?.udp ?? 0)),
       renderMetric('TCP Open', fmtInteger(row.open_connections?.tcp ?? 0)),
       renderMetric('TUN Open', fmtInteger(row.open_connections?.tun ?? 0)),
+      renderMetric('Throttle', fmtThrottleIndicator(row.throttle), { pill: true }),
     ], [
       renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds)),
       renderMetric('Restart In', fmtUptime(row.restart_in_seconds)),
-    ]]) : '';
-    const tunMetrics = !isListeningPeer ? renderMetricStack([[
-      renderMetric('Throttle', fmtThrottleSummary(row.throttle)),
     ]]) : '';
     const connectionMetrics = renderMetricStack(connectionLines);
     const showProtocolRow = !isListeningPeer;
@@ -3157,12 +3162,6 @@ function renderPeerTable(rows) {
       <tr class="peer-detail-row">
         <td class="peer-detail-kind">ChannelMux</td>
         <td>${channelMuxMetrics}</td>
-      </tr>
-      `);
-      detailRows.push(`
-      <tr class="peer-detail-row peer-detail-row-end">
-        <td class="peer-detail-kind">TUN</td>
-        <td>${tunMetrics}</td>
       </tr>
       `);
     }

@@ -1104,6 +1104,8 @@ A typed transport `Disconnected` lifecycle event is authoritative: SecureLink im
 
 ChannelMux also protects SecureLink handshake and rekey traffic under load: `channelmux_transport_delay_threshold_ms` defaults to 5000 ms. At or above it, TCP pauses local reads and UDP drops new local packets. TUN continues draining locally, but its completed mux DATA/DATA_FRAG is dropped immediately before SecureLink; TUN OPEN control remains eligible. `channelmux_transport_delay_rotation_delay_ms` defaults to 30000 ms; if estimated delay remains high for that duration, ChannelMux requests the normal connection rotation. Admission resumes when RTT recovers.
 
+WebAdmin presents that state as one active/inactive throttle indicator in each peer's ChannelMux box. The TUN / Routing page presents the same indicator only beside aggregate physical-interface statistics; shared-peer binding rows remain focused on binding state, connection identity, and RX/TX traffic rather than quota detail.
+
 ### Own public IP
 
 Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address and port it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the peer-observed IPv4 or IPv6 source tuple for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. IPv6 uses `[address]:port`; IPv4-mapped dual-stack observations are published as normal IPv4 addresses. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.

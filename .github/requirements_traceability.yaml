@@ -1287,7 +1287,9 @@ REQ-ADM-006:
   # Peer-detail coverage also pins persistent enabled-layer visibility and
   # ChannelMux-owned candidate/restart timers, including the Transport
   # detail ordering, status-pill semantics, launcher restart countdowns, and peer-scoped wrapper states for resolved and
-  # server-observed peer address-and-port tuples.
+  # server-observed peer address-and-port tuples. The UI evidence also keeps
+  # throttle state in the ChannelMux peer box and limits the TUN page to a
+  # physical-interface aggregate indicator.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
