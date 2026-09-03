@@ -1036,7 +1036,18 @@ class SecureLinkPskSession(ISession):
             self._connected_evt.set()
         else:
             self._connected_evt.clear()
-        if connected == self._last_connected:
+        # A lower transport can begin a fresh disconnected epoch while
+        # SecureLink is already failed/disconnected.  That epoch is still a
+        # material lifecycle edge: ChannelMux uses it to release its prior
+        # rotation wait and schedule the next candidate.  Suppressing it just
+        # because the boolean state is unchanged permanently latches recovery
+        # after the first SecureLink failure.
+        lifecycle_epoch_changed = (
+            int(self._connection_lifecycle.event.epoch)
+            != int(self._connection_lifecycle_epoch)
+        )
+        state_changed = connected != self._last_connected
+        if not state_changed and not lifecycle_epoch_changed:
             return
         self._last_connected = connected
         self._connection_lifecycle.transition(
@@ -1044,7 +1055,7 @@ class SecureLinkPskSession(ISession):
             self._connection_lifecycle_epoch,
             "security_authenticated" if connected else "security_disconnected",
         )
-        if callable(self._outer_on_state):
+        if state_changed and callable(self._outer_on_state):
             try:
                 self._outer_on_state(connected)
             except Exception:

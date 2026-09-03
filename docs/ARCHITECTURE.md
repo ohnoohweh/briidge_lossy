@@ -77,6 +77,9 @@ Security:
 - remains `disconnected` while the initial handshake is incomplete or fails
 - remains `connected` during a rekey; a rekey is not a transport disconnect
 - publishes `disconnected` when secure-link enters `failed`
+- propagates a newer lower-transport epoch even when it is already
+  `disconnected`, so ChannelMux can continue candidate rotation after a
+  failed reauthentication
 - forwards a rotation request to the transport after clearing security state
   for the next transport epoch
 

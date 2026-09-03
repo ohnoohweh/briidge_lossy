@@ -173,12 +173,16 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await session.start()
         inner.emit_lifecycle(ConnectionState.CONNECTED, 4, "transport_connected")
         inner.emit_lifecycle(ConnectionState.DISCONNECTED, 4, "transport_disconnected")
+        inner.emit_lifecycle(ConnectionState.DISCONNECTED, 5, "transport_rotation")
         result = session.request_connection_rotation("channelmux_disconnected")
         await session.stop()
 
         self.assertEqual(
             [(event.state, event.epoch) for event in events],
-            [(ConnectionState.DISCONNECTED, 4)],
+            [
+                (ConnectionState.DISCONNECTED, 4),
+                (ConnectionState.DISCONNECTED, 5),
+            ],
         )
         self.assertTrue(result.accepted)
         self.assertEqual(result.reason, "channelmux_disconnected")

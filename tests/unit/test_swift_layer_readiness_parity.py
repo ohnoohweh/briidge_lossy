@@ -85,6 +85,9 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
     assert 'request_connection_rotation("channelmux_transport_delay")' in python_mux
     assert "retry_after_rejection = not accepted and not self._overlay_connected" in python_mux
     assert "if not accepted or self._connection_lifecycle_epoch > requested_epoch:" in python_mux
+    python_secure_link = (ROOT / "src" / "obstacle_bridge" / "bridge_securelink.py").read_text(encoding="utf-8")
+    assert "lifecycle_epoch_changed = (" in python_secure_link
+    assert "outerLifecycle.state != nextState || outerLifecycle.epoch != transportLifecycle.epoch" in adapter
     assert "static let defaultTransportDelayRotationThresholdMS: Double = 5_000.0" in adapter
     assert "static let defaultTransportDelayRotationGrace: TimeInterval = 30.0" in adapter
     assert "let transportDelayRotationThresholdMS: Double" in adapter
