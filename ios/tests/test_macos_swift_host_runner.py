@@ -504,6 +504,10 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
     assert "private static let lowerLayerUnavailableFallbackNS" in udp_owner
     assert "maybeRecoverUnavailableAppReady(nowNS:" in udp_owner
+    assert "private func appReadinessRecoveryInSeconds" in udp_owner
+    assert 'snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
+    assert 'snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
+    assert "guard rebuildSocketForPeerRotation() else" in udp_owner
     assert 'reason = "secure_link_handshake_stale"' in udp_owner
     assert 'reason = "secure_link_failed"' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner

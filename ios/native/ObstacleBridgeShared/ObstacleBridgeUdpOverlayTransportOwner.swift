@@ -12,7 +12,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = 15_000_000_000
 
     private let bindHost: String
     private let bindPort: Int
@@ -399,6 +399,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
+            snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             return snapshot
         }
     }
@@ -854,9 +856,32 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         if peerCandidates.count > 1 {
             rotateToNextPeerCandidate(nowNS: nowNS, reason: reason)
         } else {
+            guard rebuildSocketForPeerRotation() else {
+                return false
+            }
             resetOverlayTransportEpoch(reason: reason)
+            sendInitialIdleProbe()
         }
         return true
+    }
+
+    private func appReadinessRecoveryInSeconds(nowNS: UInt64? = nil) -> Double? {
+        guard overlayConnected,
+              secureLinkHandshakePrimed,
+              lastSecureLinkPrimeNS != 0,
+              let adapter = overlayLayerTransportAdapter,
+              let status = adapter.secureLinkStatusSnapshot(),
+              status.clientMode,
+              !status.peerConfirmedAuthenticated
+        else {
+            return nil
+        }
+        let currentNS = nowNS ?? monotonicNowNS()
+        guard currentNS >= lastSecureLinkPrimeNS else { return 0.0 }
+        let elapsedNS = currentNS - lastSecureLinkPrimeNS
+        return Double(Self.lowerLayerUnavailableFallbackNS > elapsedNS
+            ? Self.lowerLayerUnavailableFallbackNS - elapsedNS
+            : 0) / 1_000_000_000.0
     }
 
     private func resetOverlayTransportEpoch(reason: String) {

@@ -20,6 +20,7 @@ ARC-CMP-001:
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_connection_lifecycle.py::test_listener_peer_without_completed_app_payload_has_bounded_deadline
     - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
@@ -288,6 +289,9 @@ ARC-CMP-004:
   # GitHub-hosted macOS cannot grant the Swift host runner permission for real
   # utun packet injection, so that packet-carry case remains a local-authorized
   # integration assertion and skips in the hosted lane.
+  # myUDP connection readiness requires completed application-payload progress,
+  # not merely UDP control traffic: raw-only listener peers are reaped and
+  # Swift client recovery publishes its retry deadline before socket rebuild.
   # Synology wrapper coverage also pins the declared python314 package
   # dependency, beta-package metadata, DSM-acceptable outer archive shape,
   # restart-exit-code handling, package-managed dependency-bootstrap
