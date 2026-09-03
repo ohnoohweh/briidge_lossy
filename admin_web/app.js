@@ -3109,11 +3109,15 @@ function renderPeerTable(rows) {
         renderMetric('disconnect_detail', secureLink.disconnect_detail),
       ]] : []),
     ]) : '';
+    // Keep the identity cell scoped to exactly this peer's rendered detail
+    // rows.  Counting both the non-listener shortcut and Protocol previously
+    // made it span one row into the next peer, visibly stretching e.g. a
+    // ws:0:-1 identity box when it preceded another connection.
     const rowSpan = 1
-      + (!isListeningPeer ? 2 : 0)
       + (showProtocolRow ? 1 : 0)
       + (showCompressionRow ? 1 : 0)
-      + (showSecurityLifecycle ? 1 : 0);
+      + (showSecurityLifecycle ? 1 : 0)
+      + (channelMuxMetrics ? 1 : 0);
     const detailRows = [
       `
       <tr class="peer-detail-row peer-detail-row-start ${rowSpan === 1 ? 'peer-detail-row-end' : ''}">

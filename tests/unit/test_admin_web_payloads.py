@@ -1598,6 +1598,8 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
                 self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
                 self.assertIn("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", text)
+                self.assertIn("+ (channelMuxMetrics ? 1 : 0);", text)
+                self.assertNotIn("+ (!isListeningPeer ? 2 : 0)", text)
                 uptime_index = text.index("renderMetric('Connection Uptime'")
                 self.assertLess(
                     uptime_index,
