@@ -235,7 +235,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         "helper_write_probe_packet",
         "helper_write_error",
     )
-    CONNECTION_ROTATION_DELAY_S: float = 30.0
+    # The outer layer is the protocol-agnostic readiness authority. A live
+    # socket with SecureLink/Compression not app-ready must rotate just like a
+    # fully disconnected transport.
+    CONNECTION_ROTATION_DELAY_S: float = 15.0
 
     class Proto(enum.IntEnum):
         UDP = 0

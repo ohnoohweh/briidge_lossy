@@ -29,6 +29,7 @@ def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
         assert 'overlayConnected: inflowAllowed()' in source
         assert "connectionRotationDue(candidateCount:" in source
         assert "lifecycle_restart_required" in source
+        assert "ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace" in source
 
 
 def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
@@ -42,6 +43,8 @@ def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     assert "struct ObstacleBridgeConnectionLifecycleEvent" in adapter
     assert "struct ObstacleBridgeConnectionRotationResult" in adapter
     assert "func connectionRotationDue(candidateCount: Int)" in adapter
+    assert "static let outerReadinessGrace: TimeInterval = 15.0" in adapter
+    assert "connectionRotationDelay: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace" in adapter
     assert 'layers[index]["lifecycle_state"] = outerLifecycle.state.rawValue' in adapter
     assert '"layer": "peer_address_protocol"' in adapter
     assert '"app_ready": transportLifecycle.state == .connected' in adapter

@@ -41,7 +41,7 @@ This guide should describe the current testing model, not act as a dated event l
 The active testing focus on this branch is:
 
 - overlay reconnect and stale-transport recovery on Python and Swift paths, including myUDP disconnected-epoch publication for every unsuccessful candidate rotation and a fresh Swift WebSocket ChannelMux TUN epoch before each connection attempt
-- typed Python lifecycle-contract normalization, Compression forwarding, ChannelMux epoch-gated rotation/TUN admission and full-stack candidate-cycle reset, Runner cycle-exhaustion restart, and myUDP event-order/epoch emission
+- typed Python lifecycle-contract normalization, Compression forwarding, shared peer-client/listener ChannelMux outer-readiness rotation/TUN admission and full-stack candidate-cycle reset, Runner cycle-exhaustion restart, and myUDP event-order/epoch emission
 - WebAdmin peer ownership grouping for connection, protocol, ChannelMux, and TUN diagnostics, including ChannelMux-owned candidate/restart timers and persistent visibility for enabled SecureLink and Compression layers
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
@@ -79,7 +79,7 @@ Representative anchors for those areas:
   - [tests/unit/test_admin_web_component_parity.py](../tests/unit/test_admin_web_component_parity.py)
   - [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
-- current Swift/Python parity coverage now also includes [tests/unit/test_swift_layer_readiness_parity.py](../tests/unit/test_swift_layer_readiness_parity.py), which source-guards the shared lifecycle/readiness contract so Swift overlay owners publish `connection_layers`, lifecycle rotation ownership, and top-layer `app_ready`, while the Swift admin surfaces continue to consume that contract instead of falling back to raw transport-up state
+- current Swift/Python parity coverage now also includes [tests/unit/test_swift_layer_readiness_parity.py](../tests/unit/test_swift_layer_readiness_parity.py), which source-guards the shared 15-second outer-readiness grace and lifecycle/readiness contract so all Swift overlay owners publish `connection_layers`, lifecycle rotation ownership, and top-layer `app_ready`, while the Swift admin surfaces continue to consume that contract instead of falling back to raw transport-up state
 - current Admin Web payload coverage includes Python peer-metric fallback parity for connected rows while preserving null transport metrics on passive listener rows
 - current Admin Web resilience coverage pins the minimal live-session status fallback used when stats snapshotting fails before a cached status payload exists
 - current TUN / Routing Admin Web coverage also pins shared-TUN diagnostics so the page renders one configured ownership peer per row with bound/not-bound state, a protocol-qualified connection identity, learned addresses, and binding-scoped RX/TX counters, while retaining interface-facing flow counters, shared-drop totals, per-reason drop summaries, and latest-drop context without inventing a second backend-only diagnostic path

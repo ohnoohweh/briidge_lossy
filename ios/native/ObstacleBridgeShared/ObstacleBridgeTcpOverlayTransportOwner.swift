@@ -6,7 +6,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     typealias TunPacketSink = (Data) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
+        ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
+    )
 
     private let peerHost: String
     private let peerPort: Int

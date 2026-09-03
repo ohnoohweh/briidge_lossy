@@ -12,7 +12,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 15_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
+        ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
+    )
 
     private let bindHost: String
     private let bindPort: Int

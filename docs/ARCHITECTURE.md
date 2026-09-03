@@ -94,7 +94,7 @@ ChannelMux and TUN:
 
 - `ChannelMux` admits or starts services only while the outer lifecycle state is
   `connected`
-- after receiving `disconnected` continuously for more than 30 seconds,
+- after the outer layer remains non-ready continuously for more than 15 seconds,
   `ChannelMux` requests one connection rotation through the wrapper stack
 - a raw transport `connected` event does not reset the candidate-cycle budget;
   ChannelMux resets it only after the outer lifecycle reports `connected`
@@ -153,9 +153,9 @@ recovery paths:
   decompression error as disconnected, and blocks traffic until a newer epoch
 - SecureLink reports authentication failure as disconnected and forwards a
   rotation request only when its caller asks; ChannelMux requests one cascaded
-  rotation after 30 seconds of continuous disconnection
+  rotation after 15 seconds of continuous outer-layer non-readiness
 - ChannelMux tracks continuous outer-layer disconnection, requests one
-  cascaded rotation after 30 seconds, and waits for a newer lifecycle epoch
+  cascaded rotation after 15 seconds, and waits for a newer lifecycle epoch
   before it can request another rotation. An accepted myUDP rotation publishes
   that newer disconnected epoch, so the policy continues through candidates
   rather than remaining stalled after its first request.

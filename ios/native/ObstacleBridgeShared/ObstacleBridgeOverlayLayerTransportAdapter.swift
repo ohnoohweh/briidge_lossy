@@ -21,6 +21,10 @@ struct ObstacleBridgeConnectionRotationResult {
 }
 
 final class ObstacleBridgeOverlayLayerTransportAdapter {
+    // This is the layered application-readiness grace used by every native
+    // overlay owner. Transport-up alone never makes the overlay usable.
+    static let outerReadinessGrace: TimeInterval = 15.0
+
     struct OutboundSnapshot {
         var emittedFrames: [Data]
     }
@@ -47,7 +51,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         compressRuntime: ObstacleBridgeCompressLayerRuntime? = nil,
         secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter? = nil,
         peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime? = nil,
-        connectionRotationDelay: TimeInterval = 30.0,
+        connectionRotationDelay: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace,
         lifecycleTimeProvider: (() -> TimeInterval)? = nil
     ) {
         self.compressRuntime = compressRuntime

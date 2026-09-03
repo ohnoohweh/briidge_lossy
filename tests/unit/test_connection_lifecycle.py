@@ -14,6 +14,11 @@ from obstacle_bridge.bridge import UdpSession
 
 
 class ConnectionLifecycleContractTests(unittest.TestCase):
+    def test_channelmux_outer_readiness_rotation_uses_shared_grace_window(self) -> None:
+        from obstacle_bridge.bridge_channelmux import ChannelMux
+
+        self.assertEqual(ChannelMux.CONNECTION_ROTATION_DELAY_S, 15.0)
+
     def test_event_snapshot_round_trip_preserves_state_epoch_and_reason(self) -> None:
         event = ConnectionLifecycleEvent(
             state=ConnectionState.CONNECTED,

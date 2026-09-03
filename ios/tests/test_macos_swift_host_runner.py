@@ -503,6 +503,9 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "receiveState.reset()" in peer_runtime
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
     assert "private static let lowerLayerUnavailableFallbackNS" in udp_owner
+    assert "static let outerReadinessGrace: TimeInterval = 15.0" in (
+        (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    )
     assert "maybeRecoverUnavailableAppReady(nowNS:" in udp_owner
     assert "private func appReadinessRecoveryInSeconds" in udp_owner
     assert 'snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
