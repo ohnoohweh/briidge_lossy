@@ -112,7 +112,7 @@ jobs:
         run: pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 
   bridge-py-integration-macos-elevated:
-    name: Integration Gate (macOS elevated TUN: ${{ matrix.case }})
+    name: "Integration Gate (macOS elevated TUN: ${{ matrix.case }})"
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: macos-latest
