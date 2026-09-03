@@ -119,6 +119,7 @@ ARC-CMP-003:
   # local subnet routes stay attached to their original interfaces. The WS
   # fragmentation integration proof relies on peer byte counters, not logs.
   unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
     - tests/unit/test_channel_mux_listener_mode.py::test_high_overlay_rtt_throttles_local_ingress
     - tests/unit/test_connection_lifecycle.py::test_channelmux_outer_readiness_rotation_uses_shared_grace_window
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer

@@ -560,6 +560,7 @@ REQ-LIFE-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
   unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
     - tests/unit/test_channel_mux_listener_mode.py::test_high_overlay_rtt_throttles_local_ingress
     - tests/unit/test_connection_lifecycle.py::test_channelmux_outer_readiness_rotation_uses_shared_grace_window
     - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason

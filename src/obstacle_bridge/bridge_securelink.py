@@ -2548,8 +2548,13 @@ class SecureLinkPskSession(ISession):
     def _on_inner_connection_lifecycle(self, event) -> None:
         self._connection_lifecycle_epoch = int(event.epoch)
         if not bool(event.connected):
-            self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, event.reason)
-            self._on_inner_state_change(False)
+            # A typed lower-layer lifecycle event is authoritative.  Do not
+            # re-check ``inner.is_connected()`` here: myUDP can still expose
+            # a stale raw socket/protocol object while its RTT lifecycle has
+            # already transitioned to disconnected. Keeping authenticated
+            # SecureLink state in that window made the outer layers lie.
+            self._preserve_connected_during_epoch_restart = False
+            self._clear_all_states()
             return
         self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, "security_handshaking")
 

@@ -283,6 +283,33 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["authenticated_sessions_total"], 1)
         self.assertIsNotNone(client_status["last_authenticated_unix_ts"])
 
+    async def test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer="127.0.0.1"), "myudp")
+        server = SecureLinkPskSession(server_inner, _args(), "myudp")
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            self.assertTrue(await client.wait_connected(timeout=0.1))
+            self.assertTrue(client.is_connected())
+
+            # Model myUDP publishing RTT disconnect while a stale protocol
+            # object still reports connected to an immediate caller.
+            client_inner.emit_lifecycle(ConnectionState.DISCONNECTED, 9, "rtt_timeout")
+
+            self.assertTrue(client_inner.is_connected())
+            self.assertFalse(client.is_connected())
+            self.assertFalse(client.get_connection_layers_snapshot()[-1]["app_ready"])
+            self.assertEqual(client.get_connection_lifecycle_snapshot()["state"], "disconnected")
+        finally:
+            await client.stop()
+            await server.stop()
+
     async def test_psk_server_authenticates_before_first_application_payload(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()
