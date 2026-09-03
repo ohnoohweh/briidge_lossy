@@ -1098,7 +1098,7 @@ What the admin web shows:
 | `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
-When the outer lifecycle remains non-ready, ChannelMux rotates the lower stack after 15 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
+When the outer lifecycle remains non-ready, ChannelMux rotates the lower stack after 15 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart. If a lower layer rejects a rotation before creating an epoch, ChannelMux releases its pending-epoch guard and retries after the same grace period instead of leaving the path stuck.
 
 A typed transport `Disconnected` lifecycle event is authoritative: SecureLink immediately withdraws authenticated readiness and Compression follows, even if a stale raw transport object briefly still appears connected. If that callback is missed, the authenticated secure-link watchdog fails closed after one handshake-timeout window of lower-layer non-readiness; the Swift shared adapter applies the same rule on its next observed transport-state snapshot.
 

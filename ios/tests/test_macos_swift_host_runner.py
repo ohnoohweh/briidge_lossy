@@ -528,6 +528,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "transportDelayRotationDue(" in overlay_adapter
     assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in overlay_adapter
     assert "let transportDelayRotationGrace: TimeInterval" in overlay_adapter
+    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in overlay_adapter
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert 'runtimeConfig["channelmux_transport_delay_threshold_ms"]' in host_runner
     assert 'runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]' in host_runner

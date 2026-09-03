@@ -923,6 +923,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             rotateToNextPeerCandidate(nowNS: nowNS, reason: result.reason)
         } else {
             guard rebuildSocketForPeerRotation() else {
+                adapter.rotationAttemptRejected(result)
                 return
             }
             resetOverlayTransportEpoch(reason: result.reason)

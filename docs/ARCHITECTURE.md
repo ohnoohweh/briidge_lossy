@@ -96,6 +96,10 @@ ChannelMux and TUN:
   `connected`
 - after the outer layer remains non-ready continuously for more than 15 seconds,
   `ChannelMux` requests one connection rotation through the wrapper stack
+- a lower-layer rotation request that is rejected before it starts a new
+  lifecycle epoch does not consume ChannelMux's one-per-epoch guard; while the
+  outer layer remains non-ready, ChannelMux clears that guard and retries after
+  the same grace window
 - `channelmux_transport_delay_threshold_ms` is the shared ChannelMux overload
   parameter, defaulting to `5000` milliseconds. At or above it, TCP pauses local
   reads, UDP sheds new local datagrams, and TUN continues draining but sheds
@@ -106,7 +110,8 @@ ChannelMux and TUN:
   transport delay stays at or above the threshold for that duration
   while the outer lifecycle is connected, ChannelMux requests one normal
   connection rotation and waits for the next lifecycle epoch before another
-  request.
+  request. A rejected request clears the wait immediately and is retried after
+  the configured delay rather than leaving the connection stuck.
 - a raw transport `connected` event does not reset the candidate-cycle budget;
   ChannelMux resets it only after the outer lifecycle reports `connected`
 - `TUN` ingress must not be admitted into `ChannelMux` unless ChannelMux has

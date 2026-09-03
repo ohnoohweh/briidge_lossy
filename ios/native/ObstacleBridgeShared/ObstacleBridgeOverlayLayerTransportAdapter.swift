@@ -183,6 +183,16 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         )
     }
 
+    // The owner can fail before it has actually reset or reconnected its
+    // transport (for example, a myUDP socket rebuild can be unavailable).
+    // Do not retain a wait-for-epoch latch for a rotation that never started.
+    func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult) {
+        guard rotationWaitingForNewEpoch == result.epoch else {
+            return
+        }
+        rotationWaitingForNewEpoch = nil
+    }
+
     // A connected transport can be unusable long before it reports a hard
     // disconnect. Rotate the normal candidate path after sustained estimated
     // wire delay, using the same one-rotation-per-epoch accounting.

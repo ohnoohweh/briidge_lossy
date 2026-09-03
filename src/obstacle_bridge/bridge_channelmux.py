@@ -2418,8 +2418,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return
 
         requested_epoch = self._connection_lifecycle_epoch
+        retry_after_rejection = False
 
         async def _rotate_after_disconnect() -> None:
+            nonlocal retry_after_rejection
             try:
                 await asyncio.sleep(self.CONNECTION_ROTATION_DELAY_S)
                 if self._overlay_connected:
@@ -2428,10 +2430,15 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     return
                 result = self.request_connection_rotation("channelmux_disconnected")
                 self.log.warning("[MUX] requested connection rotation after %.1fs epoch=%s result=%r", self.CONNECTION_ROTATION_DELAY_S, requested_epoch, result)
+                accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
+                retry_after_rejection = not accepted and not self._overlay_connected
             except asyncio.CancelledError:
                 return
             finally:
-                self._connection_rotation_task = None
+                if self._connection_rotation_task is asyncio.current_task():
+                    self._connection_rotation_task = None
+                if retry_after_rejection and self._connection_rotation_wait_epoch is None and not self._overlay_connected:
+                    self._schedule_connection_rotation()
 
         self._connection_rotation_task = self.loop.create_task(_rotate_after_disconnect())
 
@@ -2448,10 +2455,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not callable(request):
             return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
 
-        # A rotation is consumed by this epoch. Only a new lifecycle epoch may
-        # arm another request after a persistent outage or operator reload.
-        self._connection_rotation_wait_epoch = self._connection_lifecycle_epoch
-        result = request(str(reason or "channelmux_requested"))
+        # Reserve the epoch while calling the lower layer so a synchronous
+        # lifecycle edge cannot race past us.  A rejected request must not
+        # consume that epoch: otherwise a temporarily unavailable transport
+        # leaves ChannelMux permanently waiting for an epoch it never started.
+        requested_epoch = self._connection_lifecycle_epoch
+        self._connection_rotation_wait_epoch = requested_epoch
+        try:
+            result = request(str(reason or "channelmux_requested"))
+        except Exception as exc:
+            self.log.warning("[MUX] lower-layer rotation request failed reason=%s error=%r", reason, exc)
+            result = ConnectionRotationResult(accepted=False, reason="inner_rotation_error")
+        accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
+        if not accepted or self._connection_lifecycle_epoch > requested_epoch:
+            self._connection_rotation_wait_epoch = None
         if callable(self._on_connection_rotation_result):
             self._on_connection_rotation_result(result)
         return result

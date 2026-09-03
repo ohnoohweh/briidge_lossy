@@ -83,6 +83,8 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
     assert "--channelmux-transport-delay-threshold-ms" in python_mux
     assert "--channelmux-transport-delay-rotation-delay-ms" in python_mux
     assert 'request_connection_rotation("channelmux_transport_delay")' in python_mux
+    assert "retry_after_rejection = not accepted and not self._overlay_connected" in python_mux
+    assert "if not accepted or self._connection_lifecycle_epoch > requested_epoch:" in python_mux
     assert "static let defaultTransportDelayRotationThresholdMS: Double = 5_000.0" in adapter
     assert "static let defaultTransportDelayRotationGrace: TimeInterval = 30.0" in adapter
     assert "let transportDelayRotationThresholdMS: Double" in adapter
@@ -90,6 +92,8 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
     assert 'reason: "channelmux_transport_delay"' in adapter
     for owner in owners:
         assert "transportDelayRotationDue(" in owner
+    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in adapter
+    assert "adapter.rotationAttemptRejected(result)" in owners[0]
 
 
 def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:

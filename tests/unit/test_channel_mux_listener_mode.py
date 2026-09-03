@@ -303,6 +303,36 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
 
         self.assertEqual(session.rotation_requests, ["channelmux_disconnected"])
 
+    def test_rejected_rotation_does_not_latch_channelmux_epoch(self):
+        loop = asyncio.new_event_loop()
+        try:
+            session = _FakeSession(connected=False)
+            session.request_connection_rotation = lambda _reason: {"accepted": False, "reason": "transport_not_running"}
+            mux = ChannelMux(session, loop)
+
+            result = mux.request_connection_rotation("channelmux_disconnected")
+
+            self.assertFalse(result["accepted"])
+            self.assertIsNone(mux._connection_rotation_wait_epoch)
+        finally:
+            loop.close()
+
+    def test_rejected_disconnected_rotation_retries_after_grace(self):
+        asyncio.run(self._test_rejected_disconnected_rotation_retries_after_grace())
+
+    async def _test_rejected_disconnected_rotation_retries_after_grace(self):
+        session = _FakeSession(connected=False)
+        session.request_connection_rotation = lambda reason: session.rotation_requests.append(str(reason)) or {"accepted": False, "reason": "transport_not_running"}
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux.CONNECTION_ROTATION_DELAY_S = 0.01
+
+        await mux.on_overlay_state(False)
+        await asyncio.sleep(0.035)
+
+        self.assertGreaterEqual(len(session.rotation_requests), 2)
+        self.assertIsNone(mux._connection_rotation_wait_epoch)
+        mux._cancel_connection_rotation()
+
     def test_connected_overlay_cancels_pending_rotation(self):
         asyncio.run(self._test_connected_overlay_cancels_pending_rotation())
 
