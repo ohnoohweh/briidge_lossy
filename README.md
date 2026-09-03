@@ -1100,6 +1100,8 @@ What the admin web shows:
 
 When the outer lifecycle remains non-ready, ChannelMux rotates the lower stack after 15 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
 
+ChannelMux also protects SecureLink handshake and rekey traffic under load: when the overlay RTT estimate reaches two seconds, it pauses local TCP reads and drops new local UDP/TUN packets instead of extending the overlay queue. Admission resumes when RTT recovers.
+
 ### Own public IP
 
 Every peer client uses a small transport-adjacent protocol to ask its connected peer which source address and port it observes. The Peer page’s Transport block presents **Own Public IP** alongside compact Connection Uptime and Last Incoming values. It reports the peer-observed IPv4 or IPv6 source tuple for the active `myudp`, TCP, WebSocket, or QUIC path, is refreshed on each connection epoch, and remains empty until the peer replies. IPv6 uses `[address]:port`; IPv4-mapped dual-stack observations are published as normal IPv4 addresses. The diagnostic wrapper preserves the underlying transport's connected state and metrics, so it cannot turn a live peer into a disconnected Admin Web row. This is not an external address lookup and does not depend on SecureLink.

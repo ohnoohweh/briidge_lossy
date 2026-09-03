@@ -239,6 +239,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     # socket with SecureLink/Compression not app-ready must rotate just like a
     # fully disconnected transport.
     CONNECTION_ROTATION_DELAY_S: float = 15.0
+    OVERLAY_RTT_INGRESS_THROTTLE_MS: float = 2_000.0
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -720,6 +721,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tcp_drain_threshold: int = 1
         self._tcp_bp_latency_ms: int = 300
         self._tcp_bp_poll_interval_s: float = 0.05
+        self._tcp_ingress_throttle_poll_s: float = 0.05
 
         # Listener peers may legally reuse channel ids, so counters are scoped
         # to the peer session that receives the frame.
@@ -4313,6 +4315,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "inflight": 0,
                 "max_inflight": 0,
                 "transmit_delay_est_ms": 0.0,
+                "rtt_est_ms": 0.0,
                 "prev_window_bytes": 0,
                 "curr_window_bytes": 0,
                 "stalled": False,
@@ -4325,6 +4328,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "inflight": 0,
                 "max_inflight": 0,
                 "transmit_delay_est_ms": 0.0,
+                "rtt_est_ms": 0.0,
                 "prev_window_bytes": 0,
                 "curr_window_bytes": 0,
                 "stalled": False,
@@ -4337,6 +4341,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         last_rtt_ok_ns = getattr(metrics, "last_rtt_ok_ns", None)
         last_rx_ns = getattr(metrics, "last_rx_ns", None)
         transmit_delay_est_ms = getattr(metrics, "transmit_delay_est_ms", None)
+        rtt_est_ms = getattr(metrics, "rtt_est_ms", None)
         try:
             waiting_count = max(0, int(getattr(metrics, "waiting_count", 0) or 0))
         except (TypeError, ValueError):
@@ -4367,11 +4372,16 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             last_rx = 0
         progress_ns = max(last_ok, last_rx)
         if progress_ns <= 0:
+            try:
+                rtt_ms = max(0.0, float(rtt_est_ms or 0.0))
+            except (TypeError, ValueError):
+                rtt_ms = 0.0
             return {
                 "waiting_count": waiting_count,
                 "inflight": inflight,
                 "max_inflight": max_inflight,
                 "transmit_delay_est_ms": 0.0,
+                "rtt_est_ms": rtt_ms,
                 "prev_window_bytes": prev_window_bytes,
                 "curr_window_bytes": curr_window_bytes,
                 "stalled": False,
@@ -4381,6 +4391,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             tx_delay_ms = float(transmit_delay_est_ms or 0.0)
         except (TypeError, ValueError):
             tx_delay_ms = 0.0
+        try:
+            rtt_ms = max(0.0, float(rtt_est_ms or 0.0))
+        except (TypeError, ValueError):
+            rtt_ms = 0.0
         if tx_delay_ms > 0.0:
             adaptive_budget_ns = int(max(
                 self.TUN_STREAM_OVERLAY_RX_IDLE_NS_MIN,
@@ -4396,16 +4410,28 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "inflight": inflight,
             "max_inflight": max_inflight,
             "transmit_delay_est_ms": tx_delay_ms,
+            "rtt_est_ms": rtt_ms,
             "prev_window_bytes": prev_window_bytes,
             "curr_window_bytes": curr_window_bytes,
             "stalled": stalled,
         }
 
-    @staticmethod
-    def _session_overlay_backpressure_active(snapshot: dict[str, Any]) -> bool:
+    @classmethod
+    def _session_overlay_backpressure_active(cls, snapshot: dict[str, Any]) -> bool:
         inflight = max(0, int(snapshot.get("inflight", 0) or 0))
         max_inflight = max(0, int(snapshot.get("max_inflight", 0) or 0))
-        return max_inflight > 0 and inflight >= max_inflight
+        return (
+            (max_inflight > 0 and inflight >= max_inflight)
+            or float(snapshot.get("rtt_est_ms", 0.0) or 0.0) >= cls.OVERLAY_RTT_INGRESS_THROTTLE_MS
+        )
+
+    async def _wait_for_local_tcp_ingress(self, chan: int) -> None:
+        while self._overlay_connected and self._accepting_enabled:
+            snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+            if float(snapshot.get("rtt_est_ms", 0.0) or 0.0) < self.OVERLAY_RTT_INGRESS_THROTTLE_MS:
+                return
+            self.log.debug("[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f", chan, float(snapshot["rtt_est_ms"]))
+            await asyncio.sleep(self._tcp_ingress_throttle_poll_s)
 
     def _tcp_overlay_read_size(self) -> int:
         size = max(1, int(self._SAFE_TCP_READ))
@@ -4554,6 +4580,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "inflight": int(snapshot.get("inflight", 0) or 0),
             "max_inflight": int(snapshot.get("max_inflight", 0) or 0),
             "transmit_delay_est_ms": float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0),
+            "rtt_est_ms": float(snapshot.get("rtt_est_ms", 0.0) or 0.0),
             "budget_bytes": min(remaining_candidates) + aggregate["used_bytes"] if remaining_candidates else 0,
             "used_bytes": max(aggregate["used_bytes"], int(scoped.get("used_bytes", 0) or 0) if scoped else 0),
             "remaining_bytes": min(remaining_candidates) if remaining_candidates else 0,
@@ -6484,6 +6511,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             async def _pump():
                 try:
                     while True:
+                        await self._wait_for_local_tcp_ingress(chan)
                         data = await reader.read(self._tcp_overlay_read_size())
                         if not data:
                             break
@@ -6671,6 +6699,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 async def _rx():
                     try:
                         while True:
+                            await self._wait_for_local_tcp_ingress(chan)
                             buf = await reader.read(self._tcp_overlay_read_size())
                             if not buf:
                                 break

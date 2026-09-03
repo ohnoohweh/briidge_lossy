@@ -30,6 +30,7 @@ class _FakeSession:
         secure_link_status=None,
         max_app_payload_size=65535,
         transmit_delay_est_ms=None,
+        rtt_est_ms=None,
         waiting_count=0,
         inflight=0,
         max_inflight=0,
@@ -61,6 +62,7 @@ class _FakeSession:
         self.max_app_payload_size = max_app_payload_size
         self._metrics = SessionMetrics(
             transmit_delay_est_ms=transmit_delay_est_ms,
+            rtt_est_ms=rtt_est_ms,
             waiting_count=waiting_count,
             inflight=inflight,
             max_inflight=max_inflight,
@@ -239,6 +241,15 @@ def _ipv4_echo_reply(src: str, dst: str, identifier: int, sequence: int, payload
 
 
 class ChannelMuxListenerModeTests(unittest.TestCase):
+    def test_high_overlay_rtt_throttles_local_ingress(self):
+        loop = asyncio.new_event_loop()
+        try:
+            mux = ChannelMux(_FakeSession(connected=True, rtt_est_ms=2_000.0), loop)
+            snapshot = mux._session_overlay_backpressure_snapshot(now_ns=1)
+            self.assertTrue(mux._session_overlay_backpressure_active(snapshot))
+            self.assertFalse(mux._local_ingress_send_allowed(64, now_ns=1, scope_key=("udp", "test", 1)))
+        finally:
+            loop.close()
     def test_disconnected_overlay_requests_one_rotation_after_delay(self):
         asyncio.run(self._test_disconnected_overlay_requests_one_rotation_after_delay())
 
