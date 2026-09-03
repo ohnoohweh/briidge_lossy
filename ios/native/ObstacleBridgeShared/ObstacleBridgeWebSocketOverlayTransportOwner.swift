@@ -1227,8 +1227,13 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func handleLifecycleRotationIfDue() {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: transmitDelayEstMSValue() ?? 0.0,
+            candidateCount: resolvedPeerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
         else {
             return
         }

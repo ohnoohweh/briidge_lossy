@@ -240,6 +240,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     # fully disconnected transport.
     CONNECTION_ROTATION_DELAY_S: float = 15.0
     OVERLAY_RTT_INGRESS_THROTTLE_MS: float = 2_000.0
+    TRANSPORT_DELAY_ROTATION_DELAY_S: float = 30.0
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -660,6 +661,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._overlay_connected: bool = self._session_overlay_inflow_allowed()
         self._accepting_enabled: bool = self._overlay_connected
         self._connection_rotation_task: Optional[asyncio.Task] = None
+        self._transport_delay_rotation_task: Optional[asyncio.Task] = None
+        self._transport_delay_high_since_mono: Optional[float] = None
         self._on_connection_rotation_result = None
         self._connection_rotation_wait_epoch: Optional[int] = None
         self._connection_lifecycle_epoch: int = 0
@@ -2259,14 +2262,15 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self._send_remote_services_catalog_if_any()
         self._sweeper_task = self.loop.create_task(self._udp_idle_sweeper())
         self._ensure_task = self.loop.create_task(self._ensure_servers_task())
+        self._transport_delay_rotation_task = self.loop.create_task(self._transport_delay_rotation_watchdog())
 
     async def stop(self, reason: str = "") -> None:
         self.log.info("[MUX] stopping reason=%s", str(reason or "unspecified"))
-        for t in (self._ensure_task, self._sweeper_task):
+        for t in (self._ensure_task, self._sweeper_task, self._transport_delay_rotation_task):
             if t:
                 try: t.cancel()
                 except Exception: pass
-        self._ensure_task = self._sweeper_task = None
+        self._ensure_task = self._sweeper_task = self._transport_delay_rotation_task = None
         await self._await_tun_helper_open_tasks()
         await self._stop_all_services()
         await self._close_all_channels()
@@ -2344,6 +2348,42 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._connection_rotation_task = None
         if task is not None and not task.done():
             task.cancel()
+
+    def _poll_transport_delay_rotation(self, *, now_mono: Optional[float] = None) -> Optional[ConnectionRotationResult]:
+        """Rotate once when a connected overlay sustains excessive delay."""
+        now = time.monotonic() if now_mono is None else float(now_mono)
+        if not self._overlay_connected:
+            self._transport_delay_high_since_mono = None
+            return None
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+        delay_ms = float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0)
+        if delay_ms < self.OVERLAY_RTT_INGRESS_THROTTLE_MS:
+            self._transport_delay_high_since_mono = None
+            return None
+        if self._transport_delay_high_since_mono is None:
+            self._transport_delay_high_since_mono = now
+            return None
+        if (now - self._transport_delay_high_since_mono) < self.TRANSPORT_DELAY_ROTATION_DELAY_S:
+            return None
+        result = self.request_connection_rotation("channelmux_transport_delay")
+        accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
+        if accepted:
+            self.log.warning(
+                "[MUX] requested connection rotation after %.1fs transport delay >= %.0fms (current=%.3fms)",
+                now - self._transport_delay_high_since_mono,
+                self.OVERLAY_RTT_INGRESS_THROTTLE_MS,
+                delay_ms,
+            )
+        self._transport_delay_high_since_mono = None
+        return result
+
+    async def _transport_delay_rotation_watchdog(self) -> None:
+        try:
+            while True:
+                self._poll_transport_delay_rotation()
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            return
 
     def _schedule_connection_rotation(self) -> None:
         if self._connection_rotation_wait_epoch is not None:

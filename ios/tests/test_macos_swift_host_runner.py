@@ -525,6 +525,8 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in overlay_adapter
     assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in overlay_adapter
     assert "handleTransportDisconnected()" in overlay_adapter
+    assert "transportDelayRotationDue(" in overlay_adapter
+    assert "transportDelayRotationGrace: TimeInterval = 30.0" in overlay_adapter
 
 
 def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:

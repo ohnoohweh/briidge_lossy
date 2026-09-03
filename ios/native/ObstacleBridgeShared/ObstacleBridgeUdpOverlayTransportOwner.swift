@@ -899,8 +899,13 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleLifecycleRotationIfDue(nowNS: UInt64) {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: peerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: overlayRuntime.transmitDelayEstMS,
+            candidateCount: peerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: peerCandidates.count)
         else {
             return
         }

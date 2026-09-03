@@ -24,6 +24,8 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     // This is the layered application-readiness grace used by every native
     // overlay owner. Transport-up alone never makes the overlay usable.
     static let outerReadinessGrace: TimeInterval = 15.0
+    static let transportDelayRotationThresholdMS: Double = 2_000.0
+    static let transportDelayRotationGrace: TimeInterval = 30.0
 
     struct OutboundSnapshot {
         var emittedFrames: [Data]
@@ -43,6 +45,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     private var outerLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var compressionFailureEpoch: UInt64?
     private var disconnectedSince: TimeInterval?
+    private var transportDelayHighSince: TimeInterval?
     private var rotationWaitingForNewEpoch: UInt64?
     private var requestedRotations = 0
     private var completedCandidateCycles = 0
@@ -168,6 +171,45 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         return ObstacleBridgeConnectionRotationResult(
             accepted: true,
             reason: "channelmux_disconnected",
+            epoch: transportLifecycle.epoch,
+            candidateCycle: completedCandidateCycles,
+            restartRequired: completedCandidateCycles >= 3
+        )
+    }
+
+    // A connected transport can be unusable long before it reports a hard
+    // disconnect. Rotate the normal candidate path after sustained estimated
+    // wire delay, using the same one-rotation-per-epoch accounting.
+    func transportDelayRotationDue(
+        transmitDelayEstMS: Double,
+        candidateCount: Int
+    ) -> ObstacleBridgeConnectionRotationResult? {
+        let now = lifecycleTimeProvider()
+        guard transportLifecycle.state == .connected,
+              transmitDelayEstMS >= Self.transportDelayRotationThresholdMS
+        else {
+            transportDelayHighSince = nil
+            return nil
+        }
+        guard let highSince = transportDelayHighSince else {
+            transportDelayHighSince = now
+            return nil
+        }
+        guard now - highSince >= Self.transportDelayRotationGrace,
+              rotationWaitingForNewEpoch == nil
+        else {
+            return nil
+        }
+        let candidates = max(1, candidateCount)
+        requestedRotations += 1
+        if requestedRotations % candidates == 0 {
+            completedCandidateCycles += 1
+        }
+        rotationWaitingForNewEpoch = transportLifecycle.epoch
+        transportDelayHighSince = nil
+        return ObstacleBridgeConnectionRotationResult(
+            accepted: true,
+            reason: "channelmux_transport_delay",
             epoch: transportLifecycle.epoch,
             candidateCycle: completedCandidateCycles,
             restartRequired: completedCandidateCycles >= 3

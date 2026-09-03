@@ -65,6 +65,28 @@ def test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disco
     assert "handleTransportDisconnected()" in adapter
 
 
+def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_policy() -> None:
+    adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
+    python_mux = (ROOT / "src" / "obstacle_bridge" / "bridge_channelmux.py").read_text(encoding="utf-8")
+    owners = [
+        _read("ObstacleBridgeShared", name)
+        for name in (
+            "ObstacleBridgeUdpOverlayTransportOwner.swift",
+            "ObstacleBridgeTcpOverlayTransportOwner.swift",
+            "ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+            "ObstacleBridgeQuicOverlayTransportOwner.swift",
+        )
+    ]
+
+    assert "TRANSPORT_DELAY_ROTATION_DELAY_S: float = 30.0" in python_mux
+    assert 'request_connection_rotation("channelmux_transport_delay")' in python_mux
+    assert "static let transportDelayRotationThresholdMS: Double = 2_000.0" in adapter
+    assert "static let transportDelayRotationGrace: TimeInterval = 30.0" in adapter
+    assert 'reason: "channelmux_transport_delay"' in adapter
+    for owner in owners:
+        assert "transportDelayRotationDue(" in owner
+
+
 def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:
     channel_core = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayChannelCore.swift")
     provider = _read("IPServer", "PacketTunnelProvider.swift")

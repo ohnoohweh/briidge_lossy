@@ -250,6 +250,26 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
             self.assertFalse(mux._local_ingress_send_allowed(64, now_ns=1, scope_key=("udp", "test", 1)))
         finally:
             loop.close()
+
+    def test_sustained_transport_delay_requests_one_connection_rotation(self):
+        loop = asyncio.new_event_loop()
+        try:
+            session = _FakeSession(connected=True, transmit_delay_est_ms=2_000.0)
+            mux = ChannelMux(session, loop)
+            mux.TRANSPORT_DELAY_ROTATION_DELAY_S = 30.0
+
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=100.0))
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=129.9))
+            result = mux._poll_transport_delay_rotation(now_mono=130.0)
+
+            self.assertTrue(result["accepted"])
+            self.assertEqual(result["reason"], "channelmux_transport_delay")
+            self.assertEqual(session.rotation_requests, ["channelmux_transport_delay"])
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=160.0))
+            session._metrics.transmit_delay_est_ms = 0.0
+            self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=161.0))
+        finally:
+            loop.close()
     def test_disconnected_overlay_requests_one_rotation_after_delay(self):
         asyncio.run(self._test_disconnected_overlay_requests_one_rotation_after_delay())
 

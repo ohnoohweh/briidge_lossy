@@ -567,8 +567,15 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func handleLifecycleRotationIfDue() {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        let protocolStats = overlayRuntime.protocolStatsSnapshot()
+        let transmitDelayEstMS = protocolStats["transmit_delay_est_ms"] as? Double ?? 0.0
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: transmitDelayEstMS,
+            candidateCount: resolvedPeerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
         else {
             return
         }
