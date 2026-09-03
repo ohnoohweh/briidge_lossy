@@ -940,6 +940,9 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "struct ObstacleBridgeConnectionLifecycleEvent" in runtime
     assert "struct ObstacleBridgeConnectionRotationResult" in runtime
     assert "func connectionRotationDue(candidateCount: Int)" in runtime
+    assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in runtime
+    assert "private func enforceAuthenticatedTransportReadiness(transportConnected: Bool)" in runtime
+    assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in runtime
 
 
 def test_peer_address_protocol_source_exists_and_is_below_secure_link() -> None:

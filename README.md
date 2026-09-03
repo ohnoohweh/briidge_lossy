@@ -1100,7 +1100,7 @@ What the admin web shows:
 
 When the outer lifecycle remains non-ready, ChannelMux rotates the lower stack after 15 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
 
-A typed transport `Disconnected` lifecycle event is authoritative: SecureLink immediately withdraws authenticated readiness and Compression follows, even if a stale raw transport object briefly still appears connected.
+A typed transport `Disconnected` lifecycle event is authoritative: SecureLink immediately withdraws authenticated readiness and Compression follows, even if a stale raw transport object briefly still appears connected. If that callback is missed, the authenticated secure-link watchdog fails closed after one handshake-timeout window of lower-layer non-readiness; the Swift shared adapter applies the same rule on its next observed transport-state snapshot.
 
 ChannelMux also protects SecureLink handshake and rekey traffic under load: when the overlay RTT estimate reaches two seconds, it pauses local TCP reads and drops new local UDP/TUN packets instead of extending the overlay queue. Admission resumes when RTT recovers.
 

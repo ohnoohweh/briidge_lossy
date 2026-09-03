@@ -518,6 +518,10 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
     assert "overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)" in udp_owner
     assert "runtime.handleTransportDisconnected()" in secure_adapter
+    overlay_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in overlay_adapter
+    assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in overlay_adapter
+    assert "handleTransportDisconnected()" in overlay_adapter
 
 
 def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:

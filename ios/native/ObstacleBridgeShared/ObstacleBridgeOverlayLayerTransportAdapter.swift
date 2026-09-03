@@ -209,6 +209,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         preserveConnectedDuringEpochRestart: Bool = false
     ) -> [[String: Any]] {
         observeTransportState(connected: transportConnected)
+        enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)
         let secureStatus = secureLinkAdapter?.statusSnapshot()
         refreshOuterLifecycle(secureLinkStatus: secureStatus)
         var layers = Self.connectionLayersSnapshot(
@@ -255,6 +256,19 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         secureLinkAdapter?.handleTransportDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
+    }
+
+    // Owners publish lower transport state independently of SecureLink. If a
+    // queued disconnect callback was missed, the next observed lower-state
+    // snapshot is still authoritative: authenticated SecureLink must never
+    // remain visible above a disconnected transport.
+    private func enforceAuthenticatedTransportReadiness(transportConnected: Bool) {
+        guard !transportConnected,
+              secureLinkAdapter?.statusSnapshot().authenticated == true
+        else {
+            return
+        }
+        handleTransportDisconnected()
     }
 
     // A candidate rotation starts a new transport attempt while its reported

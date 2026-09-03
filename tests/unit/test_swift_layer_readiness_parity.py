@@ -50,6 +50,21 @@ def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
     assert '"app_ready": transportLifecycle.state == .connected' in adapter
 
 
+def test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect() -> None:
+    adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
+    python_secure_link = (ROOT / "src" / "obstacle_bridge" / "bridge_securelink.py").read_text(encoding="utf-8")
+
+    # Both runtimes fail closed after a missed normal disconnect callback:
+    # Python has a bounded watchdog; Swift clears on its next observation.
+    assert "def _inner_transport_ready(self) -> bool:" in python_secure_link
+    assert 'phase="transport"' in python_secure_link
+    assert "authenticated secure-link transport readiness timed out" in python_secure_link
+    assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in adapter
+    assert "private func enforceAuthenticatedTransportReadiness(transportConnected: Bool)" in adapter
+    assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in adapter
+    assert "handleTransportDisconnected()" in adapter
+
+
 def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:
     channel_core = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayChannelCore.swift")
     provider = _read("IPServer", "PacketTunnelProvider.swift")

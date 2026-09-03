@@ -95,6 +95,13 @@ class FakeInnerSession:
             "rtt_est_ms": None,
         }]
 
+    def get_connection_layers_snapshot(self):
+        return [{
+            "layer": "transport",
+            "connected": bool(self._connected),
+            "app_ready": bool(self._connected),
+        }]
+
     def get_max_app_payload_size(self):
         return 65535
 
@@ -306,6 +313,39 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(client.is_connected())
             self.assertFalse(client.get_connection_layers_snapshot()[-1]["app_ready"])
             self.assertEqual(client.get_connection_lifecycle_snapshot()["state"], "disconnected")
+        finally:
+            await client.stop()
+            await server.stop()
+
+    async def test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer="127.0.0.1"), "myudp")
+        server = SecureLinkPskSession(server_inner, _args(), "myudp")
+        client._HANDSHAKE_TIMEOUT_S = 0.01
+        client._HANDSHAKE_WATCHDOG_INTERVAL_S = 10.0
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            self.assertTrue(await client.wait_connected(timeout=0.1))
+
+            # Lower readiness has failed, but a stalled callback path did not
+            # tell SecureLink. The watchdog must withdraw authentication.
+            client_inner._connected = False
+            state = client._peer_states[0]
+            import time
+            state.last_authenticated_unix_ts = time.time() - 1.0
+            client._expire_stale_handshakes()
+
+            status = client.get_secure_link_status_snapshot()
+            self.assertEqual(status["state"], "failed")
+            self.assertFalse(status["authenticated"])
+            self.assertIn("transport readiness timed out", str(status["failure_detail"] or ""))
+            self.assertFalse(client.is_connected())
         finally:
             await client.stop()
             await server.stop()
