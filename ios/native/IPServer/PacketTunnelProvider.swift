@@ -3646,20 +3646,6 @@ private final class SwiftSimpleUDPPeerBridge {
                     )
                 ))
             }
-            guard tunConnectivityTestsAllowed() else {
-                return (nil, ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(
-                    probeKind: probeKind,
-                    target: trimmedTarget,
-                    ok: false,
-                    state: "skipped",
-                    summary: "\(label): skipped",
-                    detail: "TUN verification is suspended while local TUN throttling is active.",
-                    nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(
-                        status: "skipped",
-                        detail: "Name resolution is suspended while local TUN throttling is active."
-                    )
-                ))
-            }
             let candidateFamilies = ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(
                 tunnelAddress: tunnelAddress,
                 tunnelAddress6: tunnelAddress6

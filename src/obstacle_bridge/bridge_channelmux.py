@@ -3225,6 +3225,37 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self.log.debug("[MUX/CTRL] failed scheduling peer disconnect cleanup for peer_id=%s: %r", peer_id, e)
 
     # ---------- MUX send ----------
+    def _tun_post_mux_transport_delay_exceeded(self) -> bool:
+        """Whether TUN data must be dropped before entering SecureLink.
+
+        Local TUN reads are deliberately never paused by overload control.
+        Unlike TCP (which stops reading) and local UDP (which drops on read),
+        TUN keeps draining its fd and drops completed mux DATA frames at this
+        final ChannelMux-to-SecureLink boundary.
+        """
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+        return float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0) >= float(
+            self.OVERLAY_RTT_INGRESS_THROTTLE_MS
+        )
+
+    def _record_tun_post_mux_drop(
+        self,
+        chan_id: int,
+        payload: bytes,
+        *,
+        peer_id: Optional[int],
+    ) -> None:
+        dev = self._tun_by_chan.get(int(chan_id))
+        svc_key = getattr(dev, "service_key", None) if dev is not None else None
+        self._record_shared_tun_drop(
+            svc_key,
+            reason="transport_delay_post_mux_tun",
+            direction="local_to_peer",
+            peer_id=peer_id,
+            chan_id=chan_id,
+            packet_bytes=len(payload),
+        )
+
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes, *, peer_id: Optional[int] = None) -> None:
         try:
             self._record_sync_diag("ChannelMux._send_mux", phase="started")
@@ -3286,6 +3317,21 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     "[MUX] drop oversized app message: %d bytes > %d",
                     len(wire),
                     self._session_max_app_payload,
+                )
+                return
+            if (
+                proto == ChannelMux.Proto.TUN
+                and mtype in (ChannelMux.MType.DATA, ChannelMux.MType.DATA_FRAG)
+                and self._tun_post_mux_transport_delay_exceeded()
+            ):
+                self._record_tun_post_mux_drop(
+                    chan_id,
+                    bytes(data),
+                    peer_id=effective_peer_id,
+                )
+                self.log.debug(
+                    "[TUN] drop mux data before SecureLink: transmit_delay_est_ms exceeds %.0f",
+                    self.OVERLAY_RTT_INGRESS_THROTTLE_MS,
                 )
                 return
             if self._on_local_rx:
@@ -4371,6 +4417,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except (TypeError, ValueError):
             last_rx = 0
         progress_ns = max(last_ok, last_rx)
+        try:
+            tx_delay_ms = max(0.0, float(transmit_delay_est_ms or 0.0))
+        except (TypeError, ValueError):
+            tx_delay_ms = 0.0
         if progress_ns <= 0:
             try:
                 rtt_ms = max(0.0, float(rtt_est_ms or 0.0))
@@ -4380,17 +4430,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "waiting_count": waiting_count,
                 "inflight": inflight,
                 "max_inflight": max_inflight,
-                "transmit_delay_est_ms": 0.0,
+                "transmit_delay_est_ms": tx_delay_ms,
                 "rtt_est_ms": rtt_ms,
                 "prev_window_bytes": prev_window_bytes,
                 "curr_window_bytes": curr_window_bytes,
                 "stalled": False,
             }
         idle_budget_ns = int(self.TUN_STREAM_OVERLAY_STALL_NS)
-        try:
-            tx_delay_ms = float(transmit_delay_est_ms or 0.0)
-        except (TypeError, ValueError):
-            tx_delay_ms = 0.0
         try:
             rtt_ms = max(0.0, float(rtt_est_ms or 0.0))
         except (TypeError, ValueError):
@@ -4823,21 +4869,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         return None
 
     def _tun_connectivity_tests_allowed(self, dev: "ChannelMux.TunDevice") -> bool:
-        """Keep verification traffic out of an actively throttled local TUN path."""
-        now_ns = time.monotonic_ns()
-        svc_key = getattr(dev, "service_key", None)
-        shared_snapshot = self._shared_tun_runtime_snapshot_for_service(svc_key)
-        if isinstance(shared_snapshot, dict) and isinstance(svc_key, tuple):
-            throttle = self._local_ingress_throttle_snapshot_for_shared_tun_service(
-                svc_key,
-                now_ns=now_ns,
-            )
-        else:
-            throttle = self._local_ingress_throttle_snapshot_for_scope(
-                self._direct_tun_inflow_scope_key(svc_key, getattr(dev, "chan_id", None)),
-                now_ns=now_ns,
-            )
-        return not bool(throttle.get("active"))
+        """TUN probes share normal admission; TUN has no read-side throttle."""
+        return True
 
     async def _resolve_tun_probe_target(self, target: str, *, family: int) -> str:
         infos = await self.loop.getaddrinfo(
@@ -5336,58 +5369,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     packet_bytes=len(packet),
                 )
                 return
-            now_ns = time.monotonic_ns()
             shared_route = self._shared_tun_plan_local_delivery(getattr(dev, "service_key", None), packet)
-            scope_key = self._shared_tun_inflow_scope_key(getattr(dev, "service_key", None), shared_route)
-            if scope_key is None:
-                scope_key = self._direct_tun_inflow_scope_key(getattr(dev, "service_key", None), dev.chan_id)
-            if not self._local_ingress_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
-                scope_state = self._advance_tun_inflow_window(scope_key, now_ns)
-                scope_state["throttle_drop_count"] = int(scope_state.get("throttle_drop_count", 0) or 0) + 1
-                snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
-                stream_overlay_stalled = bool(snapshot.get("stalled"))
-                self._record_shared_tun_drop(
-                    getattr(dev, "service_key", None),
-                    reason="throttled_local_tun",
-                    direction="local_to_peer",
-                    chan_id=dev.chan_id,
-                    route_class=None if shared_route is None else str(shared_route.get("route_class") or ""),
-                    destination_ip=None if shared_route is None else shared_route.get("destination_ip"),
-                    packet_bytes=len(packet),
-                )
-                if stream_overlay_stalled and now_ns >= int(self._stream_overlay_idle_warn_until_ns):
-                    self._stream_overlay_idle_warn_until_ns = int(now_ns) + self.TUN_INFLOW_THROTTLE_WINDOW_NS
-                    self.log.warning(
-                        "[TUN] if=%s pausing local forwarding on %s overlay: no RX progress observed recently; buffered_frames=%s packet_bytes=%s",
-                        dev.ifname,
-                        str(self._overlay_transport or "").lower(),
-                        int(snapshot.get("waiting_count", 0) or 0),
-                        len(packet),
-                    )
-                self.log.debug(
-                    "[TUN] if=%s throttle local packet scope=%s queued=%s inflight=%s/%s transport_prev_window_bytes=%s scope_prev_window_bytes=%s scope_curr_window_bytes=%s packet_bytes=%s stream_overlay_stalled=%s",
-                    dev.ifname,
-                    self._tun_inflow_scope_id(scope_key),
-                    int(snapshot.get("waiting_count", 0) or 0),
-                    int(snapshot.get("inflight", 0) or 0),
-                    int(snapshot.get("max_inflight", 0) or 0),
-                    int(snapshot.get("prev_window_bytes", 0) or 0),
-                    int(scope_state.get("prev_bytes", 0) or 0),
-                    int(scope_state.get("curr_bytes", 0) or 0),
-                    len(packet),
-                    stream_overlay_stalled,
-                )
-                self._log_tun_icmp_local_decision(
-                    stage="local_reply_drop_throttled",
-                    dev=dev,
-                    packet=packet,
-                    chan=current_chan,
-                    note=(
-                        f"scope={self._tun_inflow_scope_id(scope_key)}; waiting={int(snapshot.get('waiting_count', 0) or 0)}; "
-                        f"inflight={int(snapshot.get('inflight', 0) or 0)}; stalled={int(stream_overlay_stalled)}"
-                    ),
-                )
-                return
             if shared_route is not None:
                 if not bool(shared_route.get("routed")):
                     self._log_tun_icmp_local_decision(
@@ -5455,7 +5437,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     )
                     target_mux, target_peer_id = self._shared_tun_route_for_peer_id(dev, selected_peer_id)
                     target_mux._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet, peer_id=target_peer_id)
-                self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
                 return
             chan = dev.chan_id
             if chan is None:
@@ -5504,7 +5485,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             ctr.msgs_in += 1
             ctr.bytes_in += len(packet)
             self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
-            self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
         except Exception as exc:
             self._record_sync_diag("ChannelMux._on_local_tun_packet", phase="failed", error=type(exc).__name__)
             raise

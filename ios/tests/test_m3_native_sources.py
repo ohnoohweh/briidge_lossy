@@ -293,7 +293,8 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     assert "typealias ObstacleBridgeChannelMuxStartupFramesProvider" in tun_runtime
     assert "func currentConnectionSeq() -> UInt32" in tun_runtime
     assert "startupMuxFramesForNewTunOpen: (() -> [Data])? = nil" in overlay_core
-    assert "sendMuxFrames(startupFrames + localSnapshot.frames)" in overlay_core
+    assert "framesAdmittedBeforeSecureLink(" in overlay_core
+    assert "sendMuxFrames(outbound.frames)" in overlay_core
     assert "openConfiguredLocalTunIfReady(" in overlay_core
     for owner in owners:
         assert "startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?" in owner
@@ -1097,8 +1098,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "packet_pump_dropped_before_overlay_ready" in provider
     assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
     assert "TUN verification waits for the connected overlay state." in provider
-    assert "TUN verification is suspended while local TUN throttling is active." in provider
-    assert "Name resolution is suspended while local TUN throttling is active." in provider
+    assert "TUN verification is suspended while local TUN throttling is active." not in provider
+    assert "framesAdmittedBeforeSecureLink(" in (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     assert "prepare_runtime()" in ios_app
     assert "Network extension active" in ios_app
     assert "Network tunneling active" not in ios_app

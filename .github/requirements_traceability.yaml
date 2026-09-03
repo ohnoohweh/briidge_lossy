@@ -213,19 +213,19 @@ REQ-MUX-005:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_mux_data_after_transport_delay_threshold
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure
 
 REQ-MUX-011:
   unit_tests:
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_mux_data_after_transport_delay_threshold
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel
-    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_ingress_remains_unthrottled_per_peer_channel
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_ingress_remains_unthrottled
     - tests/unit/test_channel_mux_listener_mode.py::test_throttle_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured
-    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary

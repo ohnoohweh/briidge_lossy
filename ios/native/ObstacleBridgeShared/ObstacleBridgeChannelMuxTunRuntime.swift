@@ -495,9 +495,6 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         }
         let sendNowNS = nowNS ?? DispatchTime.now().uptimeNanoseconds
         let appliedScopeID = scopeID ?? "direct:\(spec.svcID)"
-        guard localTunSendAllowed(packetBytes: packet.count, snapshot: backpressure, nowNS: sendNowNS, scopeID: appliedScopeID) else {
-            return nil
-        }
 
         let normalizedPacket = normalizedLocalPacketForTunnel(packet: packet)
 

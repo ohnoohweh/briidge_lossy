@@ -490,6 +490,9 @@ def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
     assert 'waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0)' in udp_owner
     assert 'inflight: Int(protocolStats["inflight"] as? Int ?? 0)' in udp_owner
     assert 'maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0)' in udp_owner
+    assert "framesAdmittedBeforeSecureLink(" in core
+    assert "tunPostMuxTransportDelayThresholdMS: Double = 2_000.0" in core
+    assert "guard localTunSendAllowed" not in tun_runtime
 
 
 def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_python() -> None:

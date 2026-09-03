@@ -2,6 +2,10 @@ import Foundation
 import Network
 
 enum ObstacleBridgeOverlayChannelCore {
+    // Local TUN reads must keep draining the OS packet queue. TUN DATA is
+    // instead discarded only after ChannelMux has built it and immediately
+    // before SecureLink receives it, matching the UDP loss-oriented policy.
+    static let tunPostMuxTransportDelayThresholdMS: Double = 2_000.0
     struct OverlayEgressWindowState {
         var windowStartNS: UInt64?
         var previousBytes: Int = 0
@@ -305,12 +309,33 @@ enum ObstacleBridgeOverlayChannelCore {
         guard let tunRuntime else {
             return false
         }
-        let nowNS = DispatchTime.now().uptimeNanoseconds
-        let throttle = tunRuntime.sharedTunRuntimeSnapshot() != nil
-            ? tunRuntime.sharedTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
-            : tunRuntime.directTunThrottleSnapshot(snapshot: backpressure, nowNS: nowNS)
-        // Diagnostics must not compete with forwarded TUN packets under pressure.
-        return !(throttle["active"] as? Bool ?? false)
+        // TUN no longer has an ingress throttle. Packet and diagnostic reads
+        // remain available; only completed TUN mux DATA is dropped at the
+        // ChannelMux-to-SecureLink boundary when delay is excessive.
+        _ = backpressure
+        return true
+    }
+
+    static func framesAdmittedBeforeSecureLink(
+        _ frames: [Data],
+        transmitDelayEstMS: Double
+    ) -> (frames: [Data], droppedTunDataFrames: Int) {
+        guard transmitDelayEstMS >= tunPostMuxTransportDelayThresholdMS else {
+            return (frames, 0)
+        }
+        var admitted: [Data] = []
+        var dropped = 0
+        for frame in frames {
+            guard let mux = ObstacleBridgeChannelMuxCodec.unpackMux(frame),
+                  mux.proto == .tun,
+                  mux.mtype == .data || mux.mtype == .dataFrag
+            else {
+                admitted.append(frame)
+                continue
+            }
+            dropped += 1
+        }
+        return (admitted, dropped)
     }
 
     static func openConfiguredLocalTunIfReady(
@@ -376,28 +401,6 @@ enum ObstacleBridgeOverlayChannelCore {
         }
         let backpressure = backpressure ?? simpleBackpressureSnapshot(bufferedFrames: bufferedFrames)
         let sharedRoute = tunRuntime.planSharedTunOutboundRoute(packet: packet)
-        let throttle = tunRuntime.scopedTunThrottle(
-            packetBytes: packet.count,
-            snapshot: backpressure,
-            nowNS: nowNS,
-            route: sharedRoute
-        )
-        guard throttle.allowed else {
-            tunRuntime.recordSharedTunDrop(
-                reason: "throttled_local_tun",
-                direction: "local_to_peer",
-                destinationIP: sharedRoute?.destinationIP,
-                routeClass: sharedRoute?.routeClass,
-                packetBytes: packet.count
-            )
-            onLocalDrop?(TunLocalDropEvent(
-                reason: "throttled_local_tun",
-                packet: packet,
-                sharedRoute: sharedRoute,
-                tunRuntime: tunRuntime
-            ))
-            return
-        }
         if let sharedRoute {
             guard sharedRoute.routed else {
                 let reason = sharedRoute.dropReason ?? "shared_route_drop"
@@ -451,7 +454,26 @@ enum ObstacleBridgeOverlayChannelCore {
                     ? (startupMuxFramesForNewTunOpen?() ?? [])
                     : []
                 // Keep catalog install and the first TUN OPEN in one ordered batch.
-                sendMuxFrames(startupFrames + localSnapshot.frames)
+                let outbound = framesAdmittedBeforeSecureLink(
+                    startupFrames + localSnapshot.frames,
+                    transmitDelayEstMS: backpressure.transmitDelayEstMS
+                )
+                if outbound.droppedTunDataFrames > 0 {
+                    tunRuntime.recordSharedTunDrop(
+                        reason: "transport_delay_post_mux_tun",
+                        direction: "local_to_peer",
+                        destinationIP: sharedRoute.destinationIP,
+                        routeClass: sharedRoute.routeClass,
+                        packetBytes: packet.count
+                    )
+                    onLocalDrop?(TunLocalDropEvent(
+                        reason: "transport_delay_post_mux_tun",
+                        packet: packet,
+                        sharedRoute: sharedRoute,
+                        tunRuntime: tunRuntime
+                    ))
+                }
+                sendMuxFrames(outbound.frames)
             }
             tunRuntime.recordLocalTunForward(packetBytes: packet.count, nowNS: nowNS, route: sharedRoute)
             tunStats["tx_msgs", default: 0] += 1
@@ -483,7 +505,24 @@ enum ObstacleBridgeOverlayChannelCore {
             ? (startupMuxFramesForNewTunOpen?() ?? [])
             : []
         // Keep catalog install and the first TUN OPEN in one ordered batch.
-        sendMuxFrames(startupFrames + localSnapshot.frames)
+        let outbound = framesAdmittedBeforeSecureLink(
+            startupFrames + localSnapshot.frames,
+            transmitDelayEstMS: backpressure.transmitDelayEstMS
+        )
+        if outbound.droppedTunDataFrames > 0 {
+            tunRuntime.recordSharedTunDrop(
+                reason: "transport_delay_post_mux_tun",
+                direction: "local_to_peer",
+                packetBytes: packet.count
+            )
+            onLocalDrop?(TunLocalDropEvent(
+                reason: "transport_delay_post_mux_tun",
+                packet: packet,
+                sharedRoute: nil,
+                tunRuntime: tunRuntime
+            ))
+        }
+        sendMuxFrames(outbound.frames)
     }
 
     static func handleInboundTunMuxFrame(

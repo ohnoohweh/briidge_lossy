@@ -352,10 +352,10 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._on_local_tun_packet(dev, packet)
         self.assertEqual(len(sent), 1)
 
-    def test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active(self):
-        asyncio.run(self._test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active())
+    def test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy(self):
+        asyncio.run(self._test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy())
 
-    async def _test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active(self):
+    async def _test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy(self):
         session = _FakeSession(connected=True, waiting_count=1, inflight=1, max_inflight=1)
         mux = ChannelMux(session, asyncio.get_running_loop())
         mux._overlay_connected = True
@@ -363,7 +363,7 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         dev = ChannelMux.TunDevice(fd=10, ifname="obtun0", mtu=1500)
         mux._svc_tun_devices[("local", 0, 1)] = dev
 
-        with patch.object(mux, "_resolve_tun_probe_target", new=AsyncMock()) as resolve_target, \
+        with patch.object(mux, "_resolve_tun_probe_target", new=AsyncMock(return_value="198.51.100.10")) as resolve_target, \
              patch.object(mux, "_send_mux") as send_mux:
             result = await mux._probe_tun_connectivity_once(
                 probe_kind="global",
@@ -372,10 +372,9 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
                 timeout_s=0.1,
             )
 
-        self.assertEqual(result["state"], "skipped")
-        self.assertIn("throttling is active", result["detail"])
-        self.assertEqual(result["name_resolution"]["status"], "skipped")
-        resolve_target.assert_not_awaited()
+        self.assertEqual(result["state"], "failed")
+        self.assertEqual(result["name_resolution"]["status"], "successful")
+        resolve_target.assert_awaited_once()
         send_mux.assert_not_called()
 
     def test_channel_mux_default_system_egress_auth_is_platform_scoped(self):
@@ -3718,7 +3717,7 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel(self):
+    def test_local_tun_packet_shared_ingress_remains_unthrottled_per_peer_channel(self):
         session = _FakeSession(connected=True, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
@@ -3784,24 +3783,9 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
                     unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a, peer_id=77),
                     unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_seed, peer_id=88),
                     unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a_budget, peer_id=77),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_a_over, peer_id=77),
                     unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet_b_budget, peer_id=88),
                 ],
-            )
-            snapshot = mux._shared_tun_runtime_snapshot_for_service(svc_key)
-            assert snapshot is not None
-            scopes = {entry["scope_id"]: entry for entry in snapshot["throttle_scopes"]}
-            linux_scope = next(entry for entry in scopes.values() if entry["selected_peer_ids"] == [77])
-            ios_scope = next(entry for entry in scopes.values() if entry["selected_peer_ids"] == [88])
-            self.assertEqual(linux_scope["throttle_drop_count"], 1)
-            self.assertEqual(linux_scope["prev_window_bytes"], len(packet_a))
-            self.assertEqual(ios_scope["throttle_drop_count"], 0)
-            self.assertEqual(
-                [entry for entry in snapshot["active_peer_bindings"] if entry["peer_id"] == 77][0]["throttle_drop_count"],
-                1,
-            )
-            self.assertEqual(
-                [entry for entry in snapshot["active_peer_bindings"] if entry["peer_id"] == 88][0]["throttle_drop_count"],
-                0,
             )
         finally:
             mux.loop.close()
@@ -3865,7 +3849,7 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget(self):
+    def test_shared_tun_broadcast_ingress_remains_unthrottled(self):
         session = _FakeSession(connected=True, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
@@ -3934,16 +3918,12 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
                 [
                     unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_seed, peer_id=77),
                     unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_seed, peer_id=88),
+                    unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_over, peer_id=77),
+                    unittest.mock.call(22, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, broadcast_over, peer_id=88),
                     unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, unicast_seed, peer_id=77),
                     unittest.mock.call(11, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, unicast_budget, peer_id=77),
                 ],
             )
-            snapshot = mux._shared_tun_runtime_snapshot_for_service(svc_key)
-            assert snapshot is not None
-            broadcast_scope = next(entry for entry in snapshot["throttle_scopes"] if entry["route_class"] == "broadcast")
-            unicast_scope = next(entry for entry in snapshot["throttle_scopes"] if entry["selected_peer_ids"] == [77])
-            self.assertEqual(broadcast_scope["throttle_drop_count"], 1)
-            self.assertEqual(unicast_scope["throttle_drop_count"], 0)
         finally:
             mux.loop.close()
 
@@ -4369,7 +4349,7 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
-    def test_local_tun_packet_ignores_transmit_delay_without_buffered_frames(self):
+    def test_local_tun_packet_drops_mux_data_after_transport_delay_threshold(self):
         session = _FakeSession(connected=True, transmit_delay_est_ms=3000.0, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
@@ -4383,12 +4363,15 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
 
             mux._on_local_tun_packet(dev, b'\x45hello')
 
-            self.assertEqual(len(session.sent), 2)
+            # The TUN read is admitted and its OPEN is sent; only the completed
+            # mux DATA frame is discarded at the ChannelMux->SecureLink edge.
+            self.assertEqual(len(session.sent), 1)
+            self.assertEqual(mux._unpack_mux(session.sent[0])[3], ChannelMux.MType.OPEN)
             self.assertIsNotNone(dev.chan_id)
         finally:
             mux.loop.close()
 
-    def test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget(self):
+    def test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure(self):
         session = _FakeSession(connected=True, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
@@ -4408,13 +4391,15 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
                 mux._on_local_tun_packet(dev, b'b' * 80)
                 mux._on_local_tun_packet(dev, b'c' * 20)
 
-            self.assertEqual(len(session.sent), 3)
+            self.assertEqual(len(session.sent), 4)
             data_frames = [mux._unpack_mux(frame) for frame in session.sent]
             self.assertEqual(data_frames[0][3], ChannelMux.MType.OPEN)
             self.assertEqual(data_frames[1][3], ChannelMux.MType.DATA)
             self.assertEqual(bytes(data_frames[1][4]), b'a' * 100)
             self.assertEqual(data_frames[2][3], ChannelMux.MType.DATA)
             self.assertEqual(bytes(data_frames[2][4]), b'b' * 80)
+            self.assertEqual(data_frames[3][3], ChannelMux.MType.DATA)
+            self.assertEqual(bytes(data_frames[3][4]), b'c' * 20)
         finally:
             mux.loop.close()
 
