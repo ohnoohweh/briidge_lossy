@@ -5,7 +5,7 @@ enum ObstacleBridgeOverlayChannelCore {
     // Local TUN reads must keep draining the OS packet queue. TUN DATA is
     // instead discarded only after ChannelMux has built it and immediately
     // before SecureLink receives it, matching the UDP loss-oriented policy.
-    static let tunPostMuxTransportDelayThresholdMS: Double = 2_000.0
+    static let tunPostMuxTransportDelayThresholdMS: Double = 5_000.0
     struct OverlayEgressWindowState {
         var windowStartNS: UInt64?
         var previousBytes: Int = 0
@@ -318,9 +318,10 @@ enum ObstacleBridgeOverlayChannelCore {
 
     static func framesAdmittedBeforeSecureLink(
         _ frames: [Data],
-        transmitDelayEstMS: Double
+        transmitDelayEstMS: Double,
+        transportDelayThresholdMS: Double = tunPostMuxTransportDelayThresholdMS
     ) -> (frames: [Data], droppedTunDataFrames: Int) {
-        guard transmitDelayEstMS >= tunPostMuxTransportDelayThresholdMS else {
+        guard transmitDelayEstMS >= max(0.0, transportDelayThresholdMS) else {
             return (frames, 0)
         }
         var admitted: [Data] = []
@@ -371,6 +372,7 @@ enum ObstacleBridgeOverlayChannelCore {
         overlayConnected: Bool,
         bufferedFrames: Int,
         backpressure: ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot? = nil,
+        transportDelayThresholdMS: Double = tunPostMuxTransportDelayThresholdMS,
         activeTunChanIDs: inout Set<Int>,
         tunStats: inout [String: Int],
         sendMuxFrames: ([Data]) -> Void,
@@ -456,7 +458,8 @@ enum ObstacleBridgeOverlayChannelCore {
                 // Keep catalog install and the first TUN OPEN in one ordered batch.
                 let outbound = framesAdmittedBeforeSecureLink(
                     startupFrames + localSnapshot.frames,
-                    transmitDelayEstMS: backpressure.transmitDelayEstMS
+                    transmitDelayEstMS: backpressure.transmitDelayEstMS,
+                    transportDelayThresholdMS: transportDelayThresholdMS
                 )
                 if outbound.droppedTunDataFrames > 0 {
                     tunRuntime.recordSharedTunDrop(
@@ -507,7 +510,8 @@ enum ObstacleBridgeOverlayChannelCore {
         // Keep catalog install and the first TUN OPEN in one ordered batch.
         let outbound = framesAdmittedBeforeSecureLink(
             startupFrames + localSnapshot.frames,
-            transmitDelayEstMS: backpressure.transmitDelayEstMS
+            transmitDelayEstMS: backpressure.transmitDelayEstMS,
+            transportDelayThresholdMS: transportDelayThresholdMS
         )
         if outbound.droppedTunDataFrames > 0 {
             tunRuntime.recordSharedTunDrop(

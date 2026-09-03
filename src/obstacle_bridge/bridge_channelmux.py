@@ -239,8 +239,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     # socket with SecureLink/Compression not app-ready must rotate just like a
     # fully disconnected transport.
     CONNECTION_ROTATION_DELAY_S: float = 15.0
-    OVERLAY_RTT_INGRESS_THROTTLE_MS: float = 2_000.0
-    TRANSPORT_DELAY_ROTATION_DELAY_S: float = 30.0
+    DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS: float = 5_000.0
+    DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS: float = 30_000.0
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -396,6 +396,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not _has('--mux-tcp-bp-poll-interval-ms'):
             p.add_argument('--mux-tcp-bp-poll-interval-ms', type=int, default=50,
                            help='Mux TCP: polling interval for time-based backpressure (ms).')
+        if not _has('--channelmux-transport-delay-threshold-ms'):
+            p.add_argument(
+                '--channelmux-transport-delay-threshold-ms', type=float,
+                default=ChannelMux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,
+                help='ChannelMux: estimated transport-delay threshold for shedding and sustained-delay rotation (default 5000 ms).',
+            )
+        if not _has('--channelmux-transport-delay-rotation-delay-ms'):
+            p.add_argument(
+                '--channelmux-transport-delay-rotation-delay-ms', type=float,
+                default=ChannelMux.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS,
+                help='ChannelMux: continuous transport-delay duration before connection rotation (default 30000 ms).',
+            )
 
     @staticmethod
     def from_args(session, loop: asyncio.AbstractEventLoop, args,
@@ -476,6 +488,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except Exception: mux._tcp_bp_latency_ms = 300
         try: mux._tcp_bp_poll_interval_s = float(getattr(args, 'mux_tcp_bp_poll_interval_ms', 50)) / 1000.0
         except Exception: mux._tcp_bp_poll_interval_s = 0.05
+        try:
+            mux._transport_delay_threshold_ms = max(0.0, float(getattr(
+                args, 'channelmux_transport_delay_threshold_ms', mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,
+            )))
+        except Exception:
+            mux._transport_delay_threshold_ms = mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS
+        try:
+            mux._transport_delay_rotation_delay_s = max(0.0, float(getattr(
+                args, 'channelmux_transport_delay_rotation_delay_ms', mux.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS,
+            )) / 1000.0)
+        except Exception:
+            mux._transport_delay_rotation_delay_s = mux.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS / 1000.0
         with contextlib.suppress(Exception):
             config_path = str(getattr(args, "_config_path", "") or getattr(args, "config", "") or "")
             if config_path:
@@ -665,6 +689,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._transport_delay_high_since_mono: Optional[float] = None
         self._on_connection_rotation_result = None
         self._connection_rotation_wait_epoch: Optional[int] = None
+        self._transport_delay_threshold_ms: float = self.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS
+        self._transport_delay_rotation_delay_s: float = self.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS / 1000.0
         self._connection_lifecycle_epoch: int = 0
         # Epoch zero represents an already-ready session before its callback is
         # attached. Any disconnected lifecycle edge clears this bootstrap grant.
@@ -2357,13 +2383,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return None
         snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
         delay_ms = float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0)
-        if delay_ms < self.OVERLAY_RTT_INGRESS_THROTTLE_MS:
+        if delay_ms < self._transport_delay_threshold_ms:
             self._transport_delay_high_since_mono = None
             return None
         if self._transport_delay_high_since_mono is None:
             self._transport_delay_high_since_mono = now
             return None
-        if (now - self._transport_delay_high_since_mono) < self.TRANSPORT_DELAY_ROTATION_DELAY_S:
+        if (now - self._transport_delay_high_since_mono) < self._transport_delay_rotation_delay_s:
             return None
         result = self.request_connection_rotation("channelmux_transport_delay")
         accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
@@ -2371,7 +2397,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self.log.warning(
                 "[MUX] requested connection rotation after %.1fs transport delay >= %.0fms (current=%.3fms)",
                 now - self._transport_delay_high_since_mono,
-                self.OVERLAY_RTT_INGRESS_THROTTLE_MS,
+                self._transport_delay_threshold_ms,
                 delay_ms,
             )
         self._transport_delay_high_since_mono = None
@@ -3275,7 +3301,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         """
         snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
         return float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0) >= float(
-            self.OVERLAY_RTT_INGRESS_THROTTLE_MS
+            self._transport_delay_threshold_ms
         )
 
     def _record_tun_post_mux_drop(
@@ -3371,7 +3397,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 )
                 self.log.debug(
                     "[TUN] drop mux data before SecureLink: transmit_delay_est_ms exceeds %.0f",
-                    self.OVERLAY_RTT_INGRESS_THROTTLE_MS,
+                    self._transport_delay_threshold_ms,
                 )
                 return
             if self._on_local_rx:
@@ -4502,19 +4528,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "stalled": stalled,
         }
 
-    @classmethod
-    def _session_overlay_backpressure_active(cls, snapshot: dict[str, Any]) -> bool:
+    def _session_overlay_backpressure_active(self, snapshot: dict[str, Any]) -> bool:
         inflight = max(0, int(snapshot.get("inflight", 0) or 0))
         max_inflight = max(0, int(snapshot.get("max_inflight", 0) or 0))
         return (
             (max_inflight > 0 and inflight >= max_inflight)
-            or float(snapshot.get("rtt_est_ms", 0.0) or 0.0) >= cls.OVERLAY_RTT_INGRESS_THROTTLE_MS
+            or float(snapshot.get("rtt_est_ms", 0.0) or 0.0) >= self._transport_delay_threshold_ms
         )
 
     async def _wait_for_local_tcp_ingress(self, chan: int) -> None:
         while self._overlay_connected and self._accepting_enabled:
             snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
-            if float(snapshot.get("rtt_est_ms", 0.0) or 0.0) < self.OVERLAY_RTT_INGRESS_THROTTLE_MS:
+            if float(snapshot.get("rtt_est_ms", 0.0) or 0.0) < self._transport_delay_threshold_ms:
                 return
             self.log.debug("[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f", chan, float(snapshot["rtt_est_ms"]))
             await asyncio.sleep(self._tcp_ingress_throttle_poll_s)

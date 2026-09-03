@@ -244,19 +244,38 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
     def test_high_overlay_rtt_throttles_local_ingress(self):
         loop = asyncio.new_event_loop()
         try:
-            mux = ChannelMux(_FakeSession(connected=True, rtt_est_ms=2_000.0), loop)
+            mux = ChannelMux(_FakeSession(connected=True, rtt_est_ms=5_000.0), loop)
             snapshot = mux._session_overlay_backpressure_snapshot(now_ns=1)
             self.assertTrue(mux._session_overlay_backpressure_active(snapshot))
             self.assertFalse(mux._local_ingress_send_allowed(64, now_ns=1, scope_key=("udp", "test", 1)))
         finally:
             loop.close()
 
+    def test_transport_delay_controls_default_and_configure_channelmux(self):
+        parser = argparse.ArgumentParser()
+        ChannelMux.register_cli(parser)
+        defaults = parser.parse_args([])
+        configured = parser.parse_args([
+            "--channelmux-transport-delay-threshold-ms", "6100",
+            "--channelmux-transport-delay-rotation-delay-ms", "42000",
+        ])
+        self.assertEqual(defaults.channelmux_transport_delay_threshold_ms, 5_000.0)
+        self.assertEqual(defaults.channelmux_transport_delay_rotation_delay_ms, 30_000.0)
+
+        loop = asyncio.new_event_loop()
+        try:
+            mux = ChannelMux.from_args(_FakeSession(), loop, configured)
+            self.assertEqual(mux._transport_delay_threshold_ms, 6_100.0)
+            self.assertEqual(mux._transport_delay_rotation_delay_s, 42.0)
+        finally:
+            loop.close()
+
     def test_sustained_transport_delay_requests_one_connection_rotation(self):
         loop = asyncio.new_event_loop()
         try:
-            session = _FakeSession(connected=True, transmit_delay_est_ms=2_000.0)
+            session = _FakeSession(connected=True, transmit_delay_est_ms=5_000.0)
             mux = ChannelMux(session, loop)
-            mux.TRANSPORT_DELAY_ROTATION_DELAY_S = 30.0
+            mux._transport_delay_rotation_delay_s = 30.0
 
             self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=100.0))
             self.assertIsNone(mux._poll_transport_delay_rotation(now_mono=129.9))
@@ -4370,7 +4389,7 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
             mux.loop.close()
 
     def test_local_tun_packet_drops_mux_data_after_transport_delay_threshold(self):
-        session = _FakeSession(connected=True, transmit_delay_est_ms=3000.0, waiting_count=0)
+        session = _FakeSession(connected=True, transmit_delay_est_ms=5000.0, waiting_count=0)
         mux = ChannelMux(session, asyncio.new_event_loop())
         try:
             mux._overlay_connected = True

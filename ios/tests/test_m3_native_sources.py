@@ -113,6 +113,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'summary["secure_link_rekey_after_seconds"] = rekeyAfterSeconds' in provider
     assert 'summary["secure_link_retry_backoff_initial_ms"] = retryBackoffInitialMS' in provider
     assert 'summary["secure_link_retry_backoff_max_ms"] = retryBackoffMaxMS' in provider
+    assert 'payload["channelmux_transport_delay_threshold_ms"]' in provider
+    assert 'payload["channelmux_transport_delay_rotation_delay_ms"]' in provider
     assert 'summary["secure_link_recover_after_failure"]' not in provider
     assert 'summary["secure_link_recover_delay_seconds"]' not in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
@@ -148,6 +150,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"mode": "system"' in runtime_config
     assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
     assert 'schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1)' in runtime_config
+    assert 'schemaItem(key: "channelmux_transport_delay_threshold_ms", description: "Estimated transport-delay threshold before ChannelMux sheds local traffic and arms sustained-delay rotation.", defaultValue: 5000)' in runtime_config
+    assert 'schemaItem(key: "channelmux_transport_delay_rotation_delay_ms", description: "Continuous estimated-delay duration before ChannelMux requests a connection rotation.", defaultValue: 30000)' in runtime_config
     assert 'schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 200)' in runtime_config
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
@@ -942,7 +946,10 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "struct ObstacleBridgeConnectionRotationResult" in runtime
     assert "func connectionRotationDue(candidateCount: Int)" in runtime
     assert "func transportDelayRotationDue(" in runtime
-    assert "transportDelayRotationGrace: TimeInterval = 30.0" in runtime
+    assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in runtime
+    assert "let transportDelayRotationGrace: TimeInterval" in runtime
+    assert "transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS" in runtime
+    assert "transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace" in runtime
     assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in runtime
     assert "private func enforceAuthenticatedTransportReadiness(transportConnected: Bool)" in runtime
     assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in runtime

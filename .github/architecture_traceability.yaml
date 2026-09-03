@@ -123,6 +123,7 @@ ARC-CMP-003:
     - tests/unit/test_secure_link_psk.py::test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect
     - tests/unit/test_channel_mux_listener_mode.py::test_high_overlay_rtt_throttles_local_ingress
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_delay_controls_default_and_configure_channelmux
     - tests/unit/test_channel_mux_listener_mode.py::test_sustained_transport_delay_requests_one_connection_rotation
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_sustained_transport_delay_rotation_matches_python_channelmux_policy
     - tests/unit/test_connection_lifecycle.py::test_channelmux_outer_readiness_rotation_uses_shared_grace_window

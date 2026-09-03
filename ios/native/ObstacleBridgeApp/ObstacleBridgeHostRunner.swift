@@ -2550,7 +2550,9 @@ final class ObstacleBridgeHostRunner {
                 secureLinkAdapter: sharedSecureLinkPskTransportAdapter,
                 peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime(
                     clientMode: settings.peerHost != nil
-                )
+                ),
+                transportDelayRotationThresholdMS: ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_threshold_ms"]) ?? 5000.0,
+                transportDelayRotationGrace: (ObstacleBridgeRuntimeConfig.doubleValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000.0) / 1000.0
             )
             summary["peer_address_protocol_runtime"] = "ready"
 

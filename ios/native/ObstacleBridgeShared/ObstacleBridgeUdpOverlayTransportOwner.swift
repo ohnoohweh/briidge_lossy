@@ -476,6 +476,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 overlayConnected: inflowAllowed(),
                 bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
                 backpressure: backpressure,
+                transportDelayThresholdMS: overlayLayerTransportAdapter?.transportDelayRotationThresholdMS ?? ObstacleBridgeOverlayChannelCore.tunPostMuxTransportDelayThresholdMS,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames,

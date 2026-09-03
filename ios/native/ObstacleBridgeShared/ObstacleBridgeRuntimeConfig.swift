@@ -451,6 +451,8 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1),
                 schemaItem(key: "mux_tcp_bp_latency_ms", description: "Mux TCP latency threshold before pending writers are drained.", defaultValue: 300),
                 schemaItem(key: "mux_tcp_bp_poll_interval_ms", description: "Mux TCP polling interval for time-based backpressure.", defaultValue: 50),
+                schemaItem(key: "channelmux_transport_delay_threshold_ms", description: "Estimated transport-delay threshold before ChannelMux sheds local traffic and arms sustained-delay rotation.", defaultValue: 5000),
+                schemaItem(key: "channelmux_transport_delay_rotation_delay_ms", description: "Continuous estimated-delay duration before ChannelMux requests a connection rotation.", defaultValue: 30000),
             ],
             "proxy_provider": [
                 schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider.", defaultValue: false),

@@ -78,10 +78,15 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
         )
     ]
 
-    assert "TRANSPORT_DELAY_ROTATION_DELAY_S: float = 30.0" in python_mux
+    assert "DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS: float = 5_000.0" in python_mux
+    assert "DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS: float = 30_000.0" in python_mux
+    assert "--channelmux-transport-delay-threshold-ms" in python_mux
+    assert "--channelmux-transport-delay-rotation-delay-ms" in python_mux
     assert 'request_connection_rotation("channelmux_transport_delay")' in python_mux
-    assert "static let transportDelayRotationThresholdMS: Double = 2_000.0" in adapter
-    assert "static let transportDelayRotationGrace: TimeInterval = 30.0" in adapter
+    assert "static let defaultTransportDelayRotationThresholdMS: Double = 5_000.0" in adapter
+    assert "static let defaultTransportDelayRotationGrace: TimeInterval = 30.0" in adapter
+    assert "let transportDelayRotationThresholdMS: Double" in adapter
+    assert "let transportDelayRotationGrace: TimeInterval" in adapter
     assert 'reason: "channelmux_transport_delay"' in adapter
     for owner in owners:
         assert "transportDelayRotationDue(" in owner
@@ -100,7 +105,7 @@ def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic(
     assert "func tunConnectivityTestsAllowed() -> Bool" in provider
     assert "static func tunConnectivityTestsAllowed(" in channel_core
     assert "framesAdmittedBeforeSecureLink(" in channel_core
-    assert "tunPostMuxTransportDelayThresholdMS: Double = 2_000.0" in channel_core
+    assert "tunPostMuxTransportDelayThresholdMS: Double = 5_000.0" in channel_core
 
 
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:

@@ -24,8 +24,8 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     // This is the layered application-readiness grace used by every native
     // overlay owner. Transport-up alone never makes the overlay usable.
     static let outerReadinessGrace: TimeInterval = 15.0
-    static let transportDelayRotationThresholdMS: Double = 2_000.0
-    static let transportDelayRotationGrace: TimeInterval = 30.0
+    static let defaultTransportDelayRotationThresholdMS: Double = 5_000.0
+    static let defaultTransportDelayRotationGrace: TimeInterval = 30.0
 
     struct OutboundSnapshot {
         var emittedFrames: [Data]
@@ -41,6 +41,8 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
     private let lifecycleTimeProvider: () -> TimeInterval
     private let connectionRotationDelay: TimeInterval
+    let transportDelayRotationThresholdMS: Double
+    let transportDelayRotationGrace: TimeInterval
     private var transportLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var outerLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var compressionFailureEpoch: UInt64?
@@ -55,12 +57,16 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter? = nil,
         peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime? = nil,
         connectionRotationDelay: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace,
+        transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS,
+        transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace,
         lifecycleTimeProvider: (() -> TimeInterval)? = nil
     ) {
         self.compressRuntime = compressRuntime
         self.secureLinkAdapter = secureLinkAdapter
         self.peerAddressRuntime = peerAddressRuntime
         self.connectionRotationDelay = max(0.0, connectionRotationDelay)
+        self.transportDelayRotationThresholdMS = max(0.0, transportDelayRotationThresholdMS)
+        self.transportDelayRotationGrace = max(0.0, transportDelayRotationGrace)
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
         let initial = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
@@ -186,7 +192,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     ) -> ObstacleBridgeConnectionRotationResult? {
         let now = lifecycleTimeProvider()
         guard transportLifecycle.state == .connected,
-              transmitDelayEstMS >= Self.transportDelayRotationThresholdMS
+              transmitDelayEstMS >= transportDelayRotationThresholdMS
         else {
             transportDelayHighSince = nil
             return nil
@@ -195,7 +201,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
             transportDelayHighSince = now
             return nil
         }
-        guard now - highSince >= Self.transportDelayRotationGrace,
+        guard now - highSince >= transportDelayRotationGrace,
               rotationWaitingForNewEpoch == nil
         else {
             return nil

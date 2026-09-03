@@ -96,6 +96,17 @@ ChannelMux and TUN:
   `connected`
 - after the outer layer remains non-ready continuously for more than 15 seconds,
   `ChannelMux` requests one connection rotation through the wrapper stack
+- `channelmux_transport_delay_threshold_ms` is the shared ChannelMux overload
+  parameter, defaulting to `5000` milliseconds. At or above it, TCP pauses local
+  reads, UDP sheds new local datagrams, and TUN continues draining but sheds
+  completed `DATA` / `DATA_FRAG` immediately before SecureLink; TUN `OPEN`
+  control remains eligible.
+- `channelmux_transport_delay_rotation_delay_ms` is the companion rotation
+  duration parameter, defaulting to `30000` milliseconds. If estimated
+  transport delay stays at or above the threshold for that duration
+  while the outer lifecycle is connected, ChannelMux requests one normal
+  connection rotation and waits for the next lifecycle epoch before another
+  request.
 - a raw transport `connected` event does not reset the candidate-cycle budget;
   ChannelMux resets it only after the outer lifecycle reports `connected`
 - `TUN` ingress must not be admitted into `ChannelMux` unless ChannelMux has
@@ -159,6 +170,12 @@ recovery paths:
   before it can request another rotation. An accepted myUDP rotation publishes
   that newer disconnected epoch, so the policy continues through candidates
   rather than remaining stalled after its first request.
+- ChannelMux separately watches estimated transport delay while connected. Its
+  configurable `channelmux_transport_delay_threshold_ms` defaults to 5000 ms,
+  and `channelmux_transport_delay_rotation_delay_ms` defaults to 30000 ms;
+  sustained delay at or above that threshold for that duration requests the same
+  one-per-epoch candidate rotation. Python and Swift share the 5000 ms default
+  and 30-second grace.
 - Security reports failed authentication without scheduling a transport
   reconnect; Runner watchdog supervision is independent of Security recovery
   status

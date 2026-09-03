@@ -491,7 +491,7 @@ def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
     assert 'inflight: Int(protocolStats["inflight"] as? Int ?? 0)' in udp_owner
     assert 'maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0)' in udp_owner
     assert "framesAdmittedBeforeSecureLink(" in core
-    assert "tunPostMuxTransportDelayThresholdMS: Double = 2_000.0" in core
+    assert "tunPostMuxTransportDelayThresholdMS: Double = 5_000.0" in core
     assert "guard localTunSendAllowed" not in tun_runtime
 
 
@@ -526,7 +526,11 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in overlay_adapter
     assert "handleTransportDisconnected()" in overlay_adapter
     assert "transportDelayRotationDue(" in overlay_adapter
-    assert "transportDelayRotationGrace: TimeInterval = 30.0" in overlay_adapter
+    assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in overlay_adapter
+    assert "let transportDelayRotationGrace: TimeInterval" in overlay_adapter
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'runtimeConfig["channelmux_transport_delay_threshold_ms"]' in host_runner
+    assert 'runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]' in host_runner
 
 
 def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:
