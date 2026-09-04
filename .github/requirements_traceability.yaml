@@ -234,8 +234,8 @@ REQ-MUX-011:
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_removes_retired_throttle_quota_fields
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_removes_retired_throttle_quota_fields
 
 REQ-AUT-006:
   integration_tests:
@@ -1329,8 +1329,8 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_preserves_null_listener_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_removes_retired_throttle_quota_fields
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_removes_retired_throttle_quota_fields
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_connection_snapshots.py::test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected

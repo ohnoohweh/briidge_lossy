@@ -189,7 +189,7 @@ Ingress throttling: ChannelMux uses the transport RTT estimator common to myUDP,
 
 ChannelMux admits TUN packets, TUN reader registration, and internal connectivity probes only while the current lifecycle epoch is connected. A disconnected lifecycle event withdraws admission before local packet forwarding or probe injection can enter the mux path. Runner consumes an exhausted transport candidate-cycle result and requests one process restart with the transport and cycle diagnostic reason; its watchdog is reserved for sessions that have emitted no lifecycle state.
 
-WebAdmin peer diagnostics separate connection endpoint/uptime state, protocol quality and traffic counters, and ChannelMux open-channel counts, throttle-active state, and candidate/restart timers. Transport, Protocol, and ChannelMux remain visible for every non-listening peer; a separate per-peer TUN box is not rendered. Enabled SecureLink and Compression layers remain visible while their reported state is disconnected, failed, or reconnecting.
+WebAdmin peer diagnostics separate connection endpoint/uptime state, protocol quality and traffic counters, and ChannelMux open-channel counts, throttle-active state, and candidate/restart timers. Transport, Protocol, and ChannelMux remain visible for every non-listening peer; a separate per-peer TUN box is not rendered. Peer throttle summaries expose current delay/backpressure state only and omit retired byte-budget, quota, and previous-window fields. Enabled SecureLink and Compression layers remain visible while their reported state is disconnected, failed, or reconnecting.
 
 Current lifecycle implementation note:
 

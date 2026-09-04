@@ -1878,6 +1878,29 @@ class AdminWebUI:
 
     def _build_peers_payload_now(self) -> dict:
         payload = self.runner.get_peer_connections_snapshot()
+        # `/api/peers` is an operator summary.  Do not leak the byte-window
+        # quota fields that belonged to the retired ingress-throttle design
+        # when an older runner or wrapper contributes a raw throttle snapshot.
+        for peer in list(payload.get("peers") or []):
+            if not isinstance(peer, dict) or not isinstance(peer.get("throttle"), dict):
+                continue
+            peer["throttle"] = {
+                key: value
+                for key, value in peer["throttle"].items()
+                if key not in {
+                    "scope_id",
+                    "mode",
+                    "budget_bytes",
+                    "used_bytes",
+                    "remaining_bytes",
+                    "aggregate",
+                    "scope",
+                    "transport_prev_window_bytes",
+                    "prev_window_bytes",
+                    "curr_window_bytes",
+                    "throttle_drop_count",
+                }
+            }
         payload["ok"] = True
         return payload
 

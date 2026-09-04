@@ -442,7 +442,7 @@ def test_swift_admin_api_status_route_matches_python(swift_admin_web_component_r
     assert swift["body_json"] == python
 
 
-def test_swift_admin_api_peers_payload_preserves_throttle_summary(swift_admin_web_component_runner: Path) -> None:
+def test_swift_admin_api_peers_payload_removes_retired_throttle_quota_fields(swift_admin_web_component_runner: Path) -> None:
     peer_snapshot = [
         {
             "id": "0:1",
@@ -486,11 +486,12 @@ def test_swift_admin_api_peers_payload_preserves_throttle_summary(swift_admin_we
         },
     )
     assert swift["ok"] is True
-    assert swift["body_json"]["peers"][0]["throttle"]["active"] is True
-    assert swift["body_json"]["peers"][0]["throttle"]["remaining_bytes"] == 1200
+    throttle = swift["body_json"]["peers"][0]["throttle"]
+    assert throttle["active"] is True
+    assert not {"budget_bytes", "used_bytes", "remaining_bytes", "aggregate", "scope", "prev_window_bytes"} & set(throttle)
 
 
-def test_swift_admin_api_live_topic_peers_preserves_throttle_summary(swift_admin_web_component_runner: Path) -> None:
+def test_swift_admin_api_live_topic_peers_removes_retired_throttle_quota_fields(swift_admin_web_component_runner: Path) -> None:
     peer_snapshot = [
         {
             "id": "0:1",
@@ -518,8 +519,9 @@ def test_swift_admin_api_live_topic_peers_preserves_throttle_summary(swift_admin
         },
     )
     assert swift["frame_json"]["type"] == "peers"
-    assert swift["frame_json"]["data"]["peers"][0]["throttle"]["active"] is True
-    assert swift["frame_json"]["data"]["peers"][0]["throttle"]["remaining_bytes"] == 1200
+    throttle = swift["frame_json"]["data"]["peers"][0]["throttle"]
+    assert throttle["active"] is True
+    assert not {"budget_bytes", "used_bytes", "remaining_bytes"} & set(throttle)
 
 
 def test_swift_admin_api_live_topic_status_frame_contains_payload(swift_admin_web_component_runner: Path) -> None:

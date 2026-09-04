@@ -289,7 +289,7 @@ enum ObstacleBridgeAdminAPI {
         case ("POST", "/api/tun-helper/repair"):
             return provider.adminTunHelperRepair(request: request)
         case ("GET", "/api/peers"):
-            return jsonResponse(["peers": provider.adminPeersSnapshot()])
+            return jsonResponse(["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(provider.adminPeersSnapshot())])
         case ("GET", "/api/config"):
             return jsonResponse(provider.adminConfigSnapshot())
         case ("GET", "/api/onboarding/connection-profiles"):
@@ -336,7 +336,7 @@ enum ObstacleBridgeAdminAPI {
         case "tun_routing":
             return provider.adminTunRoutingSnapshot()
         case "peers":
-            return ["peers": provider.adminPeersSnapshot()]
+            return ["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(provider.adminPeersSnapshot())]
         case "meta":
             return provider.adminMetaSnapshot()
         default:

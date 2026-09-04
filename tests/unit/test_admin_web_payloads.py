@@ -2049,7 +2049,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["transmit_delay_est_ms"], 123.0)
         self.assertTrue(peer["throttle"]["applicable"])
         self.assertTrue(peer["throttle"]["active"])
-        self.assertEqual(peer["throttle"]["remaining_bytes"], 1200)
+        for legacy_key in (
+            "budget_bytes", "used_bytes", "remaining_bytes", "aggregate", "scope",
+            "transport_prev_window_bytes", "prev_window_bytes", "throttle_drop_count",
+        ):
+            self.assertNotIn(legacy_key, peer["throttle"])
         self.assertTrue(peer["compress_layer"]["enabled"])
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")

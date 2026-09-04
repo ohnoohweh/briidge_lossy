@@ -1,8 +1,6 @@
 import Foundation
 
 enum ObstacleBridgeAdminSnapshotSupport {
-    private static let peerThrottleRatio = 0.9
-
     static func statusEnvelope(
         runtimeOwner: String,
         runtimeMode: String,
@@ -200,47 +198,6 @@ enum ObstacleBridgeAdminSnapshotSupport {
                 if let throttle = row["throttle"] as? [String: Any], rowMatchesPeer(row, peerID: peerID, protocolKey: key) {
                     summary = mergeThrottleSummary(current: summary, candidate: throttle)
                 }
-                guard let ownership = row["shared_tun_ownership"] as? [String: Any] else {
-                    continue
-                }
-                let bindings = ownership["active_peer_bindings"] as? [[String: Any]] ?? []
-                for binding in bindings where intValue(binding["peer_id"]) == peerID {
-                    let prevWindowBytes = intValue(binding["throttle_prev_window_bytes"])
-                    let usedBytes = intValue(binding["throttle_curr_window_bytes"])
-                    let throttleDropCount = intValue(binding["throttle_drop_count"])
-                    let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)
-                    let remainingBytes = max(0, budgetBytes - usedBytes)
-                    let scopeID = "shared-tun-peer:\(peerID)"
-                    summary = mergeThrottleSummary(
-                        current: summary,
-                        candidate: [
-                            "applicable": true,
-                            "active": usedBytes > 0 || throttleDropCount > 0,
-                            "stalled": false,
-                            "backpressure_active": false,
-                            "disabled": false,
-                            "budget_bytes": budgetBytes,
-                            "used_bytes": usedBytes,
-                            "remaining_bytes": remainingBytes,
-                            "aggregate": [
-                                "scope_id": scopeID,
-                                "budget_bytes": budgetBytes,
-                                "used_bytes": usedBytes,
-                                "remaining_bytes": remainingBytes,
-                                "prev_window_bytes": prevWindowBytes,
-                                "throttle_drop_count": throttleDropCount,
-                            ],
-                            "scope": [
-                                "scope_id": scopeID,
-                                "budget_bytes": budgetBytes,
-                                "used_bytes": usedBytes,
-                                "remaining_bytes": remainingBytes,
-                                "prev_window_bytes": prevWindowBytes,
-                                "throttle_drop_count": throttleDropCount,
-                            ],
-                        ]
-                    )
-                }
             }
         }
         return summary ?? [
@@ -248,6 +205,23 @@ enum ObstacleBridgeAdminSnapshotSupport {
             "active": false,
             "reason": "no_local_ingress",
         ]
+    }
+
+    static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]] {
+        peers.map { peer in
+            guard let throttle = peer["throttle"] as? [String: Any] else {
+                return peer
+            }
+            var sanitized = peer
+            sanitized["throttle"] = throttle.filter { key, _ in
+                ![
+                    "scope_id", "mode", "budget_bytes", "used_bytes", "remaining_bytes",
+                    "aggregate", "scope", "transport_prev_window_bytes", "prev_window_bytes",
+                    "curr_window_bytes", "throttle_drop_count",
+                ].contains(key)
+            }
+            return sanitized
+        }
     }
 
     private static func mergeThrottleSummary(current: [String: Any]?, candidate: [String: Any]) -> [String: Any] {
@@ -265,11 +239,11 @@ enum ObstacleBridgeAdminSnapshotSupport {
                 "stalled": boolValue(candidate["stalled"]),
                 "backpressure_active": boolValue(candidate["backpressure_active"]),
                 "disabled": boolValue(candidate["disabled"]),
-                "budget_bytes": intValue(candidate["budget_bytes"]),
-                "used_bytes": intValue(candidate["used_bytes"]),
-                "remaining_bytes": intValue(candidate["remaining_bytes"]),
-                "aggregate": (candidate["aggregate"] as? [String: Any]) ?? [:],
-                "scope": candidate["scope"] ?? NSNull(),
+                "waiting_count": intValue(candidate["waiting_count"]),
+                "inflight": intValue(candidate["inflight"]),
+                "max_inflight": intValue(candidate["max_inflight"]),
+                "transmit_delay_est_ms": doubleValue(candidate["transmit_delay_est_ms"]) ?? 0.0,
+                "rtt_est_ms": doubleValue(candidate["rtt_est_ms"]) ?? 0.0,
             ]
         }
         current["applicable"] = true
@@ -277,37 +251,12 @@ enum ObstacleBridgeAdminSnapshotSupport {
         current["stalled"] = boolValue(current["stalled"]) || boolValue(candidate["stalled"])
         current["backpressure_active"] = boolValue(current["backpressure_active"]) || boolValue(candidate["backpressure_active"])
         current["disabled"] = boolValue(current["disabled"]) && boolValue(candidate["disabled"])
-        current["budget_bytes"] = max(intValue(current["budget_bytes"]), intValue(candidate["budget_bytes"]))
-        current["used_bytes"] = max(intValue(current["used_bytes"]), intValue(candidate["used_bytes"]))
-        current["remaining_bytes"] = min(intValue(current["remaining_bytes"]), intValue(candidate["remaining_bytes"]))
-
-        let currentAggregate = current["aggregate"] as? [String: Any] ?? [:]
-        let candidateAggregate = candidate["aggregate"] as? [String: Any] ?? [:]
-        if currentAggregate.isEmpty {
-            current["aggregate"] = candidateAggregate
-        } else if !candidateAggregate.isEmpty {
-            current["aggregate"] = mergedThrottleScope(current: currentAggregate, candidate: candidateAggregate)
-        }
-
-        let currentScope = current["scope"] as? [String: Any]
-        let candidateScope = candidate["scope"] as? [String: Any]
-        if currentScope == nil {
-            current["scope"] = candidateScope ?? NSNull()
-        } else if let candidateScope, intValue(candidateScope["remaining_bytes"]) < intValue(currentScope?["remaining_bytes"]) {
-            current["scope"] = candidateScope
-        }
+        current["waiting_count"] = max(intValue(current["waiting_count"]), intValue(candidate["waiting_count"]))
+        current["inflight"] = max(intValue(current["inflight"]), intValue(candidate["inflight"]))
+        current["max_inflight"] = max(intValue(current["max_inflight"]), intValue(candidate["max_inflight"]))
+        current["transmit_delay_est_ms"] = max(doubleValue(current["transmit_delay_est_ms"]) ?? 0.0, doubleValue(candidate["transmit_delay_est_ms"]) ?? 0.0)
+        current["rtt_est_ms"] = max(doubleValue(current["rtt_est_ms"]) ?? 0.0, doubleValue(candidate["rtt_est_ms"]) ?? 0.0)
         return current
-    }
-
-    private static func mergedThrottleScope(current: [String: Any], candidate: [String: Any]) -> [String: Any] {
-        [
-            "scope_id": String(describing: current["scope_id"] ?? candidate["scope_id"] ?? ""),
-            "budget_bytes": max(intValue(current["budget_bytes"]), intValue(candidate["budget_bytes"])),
-            "used_bytes": max(intValue(current["used_bytes"]), intValue(candidate["used_bytes"])),
-            "remaining_bytes": min(intValue(current["remaining_bytes"]), intValue(candidate["remaining_bytes"])),
-            "prev_window_bytes": max(intValue(current["prev_window_bytes"]), intValue(candidate["prev_window_bytes"])),
-            "throttle_drop_count": max(intValue(current["throttle_drop_count"]), intValue(candidate["throttle_drop_count"])),
-        ]
     }
 
     private static func rowMatchesPeer(_ row: [String: Any], peerID: Int, protocolKey: String) -> Bool {
