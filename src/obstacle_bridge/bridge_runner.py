@@ -2377,6 +2377,12 @@ class Runner:
                         overlay_rows = list(getter() or [])
 
             if overlay_rows:
+                # Client sessions expose one peer with an empty channel list
+                # until channels are opened.  Listener sessions also expose a
+                # passive listening row, so an empty list on one of their
+                # accepted peers means that no ChannelMux channel is owned by
+                # that peer.  Do not attribute every local service to it.
+                listener_snapshot = any(bool(row.get("listening")) for row in overlay_rows if isinstance(row, dict))
                 for p in overlay_rows:
                     if bool(p.get("listening")):
                         listener_session = getattr(real_session, "inner_session", None)
@@ -2443,6 +2449,8 @@ class Runner:
                             continue
                         if mux_chans and chan_id not in mux_chans:
                             continue
+                        if not mux_chans and listener_snapshot:
+                            continue
                         st = row.get("stats", {})
                         p_rx += int(st.get("rx_bytes", 0) or 0)
                         p_tx += int(st.get("tx_bytes", 0) or 0)
@@ -2455,6 +2463,8 @@ class Runner:
                         if str(row.get("state", "connected")).lower() == "listening":
                             continue
                         if mux_chans and chan_id not in mux_chans:
+                            continue
+                        if not mux_chans and listener_snapshot:
                             continue
                         st = row.get("stats", {})
                         p_rx += int(st.get("rx_bytes", 0) or 0)
@@ -2469,6 +2479,8 @@ class Runner:
                             continue
                         aliases = row.get("channel_aliases") if isinstance(row.get("channel_aliases"), list) else [chan_id]
                         if mux_chans and not any(alias in mux_chans for alias in aliases):
+                            continue
+                        if not mux_chans and listener_snapshot:
                             continue
                         st = row.get("stats", {})
                         p_rx += int(st.get("rx_bytes", 0) or 0)

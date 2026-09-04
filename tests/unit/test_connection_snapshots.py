@@ -701,6 +701,26 @@ class RunnerPeerSnapshotTests(unittest.TestCase):
         self.assertGreater(second["traffic"]["rx_bytes_per_sec"], 0.0)
         self.assertGreater(second["traffic"]["tx_bytes_per_sec"], 0.0)
 
+    def test_listener_peer_without_mux_channel_does_not_claim_unowned_tun(self):
+        class _ListenerSession:
+            def is_connected(self):
+                return True
+
+            def get_overlay_peers_snapshot(self):
+                return [
+                    {"peer_id": -1, "connected": False, "listening": True, "mux_chans": []},
+                    {"peer_id": 1, "connected": True, "state": "connected", "mux_chans": []},
+                ]
+
+        runner = Runner(argparse.Namespace(no_dashboard=True, overlay_transport="ws"))
+        runner._sessions = [_ListenerSession()]
+        runner._muxes = [_MuxWithMutableTun()]
+        runner._session_labels = ["ws"]
+
+        peer = next(row for row in runner.get_peer_connections_snapshot()["peers"] if row["id"] == "0:1")
+
+        self.assertEqual(peer["open_connections"]["tun"], 0)
+
     def test_listener_snapshot_includes_myudp_listener_row(self):
         class _ListenerSession:
             def __init__(self):

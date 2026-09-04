@@ -993,6 +993,7 @@ REQ-MUX-006:
     # Includes cross-transport shared binding/return-route behavior, Admin connection-id resolution, and disconnect cleanup.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_without_mux_channel_does_not_claim_unowned_tun
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
@@ -1300,7 +1301,8 @@ REQ-ADM-006:
   # ChannelMux-owned candidate/restart timers, including the Transport
   # detail ordering, status-pill semantics, launcher restart countdowns, and peer-scoped wrapper states for resolved and
   # server-observed peer address-and-port tuples. The UI evidence also keeps
-  # throttle state in the ChannelMux peer box and limits the TUN page to a
+  # throttle state in the ChannelMux peer box, preserves matching local
+  # open-channel semantics for UDP/TCP/TUN, and limits the TUN page to a
   # physical-interface aggregate indicator. Peer identity cells must not span
   # into the next rendered peer's detail rows.
   integration_tests:
