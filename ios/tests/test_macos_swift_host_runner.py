@@ -3174,6 +3174,8 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             "mux_tcp_bp_threshold",
             "mux_tcp_bp_latency_ms",
             "mux_tcp_bp_poll_interval_ms",
+            "channelmux_transport_delay_threshold_ms",
+            "channelmux_transport_delay_rotation_delay_ms",
         }
         proxy_provider_keys = {str(item["key"]) for item in config["schema"]["proxy_provider"]}
         assert {
