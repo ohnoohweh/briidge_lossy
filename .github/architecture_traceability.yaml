@@ -240,6 +240,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_inbound_peer_relay_avoids_self_loop
     - ios/tests/test_m3_native_sources.py::test_macos_swift_host_runner_source_exists
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
+    - tests/unit/test_connection_snapshots.py::test_listener_peer_without_mux_channel_does_not_claim_unowned_tun
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_idle_tun_interface_as_listening_not_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_active_tun_channel_as_open
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
@@ -554,7 +555,7 @@ ARC-CMP-005:
   # SecureLink-specific handshake-debug telemetry fields, including persistent
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
-  # semantic status-pill colors, negative-uptime launcher restart countdown,
+  # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
   # and peer-scoped wrapper status.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary

@@ -1597,6 +1597,7 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
                 self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
                 self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
+                self.assertIn("renderMetric('TUN Open', fmtInteger(row.open_connections?.tun ?? 0))", text)
                 self.assertIn("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", text)
                 self.assertIn("+ (channelMuxMetrics ? 1 : 0);", text)
                 self.assertNotIn("+ (!isListeningPeer ? 2 : 0)", text)

@@ -58,6 +58,7 @@ Current peer-row diagnostics include:
 - peer-scoped connection state such as `listening`, `connecting`, or `connected`
 - peer-local RTT estimates where the transport exposes them
 - peer-scoped decode/unidentified-frame counters where the transport exposes them
+- peer-row UDP, TCP, and TUN open-connection counts owned by this WebAdmin instance; each value counts active channels opened here for that peer
 - peer-local `last_incoming_age_seconds`, which reports how long it has been since the runtime last observed an incoming transport message from that peer
 - during `connecting` phases, countdown-style timing for the next overlay address/reconnect attempt and the runner's pending auto-restart threshold when that watchdog is enabled
 
