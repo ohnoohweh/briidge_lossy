@@ -294,7 +294,8 @@ ARC-CMP-004:
   # expected self-restart relaunches in the integration harness.
   # Hosted macOS elevated gates keep Admin/helper state assertions even when
   # the runner refuses route, ping, SMAppService approval, packaged-XPC enable,
-  # packaged-XPC Admin status polling, or inline TUN-row publication side effects.
+  # or packaged-XPC Admin status polling. The live inline route/DNS mutation
+  # case skips before setup there because it can sever runner connectivity.
   # The macOS elevated scripts preserve CI identity through sudo so those
   # hosted-runner branches remain active after privilege escalation.
   # Their unbuffered per-test progress and exit host diagnostics identify the

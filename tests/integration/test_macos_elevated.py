@@ -691,6 +691,12 @@ def _wait_tun_admin_verification(
 
 def test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification(tmp_path: Path) -> None:
     _require_macos_elevated_runtime()
+    if _running_in_github_actions():
+        pytest.skip(
+            "GitHub-hosted macOS cannot safely run the inline route/DNS mutation case: "
+            "changing the runner's live host network state can sever its Actions control connection; "
+            "this remains required on authorized local macOS"
+        )
     _repair_stale_loopback_route()
     case_tag = "mt500"
     client_requested_ifname = _tun_name(case_tag, "c")
@@ -763,12 +769,6 @@ def test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification(t
 
         _wait_interface(client_actual_ifname)
         _wait_interface(server_actual_ifname)
-        if _running_in_github_actions():
-            client_status = _local_admin_json(pair.client_proc.admin_port or 0, "/api/tun-routing/status")
-            verification = dict(client_status.get("verification") or {})
-            assert verification.get("ifname") == client_actual_ifname
-            assert dict(verification.get("tun_config") or {}).get("state") in {"verified", "failed"}
-            return
         _wait_interface_address(client_actual_ifname, "198.18.69.1")
         _wait_interface_address(client_actual_ifname, "fd20:569::1")
         _wait_interface_address(server_actual_ifname, "198.18.69.2")

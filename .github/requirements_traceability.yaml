@@ -706,10 +706,12 @@ REQ-LIFE-010:
   # macOS. GitHub-hosted macOS cannot grant the Swift host runner's packet-
   # injection permission, so that one packet-carry case skips there.
   # macOS elevated scripts preserve CI identity across sudo so hosted-runner
-  # diagnostics remain scoped to the CI privilege boundary, including the
-  # inline case where hosted macOS leaves the TUN row empty and the Swift
-  # packaged-XPC case where hosted macOS leaves the helper service disabled
-  # after privileged setup but the Admin diagnostics endpoint remains responsive.
+  # diagnostics remain scoped to the CI privilege boundary. The live inline
+  # route/DNS mutation test skips before setup on hosted macOS because it can
+  # sever the Actions control connection, while remaining required on an
+  # authorized local host; the Swift packaged-XPC case may leave the helper
+  # service disabled after privileged setup but the Admin diagnostics endpoint
+  # remains responsive.
   # The elevated wrapper emits unbuffered per-test progress and exit route,
   # interface, and process diagnostics so a hosted interruption identifies its
   # last active case. The hosted Python matrix runs every elevated case in an
