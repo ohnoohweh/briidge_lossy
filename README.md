@@ -1575,6 +1575,7 @@ Important caveat:
 - Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
 - macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.
+- SecureLink keeps a 60-second deadline for initial authentication and for a pending rekey on either peer role; a one-way path that still carries transport RTT control traffic therefore fails and enters the normal ChannelMux rotation path instead of remaining indefinitely rekeying.
 - myUDP listener peers that continue control traffic without producing an application payload are removed after a bounded pre-auth grace period; Swift myUDP clients publish the remaining app-readiness recovery time and rebuild the sole peer socket before retrying SecureLink.
 - Admin status polling keeps a minimal live-session fallback when stats snapshotting fails before a cached status exists.
 

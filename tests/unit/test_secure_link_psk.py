@@ -354,6 +354,41 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
             await client.stop()
             await server.stop()
 
+    async def test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer="127.0.0.1"), "myudp")
+        server = SecureLinkPskSession(server_inner, _args(), "myudp")
+        server._HANDSHAKE_TIMEOUT_S = 0.01
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            self.assertTrue(await client.wait_connected(timeout=0.1))
+
+            # Keep the listener's rekey reply off the wire: this models the
+            # observed one-way path where RTT control traffic still arrives.
+            server_inner._peer = None
+            state = server._peer_states[1]
+            rekey_session_id = int(state.session_id) + 1
+            rekey_body = b"x" * 32 + bytes([server._SL_CAP_PSK_V1, 0])
+            server._handle_rekey_hello(1, rekey_session_id, rekey_body)
+            self.assertIsNotNone(state.pending_started_unix_ts)
+
+            await asyncio.sleep(0.02)
+            server._expire_stale_handshakes()
+
+            status = server.get_overlay_peers_snapshot()[0]["secure_link"]
+            self.assertEqual(status["state"], "failed")
+            self.assertFalse(status["authenticated"])
+            self.assertIn("re-authentication timed out", str(status["failure_detail"] or ""))
+        finally:
+            await client.stop()
+            await server.stop()
+
     async def test_psk_server_authenticates_before_first_application_payload(self):
         client_inner = FakeInnerSession()
         server_inner = FakeInnerSession()

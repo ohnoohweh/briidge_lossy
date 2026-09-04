@@ -2996,6 +2996,12 @@ class SecureLinkPskSession(ISession):
         if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
             return
+        # The listener is a rekey participant too. Start its watchdog when
+        # the first hello is accepted, and never refresh it for retransmitted
+        # copies of that hello. Otherwise a one-way myUDP path can leave this
+        # peer authenticated with an eternal pending rekey.
+        if int(state.pending_session_id or 0) == 0:
+            state.pending_started_unix_ts = time.time()
         if self._is_cert_mode():
             parsed = self._parse_json_payload(body)
             if not isinstance(parsed, dict) or str(parsed.get("cap") or "") != "cert-v1":

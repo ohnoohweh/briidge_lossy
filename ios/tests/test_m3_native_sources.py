@@ -907,6 +907,8 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "typeData" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
+    assert "private var pendingRekeyStartedAt: TimeInterval?" in runtime
+    assert "(timeProvider() - pendingRekeyStartedAt) >= Self.handshakeTimeoutSeconds" in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:

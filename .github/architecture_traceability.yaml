@@ -666,10 +666,12 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_without_recovery_option
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
+    - tests/unit/test_secure_link_psk.py::test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_pending_rekey
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity
     - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_failure_is_atomic

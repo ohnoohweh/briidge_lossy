@@ -269,7 +269,9 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_psk.py::test_unexpected_rekey_commit_fails_closed
     - tests/unit/test_secure_link_psk.py::test_auth_failure_unregisters_server_mux_routes
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
+    - tests/unit/test_secure_link_psk.py::test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_pending_rekey
 REQ-AUT-008:
   # Authenticated SecureLink failures are reported to ChannelMux, which owns
   # the resulting lifecycle rotation through the lower layers.

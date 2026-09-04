@@ -76,6 +76,7 @@ Security:
 - publishes `connected` only after the initial secure-link handshake succeeds
 - remains `disconnected` while the initial handshake is incomplete or fails
 - remains `connected` during a rekey; a rekey is not a transport disconnect
+- bounds every initial handshake and pending rekey to the same 60-second lifecycle timeout on both client and listener roles; duplicate rekey control frames do not renew that deadline
 - publishes `disconnected` when secure-link enters `failed`
 - propagates a newer lower-transport epoch even when it is already
   `disconnected`, so ChannelMux can continue candidate rotation after a

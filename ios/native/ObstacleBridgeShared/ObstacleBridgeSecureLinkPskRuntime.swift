@@ -101,6 +101,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private var pendingServerNonce = Data()
     private var pendingC2SKey: Data?
     private var pendingS2CKey: Data?
+    private var pendingRekeyStartedAt: TimeInterval?
     private var rekeysCompletedTotal = 0
     private var lastRekeyTrigger = ""
     private var disconnectReason = ""
@@ -498,6 +499,9 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             clientNonce: Data(clientNonce),
             serverNonce: serverNonce
         )
+        if pendingSessionID == 0 {
+            pendingRekeyStartedAt = timeProvider()
+        }
         pendingSessionID = sessionID
         pendingClientNonce = Data(clientNonce)
         pendingServerNonce = serverNonce
@@ -696,7 +700,16 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     func expireHandshakeIfNeeded() {
-        guard sessionID > 0, !peerConfirmedAuthenticated, lastAuthFailCode == 0 else {
+        guard lastAuthFailCode == 0 else {
+            return
+        }
+        if pendingSessionID != 0,
+           let pendingRekeyStartedAt,
+           (timeProvider() - pendingRekeyStartedAt) >= Self.handshakeTimeoutSeconds {
+            _ = fail(sessionID: pendingSessionID, code: Self.authFailLifecycle)
+            return
+        }
+        guard sessionID > 0, !peerConfirmedAuthenticated else {
             return
         }
         guard let handshakeStartedAt else {
@@ -727,6 +740,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         pendingServerNonce = Data()
         pendingC2SKey = nil
         pendingS2CKey = nil
+        pendingRekeyStartedAt = nil
     }
 
     private func promotePendingRekey() {
@@ -796,6 +810,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         let nextSessionID = nextSessionID()
         let nextClientNonce = Data(randomBytes(32).prefix(32))
         pendingSessionID = nextSessionID
+        pendingRekeyStartedAt = timeProvider()
         pendingClientNonce = nextClientNonce
         pendingServerNonce = Data()
         pendingC2SKey = nil
