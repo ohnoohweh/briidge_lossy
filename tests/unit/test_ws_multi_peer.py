@@ -159,6 +159,32 @@ class WebSocketMultiPeerSendTests(unittest.IsolatedAsyncioTestCase):
 
         await session._close_server_peer(1)
 
+    async def test_server_closes_peer_after_rtt_liveness_is_lost(self):
+        session = WebSocketSession(_server_args())
+        session._loop = asyncio.get_running_loop()
+        peer_ws = _QueueDrivenWs()
+
+        await session._on_accept(peer_ws)
+        session._on_server_peer_rtt_state(1, True)
+        session._on_server_peer_rtt_state(1, False)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+        self.assertNotIn(1, session._server_peers)
+        await session.stop()
+
+    async def test_server_closes_peer_that_never_establishes_rtt_liveness(self):
+        session = WebSocketSession(_server_args())
+        session._loop = asyncio.get_running_loop()
+        session.WS_SERVER_INITIAL_LIVENESS_TIMEOUT_S = 0.01
+        peer_ws = _QueueDrivenWs()
+
+        await session._on_accept(peer_ws)
+        await asyncio.sleep(0.05)
+
+        self.assertNotIn(1, session._server_peers)
+        await session.stop()
+
 
 class WebSocketPeerSnapshotTests(unittest.TestCase):
     def test_client_peer_snapshot_includes_last_incoming_age_seconds(self):

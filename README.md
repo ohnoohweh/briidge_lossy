@@ -1481,7 +1481,7 @@ Optional operations follow-up:
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
-- WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
+- WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic. Each accepted peer must establish RTT liveness within 60 seconds and is closed independently if it later loses RTT liveness, so a stale socket cannot keep the listener transport falsely ready.
 - Python listener-side remote TCP services use per-service single-flight startup, so catalog installation and listener self-healing cannot race into duplicate port binds.
 
 ## For Contributors

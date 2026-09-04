@@ -61,6 +61,8 @@ ARC-CMP-001:
     - ios/tests/test_m3_native_sources.py::test_websocket_overlay_transport_owner_source_exists
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_after_rtt_liveness_is_lost
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_that_never_establishes_rtt_liveness
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
   integration_tests:

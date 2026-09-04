@@ -203,6 +203,7 @@ REQ-LST-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_after_rtt_liveness_is_lost
 
 REQ-MUX-005:
   integration_tests:
@@ -925,6 +926,7 @@ REQ-LST-006:
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_that_never_establishes_rtt_liveness
 
 REQ-MUX-001:
   integration_tests:

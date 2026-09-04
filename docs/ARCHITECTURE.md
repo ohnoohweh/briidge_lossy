@@ -257,6 +257,7 @@ Important behaviors:
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
 - transport-specific client bootstrap, such as proxy tunnel establishment and direct-path HTTP root preflight, before higher protocol handshakes
 - endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
+- an accepted Python WebSocket listener peer has its own RTT liveness guard: failure to become live within 60 seconds, or loss after it was live, closes only that peer socket and withdraws its lower-transport readiness; native Swift WebSocket code is peer-client-only and has no listener-peer ownership surface
 - every overlay transport must publish one transport-agnostic backpressure view upward: queue depth, inflight state where available, recent egress throughput, and delay/progress estimates
 
 The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).
