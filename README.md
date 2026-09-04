@@ -1509,9 +1509,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `60` | `935` |
-| macOS Swift app | `1` | `56` |
-| iOS app/extension | `27` | `177` |
+| Python CLI/runtime, including macOS Python | `60` | `952` |
+| macOS Swift app | `1` | `57` |
+| iOS app/extension | `27` | `178` |
 
 #### Requirement traceability
 
@@ -1519,7 +1519,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `7/92 = 7.6%` | `10/92 = 10.9%` |
-| iOS app/extension | `10/92 = 10.9%` | `17/92 = 18.5%` | `22/92 = 23.9%` |
+| iOS app/extension | `10/92 = 10.9%` | `19/92 = 20.7%` | `24/92 = 26.1%` |
 
 #### Architecture traceability
 
@@ -1549,9 +1549,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `56` | `0` | `56` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `31` | `31` |
-| Total parity-oriented evidence | Sum of the lanes above | `60` | `151` | `211` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `57` | `0` | `57` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
+| Total parity-oriented evidence | Sum of the lanes above | `61` | `152` | `213` |
 
 Important caveat:
 

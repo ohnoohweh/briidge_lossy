@@ -701,6 +701,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._remote_services_requested: list[ChannelMux.ServiceSpec] = []
         self._peer_installed_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
         self._pending_peer_service_catalogs: dict[int, dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec]] = {}
+        self._active_peer_service_catalogs: set[int] = set()
         self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
         self._svc_tun_devices: dict[ChannelMux.ServiceKey, ChannelMux.TunDevice] = {}
@@ -2754,7 +2755,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey", data: bytes, addr: tuple[str,int]) -> None:
-        if not (self._overlay_connected and self._accepting_enabled):
+        if not self._service_listener_accepting_enabled(svc_key):
             self.log.debug(f"[NET] package dropping  : ")
             return
         if len(data) > self._udp_service_datagram_cap:
@@ -2873,9 +2874,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         try:
             while True:
                 await asyncio.sleep(1.0)
-                if not (self._overlay_connected and self._accepting_enabled):
-                    continue
                 for svc_key, spec in self._effective_services_by_id().items():
+                    if not self._service_listener_accepting_enabled(svc_key):
+                        continue
                     if spec.l_proto == "tcp":
                         srv = self._svc_tcp_servers.get(svc_key)
                         if srv is None or getattr(srv, "sockets", None) in (None, []):
@@ -3269,20 +3270,23 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         for svc_key, spec in new_map.items():
             self._peer_installed_services[svc_key] = spec
 
-        if self._overlay_connected and self._accepting_enabled:
-            for svc_key in sorted(to_start):
-                spec = new_map.get(svc_key)
-                if not spec:
-                    continue
-                try:
-                    if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
-                        await self._start_tcp_server_for(spec, svc_key)
-                    elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
-                        await self._start_udp_server_for(spec, svc_key)
-                    elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
-                        await self._start_tun_server_for(spec, svc_key)
-                except Exception as e:
-                    self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
+        # A listener-mode transport is globally "listening", rather than
+        # connected. A catalog received from one of its authenticated child
+        # peers is nevertheless immediately usable and must create that
+        # peer's listeners. The per-peer disconnect callback tears them down.
+        for svc_key in sorted(to_start):
+            spec = new_map.get(svc_key)
+            if not spec:
+                continue
+            try:
+                if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
+                    await self._start_tcp_server_for(spec, svc_key)
+                elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
+                    await self._start_udp_server_for(spec, svc_key)
+                elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
+                    await self._start_tun_server_for(spec, svc_key)
+            except Exception as e:
+                self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
 
     async def _drop_peer_installed_services(self, peer_id: Optional[int]) -> None:
         if peer_id is None:
@@ -3299,6 +3303,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     def on_peer_disconnected(self, peer_id: int) -> None:
         self._pending_peer_service_catalogs.pop(int(peer_id), None)
+        self._active_peer_service_catalogs.discard(int(peer_id))
         self._peer_mux_epochs.pop(int(peer_id), None)
         self._reset_peer_open_channels(int(peer_id))
         self._drop_shared_tun_state_for_local_peer(int(peer_id))
@@ -3306,6 +3311,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self.loop.create_task(self._drop_peer_installed_services(peer_id=peer_id))
         except Exception as e:
             self.log.debug("[MUX/CTRL] failed scheduling peer disconnect cleanup for peer_id=%s: %r", peer_id, e)
+
+    def _service_listener_accepting_enabled(self, svc_key: "ChannelMux.ServiceKey") -> bool:
+        """Whether a local listener may accept traffic for this service.
+
+        In a server/listener transport, global ``_overlay_connected`` describes
+        the listening socket and stays false. Peer-installed services instead
+        inherit their liveness from membership in the authenticated peer
+        catalog. The active marker is cleared synchronously on that peer's
+        disconnect, before asynchronous listener teardown starts.
+        """
+        if str(svc_key[0]) == "peer":
+            return int(svc_key[1]) in self._active_peer_service_catalogs
+        return bool(self._overlay_connected and self._accepting_enabled)
 
     # ---------- MUX send ----------
     def _tun_post_mux_transport_delay_exceeded(self) -> bool:
@@ -5936,6 +5954,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return False
         instance_id, connection_seq, services = decoded
         peer_key = int(peer_id or 0)
+        self._active_peer_service_catalogs.add(peer_key)
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
             self.log.debug("[MUX/CTRL] duplicate/replay REMOTE_SERVICES_SET_V2 peer_id=%s instance_id=%s connection_seq=%s", peer_key, instance_id, connection_seq)
@@ -6537,7 +6556,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     async def _start_tcp_server_for_unlocked(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-            if not self._overlay_connected or not self._accepting_enabled:
+            if not self._service_listener_accepting_enabled(svc_key):
                 try:
                     writer.close()
                     await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()

@@ -2459,6 +2459,23 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(('peer', 77, 2), self.mux._peer_installed_services)
         self.assertIn(('peer', 77, 3), self.mux._peer_installed_services)
 
+    async def test_passive_listener_starts_peer_tcp_listener_from_remote_catalog(self):
+        """An authenticated inbound myUDP peer is usable although its parent listens."""
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+        tcp_spec = ChannelMux.ServiceSpec(2, 'tcp', '127.0.0.1', 13081, 'tcp', '127.0.0.1', 18080)
+        payload = self.mux._encode_remote_services_set_v2([tcp_spec])
+        frame = self.mux._pack_mux(0, ChannelMux.Proto.UDP, 0, ChannelMux.MType.REMOTE_SERVICES_SET_V2, payload)
+
+        with patch.object(self.mux, '_start_tcp_server_for', new=AsyncMock()) as start_tcp:
+            self.assertTrue(self.mux.on_app_payload_from_peer(frame, peer_id=6))
+            await asyncio.sleep(0)
+
+        start_tcp.assert_awaited_once_with(tcp_spec, ('peer', 6, 2))
+        self.assertTrue(self.mux._service_listener_accepting_enabled(('peer', 6, 2)))
+        self.mux.on_peer_disconnected(6)
+        self.assertFalse(self.mux._service_listener_accepting_enabled(('peer', 6, 2)))
+
     async def test_tun_open_uses_pending_peer_listener_before_async_catalog_start(self):
         remote_tun = ChannelMux.ServiceSpec(
             2,
