@@ -649,7 +649,8 @@ ARC-CMP-005:
 
 ARC-CMP-006:
   # SecureLink integration coverage includes authenticated-readiness gating
-  # and failure reporting without direct transport-reconnect ownership.
+  # and failure reporting without direct transport-reconnect ownership. A
+  # changed session id is only a recovery signal after authentication completes.
   # New disconnected transport epochs also remain visible through a failed
   # SecureLink layer so ChannelMux can advance the candidate lifecycle.
   # before multi-peer client-published TCP service probes and preservation of
