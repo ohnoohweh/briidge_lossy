@@ -1834,6 +1834,11 @@ class UdpSession(ISession):
       - exposes ISession methods to the rest of the app (Mux/Runner).
     No behavior changes vs. old Runner wiring.  
     """
+    # A listener peer can keep answering myUDP control traffic while never
+    # producing an application record for SecureLink. Do not retain that
+    # dynamic peer (and its ChannelMux/TUN aliases) indefinitely.
+    _LISTENER_PREAUTH_APP_PAYLOAD_TIMEOUT_S = 15.0
+
     def __init__(self, args: argparse.Namespace):
         self._args = args
         self._log = logging.getLogger("udp_session")
@@ -2582,6 +2587,9 @@ class UdpSession(ISession):
 
     def _on_complete_for_peer(self, peer_id: int, datagram: bytes) -> None:
         self._log.debug("[UdpSession] On Complete Datagram len %d peer_id=%s on session id=%x", len(datagram), peer_id, id(self))
+        ctx = self._server_peers.get(int(peer_id))
+        if isinstance(ctx, dict) and datagram:
+            ctx["last_completed_app_payload_wall_ns"] = now_ns()
         try:
             if datagram and self._on_app_from_peer_bytes:
                 self._on_app_from_peer_bytes(len(datagram))
@@ -2901,7 +2909,9 @@ class UdpSession(ISession):
                 "peer_proto": peer_proto,
                 "connected": False,
                 "connected_since_unix_ts": None,
+                "first_seen_wall_ns": rx_wall_ns,
                 "last_incoming_wall_ns": rx_wall_ns,
+                "last_completed_app_payload_wall_ns": 0,
             }
             self._server_peer_by_addr[key] = peer_id
             self.peer_proto = peer_proto
@@ -2940,6 +2950,19 @@ class UdpSession(ISession):
         except Exception:
             return 0
 
+    @classmethod
+    def _listener_peer_app_payload_deadline_ns(cls, ctx: dict) -> int:
+        """Return the pre-auth progress deadline for one dynamic listener peer."""
+        try:
+            if int(ctx.get("last_completed_app_payload_wall_ns") or 0) > 0:
+                return 0
+            first_seen = int(ctx.get("first_seen_wall_ns") or ctx.get("last_incoming_wall_ns") or 0)
+            if first_seen > 0:
+                return first_seen + int(cls._LISTENER_PREAUTH_APP_PAYLOAD_TIMEOUT_S * 1e9)
+        except Exception:
+            pass
+        return 0
+
     async def _listener_peer_cleanup_loop(self) -> None:
         try:
             while True:
@@ -2948,6 +2971,10 @@ class UdpSession(ISession):
                 now_v = now_ns()
                 for peer_id, ctx in list(self._server_peers.items()):
                     if not isinstance(ctx, dict):
+                        continue
+                    app_payload_deadline_ns = self._listener_peer_app_payload_deadline_ns(ctx)
+                    if app_payload_deadline_ns and now_v >= app_payload_deadline_ns:
+                        stale_peer_ids.append(int(peer_id))
                         continue
                     if bool(ctx.get("connected")):
                         continue
@@ -2958,7 +2985,11 @@ class UdpSession(ISession):
                         continue
                     stale_peer_ids.append(int(peer_id))
                 for peer_id in stale_peer_ids:
-                    self._log.info("[UDP/SESSION] dropping stale never-connected listener peer_id=%s", peer_id)
+                    self._log.info(
+                        "[UDP/SESSION] dropping listener peer_id=%s without completed app payload after %.1fs",
+                        peer_id,
+                        self._LISTENER_PREAUTH_APP_PAYLOAD_TIMEOUT_S,
+                    )
                     await self._close_server_peer(peer_id)
         except asyncio.CancelledError:
             return

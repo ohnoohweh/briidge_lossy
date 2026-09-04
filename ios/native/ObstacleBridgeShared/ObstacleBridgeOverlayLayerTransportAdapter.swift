@@ -21,6 +21,12 @@ struct ObstacleBridgeConnectionRotationResult {
 }
 
 final class ObstacleBridgeOverlayLayerTransportAdapter {
+    // This is the layered application-readiness grace used by every native
+    // overlay owner. Transport-up alone never makes the overlay usable.
+    static let outerReadinessGrace: TimeInterval = 15.0
+    static let defaultTransportDelayRotationThresholdMS: Double = 5_000.0
+    static let defaultTransportDelayRotationGrace: TimeInterval = 30.0
+
     struct OutboundSnapshot {
         var emittedFrames: [Data]
     }
@@ -35,10 +41,13 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
     private let lifecycleTimeProvider: () -> TimeInterval
     private let connectionRotationDelay: TimeInterval
+    let transportDelayRotationThresholdMS: Double
+    let transportDelayRotationGrace: TimeInterval
     private var transportLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var outerLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var compressionFailureEpoch: UInt64?
     private var disconnectedSince: TimeInterval?
+    private var transportDelayHighSince: TimeInterval?
     private var rotationWaitingForNewEpoch: UInt64?
     private var requestedRotations = 0
     private var completedCandidateCycles = 0
@@ -47,13 +56,17 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         compressRuntime: ObstacleBridgeCompressLayerRuntime? = nil,
         secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter? = nil,
         peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime? = nil,
-        connectionRotationDelay: TimeInterval = 30.0,
+        connectionRotationDelay: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace,
+        transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS,
+        transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace,
         lifecycleTimeProvider: (() -> TimeInterval)? = nil
     ) {
         self.compressRuntime = compressRuntime
         self.secureLinkAdapter = secureLinkAdapter
         self.peerAddressRuntime = peerAddressRuntime
         self.connectionRotationDelay = max(0.0, connectionRotationDelay)
+        self.transportDelayRotationThresholdMS = max(0.0, transportDelayRotationThresholdMS)
+        self.transportDelayRotationGrace = max(0.0, transportDelayRotationGrace)
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
         let initial = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
@@ -170,6 +183,55 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         )
     }
 
+    // The owner can fail before it has actually reset or reconnected its
+    // transport (for example, a myUDP socket rebuild can be unavailable).
+    // Do not retain a wait-for-epoch latch for a rotation that never started.
+    func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult) {
+        guard rotationWaitingForNewEpoch == result.epoch else {
+            return
+        }
+        rotationWaitingForNewEpoch = nil
+    }
+
+    // A connected transport can be unusable long before it reports a hard
+    // disconnect. Rotate the normal candidate path after sustained estimated
+    // wire delay, using the same one-rotation-per-epoch accounting.
+    func transportDelayRotationDue(
+        transmitDelayEstMS: Double,
+        candidateCount: Int
+    ) -> ObstacleBridgeConnectionRotationResult? {
+        let now = lifecycleTimeProvider()
+        guard transportLifecycle.state == .connected,
+              transmitDelayEstMS >= transportDelayRotationThresholdMS
+        else {
+            transportDelayHighSince = nil
+            return nil
+        }
+        guard let highSince = transportDelayHighSince else {
+            transportDelayHighSince = now
+            return nil
+        }
+        guard now - highSince >= transportDelayRotationGrace,
+              rotationWaitingForNewEpoch == nil
+        else {
+            return nil
+        }
+        let candidates = max(1, candidateCount)
+        requestedRotations += 1
+        if requestedRotations % candidates == 0 {
+            completedCandidateCycles += 1
+        }
+        rotationWaitingForNewEpoch = transportLifecycle.epoch
+        transportDelayHighSince = nil
+        return ObstacleBridgeConnectionRotationResult(
+            accepted: true,
+            reason: "channelmux_transport_delay",
+            epoch: transportLifecycle.epoch,
+            candidateCycle: completedCandidateCycles,
+            restartRequired: completedCandidateCycles >= 3
+        )
+    }
+
     func secureLinkStatusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot? {
         secureLinkAdapter?.statusSnapshot()
     }
@@ -205,6 +267,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         preserveConnectedDuringEpochRestart: Bool = false
     ) -> [[String: Any]] {
         observeTransportState(connected: transportConnected)
+        enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)
         let secureStatus = secureLinkAdapter?.statusSnapshot()
         refreshOuterLifecycle(secureLinkStatus: secureStatus)
         var layers = Self.connectionLayersSnapshot(
@@ -251,6 +314,19 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         secureLinkAdapter?.handleTransportDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
+    }
+
+    // Owners publish lower transport state independently of SecureLink. If a
+    // queued disconnect callback was missed, the next observed lower-state
+    // snapshot is still authoritative: authenticated SecureLink must never
+    // remain visible above a disconnected transport.
+    private func enforceAuthenticatedTransportReadiness(transportConnected: Bool) {
+        guard !transportConnected,
+              secureLinkAdapter?.statusSnapshot().authenticated == true
+        else {
+            return
+        }
+        handleTransportDisconnected()
     }
 
     // A candidate rotation starts a new transport attempt while its reported

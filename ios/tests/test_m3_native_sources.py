@@ -113,10 +113,14 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'summary["secure_link_rekey_after_seconds"] = rekeyAfterSeconds' in provider
     assert 'summary["secure_link_retry_backoff_initial_ms"] = retryBackoffInitialMS' in provider
     assert 'summary["secure_link_retry_backoff_max_ms"] = retryBackoffMaxMS' in provider
+    assert 'payload["channelmux_transport_delay_threshold_ms"]' in provider
+    assert 'payload["channelmux_transport_delay_rotation_delay_ms"]' in provider
     assert 'summary["secure_link_recover_after_failure"]' not in provider
     assert 'summary["secure_link_recover_delay_seconds"]' not in provider
     assert "static func peerThrottleSnapshot(peerID: Int, connectionsSnapshot: [String: Any]) -> [String: Any]" in snapshot_support
-    assert 'let budgetBytes = Int(Double(prevWindowBytes) * peerThrottleRatio)' in snapshot_support
+    assert "static func peersSnapshotForAPI(_ peers: [[String: Any]]) -> [[String: Any]]" in snapshot_support
+    assert "peerThrottleRatio" not in snapshot_support
+    assert '"budget_bytes", "used_bytes", "remaining_bytes"' in snapshot_support
 
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "struct ObstacleBridgeAdminUIBootstrapState" in runtime_config
@@ -148,6 +152,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"mode": "system"' in runtime_config
     assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
     assert 'schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1)' in runtime_config
+    assert 'schemaItem(key: "channelmux_transport_delay_threshold_ms", description: "Estimated transport-delay threshold before ChannelMux sheds local traffic and arms sustained-delay rotation.", defaultValue: 5000)' in runtime_config
+    assert 'schemaItem(key: "channelmux_transport_delay_rotation_delay_ms", description: "Continuous estimated-delay duration before ChannelMux requests a connection rotation.", defaultValue: 30000)' in runtime_config
     assert 'schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 200)' in runtime_config
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
@@ -236,12 +242,14 @@ def test_channel_mux_tun_runtime_source_exists() -> None:
 
     assert "final class ObstacleBridgeChannelMuxTunRuntime" in runtime
     assert "struct LocalTunSendSnapshot" in runtime
+    assert "struct LocalTunOpenSnapshot" in runtime
     assert "struct InboundTunOpenSnapshot" in runtime
     assert "struct InboundTunOpenChunkSnapshot" in runtime
     assert "struct InboundTunDataSnapshot" in runtime
     assert "struct InboundTunFragmentSnapshot" in runtime
     assert "struct CloseSnapshot" in runtime
     assert "handleLocalTunPacket(" in runtime
+    assert "openLocalTunChannelIfNeeded(" in runtime
     assert "handleInboundTunOpen(" in runtime
     assert "handleInboundTunOpenChunk(" in runtime
     assert "handleInboundTunData(" in runtime
@@ -291,7 +299,9 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     assert "typealias ObstacleBridgeChannelMuxStartupFramesProvider" in tun_runtime
     assert "func currentConnectionSeq() -> UInt32" in tun_runtime
     assert "startupMuxFramesForNewTunOpen: (() -> [Data])? = nil" in overlay_core
-    assert "sendMuxFrames(startupFrames + localSnapshot.frames)" in overlay_core
+    assert "framesAdmittedBeforeSecureLink(" in overlay_core
+    assert "sendMuxFrames(outbound.frames)" in overlay_core
+    assert "openConfiguredLocalTunIfReady(" in overlay_core
     for owner in owners:
         assert "startupMuxFramesProvider: ObstacleBridgeChannelMuxStartupFramesProvider?" in owner
         assert "tunRuntime?.currentConnectionSeq() ?? muxConnectionSeq" in owner
@@ -299,6 +309,8 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
         assert "startupMuxFramesReplayedWithTunOpen = false" in owner
         assert "private func startupMuxFramesForNewTunOpen() -> [Data]" in owner
         assert "startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen" in owner
+        assert "private func maybeOpenConfiguredTunIfReady()" in owner
+        assert "maybeOpenConfiguredTunIfReady()" in owner
 
     assert host_runner.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
     assert provider.count("startupMuxFramesProvider: { [weak self] instanceID, connectionSeq in") == 4
@@ -506,6 +518,10 @@ def test_admin_api_source_exists() -> None:
     assert "adminTunRoutingSnapshot()" in runtime
     assert "adminTunRoutingControl(request:" in runtime
     assert "tunRoutingSnapshot(fromConnections:" in runtime
+    assert "physicalSharedTunRows(from: sharedRows)" in runtime
+    assert 'physical["physical_interface"] = true' in runtime
+    assert 'physical["peer_id"] = "physical"' in runtime
+    assert 'physical["chan_id"] = NSNull()' in runtime
     assert '"shared_drop_by_reason": sharedDropByReason' in runtime
     assert '"icmp_stage_counts": icmpStageCounts' in runtime
     assert '"probe_boundary_counts": probeBoundaryCounts' in runtime
@@ -893,6 +909,8 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "typeData" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
+    assert "private var pendingRekeyStartedAt: TimeInterval?" in runtime
+    assert "(timeProvider() - pendingRekeyStartedAt) >= Self.handshakeTimeoutSeconds" in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:
@@ -931,6 +949,15 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "struct ObstacleBridgeConnectionLifecycleEvent" in runtime
     assert "struct ObstacleBridgeConnectionRotationResult" in runtime
     assert "func connectionRotationDue(candidateCount: Int)" in runtime
+    assert "func transportDelayRotationDue(" in runtime
+    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in runtime
+    assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in runtime
+    assert "let transportDelayRotationGrace: TimeInterval" in runtime
+    assert "transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS" in runtime
+    assert "transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace" in runtime
+    assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in runtime
+    assert "private func enforceAuthenticatedTransportReadiness(transportConnected: Bool)" in runtime
+    assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in runtime
 
 
 def test_peer_address_protocol_source_exists_and_is_below_secure_link() -> None:
@@ -1085,8 +1112,8 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "packet_pump_dropped_before_overlay_ready" in provider
     assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
     assert "TUN verification waits for the connected overlay state." in provider
-    assert "TUN verification is suspended while local TUN throttling is active." in provider
-    assert "Name resolution is suspended while local TUN throttling is active." in provider
+    assert "TUN verification is suspended while local TUN throttling is active." not in provider
+    assert "framesAdmittedBeforeSecureLink(" in (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     assert "prepare_runtime()" in ios_app
     assert "Network extension active" in ios_app
     assert "Network tunneling active" not in ios_app

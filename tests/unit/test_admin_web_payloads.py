@@ -1169,7 +1169,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         shared = {
             "mode": "server_shared",
             "peer_count": 1,
-            "active_peer_bindings": [{"peer_id": 7}],
+            "active_peer_bindings": [{"peer_id": 7, "rx_packets": 2, "tx_packets": 3, "rx_bytes": 200, "tx_bytes": 300}],
             "drop_counters": {"total": 0, "by_reason": {}},
         }
         runner.get_connections_snapshot = lambda: {
@@ -1201,13 +1201,17 @@ class AdminWebPayloadTests(unittest.TestCase):
 
         payload = ui._build_tun_routing_payload()
 
-        self.assertEqual(payload["summary"]["tun_total"], 2)
+        self.assertEqual(payload["summary"]["tun_total"], 1)
         self.assertEqual(payload["summary"]["tun_open"], 1)
-        self.assertEqual(payload["summary"]["tun_listening"], 1)
+        self.assertEqual(payload["summary"]["tun_listening"], 0)
         self.assertEqual(payload["summary"]["shared_services"], 1)
         self.assertEqual(payload["summary"]["shared_active_peer_bindings"], 1)
         self.assertEqual(len(payload["shared_tun"]), 1)
         self.assertEqual(payload["shared_tun"][0]["state"], "connected")
+        self.assertEqual(len(payload["tun"]), 1)
+        self.assertTrue(payload["tun"][0]["physical_interface"])
+        self.assertEqual(payload["tun"][0]["peer_id"], "physical")
+        self.assertEqual(payload["tun"][0]["stats"], {"rx_msgs": 2, "tx_msgs": 3, "rx_bytes": 200, "tx_bytes": 300})
 
     def test_build_tun_routing_payload_exposes_effective_overlay_peer_excluded_routes(self):
         args = argparse.Namespace(
@@ -1588,12 +1592,14 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("renderMetric('RTT Est (ms)', fmtNumber(row.rtt_est_ms))", text)
                 self.assertIn("renderMetric('Transmit Delay Est (ms)', fmtNumber(row.transmit_delay_est_ms))", text)
                 self.assertIn('<td class="peer-detail-kind">ChannelMux</td>', text)
-                self.assertIn('<td class="peer-detail-kind">TUN</td>', text)
+                self.assertNotIn('<td class="peer-detail-kind">TUN</td>', text)
                 self.assertIn('<td class="peer-detail-kind">SecureLink</td>', text)
                 self.assertNotIn('<td class="peer-detail-kind">Lifecycle</td>', text)
                 self.assertIn('<td class="peer-detail-kind">Transport</td>', text)
                 self.assertIn("renderMetric('Resolved Peer', row.peer)", text)
                 self.assertIn("fmtOwnPublicEndpoint(row.observed_public_ip, row.observed_public_port)", text)
+                self.assertIn("+ (channelMuxMetrics ? 1 : 0);", text)
+                self.assertNotIn("+ (!isListeningPeer ? 2 : 0)", text)
                 uptime_index = text.index("renderMetric('Connection Uptime'")
                 self.assertLess(
                     uptime_index,
@@ -1607,7 +1613,9 @@ class AdminWebPayloadTests(unittest.TestCase):
                 self.assertIn("if (normalized === 'connected') return 'role-pill role-server';", text)
                 self.assertIn("if (normalized === 'disconnected') return 'role-pill role-disconnected';", text)
                 self.assertIn(".conn-table .role-disconnected", (repo_root / "admin_web" / "style.css").read_text(encoding="utf-8"))
-                self.assertIn("renderMetric('Throttle', fmtThrottleSummary(row.throttle))", text)
+                self.assertIn("renderMetric('Throttle', fmtThrottleIndicator(row.throttle), { pill: true })", text)
+                self.assertIn("function fmtThrottleIndicator(throttle)", text)
+                self.assertIn("escapeHtml(fmtThrottleIndicator(row.throttle))", text)
                 self.assertIn("const showSecurityLifecycle = secureLinkEnabled && !isListeningPeer;", text)
                 self.assertIn("const showCompressionRow = !isListeningPeer && (compressEnabled || compressHasData);", text)
                 self.assertIn("const channelMuxMetrics = !isListeningPeer ? renderMetricStack", text)
@@ -1624,6 +1632,7 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertIn('data-tab="tun-routing"', index_html)
         self.assertIn('id="tab-tun-routing"', index_html)
         self.assertIn('id="tunRoutingConnectionsBody"', index_html)
+        self.assertIn('<th>ChannelMux Throttle</th>', index_html)
         self.assertIn('id="tunRoutingSharedBody"', index_html)
         self.assertIn('id="tunRoutingSharedDrops"', index_html)
         self.assertIn('id="tunRoutingSharedDropReasons"', index_html)
@@ -2040,7 +2049,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["transmit_delay_est_ms"], 123.0)
         self.assertTrue(peer["throttle"]["applicable"])
         self.assertTrue(peer["throttle"]["active"])
-        self.assertEqual(peer["throttle"]["remaining_bytes"], 1200)
+        for legacy_key in (
+            "budget_bytes", "used_bytes", "remaining_bytes", "aggregate", "scope",
+            "transport_prev_window_bytes", "prev_window_bytes", "throttle_drop_count",
+        ):
+            self.assertNotIn(legacy_key, peer["throttle"])
         self.assertTrue(peer["compress_layer"]["enabled"])
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")

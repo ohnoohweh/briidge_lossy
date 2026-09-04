@@ -95,6 +95,13 @@ class FakeInnerSession:
             "rtt_est_ms": None,
         }]
 
+    def get_connection_layers_snapshot(self):
+        return [{
+            "layer": "transport",
+            "connected": bool(self._connected),
+            "app_ready": bool(self._connected),
+        }]
+
     def get_max_app_payload_size(self):
         return 65535
 
@@ -166,12 +173,16 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         await session.start()
         inner.emit_lifecycle(ConnectionState.CONNECTED, 4, "transport_connected")
         inner.emit_lifecycle(ConnectionState.DISCONNECTED, 4, "transport_disconnected")
+        inner.emit_lifecycle(ConnectionState.DISCONNECTED, 5, "transport_rotation")
         result = session.request_connection_rotation("channelmux_disconnected")
         await session.stop()
 
         self.assertEqual(
             [(event.state, event.epoch) for event in events],
-            [(ConnectionState.DISCONNECTED, 4)],
+            [
+                (ConnectionState.DISCONNECTED, 4),
+                (ConnectionState.DISCONNECTED, 5),
+            ],
         )
         self.assertTrue(result.accepted)
         self.assertEqual(result.reason, "channelmux_disconnected")
@@ -282,6 +293,101 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["handshake_attempts_total"], 1)
         self.assertEqual(client_status["authenticated_sessions_total"], 1)
         self.assertIsNotNone(client_status["last_authenticated_unix_ts"])
+
+    async def test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer="127.0.0.1"), "myudp")
+        server = SecureLinkPskSession(server_inner, _args(), "myudp")
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            self.assertTrue(await client.wait_connected(timeout=0.1))
+            self.assertTrue(client.is_connected())
+
+            # Model myUDP publishing RTT disconnect while a stale protocol
+            # object still reports connected to an immediate caller.
+            client_inner.emit_lifecycle(ConnectionState.DISCONNECTED, 9, "rtt_timeout")
+
+            self.assertTrue(client_inner.is_connected())
+            self.assertFalse(client.is_connected())
+            self.assertFalse(client.get_connection_layers_snapshot()[-1]["app_ready"])
+            self.assertEqual(client.get_connection_lifecycle_snapshot()["state"], "disconnected")
+        finally:
+            await client.stop()
+            await server.stop()
+
+    async def test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer="127.0.0.1"), "myudp")
+        server = SecureLinkPskSession(server_inner, _args(), "myudp")
+        client._HANDSHAKE_TIMEOUT_S = 0.01
+        client._HANDSHAKE_WATCHDOG_INTERVAL_S = 10.0
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            self.assertTrue(await client.wait_connected(timeout=0.1))
+
+            # Lower readiness has failed, but a stalled callback path did not
+            # tell SecureLink. The watchdog must withdraw authentication.
+            client_inner._connected = False
+            state = client._peer_states[0]
+            import time
+            state.last_authenticated_unix_ts = time.time() - 1.0
+            client._expire_stale_handshakes()
+
+            status = client.get_secure_link_status_snapshot()
+            self.assertEqual(status["state"], "failed")
+            self.assertFalse(status["authenticated"])
+            self.assertIn("transport readiness timed out", str(status["failure_detail"] or ""))
+            self.assertFalse(client.is_connected())
+        finally:
+            await client.stop()
+            await server.stop()
+
+    async def test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives(self):
+        client_inner = FakeInnerSession()
+        server_inner = FakeInnerSession()
+        client_inner.connect_peer(server_inner)
+        server_inner.connect_peer(client_inner)
+        client = SecureLinkPskSession(client_inner, _args(udp_peer="127.0.0.1"), "myudp")
+        server = SecureLinkPskSession(server_inner, _args(), "myudp")
+        server._HANDSHAKE_TIMEOUT_S = 0.01
+        await client.start()
+        await server.start()
+        try:
+            server_inner.emit_state(True)
+            client_inner.emit_state(True)
+            self.assertTrue(await client.wait_connected(timeout=0.1))
+
+            # Keep the listener's rekey reply off the wire: this models the
+            # observed one-way path where RTT control traffic still arrives.
+            server_inner._peer = None
+            state = server._peer_states[1]
+            rekey_session_id = int(state.session_id) + 1
+            rekey_body = b"x" * 32 + bytes([server._SL_CAP_PSK_V1, 0])
+            server._handle_rekey_hello(1, rekey_session_id, rekey_body)
+            self.assertIsNotNone(state.pending_started_unix_ts)
+
+            await asyncio.sleep(0.02)
+            server._expire_stale_handshakes()
+
+            status = server.get_overlay_peers_snapshot()[0]["secure_link"]
+            self.assertEqual(status["state"], "failed")
+            self.assertFalse(status["authenticated"])
+            self.assertIn("re-authentication timed out", str(status["failure_detail"] or ""))
+        finally:
+            await client.stop()
+            await server.stop()
 
     async def test_psk_server_authenticates_before_first_application_payload(self):
         client_inner = FakeInnerSession()

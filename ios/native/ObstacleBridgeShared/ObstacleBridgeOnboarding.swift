@@ -15,7 +15,7 @@ enum ObstacleBridgeOnboarding {
         if let tunRouting = requestPayload["TUN_routing"] as? [String: Any], !tunRouting.isEmpty {
             effective["TUN_routing"] = tunRouting
         }
-        for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms"] {
+        for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms", "channelmux_transport_delay_threshold_ms", "channelmux_transport_delay_rotation_delay_ms"] {
             if let value = ObstacleBridgeRuntimeConfig.intValue(from: requestPayload[key]) {
                 effective[key] = value
             }
@@ -256,6 +256,8 @@ enum ObstacleBridgeOnboarding {
             "mux_tcp_bp_threshold": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_threshold"]) ?? 1,
             "mux_tcp_bp_latency_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_latency_ms"]) ?? 300,
             "mux_tcp_bp_poll_interval_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["mux_tcp_bp_poll_interval_ms"]) ?? 50,
+            "channelmux_transport_delay_threshold_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["channelmux_transport_delay_threshold_ms"]) ?? 5000,
+            "channelmux_transport_delay_rotation_delay_ms": ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]) ?? 30000,
             "proxy_provider": proxyProvider,
             "admin_auth_recommended": true,
             "own_servers": ownServices,
@@ -328,7 +330,7 @@ enum ObstacleBridgeOnboarding {
         if let tunRouting = payload["TUN_routing"] as? [String: Any], !tunRouting.isEmpty {
             updates["TUN_routing"] = tunRouting
         }
-        for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms"] {
+        for key in ["mux_tcp_bp_threshold", "mux_tcp_bp_latency_ms", "mux_tcp_bp_poll_interval_ms", "channelmux_transport_delay_threshold_ms", "channelmux_transport_delay_rotation_delay_ms"] {
             if let value = ObstacleBridgeRuntimeConfig.intValue(from: payload[key]) {
                 updates[key] = value
             }

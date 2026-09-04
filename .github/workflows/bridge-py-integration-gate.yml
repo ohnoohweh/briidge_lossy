@@ -112,10 +112,24 @@ jobs:
         run: pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 
   bridge-py-integration-macos-elevated:
-    name: Integration Gate (macOS elevated TUN)
+    name: "Integration Gate (macOS elevated TUN: ${{ matrix.case }})"
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: inline-route-dns
+            target: tests/integration/test_macos_elevated.py::test_macos_elevated_inline_tun_applies_routes_dns_and_reports_verification
+          - case: helper-packet-carry
+            target: tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_creates_utun_and_applies_hooks
+          - case: helper-route-dns
+            target: tests/integration/test_macos_elevated.py::test_macos_elevated_darwin_native_helper_applies_routes_and_dns_live
+          - case: helper-death-cleanup
+            target: tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_cleanup
+          - case: helper-death-route-dns-warning
+            target: tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_with_route_dns_warning
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -134,6 +148,8 @@ jobs:
         run: sudo -n true
 
       - name: Run macOS elevated TUN subset
+        env:
+          OBSTACLEBRIDGE_MACOS_ELEVATED_TEST_TARGET: ${{ matrix.target }}
         run: ./scripts/run_macos_elevated_tests.sh
 
   bridge-py-integration-macos-swift-probe:

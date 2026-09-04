@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import types
 import unittest
+from unittest.mock import patch
 
 from obstacle_bridge.bridge_connection_lifecycle import (
     ConnectionLifecycleEvent,
@@ -13,6 +14,11 @@ from obstacle_bridge.bridge import UdpSession
 
 
 class ConnectionLifecycleContractTests(unittest.TestCase):
+    def test_channelmux_outer_readiness_rotation_uses_shared_grace_window(self) -> None:
+        from obstacle_bridge.bridge_channelmux import ChannelMux
+
+        self.assertEqual(ChannelMux.CONNECTION_ROTATION_DELAY_S, 15.0)
+
     def test_event_snapshot_round_trip_preserves_state_epoch_and_reason(self) -> None:
         event = ConnectionLifecycleEvent(
             state=ConnectionState.CONNECTED,
@@ -131,3 +137,20 @@ class ConnectionLifecycleContractTests(unittest.TestCase):
                 (ConnectionState.DISCONNECTED, 7),
             ],
         )
+
+    def test_listener_peer_without_completed_app_payload_has_bounded_deadline(self) -> None:
+        session = UdpSession(argparse.Namespace(max_inflight=200))
+        first_seen = 1_000_000_000
+        ctx = {
+            "first_seen_wall_ns": first_seen,
+            "last_incoming_wall_ns": first_seen,
+            "last_completed_app_payload_wall_ns": 0,
+        }
+
+        deadline = session._listener_peer_app_payload_deadline_ns(ctx)
+
+        self.assertEqual(deadline, first_seen + int(session._LISTENER_PREAUTH_APP_PAYLOAD_TIMEOUT_S * 1e9))
+        session._server_peers[7] = ctx
+        with patch("obstacle_bridge.bridge_transport_udp.now_ns", return_value=first_seen + 1):
+            session._on_complete_for_peer(7, b"secure-link-hello")
+        self.assertEqual(session._listener_peer_app_payload_deadline_ns(ctx), 0)

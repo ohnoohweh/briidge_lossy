@@ -20,6 +20,7 @@ ARC-CMP-001:
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_connection_lifecycle.py::test_listener_peer_without_completed_app_payload_has_bounded_deadline
     - tests/unit/test_stream_peer_rotation.py::test_stream_rotation_counts_completed_candidate_cycles_and_resets_on_outer_recovery
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
@@ -60,6 +61,8 @@ ARC-CMP-001:
     - ios/tests/test_m3_native_sources.py::test_websocket_overlay_transport_owner_source_exists
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_after_rtt_liveness_is_lost
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_that_never_establishes_rtt_liveness
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
   integration_tests:
@@ -117,14 +120,26 @@ ARC-CMP-003:
   # The TUN hook coverage here includes exact excluded-route snapshotting so
   # local subnet routes stay attached to their original interfaces. The WS
   # fragmentation integration proof relies on peer byte counters, not logs.
+  # The admin UI exposes throttle state at the ChannelMux and physical-TUN
+  # aggregate boundaries, not as a per-peer TUN quota view.
   unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
+    - tests/unit/test_secure_link_psk.py::test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect
+    - tests/unit/test_channel_mux_listener_mode.py::test_high_overlay_rtt_throttles_local_ingress
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_delay_controls_default_and_configure_channelmux
+    - tests/unit/test_channel_mux_listener_mode.py::test_sustained_transport_delay_requests_one_connection_rotation
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_sustained_transport_delay_rotation_matches_python_channelmux_policy
+    - tests/unit/test_connection_lifecycle.py::test_channelmux_outer_readiness_rotation_uses_shared_grace_window
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer
     - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
     - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_rejected_rotation_does_not_latch_channelmux_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_rejected_disconnected_rotation_retries_after_grace
     - tests/unit/test_channel_mux_listener_mode.py::test_operator_rotation_cascades_once_and_waits_for_new_epoch
     - tests/unit/test_channel_mux_listener_mode.py::test_connected_lifecycle_resets_transport_rotation_cycles
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_admission_requires_connected_lifecycle_epoch
-    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy
     - tests/unit/test_runner_events.py::test_rotation_exhaustion_requests_restart_once
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
@@ -133,6 +148,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
     - ios/tests/test_m3_native_sources.py::test_swift_overlay_remote_service_catalog_uses_current_tun_epoch
+    - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_connect_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_buffer_connect_then_data_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_connect_then_local_data_matches_python
@@ -141,6 +157,7 @@ ARC-CMP-003:
     # Includes cross-transport shared binding/return-route behavior and disconnect cleanup.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_listener_mode.py::test_passive_listener_starts_peer_tcp_listener_from_remote_catalog
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_splits_multi_host_peer_list
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_adds_ipv4_mapped_ipv6_exclusion
@@ -158,6 +175,8 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_secure_link_handshaking
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
+    - tests/unit/test_channel_mux_listener_mode.py::test_overlay_ready_proactively_opens_configured_tun_listener
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_tun_close_removes_closed_channel_from_interface_aliases
     - tests/unit/test_channel_mux_listener_mode.py::test_local_udp_datagram_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_listener_mode.py::test_overlay_udp_to_target_emits_debug_level_direction_diagnostic
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
@@ -230,11 +249,11 @@ ARC-CMP-003:
     - tests/unit/test_bridge_tun_ios.py::test_write_tun_packet_uses_bridge_backend
     - tests/unit/test_bridge_tun_ios.py::test_register_tun_reader_drains_bridge_queue
     - tests/unit/test_check_ios_fedora_log_fit.py::test_check_ios_fedora_log_fit_selects_shared_epoch
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_mux_data_after_transport_delay_threshold
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel
-    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_ingress_remains_unthrottled_per_peer_channel
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_ingress_remains_unthrottled
     - tests/unit/test_channel_mux_listener_mode.py::test_throttle_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_drop_snapshot_tracks_reasons_and_bounds_recent_entries
@@ -269,13 +288,26 @@ ARC-CMP-003:
 ARC-CMP-004:
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
+  # Swift macOS packet carriage waits for its configured peer route to resolve
+  # through the created utun, establishing the local routing contract before
+  # it asserts overlay delivery.
   # Process orchestration coverage includes bounded reconnect waits across
   # expected self-restart relaunches in the integration harness.
   # Hosted macOS elevated gates keep Admin/helper state assertions even when
   # the runner refuses route, ping, SMAppService approval, packaged-XPC enable,
-  # packaged-XPC Admin status polling, or inline TUN-row publication side effects.
+  # or packaged-XPC Admin status polling. The live inline route/DNS mutation
+  # case skips before setup there because it can sever runner connectivity.
   # The macOS elevated scripts preserve CI identity through sudo so those
   # hosted-runner branches remain active after privilege escalation.
+  # Their unbuffered per-test progress and exit host diagnostics identify the
+  # last active case when a hosted runner loses its control connection. The
+  # hosted Python matrix also isolates every elevated case in its own named job.
+  # GitHub-hosted macOS cannot grant the Swift host runner permission for real
+  # utun packet injection, so that packet-carry case remains a local-authorized
+  # integration assertion and skips in the hosted lane.
+  # myUDP connection readiness requires completed application-payload progress,
+  # not merely UDP control traffic: raw-only listener peers are reaped and
+  # Swift client recovery publishes its retry deadline before socket rebuild.
   # Synology wrapper coverage also pins the declared python314 package
   # dependency, beta-package metadata, DSM-acceptable outer archive shape,
   # restart-exit-code handling, package-managed dependency-bootstrap
@@ -302,6 +334,7 @@ ARC-CMP-004:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
   unit_tests:
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row
     - tests/unit/test_runner_tun_helper.py::test_runner_can_toggle_tun_enabled_state_through_helper_backend
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
@@ -520,8 +553,9 @@ ARC-CMP-005:
   # the supported peer-scoped summary contract rather than retired
   # SecureLink-specific handshake-debug telemetry fields, including persistent
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
-  # the stable peer Transport detail layout, semantic status-pill colors, and
-  # negative-uptime launcher restart countdown, and peer-scoped wrapper status.
+  # the stable peer Transport detail layout, peer-local identity-cell row spans,
+  # semantic status-pill colors, negative-uptime launcher restart countdown,
+  # and peer-scoped wrapper status.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
@@ -579,8 +613,8 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_component_parity.py::test_swift_tun_routing_snapshot_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_tun_routing_route_matches_python
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_tun_routing_matches_python
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_removes_retired_throttle_quota_fields
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_removes_retired_throttle_quota_fields
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
     # Includes pre-connected and throttle-active TUN verification admission.
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic
@@ -615,7 +649,10 @@ ARC-CMP-005:
 
 ARC-CMP-006:
   # SecureLink integration coverage includes authenticated-readiness gating
-  # and failure reporting without direct transport-reconnect ownership.
+  # and failure reporting without direct transport-reconnect ownership. A
+  # changed session id is only a recovery signal after authentication completes.
+  # New disconnected transport epochs also remain visible through a failed
+  # SecureLink layer so ChannelMux can advance the candidate lifecycle.
   # before multi-peer client-published TCP service probes and preservation of
   # authenticated failures are reported to ChannelMux for lifecycle rotation,
   # plus cert local-identity reload reconnect/re-authentication at the
@@ -631,10 +668,12 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_without_recovery_option
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
+    - tests/unit/test_secure_link_psk.py::test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_pending_rekey
     - tests/unit/test_secure_link_cert.py::test_cert_mode_happy_path_authenticates_and_exposes_peer_identity
     - tests/unit/test_secure_link_cert.py::test_revocation_reload_drops_existing_authenticated_peer
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_failure_is_atomic

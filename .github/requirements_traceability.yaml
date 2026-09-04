@@ -203,6 +203,7 @@ REQ-LST-007:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
   unit_tests:
     - tests/unit/test_ws_multi_peer.py::test_unregister_peer_channels_only_removes_target_peer
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_after_rtt_liveness_is_lost
 
 REQ-MUX-005:
   integration_tests:
@@ -213,23 +214,28 @@ REQ-MUX-005:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_listener_mode.py::test_concurrent_tcp_listener_starts_are_single_flight
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_catalog_state_is_scoped_by_peer_id
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_mux_data_after_transport_delay_threshold
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure
 
 REQ-MUX-011:
   unit_tests:
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_ignores_transmit_delay_without_buffered_frames
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_throttles_when_buffered_frames_exceed_recent_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_transport_delay_controls_default_and_configure_channelmux
+    - tests/unit/test_channel_mux_listener_mode.py::test_sustained_transport_delay_requests_one_connection_rotation
+    - tests/unit/test_channel_mux_listener_mode.py::test_rejected_rotation_does_not_latch_channelmux_epoch
+    - tests/unit/test_channel_mux_listener_mode.py::test_rejected_disconnected_rotation_retries_after_grace
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_sustained_transport_delay_rotation_matches_python_channelmux_policy
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_drops_mux_data_after_transport_delay_threshold
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_does_not_throttle_ingress_for_buffer_pressure
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_throttle_sequence_matches_python
-    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_throttle_is_scoped_per_peer_channel
-    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_throttle_scope_does_not_consume_unicast_budget
+    - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_shared_ingress_remains_unthrottled_per_peer_channel
+    - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_broadcast_ingress_remains_unthrottled
     - tests/unit/test_channel_mux_listener_mode.py::test_throttle_snapshot_reports_inactive_when_not_backpressured
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_service_snapshot_reports_inactive_when_not_backpressured
-    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_skips_dns_and_icmp_while_local_throttle_is_active
+    - tests/unit/test_channel_mux_listener_mode.py::test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_scoped_tun_throttle_sequence_preserves_unrelated_scope_budget
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_scope_ids_preserve_broadcast_unicast_isolation
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_removes_retired_throttle_quota_fields
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_removes_retired_throttle_quota_fields
 
 REQ-AUT-006:
   integration_tests:
@@ -263,7 +269,9 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_psk.py::test_unexpected_rekey_commit_fails_closed
     - tests/unit/test_secure_link_psk.py::test_auth_failure_unregisters_server_mux_routes
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
+    - tests/unit/test_secure_link_psk.py::test_listener_rekey_watchdog_fails_closed_when_client_commit_never_arrives
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_pending_rekey
 REQ-AUT-008:
   # Authenticated SecureLink failures are reported to ChannelMux, which owns
   # the resulting lifecycle rotation through the lower layers.
@@ -280,8 +288,9 @@ REQ-AUT-008:
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
 REQ-AUT-009:
   # The supported admin surface for SecureLink remains the peer-scoped summary
-  # contract; retired handshake-debug telemetry fields are intentionally not a
-  # requirement-bearing API surface.
+  # contract; a changed session id is not recovered health until the new row is
+  # authenticated. Retired handshake-debug telemetry fields are intentionally
+  # not a requirement-bearing API surface.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
@@ -556,16 +565,24 @@ REQ-PRX-001:
     - ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_resolves_multi_host_peer_with_family_preference
 
 REQ-LIFE-001:
-  # SecureLink lifecycle coverage reports failure without issuing a direct transport reconnect.
+  # SecureLink lifecycle coverage reports failure without issuing a direct transport reconnect
+  # and forwards every newer disconnected transport epoch so ChannelMux can
+  # complete bounded candidate rotation and request a supervised restart.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
   unit_tests:
+    - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
+    - tests/unit/test_secure_link_psk.py::test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect
+    - tests/unit/test_channel_mux_listener_mode.py::test_high_overlay_rtt_throttles_local_ingress
+    - tests/unit/test_connection_lifecycle.py::test_channelmux_outer_readiness_rotation_uses_shared_grace_window
     - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason
     - tests/unit/test_connection_lifecycle.py::test_event_normalizes_legacy_connected_snapshot
     - tests/unit/test_connection_lifecycle.py::test_event_rejects_negative_epoch
     - tests/unit/test_connection_lifecycle.py::test_rotation_result_exposes_transport_policy_metadata
     - tests/unit/test_connection_lifecycle.py::test_myudp_emits_ordered_lifecycle_events_with_one_epoch
     - tests/unit/test_connection_lifecycle.py::test_myudp_rotation_advances_epoch_until_recovery_or_cycle_exhaustion
+    - tests/unit/test_connection_lifecycle.py::test_listener_peer_without_completed_app_payload_has_bounded_deadline
     - tests/unit/test_secure_link_psk.py::test_lifecycle_forwards_transport_epoch_and_rotation_request
     - tests/unit/test_channel_mux_listener_mode.py::test_disconnected_overlay_requests_one_rotation_after_delay
     - tests/unit/test_channel_mux_listener_mode.py::test_rotation_waits_for_new_lifecycle_epoch
@@ -581,6 +598,7 @@ REQ-LIFE-001:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_transport_epoch_reset_clears_receiver_gap_state
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_peer_protocol_epoch_reset_drops_queued_datagrams_and_control_state
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_overlay_transport_owners_publish_layered_readiness
+    - tests/unit/test_swift_layer_readiness_parity.py::test_swift_layered_readiness_gates_inflow_on_outer_app_ready
     - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect
 
 REQ-LIFE-002:
@@ -685,11 +703,25 @@ REQ-LIFE-009:
 REQ-LIFE-010:
   # Elevated route/DNS verification is host-local and deterministic; the
   # paired packet-carry tests cover overlay delivery independently of ICMP policy.
+  # Swift macOS packet carry waits for the configured peer route to resolve
+  # through the created utun before injecting traffic, establishing that local
+  # route contract before overlay carriage is asserted on authorized local
+  # macOS. GitHub-hosted macOS cannot grant the Swift host runner's packet-
+  # injection permission, so that one packet-carry case skips there.
   # macOS elevated scripts preserve CI identity across sudo so hosted-runner
-  # diagnostics remain scoped to the CI privilege boundary, including the
-  # inline case where hosted macOS leaves the TUN row empty and the Swift
-  # packaged-XPC case where hosted macOS leaves the helper service disabled
-  # after privileged setup but the Admin diagnostics endpoint remains responsive.
+  # diagnostics remain scoped to the CI privilege boundary. The live inline
+  # route/DNS mutation test skips before setup on hosted macOS because it can
+  # sever the Actions control connection, while remaining required on an
+  # authorized local host; the Swift packaged-XPC case may leave the helper
+  # service disabled after privileged setup but the Admin diagnostics endpoint
+  # remains responsive.
+  # The elevated wrapper emits unbuffered per-test progress and exit route,
+  # interface, and process diagnostics so a hosted interruption identifies its
+  # last active case. The hosted Python matrix runs every elevated case in an
+  # independently named job when those logs cannot be persisted.
+  # myUDP listener peers without a completed application payload are bounded
+  # by a pre-auth grace period; the Swift client exposes the remaining
+  # app-readiness recovery deadline before it rotates or rebuilds its socket.
   integration_tests:
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
@@ -827,6 +859,7 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_start_skips_runtime_listener_on_created_hook
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_skips_runtime_listener_on_stopped_hook
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_dedicated_shared_tun_view
+    - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_deduplicates_shared_tun_listener_and_open_row
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_preserves_tun_runtime_health_warning
     - tests/unit/test_admin_web_payloads.py::test_build_tun_routing_payload_exposes_verification_checks
     - tests/unit/test_admin_web_payloads.py::test_cached_probe_verification_returns_pending_and_schedules_background_refresh_on_admin_thread
@@ -898,6 +931,7 @@ REQ-LST-006:
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_listener_peer_snapshot_uses_child_myudp_session_stats
     - tests/unit/test_ws_multi_peer.py::test_server_peer_rtt_updates_after_ping_pong_round_trip
+    - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_that_never_establishes_rtt_liveness
 
 REQ-MUX-001:
   integration_tests:
@@ -934,6 +968,7 @@ REQ-MUX-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
+    - tests/unit/test_channel_mux_listener_mode.py::test_passive_listener_starts_peer_tcp_listener_from_remote_catalog
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer
     - ios/tests/test_m3_native_sources.py::test_swift_overlay_remote_service_catalog_uses_current_tun_epoch
 
@@ -954,6 +989,7 @@ REQ-MUX-006:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_local_tun_packet_opens_channel_and_sends_data
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_device_keeps_symmetric_channel_aliases_routable
+    - tests/unit/test_channel_mux_listener_mode.py::test_peer_tun_close_removes_closed_channel_from_interface_aliases
     # Includes cross-transport shared binding/return-route behavior, Admin connection-id resolution, and disconnect cleanup.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
@@ -1013,6 +1049,8 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_secure_link_handshaking
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_allows_connected_non_securelink_transport
     - tests/unit/test_channel_mux_listener_mode.py::test_on_overlay_state_blocks_disconnected_non_securelink_transport
+    - tests/unit/test_channel_mux_listener_mode.py::test_overlay_ready_proactively_opens_configured_tun_listener
+    - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_default_system_honors_no_proxy_on_linux
     - tests/unit/test_channel_mux_listener_mode.py::test_tcp_target_connection_uses_system_proxy_egress
@@ -1261,7 +1299,10 @@ REQ-ADM-006:
   # Peer-detail coverage also pins persistent enabled-layer visibility and
   # ChannelMux-owned candidate/restart timers, including the Transport
   # detail ordering, status-pill semantics, launcher restart countdowns, and peer-scoped wrapper states for resolved and
-  # server-observed peer address-and-port tuples.
+  # server-observed peer address-and-port tuples. The UI evidence also keeps
+  # throttle state in the ChannelMux peer box and limits the TUN page to a
+  # physical-interface aggregate indicator. Peer identity cells must not span
+  # into the next rendered peer's detail rows.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_two_clients
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
@@ -1290,8 +1331,8 @@ REQ-ADM-006:
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_coalesces_null_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_runner_peer_snapshot_preserves_null_listener_overlay_metrics
     - tests/unit/test_admin_web_payloads.py::test_status_frontend_renders_transmit_delay_next_to_rtt
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_preserves_throttle_summary
-    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_preserves_throttle_summary
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_peers_payload_removes_retired_throttle_quota_fields
+    - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_live_topic_peers_removes_retired_throttle_quota_fields
     - tests/unit/test_connection_snapshots.py::test_snapshot_collapses_tun_channel_aliases_into_one_logical_connection
     - tests/unit/test_connection_snapshots.py::test_shared_tun_binding_traffic_is_mirrored_to_each_process_holder
     - tests/unit/test_connection_snapshots.py::test_snapshot_counts_listeners_when_no_clients_connected

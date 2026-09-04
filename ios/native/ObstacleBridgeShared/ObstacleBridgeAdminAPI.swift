@@ -289,7 +289,7 @@ enum ObstacleBridgeAdminAPI {
         case ("POST", "/api/tun-helper/repair"):
             return provider.adminTunHelperRepair(request: request)
         case ("GET", "/api/peers"):
-            return jsonResponse(["peers": provider.adminPeersSnapshot()])
+            return jsonResponse(["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(provider.adminPeersSnapshot())])
         case ("GET", "/api/config"):
             return jsonResponse(provider.adminConfigSnapshot())
         case ("GET", "/api/onboarding/connection-profiles"):
@@ -336,7 +336,7 @@ enum ObstacleBridgeAdminAPI {
         case "tun_routing":
             return provider.adminTunRoutingSnapshot()
         case "peers":
-            return ["peers": provider.adminPeersSnapshot()]
+            return ["peers": ObstacleBridgeAdminSnapshotSupport.peersSnapshotForAPI(provider.adminPeersSnapshot())]
         case "meta":
             return provider.adminMetaSnapshot()
         default:
@@ -456,24 +456,21 @@ enum ObstacleBridgeAdminAPI {
     static func tunRoutingSnapshot(fromConnections snapshot: [String: Any]) -> [String: Any] {
         let tunRows = snapshot["tun"] as? [[String: Any]] ?? []
         let sharedRows = deduplicatedSharedTunRows(from: tunRows)
+        let interfaceRows = tunRows.filter { row in
+            !(row["shared_tun_ownership"] is [String: Any])
+        } + physicalSharedTunRows(from: sharedRows)
         let icmpStageCounts = snapshot["tun_icmp_stage_counts"] as? [String: Any] ?? [:]
         let probeBoundaryCounts = snapshot["tun_probe_boundary_counts"] as? [String: Any] ?? [:]
         let localReplyStageCounts = snapshot["tun_local_reply_stage_counts"] as? [String: Any] ?? [:]
         let probeLastTimeoutDiag = snapshot["tun_probe_last_timeout_diag"] as? [String: Any] ?? [:]
         let probeLastTimeoutDiagByTransport = snapshot["tun_probe_last_timeout_diag_by_transport"] as? [String: Any] ?? [:]
-        let tunOpen = tunRows.reduce(into: 0) { partialResult, row in
+        let tunOpen = interfaceRows.reduce(into: 0) { partialResult, row in
             let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if row["chan_id"] is NSNull {
-                return
-            }
-            if row["chan_id"] == nil {
-                return
-            }
             if state != "listening" {
                 partialResult += 1
             }
         }
-        let tunListening = tunRows.reduce(into: 0) { partialResult, row in
+        let tunListening = interfaceRows.reduce(into: 0) { partialResult, row in
             let state = String(describing: row["state"] ?? "connected").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if state == "listening" {
                 partialResult += 1
@@ -499,11 +496,11 @@ enum ObstacleBridgeAdminAPI {
             }
         }
         return [
-            "tun": tunRows,
+            "tun": interfaceRows,
             "shared_tun": sharedRows,
             "tun_helper": [:],
             "summary": [
-                "tun_total": tunRows.count,
+                "tun_total": interfaceRows.count,
                 "tun_open": tunOpen,
                 "tun_listening": tunListening,
                 "shared_services": sharedRows.count,
@@ -580,6 +577,45 @@ enum ObstacleBridgeAdminAPI {
             }
         }
         return order.compactMap { rowsByKey[$0] }
+    }
+
+    private static func physicalSharedTunRows(from sharedRows: [[String: Any]]) -> [[String: Any]] {
+        sharedRows.map { row in
+            var physical = row
+            let ownership = physical["shared_tun_ownership"] as? [String: Any] ?? [:]
+            let bindings = ownership["active_peer_bindings"] as? [[String: Any]] ?? []
+            var stats: [String: Int] = [
+                "rx_msgs": 0,
+                "tx_msgs": 0,
+                "rx_bytes": 0,
+                "tx_bytes": 0,
+            ]
+            for binding in bindings where !(binding["local_virtual"] as? Bool ?? false) {
+                stats["rx_msgs", default: 0] += integerValue(binding["rx_packets"])
+                stats["tx_msgs", default: 0] += integerValue(binding["tx_packets"])
+                stats["rx_bytes", default: 0] += integerValue(binding["rx_bytes"])
+                stats["tx_bytes", default: 0] += integerValue(binding["tx_bytes"])
+            }
+            physical["physical_interface"] = true
+            physical["peer_id"] = "physical"
+            physical["chan_id"] = NSNull()
+            physical["channel_aliases"] = [] as [Any]
+            physical["stats"] = stats
+            return physical
+        }
+    }
+
+    private static func integerValue(_ value: Any?) -> Int {
+        if let integer = value as? Int {
+            return integer
+        }
+        if let number = value as? NSNumber {
+            return number.intValue
+        }
+        if let string = value as? String, let integer = Int(string) {
+            return integer
+        }
+        return 0
     }
 
     static func jsonResponse(_ payload: Any, statusLine: String = "HTTP/1.1 200 OK", headers: [(String, String)] = []) -> ObstacleBridgeAdminAPIResponse {

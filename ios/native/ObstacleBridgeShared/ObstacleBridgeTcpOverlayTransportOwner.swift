@@ -6,7 +6,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     typealias TunPacketSink = (Data) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
+        ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
+    )
 
     private let peerHost: String
     private let peerPort: Int
@@ -240,6 +242,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot()
             )
@@ -363,6 +366,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 overlayConnected: inflowAllowed(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
+                transportDelayThresholdMS: overlayLayerTransportAdapter?.transportDelayRotationThresholdMS ?? ObstacleBridgeOverlayChannelCore.tunPostMuxTransportDelayThresholdMS,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames,
@@ -611,6 +615,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             receiveFromOverlay()
         case .failed(let error):
             overlayConnected = false
@@ -751,6 +756,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             }
             updateLowerLayerFallback()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             return
         }
         handleOverlayPayload(payload)
@@ -794,8 +800,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func handleLifecycleRotationIfDue() {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: peerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        let protocolStats = overlayProtocolStats()
+        let transmitDelayEstMS = protocolStats["transmit_delay_est_ms"] as? Double ?? 0.0
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: transmitDelayEstMS,
+            candidateCount: peerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: peerCandidates.count)
         else {
             return
         }
@@ -906,6 +919,25 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("tcp_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("tcp_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func startupMuxFramesForNewTunOpen() -> [Data] {

@@ -186,6 +186,17 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
             @main
             struct SwiftUDPTunProbe {
                 static func main() throws {
+                    let proactiveSpec = ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: "ios-utun", mtu: 1400)
+                    let proactiveRuntime = ObstacleBridgeChannelMuxTunRuntime(
+                        instanceID: 0x3000000000000003,
+                        connectionSeq: 0x30303030,
+                        localSpec: proactiveSpec
+                    )
+                    let initialProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
+                    let duplicateProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
+                    proactiveRuntime.resetTransportEpoch()
+                    let recoveredProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
+
                     let sender = SwiftUDPTunBridgeHarness(
                         instanceID: 0x1000000000000001,
                         connectionSeq: 0x10101010,
@@ -216,6 +227,21 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                             "r_host": sender.tunSpec.rHost,
                             "r_port": sender.tunSpec.rPort,
                         ],
+                        "proactive_open_frame_types": try (initialProactiveOpen?.frames ?? []).map { frameData in
+                            guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(frameData) else {
+                                throw ProbeError.badState("failed to unpack proactive mux frame")
+                            }
+                            return mtypeName(frame.mtype)
+                        },
+                        "proactive_open_channel": initialProactiveOpen?.chanID ?? -1,
+                        "proactive_open_duplicate": duplicateProactiveOpen != nil,
+                        "proactive_recovered_frame_types": try (recoveredProactiveOpen?.frames ?? []).map { frameData in
+                            guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(frameData) else {
+                                throw ProbeError.badState("failed to unpack recovered proactive mux frame")
+                            }
+                            return mtypeName(frame.mtype)
+                        },
+                        "proactive_connection_seq": proactiveRuntime.currentConnectionSeq(),
                         "first_send_mux_frames": firstSend.muxFrames.map { $0.jsonObject() },
                         "first_send_overlay_frame_count": firstSend.datagrams.count,
                         "receiver_packets": receiverPackets.map { String(data: $0, encoding: .utf8) ?? "" },
@@ -247,6 +273,11 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
         "r_host": "ios-utun",
         "r_port": 1400,
     }
+    assert payload["proactive_open_frame_types"] == ["open"]
+    assert payload["proactive_open_channel"] == 1
+    assert payload["proactive_open_duplicate"] is False
+    assert payload["proactive_recovered_frame_types"] == ["open"]
+    assert payload["proactive_connection_seq"] == 0x30303031
     assert payload["first_send_mux_frames"] == [
         {
             "chan_id": 1,

@@ -3755,10 +3755,14 @@ def wait_peer_secure_link_session_change(
     timeout: float = 12.0,
     label: str = '',
     transport: Optional[str] = None,
+    expected_state: Optional[str] = None,
+    authenticated: Optional[bool] = None,
+    failure_free: bool = False,
 ) -> dict:
     end = time.time() + timeout
     last_doc = None
     normalized_transport = str(transport or '').strip().lower()
+    expected_state_norm = None if expected_state is None else str(expected_state).strip().lower()
     while time.time() < end:
         _code, doc = fetch_json(f'http://127.0.0.1:{admin_port}/api/peers', timeout=1.5)
         last_doc = doc
@@ -3769,13 +3773,20 @@ def wait_peer_secure_link_session_change(
                 continue
             secure_link = row.get('secure_link') or {}
             session_id = int(secure_link.get('session_id') or 0)
-            if session_id > 0 and session_id != int(previous_session_id):
-                who = f' {label}' if label else ''
-                log.info(f'[PEERS]{who} port={admin_port} secure_link_session_changed={secure_link!r}')
-                return doc
+            if session_id <= 0 or session_id == int(previous_session_id):
+                continue
+            if expected_state_norm is not None and str(secure_link.get('state', '')).strip().lower() != expected_state_norm:
+                continue
+            if authenticated is not None and bool(secure_link.get('authenticated')) != bool(authenticated):
+                continue
+            if failure_free and (secure_link.get('failure_code') or secure_link.get('failure_reason')):
+                continue
+            who = f' {label}' if label else ''
+            log.info(f'[PEERS]{who} port={admin_port} secure_link_session_changed={secure_link!r}')
+            return doc
         time.sleep(0.25)
     raise RuntimeError(
-        f'/api/peers did not expose secure_link session change from {previous_session_id} on port {admin_port}; last={last_doc!r}'
+        f'/api/peers did not expose the requested secure_link session change from {previous_session_id} on port {admin_port}; last={last_doc!r}'
     )
 
 
@@ -10793,6 +10804,9 @@ def test_overlay_e2e_tcp_secure_link_psk_authenticated_failure_recovers_with_rec
                 timeout=45.0,
                 label='client',
                 transport='tcp',
+                expected_state='authenticated',
+                authenticated=True,
+                failure_free=True,
             )
             recovered_secure = dict((first_active_secure_link_row(recovered_doc, transport='tcp').get('secure_link') or {}))
             assert str(recovered_secure.get('state') or '').strip().lower() == 'authenticated'

@@ -44,6 +44,13 @@ SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 
 
+def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
+
+    assert "private var pendingRekeyStartedAt: TimeInterval?" in source
+    assert "_ = fail(sessionID: pendingSessionID, code: Self.authFailLifecycle)" in source
+
+
 def test_macos_swift_host_runner_keeps_shared_tun_hooks_bound_to_adapter_lifecycle() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert "private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool)" in source
@@ -490,6 +497,9 @@ def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
     assert 'waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0)' in udp_owner
     assert 'inflight: Int(protocolStats["inflight"] as? Int ?? 0)' in udp_owner
     assert 'maxInflight: Int(protocolStats["max_inflight"] as? Int ?? 0)' in udp_owner
+    assert "framesAdmittedBeforeSecureLink(" in core
+    assert "tunPostMuxTransportDelayThresholdMS: Double = 5_000.0" in core
+    assert "guard localTunSendAllowed" not in tun_runtime
 
 
 def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_python() -> None:
@@ -503,7 +513,14 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "receiveState.reset()" in peer_runtime
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
     assert "private static let lowerLayerUnavailableFallbackNS" in udp_owner
+    assert "static let outerReadinessGrace: TimeInterval = 15.0" in (
+        (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    )
     assert "maybeRecoverUnavailableAppReady(nowNS:" in udp_owner
+    assert "private func appReadinessRecoveryInSeconds" in udp_owner
+    assert 'snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
+    assert 'snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
+    assert "guard rebuildSocketForPeerRotation() else" in udp_owner
     assert 'reason = "secure_link_handshake_stale"' in udp_owner
     assert 'reason = "secure_link_failed"' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
@@ -511,6 +528,17 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
     assert "overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)" in udp_owner
     assert "runtime.handleTransportDisconnected()" in secure_adapter
+    overlay_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in overlay_adapter
+    assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in overlay_adapter
+    assert "handleTransportDisconnected()" in overlay_adapter
+    assert "transportDelayRotationDue(" in overlay_adapter
+    assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in overlay_adapter
+    assert "let transportDelayRotationGrace: TimeInterval" in overlay_adapter
+    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in overlay_adapter
+    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'runtimeConfig["channelmux_transport_delay_threshold_ms"]' in host_runner
+    assert 'runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]' in host_runner
 
 
 def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:
@@ -3146,6 +3174,8 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             "mux_tcp_bp_threshold",
             "mux_tcp_bp_latency_ms",
             "mux_tcp_bp_poll_interval_ms",
+            "channelmux_transport_delay_threshold_ms",
+            "channelmux_transport_delay_rotation_delay_ms",
         }
         proxy_provider_keys = {str(item["key"]) for item in config["schema"]["proxy_provider"]}
         assert {
@@ -5635,13 +5665,16 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
         connections = _http_json(f"http://127.0.0.1:{hostrunner_admin_port}/api/connections")
 
         assert tun_status["summary"]["shared_services"] == 1
-        assert tun_status["summary"]["tun_listening"] >= 1
+        # A configured Swift TUN endpoint announces OPEN as soon as the overlay
+        # is app-ready, so the shared physical interface is already connected.
+        assert tun_status["summary"]["tun_open"] >= 1
+        assert tun_status["summary"]["tun_listening"] == 0
         assert tun_status["summary"]["shared_active_peer_bindings"] == 0
         assert tun_status["summary"]["shared_drop_by_reason"] == {}
         assert len(tun_status["shared_tun"]) == 1
         shared_row = tun_status["shared_tun"][0]
         ownership = shared_row["shared_tun_ownership"]
-        assert shared_row["state"] == "listening"
+        assert shared_row["state"] == "connected"
         assert shared_row["service_name"] == "Shared TUN Control Plane"
         assert ownership["mode"] == "server_shared"
         assert ownership["peer_refs"] == ["linux-client"]

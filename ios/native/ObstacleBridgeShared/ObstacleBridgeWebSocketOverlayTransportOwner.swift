@@ -8,7 +8,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     typealias TunPacketSink = (Data) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
+        ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
+    )
 
     private let peerHost: String
     private let peerAddresses: [String]
@@ -247,6 +249,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot()
             )
@@ -373,6 +376,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 overlayConnected: inflowAllowed(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
+                transportDelayThresholdMS: overlayLayerTransportAdapter?.transportDelayRotationThresholdMS ?? ObstacleBridgeOverlayChannelCore.tunPostMuxTransportDelayThresholdMS,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames,
@@ -664,6 +668,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         outboundSendInFlight = false
         maybePrimeSecureLinkHandshake()
         maybeSendStartupMuxFrames()
+        maybeOpenConfiguredTunIfReady()
         scheduleNextRTTPing(generation: generation)
         receiveFromOverlay()
     }
@@ -886,6 +891,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             }
             updateLowerLayerFallback()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
             return
         }
         handleOverlayPayload(payload)
@@ -984,6 +990,25 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("ws_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("ws_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func startupMuxFramesForNewTunOpen() -> [Data] {
@@ -1203,8 +1228,13 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func handleLifecycleRotationIfDue() {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: transmitDelayEstMSValue() ?? 0.0,
+            candidateCount: resolvedPeerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
         else {
             return
         }

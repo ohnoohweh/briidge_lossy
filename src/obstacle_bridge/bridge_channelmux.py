@@ -235,7 +235,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         "helper_write_probe_packet",
         "helper_write_error",
     )
-    CONNECTION_ROTATION_DELAY_S: float = 30.0
+    # The outer layer is the protocol-agnostic readiness authority. A live
+    # socket with SecureLink/Compression not app-ready must rotate just like a
+    # fully disconnected transport.
+    CONNECTION_ROTATION_DELAY_S: float = 15.0
+    DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS: float = 5_000.0
+    DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS: float = 30_000.0
 
     class Proto(enum.IntEnum):
         UDP = 0
@@ -391,6 +396,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not _has('--mux-tcp-bp-poll-interval-ms'):
             p.add_argument('--mux-tcp-bp-poll-interval-ms', type=int, default=50,
                            help='Mux TCP: polling interval for time-based backpressure (ms).')
+        if not _has('--channelmux-transport-delay-threshold-ms'):
+            p.add_argument(
+                '--channelmux-transport-delay-threshold-ms', type=float,
+                default=ChannelMux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,
+                help='ChannelMux: estimated transport-delay threshold for shedding and sustained-delay rotation (default 5000 ms).',
+            )
+        if not _has('--channelmux-transport-delay-rotation-delay-ms'):
+            p.add_argument(
+                '--channelmux-transport-delay-rotation-delay-ms', type=float,
+                default=ChannelMux.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS,
+                help='ChannelMux: continuous transport-delay duration before connection rotation (default 30000 ms).',
+            )
 
     @staticmethod
     def from_args(session, loop: asyncio.AbstractEventLoop, args,
@@ -471,6 +488,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except Exception: mux._tcp_bp_latency_ms = 300
         try: mux._tcp_bp_poll_interval_s = float(getattr(args, 'mux_tcp_bp_poll_interval_ms', 50)) / 1000.0
         except Exception: mux._tcp_bp_poll_interval_s = 0.05
+        try:
+            mux._transport_delay_threshold_ms = max(0.0, float(getattr(
+                args, 'channelmux_transport_delay_threshold_ms', mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS,
+            )))
+        except Exception:
+            mux._transport_delay_threshold_ms = mux.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS
+        try:
+            mux._transport_delay_rotation_delay_s = max(0.0, float(getattr(
+                args, 'channelmux_transport_delay_rotation_delay_ms', mux.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS,
+            )) / 1000.0)
+        except Exception:
+            mux._transport_delay_rotation_delay_s = mux.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS / 1000.0
         with contextlib.suppress(Exception):
             config_path = str(getattr(args, "_config_path", "") or getattr(args, "config", "") or "")
             if config_path:
@@ -656,8 +685,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._overlay_connected: bool = self._session_overlay_inflow_allowed()
         self._accepting_enabled: bool = self._overlay_connected
         self._connection_rotation_task: Optional[asyncio.Task] = None
+        self._transport_delay_rotation_task: Optional[asyncio.Task] = None
+        self._transport_delay_high_since_mono: Optional[float] = None
         self._on_connection_rotation_result = None
         self._connection_rotation_wait_epoch: Optional[int] = None
+        self._transport_delay_threshold_ms: float = self.DEFAULT_TRANSPORT_DELAY_THRESHOLD_MS
+        self._transport_delay_rotation_delay_s: float = self.DEFAULT_TRANSPORT_DELAY_ROTATION_DELAY_MS / 1000.0
         self._connection_lifecycle_epoch: int = 0
         # Epoch zero represents an already-ready session before its callback is
         # attached. Any disconnected lifecycle edge clears this bootstrap grant.
@@ -668,6 +701,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._remote_services_requested: list[ChannelMux.ServiceSpec] = []
         self._peer_installed_services: dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec] = {}
         self._pending_peer_service_catalogs: dict[int, dict[ChannelMux.ServiceKey, ChannelMux.ServiceSpec]] = {}
+        self._active_peer_service_catalogs: set[int] = set()
         self._svc_tcp_servers: dict[ChannelMux.ServiceKey, asyncio.base_events.Server] = {}
         self._svc_udp_servers: dict[ChannelMux.ServiceKey, asyncio.DatagramTransport] = {}
         self._svc_tun_devices: dict[ChannelMux.ServiceKey, ChannelMux.TunDevice] = {}
@@ -717,6 +751,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tcp_drain_threshold: int = 1
         self._tcp_bp_latency_ms: int = 300
         self._tcp_bp_poll_interval_s: float = 0.05
+        self._tcp_ingress_throttle_poll_s: float = 0.05
 
         # Listener peers may legally reuse channel ids, so counters are scoped
         # to the peer session that receives the frame.
@@ -2250,17 +2285,19 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         await self._start_prestaged_listener_shared_tun_services()
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
+            self._open_configured_tun_services_if_ready()
             self._send_remote_services_catalog_if_any()
         self._sweeper_task = self.loop.create_task(self._udp_idle_sweeper())
         self._ensure_task = self.loop.create_task(self._ensure_servers_task())
+        self._transport_delay_rotation_task = self.loop.create_task(self._transport_delay_rotation_watchdog())
 
     async def stop(self, reason: str = "") -> None:
         self.log.info("[MUX] stopping reason=%s", str(reason or "unspecified"))
-        for t in (self._ensure_task, self._sweeper_task):
+        for t in (self._ensure_task, self._sweeper_task, self._transport_delay_rotation_task):
             if t:
                 try: t.cancel()
                 except Exception: pass
-        self._ensure_task = self._sweeper_task = None
+        self._ensure_task = self._sweeper_task = self._transport_delay_rotation_task = None
         await self._await_tun_helper_open_tasks()
         await self._stop_all_services()
         await self._close_all_channels()
@@ -2330,6 +2367,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             new_accepting_enabled=self._accepting_enabled,
         )
         await self._start_all_services()
+        self._open_configured_tun_services_if_ready()
         self._send_remote_services_catalog_if_any()
 
     def _cancel_connection_rotation(self) -> None:
@@ -2338,6 +2376,42 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if task is not None and not task.done():
             task.cancel()
 
+    def _poll_transport_delay_rotation(self, *, now_mono: Optional[float] = None) -> Optional[ConnectionRotationResult]:
+        """Rotate once when a connected overlay sustains excessive delay."""
+        now = time.monotonic() if now_mono is None else float(now_mono)
+        if not self._overlay_connected:
+            self._transport_delay_high_since_mono = None
+            return None
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+        delay_ms = float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0)
+        if delay_ms < self._transport_delay_threshold_ms:
+            self._transport_delay_high_since_mono = None
+            return None
+        if self._transport_delay_high_since_mono is None:
+            self._transport_delay_high_since_mono = now
+            return None
+        if (now - self._transport_delay_high_since_mono) < self._transport_delay_rotation_delay_s:
+            return None
+        result = self.request_connection_rotation("channelmux_transport_delay")
+        accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
+        if accepted:
+            self.log.warning(
+                "[MUX] requested connection rotation after %.1fs transport delay >= %.0fms (current=%.3fms)",
+                now - self._transport_delay_high_since_mono,
+                self._transport_delay_threshold_ms,
+                delay_ms,
+            )
+        self._transport_delay_high_since_mono = None
+        return result
+
+    async def _transport_delay_rotation_watchdog(self) -> None:
+        try:
+            while True:
+                self._poll_transport_delay_rotation()
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            return
+
     def _schedule_connection_rotation(self) -> None:
         if self._connection_rotation_wait_epoch is not None:
             return
@@ -2345,8 +2419,10 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return
 
         requested_epoch = self._connection_lifecycle_epoch
+        retry_after_rejection = False
 
         async def _rotate_after_disconnect() -> None:
+            nonlocal retry_after_rejection
             try:
                 await asyncio.sleep(self.CONNECTION_ROTATION_DELAY_S)
                 if self._overlay_connected:
@@ -2355,10 +2431,15 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     return
                 result = self.request_connection_rotation("channelmux_disconnected")
                 self.log.warning("[MUX] requested connection rotation after %.1fs epoch=%s result=%r", self.CONNECTION_ROTATION_DELAY_S, requested_epoch, result)
+                accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
+                retry_after_rejection = not accepted and not self._overlay_connected
             except asyncio.CancelledError:
                 return
             finally:
-                self._connection_rotation_task = None
+                if self._connection_rotation_task is asyncio.current_task():
+                    self._connection_rotation_task = None
+                if retry_after_rejection and self._connection_rotation_wait_epoch is None and not self._overlay_connected:
+                    self._schedule_connection_rotation()
 
         self._connection_rotation_task = self.loop.create_task(_rotate_after_disconnect())
 
@@ -2375,10 +2456,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         if not callable(request):
             return ConnectionRotationResult(accepted=False, reason="inner_rotation_unavailable")
 
-        # A rotation is consumed by this epoch. Only a new lifecycle epoch may
-        # arm another request after a persistent outage or operator reload.
-        self._connection_rotation_wait_epoch = self._connection_lifecycle_epoch
-        result = request(str(reason or "channelmux_requested"))
+        # Reserve the epoch while calling the lower layer so a synchronous
+        # lifecycle edge cannot race past us.  A rejected request must not
+        # consume that epoch: otherwise a temporarily unavailable transport
+        # leaves ChannelMux permanently waiting for an epoch it never started.
+        requested_epoch = self._connection_lifecycle_epoch
+        self._connection_rotation_wait_epoch = requested_epoch
+        try:
+            result = request(str(reason or "channelmux_requested"))
+        except Exception as exc:
+            self.log.warning("[MUX] lower-layer rotation request failed reason=%s error=%r", reason, exc)
+            result = ConnectionRotationResult(accepted=False, reason="inner_rotation_error")
+        accepted = bool(result.get("accepted")) if isinstance(result, dict) else bool(getattr(result, "accepted", False))
+        if not accepted or self._connection_lifecycle_epoch > requested_epoch:
+            self._connection_rotation_wait_epoch = None
         if callable(self._on_connection_rotation_result):
             self._on_connection_rotation_result(result)
         return result
@@ -2443,6 +2534,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         )
         if self._overlay_connected and self._accepting_enabled:
             await self._start_all_services()
+            self._open_configured_tun_services_if_ready()
         self._send_remote_services_catalog_if_any()
 
 
@@ -2663,7 +2755,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._schedule_service_hook(spec, svc_key, "listener", "on_created")
 
     def _on_local_udp_datagram(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey", data: bytes, addr: tuple[str,int]) -> None:
-        if not (self._overlay_connected and self._accepting_enabled):
+        if not self._service_listener_accepting_enabled(svc_key):
             self.log.debug(f"[NET] package dropping  : ")
             return
         if len(data) > self._udp_service_datagram_cap:
@@ -2782,9 +2874,9 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         try:
             while True:
                 await asyncio.sleep(1.0)
-                if not (self._overlay_connected and self._accepting_enabled):
-                    continue
                 for svc_key, spec in self._effective_services_by_id().items():
+                    if not self._service_listener_accepting_enabled(svc_key):
+                        continue
                     if spec.l_proto == "tcp":
                         srv = self._svc_tcp_servers.get(svc_key)
                         if srv is None or getattr(srv, "sockets", None) in (None, []):
@@ -3053,6 +3145,41 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except Exception as e:
             self.log.warning("[MUX/CTRL] failed sending REMOTE_SERVICES_SET_V2: %r", e)
 
+    def _open_configured_tun_services_if_ready(self) -> None:
+        """Bind and announce each configured TUN listener for this mux epoch.
+
+        TCP sends its OPEN as soon as a local accepted socket gives it a
+        channel.  A TUN listener is its own long-lived local endpoint, so
+        waiting for its first packet creates an unnecessary asymmetry: a peer
+        can receive DATA for a retained channel without ever seeing the OPEN
+        that binds that channel to its shared-TUN owner.  Announce it once the
+        authenticated overlay is ready, and let normal channel teardown clear
+        the preferred channel before the next epoch.
+        """
+        if not (
+            self._overlay_connected
+            and self._accepting_enabled
+            and self.session.is_connected()
+            and self._session_app_ready()
+        ):
+            return
+        for svc_key, spec in list(self._effective_services_by_id().items()):
+            if str(spec.l_proto) != "tun":
+                continue
+            dev = self._svc_tun_devices.get(svc_key)
+            if dev is None or dev.chan_id is not None:
+                continue
+            chan = self._alloc_tun_id()
+            self._chan_owner_peer_id[chan] = int(svc_key[1]) if str(svc_key[0]) == "peer" else 0
+            self._bind_tun_channel(chan, dev)
+            self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
+            self._send_open_for_service(chan, ChannelMux.Proto.TUN, spec)
+            self.log.info(
+                "[TUN/OPEN] proactive local listener bind chan=%s service_key=%s after overlay readiness",
+                chan,
+                svc_key,
+            )
+
     async def _stop_listener_for_service_id(
         self,
         svc_key: "ChannelMux.ServiceKey",
@@ -3143,20 +3270,23 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         for svc_key, spec in new_map.items():
             self._peer_installed_services[svc_key] = spec
 
-        if self._overlay_connected and self._accepting_enabled:
-            for svc_key in sorted(to_start):
-                spec = new_map.get(svc_key)
-                if not spec:
-                    continue
-                try:
-                    if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
-                        await self._start_tcp_server_for(spec, svc_key)
-                    elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
-                        await self._start_udp_server_for(spec, svc_key)
-                    elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
-                        await self._start_tun_server_for(spec, svc_key)
-                except Exception as e:
-                    self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
+        # A listener-mode transport is globally "listening", rather than
+        # connected. A catalog received from one of its authenticated child
+        # peers is nevertheless immediately usable and must create that
+        # peer's listeners. The per-peer disconnect callback tears them down.
+        for svc_key in sorted(to_start):
+            spec = new_map.get(svc_key)
+            if not spec:
+                continue
+            try:
+                if spec.l_proto == "tcp" and svc_key not in self._svc_tcp_servers:
+                    await self._start_tcp_server_for(spec, svc_key)
+                elif spec.l_proto == "udp" and svc_key not in self._svc_udp_servers:
+                    await self._start_udp_server_for(spec, svc_key)
+                elif spec.l_proto == "tun" and svc_key not in self._svc_tun_devices:
+                    await self._start_tun_server_for(spec, svc_key)
+            except Exception as e:
+                self.log.warning("[MUX/CTRL] peer-installed service %s:%s start failed: %r", svc_key[0], spec.svc_id, e)
 
     async def _drop_peer_installed_services(self, peer_id: Optional[int]) -> None:
         if peer_id is None:
@@ -3173,6 +3303,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     def on_peer_disconnected(self, peer_id: int) -> None:
         self._pending_peer_service_catalogs.pop(int(peer_id), None)
+        self._active_peer_service_catalogs.discard(int(peer_id))
         self._peer_mux_epochs.pop(int(peer_id), None)
         self._reset_peer_open_channels(int(peer_id))
         self._drop_shared_tun_state_for_local_peer(int(peer_id))
@@ -3181,7 +3312,51 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except Exception as e:
             self.log.debug("[MUX/CTRL] failed scheduling peer disconnect cleanup for peer_id=%s: %r", peer_id, e)
 
+    def _service_listener_accepting_enabled(self, svc_key: "ChannelMux.ServiceKey") -> bool:
+        """Whether a local listener may accept traffic for this service.
+
+        In a server/listener transport, global ``_overlay_connected`` describes
+        the listening socket and stays false. Peer-installed services instead
+        inherit their liveness from membership in the authenticated peer
+        catalog. The active marker is cleared synchronously on that peer's
+        disconnect, before asynchronous listener teardown starts.
+        """
+        if str(svc_key[0]) == "peer":
+            return int(svc_key[1]) in self._active_peer_service_catalogs
+        return bool(self._overlay_connected and self._accepting_enabled)
+
     # ---------- MUX send ----------
+    def _tun_post_mux_transport_delay_exceeded(self) -> bool:
+        """Whether TUN data must be dropped before entering SecureLink.
+
+        Local TUN reads are deliberately never paused by overload control.
+        Unlike TCP (which stops reading) and local UDP (which drops on read),
+        TUN keeps draining its fd and drops completed mux DATA frames at this
+        final ChannelMux-to-SecureLink boundary.
+        """
+        snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+        return float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0) >= float(
+            self._transport_delay_threshold_ms
+        )
+
+    def _record_tun_post_mux_drop(
+        self,
+        chan_id: int,
+        payload: bytes,
+        *,
+        peer_id: Optional[int],
+    ) -> None:
+        dev = self._tun_by_chan.get(int(chan_id))
+        svc_key = getattr(dev, "service_key", None) if dev is not None else None
+        self._record_shared_tun_drop(
+            svc_key,
+            reason="transport_delay_post_mux_tun",
+            direction="local_to_peer",
+            peer_id=peer_id,
+            chan_id=chan_id,
+            packet_bytes=len(payload),
+        )
+
     def _send_mux(self, chan_id: int, proto: ChannelMux.Proto, mtype: ChannelMux.MType, data: bytes, *, peer_id: Optional[int] = None) -> None:
         try:
             self._record_sync_diag("ChannelMux._send_mux", phase="started")
@@ -3243,6 +3418,21 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     "[MUX] drop oversized app message: %d bytes > %d",
                     len(wire),
                     self._session_max_app_payload,
+                )
+                return
+            if (
+                proto == ChannelMux.Proto.TUN
+                and mtype in (ChannelMux.MType.DATA, ChannelMux.MType.DATA_FRAG)
+                and self._tun_post_mux_transport_delay_exceeded()
+            ):
+                self._record_tun_post_mux_drop(
+                    chan_id,
+                    bytes(data),
+                    peer_id=effective_peer_id,
+                )
+                self.log.debug(
+                    "[TUN] drop mux data before SecureLink: transmit_delay_est_ms exceeds %.0f",
+                    self._transport_delay_threshold_ms,
                 )
                 return
             if self._on_local_rx:
@@ -4272,6 +4462,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "inflight": 0,
                 "max_inflight": 0,
                 "transmit_delay_est_ms": 0.0,
+                "rtt_est_ms": 0.0,
                 "prev_window_bytes": 0,
                 "curr_window_bytes": 0,
                 "stalled": False,
@@ -4284,6 +4475,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 "inflight": 0,
                 "max_inflight": 0,
                 "transmit_delay_est_ms": 0.0,
+                "rtt_est_ms": 0.0,
                 "prev_window_bytes": 0,
                 "curr_window_bytes": 0,
                 "stalled": False,
@@ -4296,6 +4488,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         last_rtt_ok_ns = getattr(metrics, "last_rtt_ok_ns", None)
         last_rx_ns = getattr(metrics, "last_rx_ns", None)
         transmit_delay_est_ms = getattr(metrics, "transmit_delay_est_ms", None)
+        rtt_est_ms = getattr(metrics, "rtt_est_ms", None)
         try:
             waiting_count = max(0, int(getattr(metrics, "waiting_count", 0) or 0))
         except (TypeError, ValueError):
@@ -4325,21 +4518,30 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except (TypeError, ValueError):
             last_rx = 0
         progress_ns = max(last_ok, last_rx)
+        try:
+            tx_delay_ms = max(0.0, float(transmit_delay_est_ms or 0.0))
+        except (TypeError, ValueError):
+            tx_delay_ms = 0.0
         if progress_ns <= 0:
+            try:
+                rtt_ms = max(0.0, float(rtt_est_ms or 0.0))
+            except (TypeError, ValueError):
+                rtt_ms = 0.0
             return {
                 "waiting_count": waiting_count,
                 "inflight": inflight,
                 "max_inflight": max_inflight,
-                "transmit_delay_est_ms": 0.0,
+                "transmit_delay_est_ms": tx_delay_ms,
+                "rtt_est_ms": rtt_ms,
                 "prev_window_bytes": prev_window_bytes,
                 "curr_window_bytes": curr_window_bytes,
                 "stalled": False,
             }
         idle_budget_ns = int(self.TUN_STREAM_OVERLAY_STALL_NS)
         try:
-            tx_delay_ms = float(transmit_delay_est_ms or 0.0)
+            rtt_ms = max(0.0, float(rtt_est_ms or 0.0))
         except (TypeError, ValueError):
-            tx_delay_ms = 0.0
+            rtt_ms = 0.0
         if tx_delay_ms > 0.0:
             adaptive_budget_ns = int(max(
                 self.TUN_STREAM_OVERLAY_RX_IDLE_NS_MIN,
@@ -4355,16 +4557,27 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "inflight": inflight,
             "max_inflight": max_inflight,
             "transmit_delay_est_ms": tx_delay_ms,
+            "rtt_est_ms": rtt_ms,
             "prev_window_bytes": prev_window_bytes,
             "curr_window_bytes": curr_window_bytes,
             "stalled": stalled,
         }
 
-    @staticmethod
-    def _session_overlay_backpressure_active(snapshot: dict[str, Any]) -> bool:
+    def _session_overlay_backpressure_active(self, snapshot: dict[str, Any]) -> bool:
         inflight = max(0, int(snapshot.get("inflight", 0) or 0))
         max_inflight = max(0, int(snapshot.get("max_inflight", 0) or 0))
-        return max_inflight > 0 and inflight >= max_inflight
+        return (
+            (max_inflight > 0 and inflight >= max_inflight)
+            or float(snapshot.get("rtt_est_ms", 0.0) or 0.0) >= self._transport_delay_threshold_ms
+        )
+
+    async def _wait_for_local_tcp_ingress(self, chan: int) -> None:
+        while self._overlay_connected and self._accepting_enabled:
+            snapshot = self._session_overlay_backpressure_snapshot(now_ns=time.monotonic_ns())
+            if float(snapshot.get("rtt_est_ms", 0.0) or 0.0) < self._transport_delay_threshold_ms:
+                return
+            self.log.debug("[TCP/INGRESS] paused chan=%s rtt_est_ms=%.1f", chan, float(snapshot["rtt_est_ms"]))
+            await asyncio.sleep(self._tcp_ingress_throttle_poll_s)
 
     def _tcp_overlay_read_size(self) -> int:
         size = max(1, int(self._SAFE_TCP_READ))
@@ -4513,6 +4726,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             "inflight": int(snapshot.get("inflight", 0) or 0),
             "max_inflight": int(snapshot.get("max_inflight", 0) or 0),
             "transmit_delay_est_ms": float(snapshot.get("transmit_delay_est_ms", 0.0) or 0.0),
+            "rtt_est_ms": float(snapshot.get("rtt_est_ms", 0.0) or 0.0),
             "budget_bytes": min(remaining_candidates) + aggregate["used_bytes"] if remaining_candidates else 0,
             "used_bytes": max(aggregate["used_bytes"], int(scoped.get("used_bytes", 0) or 0) if scoped else 0),
             "remaining_bytes": min(remaining_candidates) if remaining_candidates else 0,
@@ -4755,21 +4969,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         return None
 
     def _tun_connectivity_tests_allowed(self, dev: "ChannelMux.TunDevice") -> bool:
-        """Keep verification traffic out of an actively throttled local TUN path."""
-        now_ns = time.monotonic_ns()
-        svc_key = getattr(dev, "service_key", None)
-        shared_snapshot = self._shared_tun_runtime_snapshot_for_service(svc_key)
-        if isinstance(shared_snapshot, dict) and isinstance(svc_key, tuple):
-            throttle = self._local_ingress_throttle_snapshot_for_shared_tun_service(
-                svc_key,
-                now_ns=now_ns,
-            )
-        else:
-            throttle = self._local_ingress_throttle_snapshot_for_scope(
-                self._direct_tun_inflow_scope_key(svc_key, getattr(dev, "chan_id", None)),
-                now_ns=now_ns,
-            )
-        return not bool(throttle.get("active"))
+        """TUN probes share normal admission; TUN has no read-side throttle."""
+        return True
 
     async def _resolve_tun_probe_target(self, target: str, *, family: int) -> str:
         infos = await self.loop.getaddrinfo(
@@ -5268,58 +5469,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     packet_bytes=len(packet),
                 )
                 return
-            now_ns = time.monotonic_ns()
             shared_route = self._shared_tun_plan_local_delivery(getattr(dev, "service_key", None), packet)
-            scope_key = self._shared_tun_inflow_scope_key(getattr(dev, "service_key", None), shared_route)
-            if scope_key is None:
-                scope_key = self._direct_tun_inflow_scope_key(getattr(dev, "service_key", None), dev.chan_id)
-            if not self._local_ingress_send_allowed(len(packet), now_ns=now_ns, scope_key=scope_key):
-                scope_state = self._advance_tun_inflow_window(scope_key, now_ns)
-                scope_state["throttle_drop_count"] = int(scope_state.get("throttle_drop_count", 0) or 0) + 1
-                snapshot = self._session_overlay_backpressure_snapshot(now_ns=now_ns)
-                stream_overlay_stalled = bool(snapshot.get("stalled"))
-                self._record_shared_tun_drop(
-                    getattr(dev, "service_key", None),
-                    reason="throttled_local_tun",
-                    direction="local_to_peer",
-                    chan_id=dev.chan_id,
-                    route_class=None if shared_route is None else str(shared_route.get("route_class") or ""),
-                    destination_ip=None if shared_route is None else shared_route.get("destination_ip"),
-                    packet_bytes=len(packet),
-                )
-                if stream_overlay_stalled and now_ns >= int(self._stream_overlay_idle_warn_until_ns):
-                    self._stream_overlay_idle_warn_until_ns = int(now_ns) + self.TUN_INFLOW_THROTTLE_WINDOW_NS
-                    self.log.warning(
-                        "[TUN] if=%s pausing local forwarding on %s overlay: no RX progress observed recently; buffered_frames=%s packet_bytes=%s",
-                        dev.ifname,
-                        str(self._overlay_transport or "").lower(),
-                        int(snapshot.get("waiting_count", 0) or 0),
-                        len(packet),
-                    )
-                self.log.debug(
-                    "[TUN] if=%s throttle local packet scope=%s queued=%s inflight=%s/%s transport_prev_window_bytes=%s scope_prev_window_bytes=%s scope_curr_window_bytes=%s packet_bytes=%s stream_overlay_stalled=%s",
-                    dev.ifname,
-                    self._tun_inflow_scope_id(scope_key),
-                    int(snapshot.get("waiting_count", 0) or 0),
-                    int(snapshot.get("inflight", 0) or 0),
-                    int(snapshot.get("max_inflight", 0) or 0),
-                    int(snapshot.get("prev_window_bytes", 0) or 0),
-                    int(scope_state.get("prev_bytes", 0) or 0),
-                    int(scope_state.get("curr_bytes", 0) or 0),
-                    len(packet),
-                    stream_overlay_stalled,
-                )
-                self._log_tun_icmp_local_decision(
-                    stage="local_reply_drop_throttled",
-                    dev=dev,
-                    packet=packet,
-                    chan=current_chan,
-                    note=(
-                        f"scope={self._tun_inflow_scope_id(scope_key)}; waiting={int(snapshot.get('waiting_count', 0) or 0)}; "
-                        f"inflight={int(snapshot.get('inflight', 0) or 0)}; stalled={int(stream_overlay_stalled)}"
-                    ),
-                )
-                return
             if shared_route is not None:
                 if not bool(shared_route.get("routed")):
                     self._log_tun_icmp_local_decision(
@@ -5387,7 +5537,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     )
                     target_mux, target_peer_id = self._shared_tun_route_for_peer_id(dev, selected_peer_id)
                     target_mux._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet, peer_id=target_peer_id)
-                self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
                 return
             chan = dev.chan_id
             if chan is None:
@@ -5436,7 +5585,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             ctr.msgs_in += 1
             ctr.bytes_in += len(packet)
             self._send_mux(chan, ChannelMux.Proto.TUN, ChannelMux.MType.DATA, packet)
-            self._record_local_tun_forward(len(packet), now_ns=now_ns, scope_key=scope_key)
         except Exception as exc:
             self._record_sync_diag("ChannelMux._on_local_tun_packet", phase="failed", error=type(exc).__name__)
             raise
@@ -5736,6 +5884,16 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 owner = self._shared_tun_reader_owner_for_device(dev)
                 if owner is not None:
                     owner._drop_shared_tun_peer_binding(getattr(dev, "service_key", None), int(peer_id), int(chan))
+                # Inbound peer TUN channels are indexed both by (peer, chan)
+                # for listener routing and by chan for the device snapshot.
+                # Drop the latter too once no other peer owns this channel id;
+                # otherwise a closed channel remains visible as a live alias.
+                still_bound_for_chan = any(
+                    int(peer_chan[1]) == int(chan)
+                    for peer_chan in self._tun_by_peer_chan
+                )
+                if self._tun_by_chan.get(int(chan)) is dev and not still_bound_for_chan:
+                    self._unbind_tun_channel(int(chan))
         else:
             dev = self._unbind_tun_channel(chan)
         self._finalize_channel_stats(chan, ChannelMux.Proto.TUN)
@@ -5796,6 +5954,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return False
         instance_id, connection_seq, services = decoded
         peer_key = int(peer_id or 0)
+        self._active_peer_service_catalogs.add(peer_key)
         prev_epoch = self._peer_mux_epochs.get(peer_key)
         if not self._peer_epoch_is_new(peer_id, instance_id, connection_seq):
             self.log.debug("[MUX/CTRL] duplicate/replay REMOTE_SERVICES_SET_V2 peer_id=%s instance_id=%s connection_seq=%s", peer_key, instance_id, connection_seq)
@@ -6397,7 +6556,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
     async def _start_tcp_server_for_unlocked(self, spec: ChannelMux.ServiceSpec, svc_key: "ChannelMux.ServiceKey"):
         async def _handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-            if not self._overlay_connected or not self._accepting_enabled:
+            if not self._service_listener_accepting_enabled(svc_key):
                 try:
                     writer.close()
                     await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()
@@ -6433,6 +6592,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             async def _pump():
                 try:
                     while True:
+                        await self._wait_for_local_tcp_ingress(chan)
                         data = await reader.read(self._tcp_overlay_read_size())
                         if not data:
                             break
@@ -6620,6 +6780,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 async def _rx():
                     try:
                         while True:
+                            await self._wait_for_local_tcp_ingress(chan)
                             buf = await reader.read(self._tcp_overlay_read_size())
                             if not buf:
                                 break

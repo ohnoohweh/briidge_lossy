@@ -76,7 +76,11 @@ Security:
 - publishes `connected` only after the initial secure-link handshake succeeds
 - remains `disconnected` while the initial handshake is incomplete or fails
 - remains `connected` during a rekey; a rekey is not a transport disconnect
+- bounds every initial handshake and pending rekey to the same 60-second lifecycle timeout on both client and listener roles; duplicate rekey control frames do not renew that deadline
 - publishes `disconnected` when secure-link enters `failed`
+- propagates a newer lower-transport epoch even when it is already
+  `disconnected`, so ChannelMux can continue candidate rotation after a
+  failed reauthentication
 - forwards a rotation request to the transport after clearing security state
   for the next transport epoch
 
@@ -94,8 +98,24 @@ ChannelMux and TUN:
 
 - `ChannelMux` admits or starts services only while the outer lifecycle state is
   `connected`
-- after receiving `disconnected` continuously for more than 30 seconds,
+- after the outer layer remains non-ready continuously for more than 15 seconds,
   `ChannelMux` requests one connection rotation through the wrapper stack
+- a lower-layer rotation request that is rejected before it starts a new
+  lifecycle epoch does not consume ChannelMux's one-per-epoch guard; while the
+  outer layer remains non-ready, ChannelMux clears that guard and retries after
+  the same grace window
+- `channelmux_transport_delay_threshold_ms` is the shared ChannelMux overload
+  parameter, defaulting to `5000` milliseconds. At or above it, TCP pauses local
+  reads, UDP sheds new local datagrams, and TUN continues draining but sheds
+  completed `DATA` / `DATA_FRAG` immediately before SecureLink; TUN `OPEN`
+  control remains eligible.
+- `channelmux_transport_delay_rotation_delay_ms` is the companion rotation
+  duration parameter, defaulting to `30000` milliseconds. If estimated
+  transport delay stays at or above the threshold for that duration
+  while the outer lifecycle is connected, ChannelMux requests one normal
+  connection rotation and waits for the next lifecycle epoch before another
+  request. A rejected request clears the wait immediately and is retried after
+  the configured delay rather than leaving the connection stuck.
 - a raw transport `connected` event does not reset the candidate-cycle budget;
   ChannelMux resets it only after the outer lifecycle reports `connected`
 - `TUN` ingress must not be admitted into `ChannelMux` unless ChannelMux has
@@ -105,13 +125,18 @@ ChannelMux and TUN:
   resynchronization and service reopening path
 - a transport-epoch reset invalidates all prior TUN channel bindings and
   advances the local ChannelMux connection sequence before local forwarding
-  resumes; the next local packet opens a fresh channel before sending data.
-  This applies to the shared Swift ChannelMux runtime used by myUDP, TCP,
-  WebSocket, and QUIC as well as the Python runtime.
+  resumes. Python proactively opens every configured local TUN listener and
+  Swift proactively opens its configured client TUN endpoint after the
+  authenticated overlay becomes ready; both send a fresh `OPEN` before any
+  TUN `DATA` on a new channel.
 - listener-side shared-TUN state uses `(peer_id, chan_id)` as its channel
   identity for bindings, OPEN lifecycle, fragments, counters, and outbound
   routing. Each peer has an independent channel-number sequence, so `chan=1`
   from two clients is two distinct TUN paths.
+- the TUN/routing operator surface collapses all in-process holders of one
+  shared device into one physical-interface row. Its overall traffic is
+  derived from the configured peer bindings; per-holder channel aliases stay
+  in the configured-peer detail rather than becoming duplicate interfaces.
 - when a process shares one server-owned TUN device between listener and
   peer-specific ChannelMux instances, the listener-owned reader retains the
   mirrored peer/channel binding and emits replies through its peer-aware
@@ -148,12 +173,18 @@ recovery paths:
   decompression error as disconnected, and blocks traffic until a newer epoch
 - SecureLink reports authentication failure as disconnected and forwards a
   rotation request only when its caller asks; ChannelMux requests one cascaded
-  rotation after 30 seconds of continuous disconnection
+  rotation after 15 seconds of continuous outer-layer non-readiness
 - ChannelMux tracks continuous outer-layer disconnection, requests one
-  cascaded rotation after 30 seconds, and waits for a newer lifecycle epoch
+  cascaded rotation after 15 seconds, and waits for a newer lifecycle epoch
   before it can request another rotation. An accepted myUDP rotation publishes
   that newer disconnected epoch, so the policy continues through candidates
   rather than remaining stalled after its first request.
+- ChannelMux separately watches estimated transport delay while connected. Its
+  configurable `channelmux_transport_delay_threshold_ms` defaults to 5000 ms,
+  and `channelmux_transport_delay_rotation_delay_ms` defaults to 30000 ms;
+  sustained delay at or above that threshold for that duration requests the same
+  one-per-epoch candidate rotation. Python and Swift share the 5000 ms default
+  and 30-second grace.
 - Security reports failed authentication without scheduling a transport
   reconnect; Runner watchdog supervision is independent of Security recovery
   status
@@ -227,6 +258,7 @@ Important behaviors:
 - multi-peer listener behavior for transports that support multiple concurrent peer clients
 - transport-specific client bootstrap, such as proxy tunnel establishment and direct-path HTTP root preflight, before higher protocol handshakes
 - endpoint-local auxiliary behavior, such as WebSocket pre-upgrade HTTP/static handling, must stay scoped to the originating socket/request and must not mutate unrelated peer sessions
+- an accepted Python WebSocket listener peer has its own RTT liveness guard: failure to become live within 60 seconds, or loss after it was live, closes only that peer socket and withdraws its lower-transport readiness; native Swift WebSocket code is peer-client-only and has no listener-peer ownership surface
 - every overlay transport must publish one transport-agnostic backpressure view upward: queue depth, inflight state where available, recent egress throughput, and delay/progress estimates
 
 The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).

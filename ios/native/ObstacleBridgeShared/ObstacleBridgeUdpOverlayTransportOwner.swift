@@ -12,7 +12,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
+        ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
+    )
 
     private let bindHost: String
     private let bindPort: Int
@@ -319,6 +321,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
                 backpressure: ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
                     waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),
@@ -398,6 +401,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["rtt_est_ms"] = overlayRuntime.rttEstMS
             snapshot["transmit_delay_est_ms"] = overlayRuntime.transmitDelayEstMS
             snapshot["protocol_stats"] = protocolStats
+            snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
+            snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()
             return snapshot
         }
     }
@@ -471,6 +476,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 overlayConnected: inflowAllowed(),
                 bufferedFrames: Int(protocolStats["buffered_frames"] as? Int ?? 0),
                 backpressure: backpressure,
+                transportDelayThresholdMS: overlayLayerTransportAdapter?.transportDelayRotationThresholdMS ?? ObstacleBridgeOverlayChannelCore.tunPostMuxTransportDelayThresholdMS,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames,
@@ -795,6 +801,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             ])
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
         }
         lastOverlayConnectedState = overlayConnected
     }
@@ -814,6 +821,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             }
             maybePrimeSecureLinkHandshake(nowNS: nowNS)
             maybeSendStartupMuxFrames()
+            maybeOpenConfiguredTunIfReady()
         }
         guard !connected, started, currentPeerAddress != nil else {
             return
@@ -851,9 +859,32 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         if peerCandidates.count > 1 {
             rotateToNextPeerCandidate(nowNS: nowNS, reason: reason)
         } else {
+            guard rebuildSocketForPeerRotation() else {
+                return false
+            }
             resetOverlayTransportEpoch(reason: reason)
+            sendInitialIdleProbe()
         }
         return true
+    }
+
+    private func appReadinessRecoveryInSeconds(nowNS: UInt64? = nil) -> Double? {
+        guard overlayConnected,
+              secureLinkHandshakePrimed,
+              lastSecureLinkPrimeNS != 0,
+              let adapter = overlayLayerTransportAdapter,
+              let status = adapter.secureLinkStatusSnapshot(),
+              status.clientMode,
+              !status.peerConfirmedAuthenticated
+        else {
+            return nil
+        }
+        let currentNS = nowNS ?? monotonicNowNS()
+        guard currentNS >= lastSecureLinkPrimeNS else { return 0.0 }
+        let elapsedNS = currentNS - lastSecureLinkPrimeNS
+        return Double(Self.lowerLayerUnavailableFallbackNS > elapsedNS
+            ? Self.lowerLayerUnavailableFallbackNS - elapsedNS
+            : 0) / 1_000_000_000.0
     }
 
     private func resetOverlayTransportEpoch(reason: String) {
@@ -869,8 +900,13 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleLifecycleRotationIfDue(nowNS: UInt64) {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: peerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: overlayRuntime.transmitDelayEstMS,
+            candidateCount: peerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: peerCandidates.count)
         else {
             return
         }
@@ -887,6 +923,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             rotateToNextPeerCandidate(nowNS: nowNS, reason: result.reason)
         } else {
             guard rebuildSocketForPeerRotation() else {
+                adapter.rotationAttemptRejected(result)
                 return
             }
             resetOverlayTransportEpoch(reason: result.reason)
@@ -953,6 +990,25 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("udp_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("udp_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func startupMuxFramesForNewTunOpen() -> [Data] {

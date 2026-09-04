@@ -1069,12 +1069,12 @@ What the admin web shows:
 
 - A summary row with the currently open UDP, TCP, and TUN channel counts.
 - Traffic cards for app-side RX/TX and peer-side RX/TX rates.
-- A peer-session table that separates Transport endpoint/state, Protocol status and timing, SecureLink reported status and phase, Compression reported status, ChannelMux traffic/channel counts plus candidate/restart timers, and TUN throttle diagnostics. Transport, Protocol, and ChannelMux remain visible for every non-listening peer, while enabled SecureLink and Compression layers remain visible throughout failed or reconnecting states. Connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
+- A peer-session table that separates Transport endpoint/state, Protocol status and timing, SecureLink reported status and phase, Compression reported status, ChannelMux traffic/channel counts plus candidate/restart timers, and TUN throttle diagnostics. Peer throttle reporting contains current delay/backpressure state only, not retired byte-budget, scope, or previous-window fields. Transport, Protocol, and ChannelMux remain visible for every non-listening peer, while enabled SecureLink and Compression layers remain visible throughout failed or reconnecting states. Connecting Python `myudp` clients keep showing their configured target endpoint there even before a live peer socket is learned.
 - Python `myudp` peer diagnostics include the myUDP2 stream-record, chunk, batch, and queue budgets plus live batch/chunk/stream-byte totals, queue age, retransmitted-chunk, malformed-batch, and malformed-stream counters. These fields describe the Python reference runtime; Swift myUDP2 parity remains a release prerequisite.
 - Transport State, Protocol Status, and layer Reported Status pills use green for connected and red for disconnected, keeping transitions distinct from definitive connection state.
 - Accepted listener peers retain their peer-local transport metrics while their SecureLink and compression pills use that peer’s authenticated wrapper state.
 - UDP, TCP, and TUN connection tables that show open/listening summaries, configured service names, current mappings or interfaces, local listening state, requested remote TCP/UDP listeners, remote endpoints, and per-channel byte/message counters.
-- The dedicated TUN / Routing view also renders each configured shared-TUN ownership peer separately with bound/not-bound state, protocol-qualified connection ID, learned addresses, and binding-specific RX/TX counters. A process-wide shared binding identity keeps same-number peers from independent WS and myUDP listener muxes distinct, while the TUN page resolves it back to the true binding transport and connection id; disconnect cleanup removes closed bindings from every shared-device holder, and counters remain consistent when an in-process virtual-peer mux receives traffic while the shared-device reader-owner observes the device, alongside interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
+- The dedicated TUN / Routing view renders one row for each physical shared TUN interface with binding-derived overall RX/TX, followed by one row per configured ownership peer with bound/not-bound state, protocol-qualified connection ID, learned addresses, and binding-specific RX/TX counters. A process-wide shared binding identity keeps same-number peers from independent WS and myUDP listener muxes distinct, while the TUN page resolves it back to the true binding transport and connection id; disconnect and peer-scoped TUN-close cleanup remove closed bindings and channel aliases from every shared-device holder, and counters remain consistent when an in-process virtual-peer mux receives traffic while the shared-device reader-owner observes the device, alongside interface-facing ChannelMux flow counters, shared-drop totals, per-reason drop summaries, recent drop context, helper lifecycle phase, and runtime warnings such as a TUN device that exists but is missing its expected configured tunnel address, so TUN-path failures can be distinguished from healthy overlay transport state.
 - A peer-scoped rekey action inside each peer security block for operator-triggered secure-link rotation on authenticated client-side sessions.
 - A configuration tab that exposes the live runtime options such as overlay transports, listener ports, `--remote-servers`, admin web settings, and log levels.
 - Structured service editors for `own_servers` and `remote_servers`, so the JSON preview opens a focused per-service popup with protocol-aware fields, add/remove controls, and left/right navigation. Removing a service commits immediately and, when another entry remains, keeps the popup open on the next valid service so multi-entry cleanup stays fast.
@@ -1098,7 +1098,13 @@ What the admin web shows:
 | `--overlay-reconnect-retry-delay-ms` | `30000` | Delay in milliseconds between failed reconnect attempts for `tcp`/`quic`/`ws` client overlays. |
 | `--client-restart-if-disconnected` | `0.0` | If configured as a peer client (for example --udp-peer set) and overlay stays disconnected for this many seconds, request process restart. 0 disables. |
 
-When the outer lifecycle remains disconnected, ChannelMux rotates the lower stack every 30 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart.
+When the outer lifecycle remains non-ready, ChannelMux rotates the lower stack after 15 seconds. Each unsuccessful rotation begins a new disconnected epoch, so configured peer candidates continue to be attempted until the outer stack reconnects or three full candidate cycles request one supervised process restart. If a lower layer rejects a rotation before creating an epoch, ChannelMux releases its pending-epoch guard and retries after the same grace period instead of leaving the path stuck.
+
+A typed transport `Disconnected` lifecycle event is authoritative: SecureLink immediately withdraws authenticated readiness and Compression follows, even if a stale raw transport object briefly still appears connected. A new transport epoch is still propagated while SecureLink remains failed or disconnected, allowing ChannelMux to continue its bounded candidate rotations through restart-required exhaustion. The peer page keeps each peer identity cell bounded to that peer's own detail rows, including listener-derived IDs such as `ws:0:-1`. If that callback is missed, the authenticated secure-link watchdog fails closed after one handshake-timeout window of lower-layer non-readiness; the Swift shared adapter applies the same rule on its next observed transport-state snapshot.
+
+ChannelMux also protects SecureLink handshake and rekey traffic under load: `channelmux_transport_delay_threshold_ms` defaults to 5000 ms. At or above it, TCP pauses local reads and UDP drops new local packets. TUN continues draining locally, but its completed mux DATA/DATA_FRAG is dropped immediately before SecureLink; TUN OPEN control remains eligible. `channelmux_transport_delay_rotation_delay_ms` defaults to 30000 ms; if estimated delay remains high for that duration, ChannelMux requests the normal connection rotation. Admission resumes when RTT recovers.
+
+WebAdmin presents that state as one active/inactive throttle indicator in each peer's ChannelMux box. The TUN / Routing page presents the same indicator only beside aggregate physical-interface statistics; shared-peer binding rows remain focused on binding state, connection identity, and RX/TX traffic rather than quota detail.
 
 ### Own public IP
 
@@ -1293,7 +1299,7 @@ API fallback for details not fully surfaced in WebAdmin yet:
   - `failure_reason=bad_psk`
   - repeated client-side retries show increasing `consecutive_failures`, a bounded `retry_backoff_sec`, a populated `next_retry_unix_ts`, a populated `failure_session_id`, increasing `handshake_attempts_total`, and `last_event=retry_scheduled`
 - if a client has only locally verified `server_hello` but has not yet received peer-confirmed protected traffic, SecureLink remains `handshaking` and reports `Disconnected` to ChannelMux rather than surfacing as authenticated or connected; if that unconfirmed state lasts 60 seconds, the runtime fails it closed as a lifecycle error instead of leaving a one-sided authenticated/handshaking split in place
-- if an already-authenticated secure-link session later fails closed, SecureLink reports `Disconnected` and ChannelMux requests one lower-layer rotation after 30 seconds; raw transport liveness does not reset the three-cycle restart budget until the outer stack reports `Connected`. An operator-triggered cert local-identity reload requests that same cascaded rotation immediately so the replacement identity can authenticate without waiting for the failure timer
+- if an already-authenticated secure-link session later fails closed, SecureLink reports `Disconnected` and ChannelMux requests one lower-layer rotation after 15 seconds; raw transport liveness does not reset the three-cycle restart budget until the outer stack reports `Connected`. An operator-triggered cert local-identity reload requests that same cascaded rotation immediately so the replacement identity can authenticate without waiting for the failure timer
 
 Current WebAdmin gap to close in a future update:
 
@@ -1475,7 +1481,7 @@ Optional operations follow-up:
 ## Notes
 - Listener mode intentionally ignores `--own-servers`, because a multi-peer listener cannot unambiguously bind one local listener to one remote peer.
 - Multi-transport mode is currently intended for listening instances without configured transport peers (for example no `--udp-peer`, `--tcp-peer`, `--quic-peer`, or `--ws-peer`).
-- WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic.
+- WebSocket listener mode supports multiple simultaneous peers with per-peer mux-channel rewriting so that peer-local channel IDs do not collide inside the shared mux logic. Each accepted peer must establish RTT liveness within 60 seconds and is closed independently if it later loses RTT liveness, so a stale socket cannot keep the listener transport falsely ready.
 - Python listener-side remote TCP services use per-service single-flight startup, so catalog installation and listener self-healing cannot race into duplicate port binds.
 
 ## For Contributors
@@ -1492,7 +1498,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
@@ -1503,9 +1509,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `60` | `935` |
-| macOS Swift app | `1` | `56` |
-| iOS app/extension | `27` | `177` |
+| Python CLI/runtime, including macOS Python | `60` | `952` |
+| macOS Swift app | `1` | `57` |
+| iOS app/extension | `27` | `178` |
 
 #### Requirement traceability
 
@@ -1513,7 +1519,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `7/92 = 7.6%` | `10/92 = 10.9%` |
-| iOS app/extension | `10/92 = 10.9%` | `17/92 = 18.5%` | `22/92 = 23.9%` |
+| iOS app/extension | `10/92 = 10.9%` | `19/92 = 20.7%` | `24/92 = 26.1%` |
 
 #### Architecture traceability
 
@@ -1529,7 +1535,7 @@ The supporting manifests remain shared:
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
 This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, plus the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
-It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. Python and iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached, and pauses connectivity-test DNS/ICMP work while local TUN throttling is active.
+It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. Python and iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached. Once ready, TUN reads remain unthrottled; only completed ChannelMux TUN data is dropped immediately before SecureLink when estimated transport delay reaches two seconds.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
@@ -1543,9 +1549,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `56` | `0` | `56` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `31` | `31` |
-| Total parity-oriented evidence | Sum of the lanes above | `60` | `151` | `211` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `57` | `0` | `57` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
+| Total parity-oriented evidence | Sum of the lanes above | `61` | `152` | `213` |
 
 Important caveat:
 
@@ -1557,7 +1563,7 @@ Important caveat:
 
 - Linux runs the OS-independent shared integration suite with `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"`
 - Linux runs the elevated TUN subset separately with `pytest -q tests/integration/test_linux_elevated.py -m "linux_elevated"`
-- macOS runs the Python elevated TUN subset separately with `./scripts/run_macos_elevated_tests.sh` and the Swift elevated TUN subset with `./scripts/run_macos_swift_elevated_tests.sh`, including GitHub `macos-latest` elevated gates when passwordless `sudo` is available; those subsets cover helper-owned Darwin route/DNS hook effects, packet carry, helper-death status, the manual-cleanup warning when cached helper-owned network state may remain after process loss, Swift host-runner real-`utun` packet carry from the built macOS app bundle, packaged XPC helper packet carry when `SMAppService` approval is present, installed signed app Admin helper activation through `/Applications`, live unregister/re-register stale-helper repair guidance, and packaged-helper death reporting plus interface/route cleanup. Hosted macOS may skip Python inline row assertions when privileged setup leaves the TUN list empty, or Swift packaged-XPC assertions when the runner reports the helper service is not enabled or resets the Admin status connection during registration preflight, after confirming the relevant Admin diagnostics endpoint remains responsive.
+- macOS runs the Python elevated TUN subset separately with `./scripts/run_macos_elevated_tests.sh` and the Swift elevated TUN subset with `./scripts/run_macos_swift_elevated_tests.sh`, including GitHub `macos-latest` elevated gates when passwordless `sudo` is available; those subsets cover helper-owned Darwin route/DNS hook effects, packet carry, helper-death status, the manual-cleanup warning when cached helper-owned network state may remain after process loss, Swift host-runner real-`utun` packet carry from the built macOS app bundle, packaged XPC helper packet carry when `SMAppService` approval is present, installed signed app Admin helper activation through `/Applications`, live unregister/re-register stale-helper repair guidance, and packaged-helper death reporting plus interface/route cleanup. The Swift packet-carry case waits for the configured peer route to resolve through the created `utun` before injecting traffic, so authorized local macOS runs observe both route setup and overlay delivery. Hosted macOS skips that host-runner packet-injection lane because it cannot grant the required TUN permission, and skips the Python inline route/DNS mutation case before any hook runs because changing hosted-runner network state can sever the Actions control connection; both remain required on authorized local macOS. The Python elevated matrix runs every privileged case in a separate job, while the wrapper emits unbuffered start/result lines and final host diagnostics; the affected job name remains visible even if a hosted runner loses its log connection.
 - Windows runs the Windows-specific non-elevated integration subset with `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"`
 - Windows runs the elevated TUN subset separately with `pytest -q tests/integration/test_windows_elevated.py -m "windows_elevated"`, including inline WinTun channel-open coverage plus `windows-native` helper-mode route/address/DNS apply, packet carry, helper-death warning, and Admin-triggered stale-state repair coverage when Administrator rights and a usable `wintun.dll` are available
 - The iOS E2E testing set is tracked separately from the bridge.py shared gate:
@@ -1569,6 +1575,8 @@ Important caveat:
 - Certificate revocation reload coverage now treats `/api/status` reload scope/result and dropped-peer counters as the stable post-disconnect signal, because the peer-scoped failed row can be transient after the revoked secure-link session is torn down.
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
 - macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.
+- SecureLink keeps a 60-second deadline for initial authentication and for a pending rekey on either peer role; a one-way path that still carries transport RTT control traffic therefore fails and enters the normal ChannelMux rotation path instead of remaining indefinitely rekeying.
+- myUDP listener peers that continue control traffic without producing an application payload are removed after a bounded pre-auth grace period; Swift myUDP clients publish the remaining app-readiness recovery time and rebuild the sole peer socket before retrying SecureLink.
 - Admin status polling keeps a minimal live-session fallback when stats snapshotting fails before a cached status exists.
 
 ### Development environment and procedure
@@ -1604,7 +1612,7 @@ Debugging in a project like this can be difficult because the behavior emerges f
 - Keep reconnect waits aligned with expected process self-restarts, so a freshly relaunched peer gets a bounded chance to reconnect before the integration harness reports failure.
 - Keep secure-link multi-peer listener probes gated on authenticated peer state before expecting client-published services to accept traffic.
 - Keep WebSocket reconnect coverage in that same regression flow, including secure-link cases that must emit a fresh connected edge after transport-epoch restart instead of inheriting stale connected state from the previous socket.
-- Keep Swift TUN recovery covered for myUDP, TCP, WebSocket, and QUIC: a transport-epoch reset must discard stale mux channel state, advance the ChannelMux connection sequence, regenerate ChannelMux startup control frames after app readiness, replay the catalog immediately before the first fresh TUN `OPEN`, and send that `OPEN` before `DATA`.
+- Keep TUN recovery covered across runtimes: Python announces each configured local TUN listener with `OPEN` after authenticated overlay readiness; Swift does the same for myUDP, TCP, WebSocket, and QUIC after discarding stale mux state, advancing the ChannelMux connection sequence, regenerating startup control frames, and replaying the catalog immediately before the fresh TUN `OPEN`.
 - Keep Linux TUN-hook regression coverage aligned with real route behavior, including exact excluded-route snapshotting so local subnets remain bound to their original interfaces during full-tunnel setup.
 - The full testing catalog, commands, and scenario-by-scenario criteria are documented in [docs/README_TESTING.md](docs/README_TESTING.md).
 

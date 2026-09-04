@@ -1036,7 +1036,18 @@ class SecureLinkPskSession(ISession):
             self._connected_evt.set()
         else:
             self._connected_evt.clear()
-        if connected == self._last_connected:
+        # A lower transport can begin a fresh disconnected epoch while
+        # SecureLink is already failed/disconnected.  That epoch is still a
+        # material lifecycle edge: ChannelMux uses it to release its prior
+        # rotation wait and schedule the next candidate.  Suppressing it just
+        # because the boolean state is unchanged permanently latches recovery
+        # after the first SecureLink failure.
+        lifecycle_epoch_changed = (
+            int(self._connection_lifecycle.event.epoch)
+            != int(self._connection_lifecycle_epoch)
+        )
+        state_changed = connected != self._last_connected
+        if not state_changed and not lifecycle_epoch_changed:
             return
         self._last_connected = connected
         self._connection_lifecycle.transition(
@@ -1044,7 +1055,7 @@ class SecureLinkPskSession(ISession):
             self._connection_lifecycle_epoch,
             "security_authenticated" if connected else "security_disconnected",
         )
-        if callable(self._outer_on_state):
+        if state_changed and callable(self._outer_on_state):
             try:
                 self._outer_on_state(connected)
             except Exception:
@@ -1214,11 +1225,11 @@ class SecureLinkPskSession(ISession):
         session_id: int,
         phase: str,
     ) -> None:
-        timeout_detail = (
-            "secure-link peer confirmation timed out"
-            if phase == "handshake"
-            else "secure-link re-authentication timed out"
-        )
+        timeout_detail = {
+            "handshake": "secure-link peer confirmation timed out",
+            "rekey": "secure-link re-authentication timed out",
+            "transport": "authenticated secure-link transport readiness timed out",
+        }.get(phase, "secure-link lifecycle timed out")
         self._mark_auth_fail(
             peer_id,
             session_id,
@@ -1301,6 +1312,22 @@ class SecureLinkPskSession(ISession):
         """Use two watchdog windows as the diagnostic budget for a rekey exchange."""
         return max(0.0, float(self._HANDSHAKE_TIMEOUT_S) * 2000.0)
 
+    def _inner_transport_ready(self) -> bool:
+        """Return the immediate lower layer's authoritative readiness."""
+        getter = getattr(self._inner, "get_connection_layers_snapshot", None)
+        if callable(getter):
+            with contextlib.suppress(Exception):
+                layers = list(getter() or [])
+                if layers:
+                    lower = dict(layers[-1] or {})
+                    if "app_ready" in lower:
+                        return bool(lower.get("app_ready"))
+                    if "connected" in lower:
+                        return bool(lower.get("connected"))
+        # A raw socket may be stale, but it is the only fallback for older
+        # transports that do not yet publish a layer snapshot.
+        return bool(getattr(self._inner, "is_connected", lambda: False)())
+
     def _expire_stale_handshakes(self) -> None:
         timeout_s = max(0.0, float(self._HANDSHAKE_TIMEOUT_S))
         if timeout_s <= 0.0:
@@ -1308,6 +1335,21 @@ class SecureLinkPskSession(ISession):
         now = time.time()
         for key, state in list(self._peer_states.items()):
             if int(state.auth_fail_code or 0) > 0:
+                continue
+            # Typed lifecycle normally clears this state immediately. This is
+            # the fail-closed fallback when that callback was missed.
+            authenticated_at = float(state.last_authenticated_unix_ts or 0.0)
+            if (
+                state.peer_confirmed_authenticated
+                and authenticated_at > 0.0
+                and not self._inner_transport_ready()
+                and (now - authenticated_at) >= timeout_s
+            ):
+                self._mark_handshake_timeout(
+                    None if self._client_mode else int(key),
+                    session_id=int(state.session_id or 0),
+                    phase="transport",
+                )
                 continue
             if (
                 not state.peer_confirmed_authenticated
@@ -2548,8 +2590,13 @@ class SecureLinkPskSession(ISession):
     def _on_inner_connection_lifecycle(self, event) -> None:
         self._connection_lifecycle_epoch = int(event.epoch)
         if not bool(event.connected):
-            self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, event.reason)
-            self._on_inner_state_change(False)
+            # A typed lower-layer lifecycle event is authoritative.  Do not
+            # re-check ``inner.is_connected()`` here: myUDP can still expose
+            # a stale raw socket/protocol object while its RTT lifecycle has
+            # already transitioned to disconnected. Keeping authenticated
+            # SecureLink state in that window made the outer layers lie.
+            self._preserve_connected_during_epoch_restart = False
+            self._clear_all_states()
             return
         self._connection_lifecycle.transition(ConnectionState.DISCONNECTED, event.epoch, "security_handshaking")
 
@@ -2949,6 +2996,12 @@ class SecureLinkPskSession(ISession):
         if int(state.pending_session_id or 0) > 0 and int(state.pending_session_id or 0) != int(session_id):
             self._send_auth_fail(peer_id, session_id, self._SL_AUTH_FAIL_LIFECYCLE)
             return
+        # The listener is a rekey participant too. Start its watchdog when
+        # the first hello is accepted, and never refresh it for retransmitted
+        # copies of that hello. Otherwise a one-way myUDP path can leave this
+        # peer authenticated with an eternal pending rekey.
+        if int(state.pending_session_id or 0) == 0:
+            state.pending_started_unix_ts = time.time()
         if self._is_cert_mode():
             parsed = self._parse_json_payload(body)
             if not isinstance(parsed, dict) or str(parsed.get("cap") or "") != "cert-v1":

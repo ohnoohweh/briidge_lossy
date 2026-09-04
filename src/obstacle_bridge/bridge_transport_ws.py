@@ -200,6 +200,10 @@ class WebSocketSession(ISession):
       - Early-buffer for APP frames sent before WS is up
       - Loud/structured DEBUG logging mirroring TcpStreamSession style
     """
+    # An accepted server peer must demonstrate RTT liveness promptly.  Without
+    # this per-peer guard a TCP/WebSocket socket can remain open indefinitely
+    # while its remote application has stopped processing overlay frames.
+    WS_SERVER_INITIAL_LIVENESS_TIMEOUT_S = 60.0
     _K_APP  = 0x00
     _K_PING = 0x01
     _K_PONG = 0x02
@@ -1826,6 +1830,8 @@ class WebSocketSession(ISession):
                 "rx_task": None,
                 "rtt": rtt,
                 "rtt_rt": rtt_rt,
+                "rtt_seen_connected": False,
+                "liveness_task": None,
             }
             self._server_peers[peer_id] = ctx
             self._server_peer_by_ws_id[id(ws)] = peer_id
@@ -1852,7 +1858,10 @@ class WebSocketSession(ISession):
             self._ensure_server_tx_task(ctx)
             rtt_rt.attach(
                 send_ping_fn=lambda payload, _peer_id=peer_id: self._send_ping_frame_for_peer(_peer_id, payload),
-                on_state_change=lambda _connected, _peer_id=peer_id: self._update_server_overlay_connected(),
+                on_state_change=lambda connected, _peer_id=peer_id: self._on_server_peer_rtt_state(_peer_id, connected),
+            )
+            ctx["liveness_task"] = self._loop.create_task(
+                self._server_peer_initial_liveness_watchdog(peer_id)
             )
             ctx["rx_task"] = self._loop.create_task(self._rx_pump(ws=ws, peer_id=peer_id))  # type: ignore
             self._ws = ws
@@ -1921,6 +1930,9 @@ class WebSocketSession(ISession):
         if rtt_rt is not None:
             with contextlib.suppress(Exception):
                 rtt_rt.detach()
+        liveness_task = ctx.get("liveness_task")
+        if liveness_task and liveness_task is not asyncio.current_task():
+            liveness_task.cancel()
         if callable(self._on_peer_disconnect_cb):
             try:
                 self._on_peer_disconnect_cb(peer_id)
@@ -1941,6 +1953,46 @@ class WebSocketSession(ISession):
             except Exception:
                 pass
         self._update_server_overlay_connected()
+
+    async def _server_peer_initial_liveness_watchdog(self, peer_id: int) -> None:
+        """Discard an accepted WS peer which never becomes RTT-live."""
+        await asyncio.sleep(float(self.WS_SERVER_INITIAL_LIVENESS_TIMEOUT_S))
+        ctx = self._server_peers.get(int(peer_id))
+        if ctx is None or bool(ctx.get("rtt_seen_connected")):
+            return
+        self._log.warning(
+            "[WS-SESSION] (%s) server peer_id=%s did not establish RTT liveness in %.1fs; closing stale peer %s",
+            self._probe_id,
+            peer_id,
+            self.WS_SERVER_INITIAL_LIVENESS_TIMEOUT_S,
+            self._server_peer_transport_diag(ctx),
+        )
+        await self._close_server_peer(int(peer_id))
+
+    def _on_server_peer_rtt_state(self, peer_id: int, connected: bool) -> None:
+        """Close a server peer that was live but stopped answering RTT probes."""
+        ctx = self._server_peers.get(int(peer_id))
+        if ctx is None:
+            return
+        if connected:
+            ctx["rtt_seen_connected"] = True
+            self._update_server_overlay_connected()
+            return
+        if not bool(ctx.get("rtt_seen_connected")):
+            # The initial false state is expected while the first PING/PONG
+            # establishes the transport. The SecureLink handshake watchdog
+            # remains responsible for a peer that never authenticates.
+            return
+        self._log.warning(
+            "[WS-SESSION] (%s) server peer_id=%s lost RTT liveness; closing stale peer %s",
+            self._probe_id,
+            peer_id,
+            self._server_peer_transport_diag(ctx),
+        )
+        try:
+            self._loop.create_task(self._close_server_peer(int(peer_id)))  # type: ignore[union-attr]
+        except Exception:
+            pass
 
     async def _connect_to(self, host: str, port: int) -> None:
         if not self._run_flag:
@@ -2553,7 +2605,7 @@ class WebSocketSession(ISession):
                 self._bump_rx(b)
                 if ctx is not None:
                     try:
-                        ctx["last_rx_ns"] = time.monotonic_ns()
+                        ctx["last_incoming_wall_ns"] = time.monotonic_ns()
                     except Exception:
                         pass
                 if self._on_peer_rx:

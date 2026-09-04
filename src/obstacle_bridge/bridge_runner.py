@@ -2316,69 +2316,33 @@ class Runner:
         def _merge_throttle_summary(current: Optional[dict], candidate: Any) -> Optional[dict]:
             if not isinstance(candidate, dict) or candidate.get("applicable") is False:
                 return current
-            if current is None:
+            # The peer API deliberately reports only the current delay-based
+            # admission state.  Byte budgets and window counters belonged to
+            # the retired local-ingress quota strategy and are not meaningful
+            # for an individual peer.
+            def _summary(source: dict) -> dict:
                 return {
                     "applicable": True,
-                    "active": bool(candidate.get("active")),
-                    "stalled": bool(candidate.get("stalled")),
-                    "backpressure_active": bool(candidate.get("backpressure_active")),
-                    "disabled": bool(candidate.get("disabled")),
-                    "budget_bytes": int(candidate.get("budget_bytes", 0) or 0),
-                    "used_bytes": int(candidate.get("used_bytes", 0) or 0),
-                    "remaining_bytes": int(candidate.get("remaining_bytes", 0) or 0),
-                    "aggregate": dict(candidate.get("aggregate") or {}),
-                    "scope": dict(candidate.get("scope") or {}) if isinstance(candidate.get("scope"), dict) else None,
+                    "active": bool(source.get("active")),
+                    "stalled": bool(source.get("stalled")),
+                    "backpressure_active": bool(source.get("backpressure_active")),
+                    "disabled": bool(source.get("disabled")),
+                    "waiting_count": int(source.get("waiting_count", 0) or 0),
+                    "inflight": int(source.get("inflight", 0) or 0),
+                    "max_inflight": int(source.get("max_inflight", 0) or 0),
+                    "transmit_delay_est_ms": float(source.get("transmit_delay_est_ms", 0.0) or 0.0),
+                    "rtt_est_ms": float(source.get("rtt_est_ms", 0.0) or 0.0),
                 }
+            if current is None:
+                return _summary(candidate)
             current["active"] = bool(current.get("active")) or bool(candidate.get("active"))
             current["stalled"] = bool(current.get("stalled")) or bool(candidate.get("stalled"))
             current["backpressure_active"] = bool(current.get("backpressure_active")) or bool(candidate.get("backpressure_active"))
             current["disabled"] = bool(current.get("disabled")) and bool(candidate.get("disabled"))
-            current["budget_bytes"] = max(
-                int(current.get("budget_bytes", 0) or 0),
-                int(candidate.get("budget_bytes", 0) or 0),
-            )
-            current["used_bytes"] = max(
-                int(current.get("used_bytes", 0) or 0),
-                int(candidate.get("used_bytes", 0) or 0),
-            )
-            current["remaining_bytes"] = min(
-                int(current.get("remaining_bytes", 0) or 0),
-                int(candidate.get("remaining_bytes", 0) or 0),
-            )
-            current_aggregate = current.get("aggregate") if isinstance(current.get("aggregate"), dict) else {}
-            candidate_aggregate = candidate.get("aggregate") if isinstance(candidate.get("aggregate"), dict) else {}
-            if not current_aggregate:
-                current["aggregate"] = dict(candidate_aggregate)
-            elif candidate_aggregate:
-                current["aggregate"] = {
-                    "scope_id": str(current_aggregate.get("scope_id") or candidate_aggregate.get("scope_id") or ""),
-                    "budget_bytes": max(
-                        int(current_aggregate.get("budget_bytes", 0) or 0),
-                        int(candidate_aggregate.get("budget_bytes", 0) or 0),
-                    ),
-                    "used_bytes": max(
-                        int(current_aggregate.get("used_bytes", 0) or 0),
-                        int(candidate_aggregate.get("used_bytes", 0) or 0),
-                    ),
-                    "remaining_bytes": min(
-                        int(current_aggregate.get("remaining_bytes", 0) or 0),
-                        int(candidate_aggregate.get("remaining_bytes", 0) or 0),
-                    ),
-                    "prev_window_bytes": max(
-                        int(current_aggregate.get("prev_window_bytes", 0) or 0),
-                        int(candidate_aggregate.get("prev_window_bytes", 0) or 0),
-                    ),
-                    "throttle_drop_count": max(
-                        int(current_aggregate.get("throttle_drop_count", 0) or 0),
-                        int(candidate_aggregate.get("throttle_drop_count", 0) or 0),
-                    ),
-                }
-            current_scope = current.get("scope") if isinstance(current.get("scope"), dict) else None
-            candidate_scope = candidate.get("scope") if isinstance(candidate.get("scope"), dict) else None
-            if current_scope is None:
-                current["scope"] = dict(candidate_scope) if candidate_scope else None
-            elif candidate_scope is not None and int(candidate_scope.get("remaining_bytes", 0) or 0) < int(current_scope.get("remaining_bytes", 0) or 0):
-                current["scope"] = dict(candidate_scope)
+            for field in ("waiting_count", "inflight", "max_inflight"):
+                current[field] = max(int(current.get(field, 0) or 0), int(candidate.get(field, 0) or 0))
+            for field in ("transmit_delay_est_ms", "rtt_est_ms"):
+                current[field] = max(float(current.get(field, 0.0) or 0.0), float(candidate.get(field, 0.0) or 0.0))
             return current
 
         for idx, session in enumerate(self._sessions):

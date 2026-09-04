@@ -1013,21 +1013,42 @@ class AdminWebUI:
             for reason, count in dict(drop_counters.get("by_reason") or {}).items():
                 reason_key = str(reason or "unknown")
                 shared_drop_by_reason[reason_key] = int(shared_drop_by_reason.get(reason_key, 0) or 0) + int(count or 0)
+        physical_shared_rows: list[dict] = []
+        for row in shared_rows:
+            physical = dict(row)
+            ownership = dict(physical.get("shared_tun_ownership") or {})
+            stats = {"rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0}
+            for binding in list(ownership.get("active_peer_bindings") or []):
+                if not isinstance(binding, dict) or bool(binding.get("local_virtual")):
+                    continue
+                stats["rx_msgs"] += int(binding.get("rx_packets", 0) or 0)
+                stats["tx_msgs"] += int(binding.get("tx_packets", 0) or 0)
+                stats["rx_bytes"] += int(binding.get("rx_bytes", 0) or 0)
+                stats["tx_bytes"] += int(binding.get("tx_bytes", 0) or 0)
+            physical["physical_interface"] = True
+            physical["peer_id"] = "physical"
+            physical["chan_id"] = None
+            physical["channel_aliases"] = []
+            physical["stats"] = stats
+            physical_shared_rows.append(physical)
+        interface_rows = [
+            row for row in tun_rows
+            if not isinstance(row.get("shared_tun_ownership"), dict)
+        ] + physical_shared_rows
         payload = {
-            "tun": tun_rows,
+            "tun": interface_rows,
             "shared_tun": shared_rows,
             "tun_helper": dict(status_snapshot.get("tun_helper") or {}),
             "tun_control": {},
             "summary": {
                 "snapshot_marker": self.TUN_ROUTING_SUMMARY_MARKER,
-                "tun_total": len(tun_rows),
+                "tun_total": len(interface_rows),
                 "tun_open": sum(
-                    1 for row in tun_rows
-                    if row.get("chan_id") is not None
-                    and str(row.get("state", "connected")).lower() != "listening"
+                    1 for row in interface_rows
+                    if str(row.get("state", "connected")).lower() != "listening"
                 ),
                 "tun_listening": sum(
-                    1 for row in tun_rows
+                    1 for row in interface_rows
                     if str(row.get("state", "connected")).lower() == "listening"
                 ),
                 "shared_services": len(shared_rows),
@@ -1857,6 +1878,29 @@ class AdminWebUI:
 
     def _build_peers_payload_now(self) -> dict:
         payload = self.runner.get_peer_connections_snapshot()
+        # `/api/peers` is an operator summary.  Do not leak the byte-window
+        # quota fields that belonged to the retired ingress-throttle design
+        # when an older runner or wrapper contributes a raw throttle snapshot.
+        for peer in list(payload.get("peers") or []):
+            if not isinstance(peer, dict) or not isinstance(peer.get("throttle"), dict):
+                continue
+            peer["throttle"] = {
+                key: value
+                for key, value in peer["throttle"].items()
+                if key not in {
+                    "scope_id",
+                    "mode",
+                    "budget_bytes",
+                    "used_bytes",
+                    "remaining_bytes",
+                    "aggregate",
+                    "scope",
+                    "transport_prev_window_bytes",
+                    "prev_window_bytes",
+                    "curr_window_bytes",
+                    "throttle_drop_count",
+                }
+            }
         payload["ok"] = True
         return payload
 

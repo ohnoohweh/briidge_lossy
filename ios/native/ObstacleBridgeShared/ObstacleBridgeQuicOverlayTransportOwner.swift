@@ -7,7 +7,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias TunPacketSink = (Data) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
-    private static let lowerLayerUnavailableFallbackNS: UInt64 = 5_000_000_000
+    private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
+        ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace * 1_000_000_000
+    )
 
     // Keep Swift QUIC writes capped at 1024 bytes. Network.framework has been
     // observed to stall larger single stream writes in the mixed Swift/Python
@@ -220,6 +222,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 tunServiceSpec: tunServiceSpec,
                 tunIfname: tunIfname,
                 tunMTU: tunMTU,
+                serviceNameByID: serviceNameByID,
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot()
             )
@@ -343,6 +346,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 overlayConnected: inflowAllowed(),
                 bufferedFrames: overlayWaitingCount(),
                 backpressure: overlayBackpressureSnapshot(),
+                transportDelayThresholdMS: overlayLayerTransportAdapter?.transportDelayRotationThresholdMS ?? ObstacleBridgeOverlayChannelCore.tunPostMuxTransportDelayThresholdMS,
                 activeTunChanIDs: &activeTunChanIDs,
                 tunStats: &tunStats,
                 sendMuxFrames: sendMuxFrames,
@@ -506,6 +510,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                     sendTransportFrames(adapterSnapshot.emittedFrames)
                 }
                 flushStartupMuxFramesIfNeeded()
+                maybeOpenConfiguredTunIfReady()
             } catch {
                 eventSink?("quic_overlay_transport_adapter_connect_failed", ["error": error.localizedDescription])
             }
@@ -563,8 +568,15 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func handleLifecycleRotationIfDue() {
-        guard let adapter = overlayLayerTransportAdapter,
-              let result = adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
+        guard let adapter = overlayLayerTransportAdapter else {
+            return
+        }
+        let protocolStats = overlayProtocolStats()
+        let transmitDelayEstMS = protocolStats["transmit_delay_est_ms"] as? Double ?? 0.0
+        guard let result = adapter.transportDelayRotationDue(
+            transmitDelayEstMS: transmitDelayEstMS,
+            candidateCount: resolvedPeerCandidates.count
+        ) ?? adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
         else {
             return
         }
@@ -675,6 +687,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 handleInboundMuxPayload(inboundPayload)
             }
             flushStartupMuxFramesIfNeeded()
+            maybeOpenConfiguredTunIfReady()
         }
     }
 
@@ -891,6 +904,25 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard !frames.isEmpty else { return }
         startupMuxFramesSent = true
         sendMuxFrames(frames)
+    }
+
+    private func maybeOpenConfiguredTunIfReady() {
+        do {
+            guard let snapshot = try ObstacleBridgeOverlayChannelCore.openConfiguredLocalTunIfReady(
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: tunServiceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: appReady(),
+                activeTunChanIDs: &activeTunChanIDs
+            ) else { return }
+            let startupFrames = startupMuxFramesForNewTunOpen()
+            sendMuxFrames(startupFrames + snapshot.frames)
+            eventSink?("quic_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
+        } catch {
+            eventSink?("quic_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
     }
 
     private func startupMuxFramesForNewTunOpen() -> [Data] {
