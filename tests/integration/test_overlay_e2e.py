@@ -143,9 +143,11 @@ class MyudpDelayLossCase:
 class LinuxSwiftSecureLinkPeer:
     """Small Python reference endpoint for the Linux Swift process E2E lane."""
 
-    def __init__(self, transport: str, psk: bytes) -> None:
+    def __init__(self, transport: str, psk: bytes, *, keep_open: bool = False) -> None:
         self.transport = transport
         self.psk = bytes(psk)
+        self.keep_open = keep_open
+        self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
         self._done = threading.Event()
@@ -157,6 +159,7 @@ class LinuxSwiftSecureLinkPeer:
             raise RuntimeError('Linux Swift Python reference peer did not start')
 
     def close(self) -> None:
+        self._closing.set()
         if self._socket is not None:
             with contextlib.suppress(OSError):
                 self._socket.close()
@@ -201,7 +204,7 @@ class LinuxSwiftSecureLinkPeer:
                 listener.bind(('127.0.0.1', 0))
                 if sock_type == socket.SOCK_STREAM:
                     listener.listen(1)
-                listener.settimeout(5.0)
+                listener.settimeout(0.25 if self.keep_open else 5.0)
                 self._socket = listener
                 self.port = int(listener.getsockname()[1])
                 self._ready.set()
@@ -210,7 +213,7 @@ class LinuxSwiftSecureLinkPeer:
                 else:
                     connection, _ = listener.accept()
                     with connection:
-                        connection.settimeout(5.0)
+                        connection.settimeout(0.25 if self.keep_open else 5.0)
                         self._serve_stream(connection)
         except BaseException as exc:
             self.error = exc
@@ -292,6 +295,22 @@ class LinuxSwiftSecureLinkPeer:
             raise RuntimeError('Linux Swift SecureLink client proof mismatch')
         acknowledgement = self._header(4, session_id, 1)
         send(acknowledgement + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (1).to_bytes(8, 'big'), b'', acknowledgement))
+        if self.keep_open:
+            while not self._closing.is_set():
+                try:
+                    receive()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    if self._closing.is_set():
+                        return
+                    raise
+                except RuntimeError as exc:
+                    if str(exc) == 'unexpected EOF from Linux Swift client':
+                        return
+                    raise
+                raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
+            return
         application = receive()
         plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
         response = self._header(4, session_id, 2)
@@ -7097,6 +7116,68 @@ def test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip(
         assert completed.returncode == 0, completed.stderr
         assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
     finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ('transport', 'session_name', 'peer_key', 'port_key'),
+    [
+        ('tcp', 'tcp_session', 'tcp_peer', 'tcp_peer_port'),
+        ('ws', 'ws_session', 'ws_peer', 'ws_peer_port'),
+        ('myudp', 'udp_session', 'udp_peer', 'udp_peer_port'),
+    ],
+)
+def test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle(
+    tmp_path: Path,
+    transport: str,
+    session_name: str,
+    peer_key: str,
+    port_key: str,
+) -> None:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-live-runtime-psk'
+    peer = LinuxSwiftSecureLinkPeer(transport, psk, keep_open=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as admin_socket:
+        admin_socket.bind(('127.0.0.1', 0))
+        admin_port = int(admin_socket.getsockname()[1])
+    proc = None
+    try:
+        config_path = tmp_path / 'linux_swift_live_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': transport},
+            session_name: {peer_key: '127.0.0.1', port_key: peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        proc = start_proc(
+            'linux_swift_foreground_runtime',
+            [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '20'],
+            tmp_path,
+            admin_port=admin_port,
+        )
+        end = time.time() + 10.0
+        status = None
+        while time.time() < end:
+            try:
+                _code, status = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.0)
+            except Exception:
+                status = None
+            if status and status.get('app_ready') is True and status.get('transport_state') == 'connected':
+                break
+            time.sleep(0.1)
+        assert status and status.get('app_ready') is True, f'Linux Swift runtime did not become ready: {status!r}'
+        assert status.get('connection_layers', [])[1].get('authenticated') is True
+        assert_running(proc)
+    finally:
+        if proc is not None:
+            if proc.popen.poll() is None:
+                os.killpg(proc.popen.pid, signal.SIGTERM)
+            assert proc.popen.wait(timeout=5.0) == 0
         peer.close()
 
 

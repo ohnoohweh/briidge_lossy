@@ -1,11 +1,18 @@
 import Foundation
 import ObstacleBridgeLinuxAdapters
 import ObstacleBridgePortable
+#if os(Linux)
+import Glibc
+#endif
 
 @main
 enum ObstacleBridgeLinuxMain {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if let runOptions = RuntimeRunOptions.parse(arguments) {
+            runForeground(options: runOptions)
+            return
+        }
         switch arguments {
         case ["--help"], ["-h"]:
             printHelp()
@@ -39,13 +46,15 @@ enum ObstacleBridgeLinuxMain {
           ObstacleBridgeLinux --runtime-config <path>
           ObstacleBridgeLinux --runtime-config <path> --status
           ObstacleBridgeLinux --runtime-config <path> --runtime-probe <payload-base64>
+          ObstacleBridgeLinux --runtime-config <path> --run [--admin-port <port>] [--hold-sec <seconds>]
 
         The transport probe validates Linux POSIX lower-layer TCP or cleartext
         WebSocket framing. --runtime-config validates the existing sectioned
         config shape and Linux transport admission without exposing secrets.
-        --runtime-probe sends one configured lower-layer or PSK-protected
-        payload; it is not the long-lived Linux overlay runtime.
-        ChannelMux, TUN, and Admin Web are delivered by later work packages.
+        --runtime-probe is a bounded diagnostic. --run owns a long-lived
+        admitted transport, SecureLink epoch, reconnect lifecycle, and
+        redacted local Admin API. ChannelMux service routing and TUN remain
+        unavailable until their dedicated work packages are delivered.
         """)
     }
 
@@ -109,7 +118,80 @@ enum ObstacleBridgeLinuxMain {
         }
     }
 
+    private static func runForeground(options: RuntimeRunOptions) {
+        do {
+            let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configPath)
+            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration)
+            let admin = ObstacleBridgeLinuxAdminServer(runtime: runtime.configuredRuntime)
+            try admin.start(port: options.adminPort)
+            runtime.start()
+            let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\"}"
+            print(status)
+            let resources = installForegroundShutdown(runtime: runtime, admin: admin, holdSeconds: options.holdSeconds)
+            withExtendedLifetime(resources) { dispatchMain() }
+        } catch {
+            writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")
+            exit(1)
+        }
+    }
+
+    private static func installForegroundShutdown(runtime: ObstacleBridgeLinuxLiveRuntime, admin: ObstacleBridgeLinuxAdminServer, holdSeconds: Int?) -> [Any] {
+        func shutdown() {
+            runtime.stop()
+            admin.stop()
+            exit(0)
+        }
+        var resources: [Any] = []
+        #if os(Linux)
+        signal(SIGINT, SIG_IGN)
+        signal(SIGTERM, SIG_IGN)
+        let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
+        interrupt.setEventHandler { shutdown() }
+        interrupt.resume()
+        let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+        terminate.setEventHandler { shutdown() }
+        terminate.resume()
+        resources.append(interrupt)
+        resources.append(terminate)
+        #endif
+        if let holdSeconds {
+            let timer = DispatchSource.makeTimerSource(queue: .main)
+            timer.schedule(deadline: .now() + .seconds(holdSeconds))
+            timer.setEventHandler { shutdown() }
+            timer.resume()
+            resources.append(timer)
+        }
+        return resources
+    }
+
     private static func writeError(_ message: String) {
         FileHandle.standardError.write(Data("\(message)\n".utf8))
+    }
+}
+
+private struct RuntimeRunOptions {
+    let configPath: String
+    let adminPort: Int
+    let holdSeconds: Int?
+
+    static func parse(_ values: [String]) -> RuntimeRunOptions? {
+        guard values.count >= 3, values[0] == "--runtime-config", values[2] == "--run" else { return nil }
+        var adminPort = 0
+        var holdSeconds: Int?
+        var index = 3
+        while index < values.count {
+            guard index + 1 < values.count else { return nil }
+            switch values[index] {
+            case "--admin-port":
+                guard let parsed = Int(values[index + 1]), (0...65535).contains(parsed) else { return nil }
+                adminPort = parsed
+            case "--hold-sec":
+                guard let parsed = Int(values[index + 1]), parsed >= 0 else { return nil }
+                holdSeconds = parsed
+            default: return nil
+            }
+            index += 2
+        }
+        return .init(configPath: values[1], adminPort: adminPort, holdSeconds: holdSeconds)
     }
 }

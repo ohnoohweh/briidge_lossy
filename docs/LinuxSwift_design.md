@@ -198,6 +198,13 @@ for those endpoints and PSK mode without exposing secrets. Its bounded
 `--runtime-probe` transaction opens the configured transport and performs the
 same PSK handshake/protected-data exchange when configured; the adapter also
 owns an explicit multi-message configured session with deterministic close.
+`--runtime-config <path> --run` starts a foreground live-runtime owner that
+serializes the admitted transport, SecureLink, ChannelMux binding, bounded
+reconnect timer, and shutdown. It exposes redacted `/api/status` and
+`/api/peers` on its local Admin listener and handles SIGINT/SIGTERM with an
+ordered stop. Process E2E coverage starts that built executable with a Python
+peer over TCP, cleartext WebSocket, and myudp, verifies application readiness,
+and verifies clean signal-driven shutdown.
 For TCP and cleartext WebSocket it rotates through comma-separated configured
 peer candidates on connection failure and provides an explicit fresh-epoch
 reconnect operation plus a bounded fresh-epoch retry for a failed one-shot
@@ -223,29 +230,6 @@ reconnect execution. TUN service routing is deferred to later work packages.
 
 Work packages are ordered by dependency. A package is complete only when every
 Definition of Done item is met; compiling alone is not completion.
-
-### LSW-004D — Long-lived Linux overlay runtime owner
-
-Replace the bounded transaction owner with one foreground runtime that owns a
-live admitted transport, SecureLink session, ChannelMux binding, reconnect
-supervisor, and lifecycle state. It is the only component allowed to promote
-transport connected into application ready.
-
-Definition of Done:
-
-- the executable starts a long-lived runtime from the supported sectioned
-  configuration and does not use `--runtime-probe` as the normal data path;
-- one serialized owner coordinates lower transport I/O, SecureLink, ChannelMux,
-  reconnect timers, and shutdown without blocking listener or Admin work;
-- fresh connection epochs recreate SecureLink and ChannelMux state, reject
-  callbacks or frames from older epochs, and replay required startup/catalog
-  state only after authentication;
-- SIGINT, SIGTERM, configuration failure, transport failure, and retry
-  exhaustion leave an observable terminal state and close every owned socket
-  and timer exactly once; and
-- process-level Python-versus-Linux-Swift tests prove application-ready,
-  disconnect, reconnect, and stop transitions for TCP, cleartext WebSocket,
-  and myudp without exposing PSKs.
 
 ### LSW-004E — Swift-owned service catalog and channel data plane
 
@@ -390,10 +374,10 @@ Definition of Done:
 
 ## Suggested sequence and open decisions
 
-The admitted TCP, cleartext WebSocket, and myudp transports supply the secure
-ChannelMux baseline. LSW-004D through LSW-004F turn that baseline into a
-service-owning endpoint before the LSW-005 TUN milestone. QUIC and TLS
-WebSocket remain gated by LSW-005B and LSW-005C.
+The admitted TCP, cleartext WebSocket, and myudp transports and foreground
+runtime supply the secure ChannelMux baseline. LSW-004E and LSW-004F turn that
+baseline into a service-owning endpoint before the LSW-005 TUN milestone. QUIC
+and TLS WebSocket remain gated by LSW-005B and LSW-005C.
 LSW-006 through LSW-008 make the result supportable.
 
 Before implementation, select and pin the Linux crypto dependency strategy;
