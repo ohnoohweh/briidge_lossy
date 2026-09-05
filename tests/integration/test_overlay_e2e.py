@@ -7,6 +7,7 @@ import contextlib
 import errno
 import heapq
 import hashlib
+import hmac
 import inspect
 import http.cookiejar
 import json
@@ -68,6 +69,7 @@ atexit.register(_LOCALHOST_TLS_FIXTURE_TMPDIR.cleanup)
 LOCALHOST_TLS_FIXTURES = materialize_localhost_tls_fixture_set(Path(_LOCALHOST_TLS_FIXTURE_TMPDIR.name))
 
 from obstacle_bridge.bridge import (
+    ChaCha20Poly1305,
     CONTROL_MAX_MISSED,
     MyUDP2BatchCodec,
     StreamChunk,
@@ -136,6 +138,164 @@ class MyudpDelayLossCase:
     duplicate_client_to_server_data: tuple[int, ...] = ()
     reorder_client_to_server_data: tuple[int, ...] = ()
     drop_client_to_server_min_chunks: int = 0
+
+
+class LinuxSwiftSecureLinkPeer:
+    """Small Python reference endpoint for the Linux Swift process E2E lane."""
+
+    def __init__(self, transport: str, psk: bytes) -> None:
+        self.transport = transport
+        self.psk = bytes(psk)
+        self.error: Optional[BaseException] = None
+        self._ready = threading.Event()
+        self._done = threading.Event()
+        self._socket: Optional[socket.socket] = None
+        self.port = 0
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(5.0):
+            raise RuntimeError('Linux Swift Python reference peer did not start')
+
+    def close(self) -> None:
+        if self._socket is not None:
+            with contextlib.suppress(OSError):
+                self._socket.close()
+        self._thread.join(timeout=5.0)
+        if self.error is not None:
+            raise self.error
+
+    @staticmethod
+    def _read_exact(connection: socket.socket, count: int) -> bytes:
+        data = bytearray()
+        while len(data) < count:
+            chunk = connection.recv(count - len(data))
+            if not chunk:
+                raise RuntimeError('unexpected EOF from Linux Swift client')
+            data.extend(chunk)
+        return bytes(data)
+
+    @staticmethod
+    def _header(message_type: int, session_id: int, counter: int) -> bytes:
+        return bytes([1, message_type, 0, 0]) + session_id.to_bytes(8, 'big') + counter.to_bytes(8, 'big')
+
+    @staticmethod
+    def _expand(prk: bytes, info: bytes, length: int) -> bytes:
+        output = b''
+        previous = b''
+        for index in range(1, (length + 31) // 32 + 1):
+            previous = hmac.new(prk, previous + info + bytes([index]), hashlib.sha256).digest()
+            output += previous
+        return output[:length]
+
+    def _derive_keys(self, session_id: int, client_nonce: bytes, server_nonce: bytes) -> tuple[bytes, bytes]:
+        salt = hashlib.sha256(self.psk).digest()
+        info = b'obstaclebridge-securelink-psk-v1|' + session_id.to_bytes(8, 'big') + client_nonce + server_nonce
+        material = self._expand(hmac.new(salt, self.psk + client_nonce + server_nonce, hashlib.sha256).digest(), info, 64)
+        return material[:32], material[32:]
+
+    def _serve(self) -> None:
+        try:
+            sock_type = socket.SOCK_DGRAM if self.transport == 'myudp' else socket.SOCK_STREAM
+            with socket.socket(socket.AF_INET, sock_type) as listener:
+                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                listener.bind(('127.0.0.1', 0))
+                if sock_type == socket.SOCK_STREAM:
+                    listener.listen(1)
+                listener.settimeout(5.0)
+                self._socket = listener
+                self.port = int(listener.getsockname()[1])
+                self._ready.set()
+                if self.transport == 'myudp':
+                    self._serve_myudp(listener)
+                else:
+                    connection, _ = listener.accept()
+                    with connection:
+                        connection.settimeout(5.0)
+                        self._serve_stream(connection)
+        except BaseException as exc:
+            self.error = exc
+            self._ready.set()
+        finally:
+            self._done.set()
+
+    def _serve_stream(self, connection: socket.socket) -> None:
+        if self.transport == 'ws':
+            request = b''
+            while b'\r\n\r\n' not in request:
+                request += connection.recv(4096)
+            key = next(line.split(b':', 1)[1].strip() for line in request.split(b'\r\n') if line.lower().startswith(b'sec-websocket-key:'))
+            accept = base64.b64encode(hashlib.sha1(key + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
+            connection.sendall(b'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + b'\r\n\r\n')
+
+        def receive() -> bytes:
+            if self.transport == 'tcp':
+                length = struct.unpack('!I', self._read_exact(connection, 4))[0]
+                payload = self._read_exact(connection, length)
+                if payload[:1] != b'\x00':
+                    raise RuntimeError('Linux Swift TCP framing marker mismatch')
+                return payload[1:]
+            first, second = self._read_exact(connection, 2)
+            if first != 0x82 or not second & 0x80:
+                raise RuntimeError('Linux Swift WebSocket frame mismatch')
+            length = second & 0x7f
+            if length == 126:
+                length = int.from_bytes(self._read_exact(connection, 2), 'big')
+            elif length == 127:
+                length = int.from_bytes(self._read_exact(connection, 8), 'big')
+            mask = self._read_exact(connection, 4)
+            return bytes(value ^ mask[index % 4] for index, value in enumerate(self._read_exact(connection, length)))
+
+        def send(payload: bytes) -> None:
+            if self.transport == 'tcp':
+                connection.sendall(struct.pack('!I', len(payload) + 1) + b'\x00' + payload)
+            elif len(payload) < 126:
+                connection.sendall(bytes([0x82, len(payload)]) + payload)
+            else:
+                connection.sendall(bytes([0x82, 126]) + len(payload).to_bytes(2, 'big') + payload)
+
+        self._secure_link_transaction(receive, send)
+
+    def _serve_myudp(self, listener: socket.socket) -> None:
+        peer: Optional[tuple[str, int]] = None
+        counter = 0
+
+        def receive() -> bytes:
+            nonlocal peer, counter
+            wire, peer = listener.recvfrom(65535)
+            if len(wire) < 27 or wire[0] != PTYPE_DATA or wire[19:21] != b'\x01\x01':
+                raise RuntimeError('Linux Swift myudp framing mismatch')
+            record_length = int.from_bytes(wire[21:23], 'big')
+            if record_length != len(wire) - 23:
+                raise RuntimeError('Linux Swift myudp record length mismatch')
+            counter = int.from_bytes(wire[23:25], 'big')
+            return wire[27:]
+
+        def send(payload: bytes) -> None:
+            assert peer is not None
+            batch = b'\x01\x01' + struct.pack('!H', len(payload) + 4) + struct.pack('!HH', counter, len(payload)) + payload
+            listener.sendto(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch, peer)
+
+        self._secure_link_transaction(receive, send)
+
+    def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
+        hello = receive()
+        if hello[:2] != b'\x01\x01' or hello[52:54] != b'\x01\x00':
+            raise RuntimeError('Linux Swift SecureLink hello mismatch')
+        session_id = int.from_bytes(hello[4:12], 'big')
+        client_nonce = hello[20:52]
+        server_nonce = bytes(range(32))
+        proof = hmac.new(self.psk, b'obstaclebridge-securelink-server-proof-v1|' + session_id.to_bytes(8, 'big') + client_nonce + server_nonce, hashlib.sha256).digest()
+        send(self._header(2, session_id, 0) + server_nonce + b'\x01' + proof)
+        client_to_server, server_to_client = self._derive_keys(session_id, client_nonce, server_nonce)
+        client_proof = receive()
+        if ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (1).to_bytes(8, 'big'), client_proof[20:], client_proof[:20]) != b'':
+            raise RuntimeError('Linux Swift SecureLink client proof mismatch')
+        acknowledgement = self._header(4, session_id, 1)
+        send(acknowledgement + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (1).to_bytes(8, 'big'), b'', acknowledgement))
+        application = receive()
+        plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
+        response = self._header(4, session_id, 2)
+        send(response + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), b'python-e2e:' + plaintext, response))
 
 
 @contextlib.contextmanager
@@ -1945,6 +2105,28 @@ def _swift_runner_binary(log_dir: Path) -> Path:
     if not binary_path.exists():
         _compile_mac_host_runner(binary_path)
         _write_mac_host_runner_build_info(binary_path)
+    return binary_path
+
+
+def _linux_swift_runner_binary() -> Path:
+    binary_path = ROOT / 'build' / 'linux' / 'ObstacleBridgeLinux'
+    if binary_path.exists():
+        return binary_path
+    with secure_link_test_lock():
+        if binary_path.exists():
+            return binary_path
+        completed = subprocess.run(
+            [str(ROOT / 'scripts' / 'build_linux_app.sh')],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0 or not binary_path.exists():
+            raise AssertionError(
+                f'Linux Swift build failed with exit code {completed.returncode}:\n'
+                f'STDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}'
+            )
     return binary_path
 
 
@@ -6860,6 +7042,62 @@ def test_overlay_e2e_mixed_runtime_tcp_secure_link_psk_compress_happy_path(tmp_p
                 stop_proc(client_proc)
             if server_proc is not None:
                 stop_proc(server_proc)
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ('transport', 'session_name', 'peer_key', 'port_key'),
+    [
+        ('tcp', 'tcp_session', 'tcp_peer', 'tcp_peer_port'),
+        ('ws', 'ws_session', 'ws_peer', 'ws_peer_port'),
+        ('myudp', 'udp_session', 'udp_peer', 'udp_peer_port'),
+    ],
+)
+def test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip(
+    tmp_path: Path,
+    transport: str,
+    session_name: str,
+    peer_key: str,
+    port_key: str,
+) -> None:
+    """Exercise the built Linux Swift client against an independent Python peer."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-e2e-psk'
+    payload = b'overlay-e2e-python-to-linux-swift'
+    peer = LinuxSwiftSecureLinkPeer(transport, psk)
+    try:
+        session = {peer_key: '127.0.0.1', port_key: peer.port}
+        if transport == 'ws':
+            session['ws_path'] = '/overlay'
+            session['ws_tls'] = False
+        runtime_config = {
+            'runner': {'overlay_transport': transport},
+            session_name: session,
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }
+        config_path = tmp_path / f'linux_swift_{transport}_runtime.json'
+        config_path.write_text(json.dumps(runtime_config), encoding='utf-8')
+        completed = subprocess.run(
+            [
+                str(binary_path),
+                '--runtime-config', str(config_path),
+                '--runtime-probe', base64.b64encode(payload).decode('ascii'),
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
 
 
 @pytest.mark.integration

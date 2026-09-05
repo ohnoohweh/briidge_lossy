@@ -190,7 +190,9 @@ The Linux adapter target has POSIX TCP framing and cleartext
 WebSocket upgrade/binary-frame clients, bounded read/write timeouts, connection
 attempt snapshots, and a `--transport-probe` executable diagnostic. Mixed
 Swift/Python fixture tests cover authenticated SecureLink PSK handshake and
-protected application-data exchanges over both admitted lower transports.
+protected application-data exchanges over both admitted lower transports. The
+overlay E2E suite also runs the built Linux executable against a Python
+reference peer over TCP, cleartext WebSocket, and myudp.
 The executable also validates the existing sectioned JSON runtime-config shape
 for those endpoints and PSK mode without exposing secrets. Its bounded
 `--runtime-probe` transaction opens the configured transport and performs the

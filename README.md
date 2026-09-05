@@ -1552,10 +1552,10 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
-| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `4` | `0` | `4` |
+| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `5` | `0` | `5` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `57` | `0` | `57` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `61` | `152` | `213` |
+| Total parity-oriented evidence | Sum of the lanes above | `62` | `152` | `214` |
 
 Important caveat:
 
