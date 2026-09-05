@@ -83,6 +83,7 @@ REQ-OVL-007:
   # Includes dual-stack peer-resolution parity: native IPv4 literals remain native
   # at resolution time under prefer-ipv6 and are mapped only for IPv6 socket sends.
   integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_udp_peer_multi_host_prefers_ipv6_and_falls_back_to_ipv4
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
@@ -129,6 +130,7 @@ REQ-OVL-007:
 # added for peer-scoped traffic accounting.
 REQ-AUT-001:
   integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
@@ -154,6 +156,7 @@ REQ-AUT-001:
 
 REQ-AUT-002:
   integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
@@ -671,9 +674,12 @@ REQ-LIFE-004:
 
 REQ-LIFE-005:
   integration_tests:
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_reconnect_regression.py::test_reconnect_retry_uses_configured_minimum_delay
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsAuthenticatedSessionAndStops
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeReportsRetryExhaustionAndCancelsItOnStop
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
     - tests/unit/test_launcher_entrypoint.py::test_show_restart_countdown_starts_and_closes_placeholder
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
