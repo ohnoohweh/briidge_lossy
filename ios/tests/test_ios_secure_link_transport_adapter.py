@@ -142,10 +142,12 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
                         "server_disconnect_detail": server.statusSnapshot().disconnectDetail,
                         "client_trust_validation_state": client.statusSnapshot().trustValidationState,
                         "server_trust_validation_state": server.statusSnapshot().trustValidationState,
-                        "client_frames_passed_total": client.statusSnapshot().framesPassedTotal,
-                        "server_frames_passed_total": server.statusSnapshot().framesPassedTotal,
-                        "client_frames_dropped_total": client.statusSnapshot().framesDroppedTotal,
-                        "server_frames_dropped_total": server.statusSnapshot().framesDroppedTotal,
+                        "client_frames_from_client_passed_total": client.statusSnapshot().framesFromClientPassedTotal,
+                        "server_frames_from_client_passed_total": server.statusSnapshot().framesFromClientPassedTotal,
+                        "client_frames_to_client_passed_total": client.statusSnapshot().framesToClientPassedTotal,
+                        "server_frames_to_client_passed_total": server.statusSnapshot().framesToClientPassedTotal,
+                        "client_frames_from_client_dropped_total": client.statusSnapshot().framesFromClientDroppedTotal,
+                        "server_frames_from_client_dropped_total": server.statusSnapshot().framesFromClientDroppedTotal,
                     ]
                     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
                     FileHandle.standardOutput.write(data)
@@ -195,10 +197,12 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
         "server_disconnect_detail": "",
         "client_trust_validation_state": "validated",
         "server_trust_validation_state": "validated",
-        "client_frames_passed_total": 2,
-        "server_frames_passed_total": 2,
-        "client_frames_dropped_total": 0,
-        "server_frames_dropped_total": 0,
+        "client_frames_from_client_passed_total": 1,
+        "server_frames_from_client_passed_total": 1,
+        "client_frames_to_client_passed_total": 1,
+        "server_frames_to_client_passed_total": 1,
+        "client_frames_from_client_dropped_total": 0,
+        "server_frames_from_client_dropped_total": 0,
     }
 
 

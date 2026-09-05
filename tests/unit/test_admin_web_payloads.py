@@ -256,8 +256,9 @@ class _RunnerStub:
                         "connected_since_unix_ts": 1699999900.0,
                         "authenticated_sessions_total": 1,
                         "rekeys_completed_total": 0,
-                        "frames_passed_total": 17,
-                        "frames_dropped_total": 3,
+                        "frames_from_client_passed_total": 17,
+                        "frames_from_client_dropped_total": 3,
+                        "frames_to_client_passed_total": 11,
                         "transport": "tcp",
                     },
                     "compress_layer": {
@@ -2042,8 +2043,9 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(peer["secure_link"]["last_event"], "authenticated")
         self.assertEqual(peer["secure_link"]["handshake_attempts_total"], 1)
         self.assertEqual(peer["secure_link"]["authenticated_sessions_total"], 1)
-        self.assertEqual(peer["secure_link"]["frames_passed_total"], 17)
-        self.assertEqual(peer["secure_link"]["frames_dropped_total"], 3)
+        self.assertEqual(peer["secure_link"]["frames_from_client_passed_total"], 17)
+        self.assertEqual(peer["secure_link"]["frames_from_client_dropped_total"], 3)
+        self.assertEqual(peer["secure_link"]["frames_to_client_passed_total"], 11)
         self.assertEqual(peer["secure_link"]["connected_since_unix_ts"], 1699999900.0)
         self.assertEqual(peer["rtt_est_ms"], 42.0)
         self.assertEqual(peer["transmit_delay_sample_ms"], 101.0)
@@ -2058,8 +2060,11 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertTrue(peer["compress_layer"]["enabled"])
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
-        self.assertIn("renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total))", app_js)
-        self.assertIn("renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total))", app_js)
+        self.assertIn("renderMetric('frames_from_client_passed_total', fmtInteger(secureLink.frames_from_client_passed_total))", app_js)
+        self.assertIn("renderMetric('frames_from_client_dropped_total', fmtInteger(secureLink.frames_from_client_dropped_total))", app_js)
+        self.assertIn("renderMetric('frames_to_client_passed_total', fmtInteger(secureLink.frames_to_client_passed_total))", app_js)
+        self.assertIn("renderMetric('Frames to SecureLink', fmtMyUdpMetric(row, row.myudp?.frames_to_securelink))", app_js)
+        self.assertIn("renderMetric('Frames from SecureLink', fmtMyUdpMetric(row, row.myudp?.frames_from_securelink))", app_js)
         self.assertIn("renderMetric('Next Address Attempt', fmtUptime(row.next_address_attempt_in_seconds))", app_js)
         self.assertIn("renderMetric('Restart In', fmtUptime(row.restart_in_seconds))", app_js)
         self.assertIn("fmtUptimeFromUnixTs(secureLink.connected_since_unix_ts ?? row.connected_since_unix_ts)", app_js)

@@ -952,6 +952,8 @@ class MyUDP2Session(_MyUDP2SessionCore):
         self.batch_stream_bytes_received = 0
         self.retransmitted_chunks = 0
         self.stream_decode_errors = 0
+        self.frames_to_securelink = 0
+        self.frames_from_securelink = 0
 
     def waiting_count(self) -> int:
         return len(self._outbound_records)
@@ -1132,6 +1134,8 @@ class MyUDP2Session(_MyUDP2SessionCore):
         self.batch_stream_bytes_received = 0
         self.retransmitted_chunks = 0
         self.stream_decode_errors = 0
+        self.frames_to_securelink = 0
+        self.frames_from_securelink = 0
 # -------------------- PeerProtocol --------------------
 class PeerProtocol(asyncio.DatagramProtocol):
     """
@@ -2002,6 +2006,8 @@ class UdpSession(ISession):
                     stream_queue_age_ms=max((float(s.stream_queue_age_ms()) for s in sessions if hasattr(s, "stream_queue_age_ms")), default=0.0),
                     retransmitted_chunks=sum(int(getattr(s, "retransmitted_chunks", 0) or 0) for s in sessions),
                     stream_decode_errors=sum(int(getattr(s, "stream_decode_errors", 0) or 0) for s in sessions),
+                    frames_to_securelink=sum(int(getattr(s, "frames_to_securelink", 0) or 0) for s in sessions),
+                    frames_from_securelink=sum(int(getattr(s, "frames_from_securelink", 0) or 0) for s in sessions),
                 )
             except Exception as e:
                 self._log.debug("[UdpSession] aggregated get_metrics failed %r", e)
@@ -2035,6 +2041,8 @@ class UdpSession(ISession):
                 stream_queue_age_ms = s.stream_queue_age_ms() if hasattr(s, "stream_queue_age_ms") else None,
                 retransmitted_chunks = getattr(s, "retransmitted_chunks", None),
                 stream_decode_errors = getattr(s, "stream_decode_errors", None),
+                frames_to_securelink = getattr(s, "frames_to_securelink", None),
+                frames_from_securelink = getattr(s, "frames_from_securelink", None),
             )
         except Exception as e:
             self._log.debug(f"[UdpSession] get_metrics failed on SessionMetrics(..) %r", e)
@@ -2558,6 +2566,16 @@ class UdpSession(ISession):
         if sent > 0:
             self._egress_tracker.record(int(sent))
         return sent
+
+    def record_securelink_boundary_frame(self, direction: str, peer_id: Optional[int] = None) -> None:
+        """Record one SecureLink frame crossing this myUDP session boundary."""
+        field = "frames_to_securelink" if str(direction) == "to_securelink" else "frames_from_securelink"
+        session = self.inner_session
+        if self._listener_mode and peer_id is not None:
+            context = self._server_peers.get(int(peer_id))
+            if isinstance(context, dict) and context.get("session") is not None:
+                session = context["session"]
+        setattr(session, field, int(getattr(session, field, 0) or 0) + 1)
 
     # ---- Internals (callbacks given to PeerProtocol) ----
     def _on_control_needed(self) -> None:

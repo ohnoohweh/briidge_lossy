@@ -486,6 +486,8 @@ class StatsBoard:
                 "stream_queue_age_ms": _num(m.stream_queue_age_ms),
                 "retransmitted_chunks": _num(m.retransmitted_chunks),
                 "stream_decode_errors": _num(m.stream_decode_errors),
+                "frames_to_securelink": _num(m.frames_to_securelink),
+                "frames_from_securelink": _num(m.frames_from_securelink),
             },
             "myudp": {
                 "retransmit": {

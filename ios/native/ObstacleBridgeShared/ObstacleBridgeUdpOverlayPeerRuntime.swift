@@ -119,6 +119,8 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     private(set) var retransmittedChunks = 0
     private(set) var malformedBatches = 0
     private(set) var streamDecodeErrors = 0
+    private(set) var framesToSecureLink = 0
+    private(set) var framesFromSecureLink = 0
 
     private let connectedLossNS: UInt64 = 20_000_000_000
     private let transmitDelayEwmaAlpha = 0.125
@@ -646,7 +648,17 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             "retransmitted_chunks": retransmittedChunks,
             "malformed_batches": malformedBatches,
             "stream_decode_errors": streamDecodeErrors,
+            "frames_to_securelink": framesToSecureLink,
+            "frames_from_securelink": framesFromSecureLink,
         ]
+    }
+
+    func recordSecureLinkBoundaryFrame(direction: String) {
+        if direction == "to_securelink" {
+            framesToSecureLink &+= 1
+        } else {
+            framesFromSecureLink &+= 1
+        }
     }
 
     private func updateInboundHeartbeat(nowNS: UInt64, txNS: UInt64, echoNS: UInt64, fromIdle: Bool) {

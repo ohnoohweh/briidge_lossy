@@ -343,6 +343,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             do {
                 let snapshot = try adapter.requestSecureLinkRekey()
                 for frame in snapshot.emittedFrames {
+                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                     sendOverlayTransportPayload(frame)
                 }
                 return [
@@ -653,6 +654,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 return
             }
             for frame in snapshot.emittedFrames {
+                overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                 sendOverlayTransportPayload(frame)
             }
         } catch {
@@ -937,12 +939,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         for payload in payloads {
             if let adapter = overlayLayerTransportAdapter {
+                overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
                 let snapshot = adapter.handleInboundFrame(
                     payload,
                     observedPeerHost: currentPeerAddress?.host,
                     observedPeerPort: currentPeerAddress?.port
                 )
                 for emitted in snapshot.emittedFrames {
+                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                     sendOverlayTransportPayload(emitted)
                 }
                 for delivered in snapshot.deliveredPayloads {
@@ -974,6 +978,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             secureLinkHandshakePrimed = true
             lastSecureLinkPrimeNS = currentNS
             for frame in snapshot.emittedFrames {
+                overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                 sendOverlayTransportPayload(frame)
             }
         } catch {
@@ -1214,6 +1219,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 do {
                     let snapshot = try adapter.handleOutboundPayload(muxFrame)
                     for secureFrame in snapshot.emittedFrames {
+                        overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
                         sendOverlayTransportPayload(secureFrame)
                     }
                 } catch {

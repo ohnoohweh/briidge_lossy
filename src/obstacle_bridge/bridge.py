@@ -476,6 +476,8 @@ class SessionMetrics:
     stream_queue_age_ms: Optional[float] = None
     retransmitted_chunks: Optional[int] = None
     stream_decode_errors: Optional[int] = None
+    frames_to_securelink: Optional[int] = None
+    frames_from_securelink: Optional[int] = None
 
 class ISession(Protocol):
     # lifecycle
