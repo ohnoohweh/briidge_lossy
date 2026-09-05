@@ -164,6 +164,7 @@ This keeps Swift-backed regression time reasonable as we add more macOS/iOS pari
 ```bash
 swift test --filter ObstacleBridgeCryptoTests
 ./scripts/build_linux_app.sh
+pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secure_link_psk_round_trip
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --status
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --runtime-probe cGF5bG9hZA==
@@ -175,6 +176,8 @@ transcript vectors. It also exercises authenticated SecureLink PSK handshake
 and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
 peers implemented in local Python fixtures, including candidate rotation,
 reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The overlay E2E process lane invokes the built Linux executable against a
+Python SecureLink reference peer for each admitted transport.
 The Linux TUN and elevated lifecycle paths remain outside this lane.
 
 - `ios`
