@@ -43,7 +43,7 @@ The active testing focus on this branch is:
 - overlay reconnect and stale-transport recovery on Python and Swift paths, including myUDP disconnected-epoch publication for every unsuccessful candidate rotation and a fresh Swift WebSocket ChannelMux TUN epoch before each connection attempt
 - typed Python lifecycle-contract normalization, Compression forwarding, shared peer-client/listener ChannelMux outer-readiness, RTT-gated TCP/UDP admission plus post-mux TUN DATA shedding and a 30-second high-delay rotation request, full-stack candidate-cycle reset, Runner cycle-exhaustion restart, and myUDP event-order/epoch emission
 - secure-link and Compression layered-lifecycle monotonicity: a lower-layer disconnect withdraws authenticated outer readiness even while a stale raw transport object remains observable
-- directional SecureLink and myUDP-boundary observability: client-to-server and server-to-client protected-frame totals, client-originated drops, and protocol frames crossing to/from SecureLink
+- directional SecureLink and myUDP-boundary observability: client-to-server and server-to-client protected-frame totals (including protected confirmation/control frames), client-originated drops, and protocol frames crossing to/from SecureLink
 - WebAdmin peer ownership grouping for connection, protocol, ChannelMux, and TUN diagnostics, including ChannelMux-owned candidate/restart timers and persistent visibility for enabled SecureLink and Compression layers
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
