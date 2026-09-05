@@ -65,8 +65,9 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         var disconnectDetail: String
         var trustValidationState: String
         var appDataSendingBlocked: Bool
-        var framesPassedTotal: Int
-        var framesDroppedTotal: Int
+        var framesFromClientPassedTotal: Int
+        var framesFromClientDroppedTotal: Int
+        var framesToClientPassedTotal: Int
         var handshakeAttemptsTotal: Int
         var consecutiveFailures: Int
         var retryBackoffSec: TimeInterval
@@ -108,8 +109,9 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private var disconnectDetail = ""
     private var trustValidationState = "n/a"
     private var clientRekeyHoldAfterCommit = false
-    private var framesPassedTotal = 0
-    private var framesDroppedTotal = 0
+    private var framesFromClientPassedTotal = 0
+    private var framesFromClientDroppedTotal = 0
+    private var framesToClientPassedTotal = 0
     private let unixTimeProvider: () -> TimeInterval
     private var rekeyDueMono: TimeInterval?
 
@@ -166,8 +168,9 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             disconnectDetail: disconnectDetail,
             trustValidationState: trustValidationState,
             appDataSendingBlocked: clientRekeyHoldAfterCommit,
-            framesPassedTotal: framesPassedTotal,
-            framesDroppedTotal: framesDroppedTotal,
+            framesFromClientPassedTotal: framesFromClientPassedTotal,
+            framesFromClientDroppedTotal: framesFromClientDroppedTotal,
+            framesToClientPassedTotal: framesToClientPassedTotal,
             handshakeAttemptsTotal: 0,
             consecutiveFailures: 0,
             retryBackoffSec: 0.0,
@@ -232,6 +235,11 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         let ciphertext = try seal(payload: payload, key: outboundKey, counter: txCounter, aad: aad)
         let frame = aad + ciphertext
         txCounter &+= 1
+        if clientMode {
+            framesFromClientPassedTotal &+= 1
+        } else {
+            framesToClientPassedTotal &+= 1
+        }
         var emittedFrames = timeTriggeredFrames
         emittedFrames.append(frame)
         emittedFrames.append(contentsOf: try maybeTriggerFrameBasedRekey())
@@ -451,6 +459,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
                     let ackCiphertext = try seal(payload: Data(), key: outboundKey, counter: txCounter, aad: ackAAD)
                     emittedFrames.append(ackAAD + ackCiphertext)
                     txCounter &+= 1
+                    framesToClientPassedTotal &+= 1
                 } catch {
                     return fail(sessionID: sessionID, code: Self.authFailLifecycle)
                 }
@@ -466,7 +475,11 @@ final class ObstacleBridgeSecureLinkPskRuntime {
             recordEvent("authenticated")
             scheduleTimeBasedRekeyIfNeeded()
         }
-        framesPassedTotal &+= 1
+        if clientMode {
+            framesToClientPassedTotal &+= 1
+        } else {
+            framesFromClientPassedTotal &+= 1
+        }
         return InboundSnapshot(
             emittedFrames: emittedFrames,
             deliveredPayloads: plaintext.isEmpty ? [] : [plaintext],
@@ -637,6 +650,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         let ciphertext = try seal(payload: Data(), key: outboundKey, counter: counter, aad: aad)
         txCounter &+= 1
         clientHandshakeProofSent = true
+        framesFromClientPassedTotal &+= 1
         return aad + ciphertext
     }
 
@@ -652,7 +666,9 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         disconnectDetail = "code=\(code)"
         trustValidationState = "failed"
         recordEvent(authFailEventName(code))
-        framesDroppedTotal &+= 1
+        if !clientMode {
+            framesFromClientDroppedTotal &+= 1
+        }
         let frame = ObstacleBridgeSecureLinkPskCodec.buildFrame(
             slType: Self.typeAuthFail,
             sessionID: sessionID,
@@ -695,8 +711,9 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         disconnectReason = keepSessionID ? disconnectReason : ""
         disconnectDetail = keepSessionID ? disconnectDetail : ""
         trustValidationState = keepSessionID ? trustValidationState : "n/a"
-        framesPassedTotal = 0
-        framesDroppedTotal = 0
+        framesFromClientPassedTotal = 0
+        framesFromClientDroppedTotal = 0
+        framesToClientPassedTotal = 0
     }
 
     func expireHandshakeIfNeeded() {

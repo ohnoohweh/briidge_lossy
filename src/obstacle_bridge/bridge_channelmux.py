@@ -3630,7 +3630,12 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             raise
 
     def _register_tun_reader(self, dev: "ChannelMux.TunDevice", *, force_owner: bool = False) -> None:
-        if not self._tun_admission_allowed():
+        # A shared server-owned device may receive its first authenticated
+        # peer OPEN before the owning listener has observed its lifecycle
+        # callback.  ``force_owner`` is used only by that authenticated bind
+        # path to establish the one process-wide reader; do not leave reverse
+        # packets stranded behind that control-plane ordering race.
+        if not self._tun_admission_allowed() and not force_owner:
             return
         if self._tun_helper_manages_device(dev):
             current_owner = getattr(dev, "_reader_mux", None)
@@ -4219,6 +4224,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         owner = self._shared_tun_reader_owner_for_device(dev)
         if owner is None:
             return
+        # The registry owner is deliberately stable across listener peers, but
+        # its deferred startup registration can race the first peer's
+        # proactive TUN OPEN (Swift does this especially promptly).  The OPEN
+        # is already authenticated and has selected this owner, so atomically
+        # establish its reader before publishing the reverse route.
+        if not bool(getattr(dev, "reader_registered", False)) or getattr(dev, "_reader_mux", None) is not owner:
+            owner._register_tun_reader(dev, force_owner=True)
         svc_key = getattr(dev, "service_key", None)
         shared_peer_id = self._shared_tun_peer_id_for_device(dev, int(peer_id))
         owner._record_shared_tun_peer_binding(svc_key, shared_peer_id, int(chan))

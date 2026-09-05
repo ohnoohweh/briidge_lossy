@@ -2069,6 +2069,8 @@ class Runner:
                 stream_queue_age_ms=(session_obj.stream_queue_age_ms() if hasattr(session_obj, "stream_queue_age_ms") else None),
                 retransmitted_chunks=getattr(session_obj, "retransmitted_chunks", None),
                 stream_decode_errors=getattr(session_obj, "stream_decode_errors", None),
+                frames_to_securelink=getattr(session_obj, "frames_to_securelink", None),
+                frames_from_securelink=getattr(session_obj, "frames_from_securelink", None),
             )
         except Exception:
             return fallback or SessionMetrics()
@@ -2105,6 +2107,8 @@ class Runner:
             "stream_queue_age_ms": float(inner.stream_queue_age_ms()) if hasattr(inner, "stream_queue_age_ms") else 0.0,
             "retransmitted_chunks": int(getattr(inner, "retransmitted_chunks", 0) or 0),
             "stream_decode_errors": int(getattr(inner, "stream_decode_errors", 0) or 0),
+            "frames_to_securelink": int(getattr(inner, "frames_to_securelink", 0) or 0),
+            "frames_from_securelink": int(getattr(inner, "frames_from_securelink", 0) or 0),
             "budget": budget,
         }
 

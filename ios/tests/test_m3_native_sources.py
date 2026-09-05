@@ -477,8 +477,6 @@ def test_proxy_server_source_exists() -> None:
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider
-    assert '"frames_passed_total": snapshot.framesPassedTotal' in host_runner
-    assert '"frames_dropped_total": snapshot.framesDroppedTotal' in host_runner
     assert '"rekey_supported": snapshot.rekeySupported' in host_runner
     assert '"rekey_in_progress": snapshot.rekeyInProgress' in host_runner
     assert '"last_event": snapshot.lastEvent' in host_runner
@@ -489,8 +487,6 @@ def test_proxy_server_source_exists() -> None:
     assert '"trust_validation_state": snapshot.trustValidationState' in host_runner
     assert '"disconnect_reason": snapshot.disconnectReason' in host_runner
     assert '"disconnect_detail": snapshot.disconnectDetail' in host_runner
-    assert '"frames_passed_total": snapshot.framesPassedTotal' in provider
-    assert '"frames_dropped_total": snapshot.framesDroppedTotal' in provider
     provider_js = (ROOT / "admin_web" / "app.js").read_text(encoding="utf-8")
     assert "const rekeySupported = secureLink.rekey_supported !== false;" in provider_js
     assert "renderMetric('last_rekey_trigger', rekeySupported ? secureLink.last_rekey_trigger : 'n/a')" in provider_js
@@ -909,6 +905,9 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "typeData" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
+    assert "framesFromClientPassedTotal" in runtime
+    assert "framesFromClientDroppedTotal" in runtime
+    assert "framesToClientPassedTotal" in runtime
     assert "private var pendingRekeyStartedAt: TimeInterval?" in runtime
     assert "(timeProvider() - pendingRekeyStartedAt) >= Self.handshakeTimeoutSeconds" in runtime
 
@@ -926,6 +925,12 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
 def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert '"frames_from_client_passed_total": snapshot.framesFromClientPassedTotal' in host_runner
+    assert '"frames_from_client_dropped_total": snapshot.framesFromClientDroppedTotal' in host_runner
+    assert '"frames_to_client_passed_total": snapshot.framesToClientPassedTotal' in host_runner
+    assert '"frames_from_client_passed_total": snapshot.framesFromClientPassedTotal' in provider
+    assert '"frames_from_client_dropped_total": snapshot.framesFromClientDroppedTotal' in provider
+    assert '"frames_to_client_passed_total": snapshot.framesToClientPassedTotal' in provider
 
     assert 'secureState = "failed"' in provider
     assert 'secureState = "waiting_transport"' in provider
@@ -1033,6 +1038,9 @@ def test_udp_overlay_peer_runtime_source_exists() -> None:
     assert "flushSendQueue(" in runtime
     assert "buildOutboundControl(" in runtime
     assert "updateControlTracking(" in runtime
+    assert '"frames_to_securelink": framesToSecureLink' in runtime
+    assert '"frames_from_securelink": framesFromSecureLink' in runtime
+    assert "recordSecureLinkBoundaryFrame(direction:" in runtime
     assert "noteControlSent(" in runtime
 
 

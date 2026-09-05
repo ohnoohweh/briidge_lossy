@@ -1416,6 +1416,8 @@ final class ObstacleBridgeHostRunner {
                 "repeated_once": myudpProtocolStats["repeated_once"] ?? 0,
                 "repeated_multiple": myudpProtocolStats["repeated_multiple"] ?? 0,
                 "confirmed_total": myudpProtocolStats["confirmed_total"] ?? 0,
+                "frames_to_securelink": myudpProtocolStats["frames_to_securelink"] ?? 0,
+                "frames_from_securelink": myudpProtocolStats["frames_from_securelink"] ?? 0,
             ]
         }
         return [peer]
@@ -1806,8 +1808,9 @@ final class ObstacleBridgeHostRunner {
                 "consecutive_failures": 0,
                 "retry_backoff_sec": 0.0,
                 "next_retry_unix_ts": NSNull(),
-                "frames_passed_total": 0,
-                "frames_dropped_total": 0,
+                "frames_from_client_passed_total": 0,
+                "frames_from_client_dropped_total": 0,
+                "frames_to_client_passed_total": 0,
                 "peer_subject_id": "",
                 "peer_subject_name": "",
                 "peer_roles": [],
@@ -1874,8 +1877,9 @@ final class ObstacleBridgeHostRunner {
             "retry_backoff_sec": snapshot.retryBackoffSec,
             "next_retry_unix_ts": snapshot.nextRetryUnixTs ?? NSNull(),
             "last_rekey_trigger": snapshot.lastRekeyTrigger,
-            "frames_passed_total": snapshot.framesPassedTotal,
-            "frames_dropped_total": snapshot.framesDroppedTotal,
+            "frames_from_client_passed_total": snapshot.framesFromClientPassedTotal,
+            "frames_from_client_dropped_total": snapshot.framesFromClientDroppedTotal,
+            "frames_to_client_passed_total": snapshot.framesToClientPassedTotal,
             "peer_subject_id": "",
             "peer_subject_name": "",
             "peer_roles": [],

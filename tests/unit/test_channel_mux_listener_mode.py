@@ -2146,6 +2146,7 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.mux._tun_admission_epoch = self.mux._connection_lifecycle_epoch
         mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
         setattr(dev, '_reader_mux', self.mux)
+        dev.reader_registered = True
         with patch.object(self.mux, '_register_tun_reader') as owner_register, \
             patch.object(mux2, '_register_tun_reader') as child_register, \
             patch.object(mux2, '_send_mux') as child_send:
@@ -2173,6 +2174,66 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
         self.assertNotIn((svc_key, shared_peer_id), mux2._shared_tun_runtime_by_peer)
+
+    async def test_first_shared_tun_peer_open_activates_stable_reader_owner_before_reverse_route(self):
+        """A proactive Swift TUN OPEN must not beat deferred listener startup.
+
+        The stable registry holder owns the single TUN reader.  A first peer
+        binding therefore activates that reader before its ownership mapping is
+        published, so packets returning from the system have a dispatch path
+        even when no Python peer has connected first.
+        """
+        peer_mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        peer_mux._overlay_connected = True
+        peer_mux._accepting_enabled = True
+        peer_mux._tun_admission_epoch = peer_mux._connection_lifecycle_epoch
+        registry = ProcessSharedTunRegistry()
+        self.mux._process_shared_tun_registry = registry
+        peer_mux._process_shared_tun_registry = registry
+        spec = ChannelMux.ServiceSpec(
+            1,
+            "tun",
+            "obtun0",
+            1600,
+            "tun",
+            "obtun0",
+            1600,
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [{"peer_ref": "iphone-client", "ipv4": ["192.168.106.4"]}],
+                }
+            },
+        )
+        svc_key = ("local", 0, 1)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        for mux in (self.mux, peer_mux):
+            mux._local_services[svc_key] = spec
+            mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        registry.register(self.mux, svc_key, dev)
+        registry.attach_existing(peer_mux, "obtun0", 1600)
+
+        # Deliberately leave the prestarted owner without a reader, matching
+        # the lifecycle window in which the iPhone's proactive OPEN arrives.
+        self.assertFalse(dev.reader_registered)
+        with patch.object(self.mux, "_register_tun_reader") as owner_register, \
+             patch.object(peer_mux, "_send_mux") as peer_send:
+            peer_mux._bind_tun_channel(1, dev, peer_id=4)
+            shared_peer_id = registry.shared_peer_id_for(peer_mux, 4, create=False)
+            peer_mux._shared_tun_peer_ref_by_peer[(svc_key, shared_peer_id)] = "iphone-client"
+            peer_mux._shared_tun_peer_id_by_ref[(svc_key, "iphone-client")] = shared_peer_id
+            self.mux._shared_tun_peer_ref_by_peer[(svc_key, shared_peer_id)] = "iphone-client"
+            self.mux._shared_tun_peer_id_by_ref[(svc_key, "iphone-client")] = shared_peer_id
+            self.mux._on_local_tun_packet(dev, _ipv4_packet("192.168.106.1", "192.168.106.4"))
+
+        owner_register.assert_called_once_with(dev, force_owner=True)
+        peer_send.assert_called_once_with(
+            1,
+            ChannelMux.Proto.TUN,
+            ChannelMux.MType.DATA,
+            _ipv4_packet("192.168.106.1", "192.168.106.4"),
+            peer_id=4,
+        )
 
     async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
         self.mux.args = argparse.Namespace(

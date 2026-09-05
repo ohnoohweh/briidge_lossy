@@ -25,6 +25,8 @@ class FakeInnerSession:
         self._passthrough_enabled = False
         self.reset_sender_calls = 0
         self.reset_transport_epoch_calls = 0
+        self.frames_to_securelink = 0
+        self.frames_from_securelink = 0
 
     def connect_peer(self, peer):
         self._peer = peer
@@ -65,6 +67,10 @@ class FakeInnerSession:
                 pass
         loop.call_soon(self._peer._on_app, bytes(payload), peer_id)
         return len(payload)
+
+    def record_securelink_boundary_frame(self, direction, peer_id=None):
+        field = "frames_to_securelink" if direction == "to_securelink" else "frames_from_securelink"
+        setattr(self, field, getattr(self, field) + 1)
 
     def set_on_app_payload(self, cb): self._on_app = cb
     def set_on_state_change(self, cb): self._on_state = cb
@@ -293,6 +299,16 @@ class SecureLinkPskSessionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client_status["handshake_attempts_total"], 1)
         self.assertEqual(client_status["authenticated_sessions_total"], 1)
         self.assertIsNotNone(client_status["last_authenticated_unix_ts"])
+        self.assertEqual(client_status["frames_from_client_passed_total"], 2)
+        self.assertEqual(client_status["frames_to_client_passed_total"], 2)
+        self.assertEqual(client_status["frames_from_client_dropped_total"], 0)
+        self.assertEqual(server_status["frames_from_client_passed_total"], 2)
+        self.assertEqual(server_status["frames_to_client_passed_total"], 2)
+        self.assertEqual(server_status["frames_from_client_dropped_total"], 0)
+        self.assertEqual(client_inner.frames_to_securelink, 3)
+        self.assertEqual(client_inner.frames_from_securelink, 3)
+        self.assertEqual(server_inner.frames_to_securelink, 3)
+        self.assertEqual(server_inner.frames_from_securelink, 3)
 
     async def test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale(self):
         client_inner = FakeInnerSession()

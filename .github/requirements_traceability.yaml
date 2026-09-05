@@ -154,6 +154,8 @@ REQ-AUT-003:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
 
 REQ-AUT-004:
+  # Directional SecureLink and myUDP-boundary frame counters are pinned by the
+  # Python flow and Swift adapter/admin snapshot probes below.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
@@ -178,6 +180,7 @@ REQ-AUT-004:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
+    - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
 
 REQ-AUT-005:
   # Multi-peer SecureLink coverage waits for authenticated peer state before
@@ -1094,6 +1097,7 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_guard_reports_owned_source_when_chan_owner_cannot_be_recovered
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_requires_prestarted_server_owned_service
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_open_binds_to_prestarted_server_owned_service
+    - tests/unit/test_channel_mux_listener_mode.py::test_first_shared_tun_peer_open_activates_stable_reader_owner_before_reverse_route
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_retains_prestarted_server_owned_shared_tun_service
     - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_still_ignores_ambiguous_non_shared_own_services
     - tests/unit/test_channel_mux_listener_mode.py::test_start_prestarts_listener_shared_tun_service_while_overlay_disconnected

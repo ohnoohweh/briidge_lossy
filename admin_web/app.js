@@ -3042,6 +3042,10 @@ function renderPeerTable(rows) {
           renderMetric('myUDP Repeated Once', fmtMyUdpPercent(row, row.myudp?.repeated_once)),
           renderMetric('myUDP Repeated Multiple', fmtMyUdpPercent(row, row.myudp?.repeated_multiple)),
         ],
+        [
+          renderMetric('Frames to SecureLink', fmtMyUdpMetric(row, row.myudp?.frames_to_securelink)),
+          renderMetric('Frames from SecureLink', fmtMyUdpMetric(row, row.myudp?.frames_from_securelink)),
+        ],
       ]))
       : renderMetricStack(protocolBaseLines.concat([
         [
@@ -3095,8 +3099,9 @@ function renderPeerTable(rows) {
         renderMetric('last_rekey_trigger', rekeySupported ? secureLink.last_rekey_trigger : 'n/a'),
       ],
       [
-        renderMetric('frames_passed_total', fmtInteger(secureLink.frames_passed_total)),
-        renderMetric('frames_dropped_total', fmtInteger(secureLink.frames_dropped_total)),
+        renderMetric('frames_from_client_passed_total', fmtInteger(secureLink.frames_from_client_passed_total)),
+        renderMetric('frames_from_client_dropped_total', fmtInteger(secureLink.frames_from_client_dropped_total)),
+        renderMetric('frames_to_client_passed_total', fmtInteger(secureLink.frames_to_client_passed_total)),
       ],
       ...(isCertMode ? [[
         renderMetric('active_material_generation', fmtInteger(secureLink.active_material_generation)),

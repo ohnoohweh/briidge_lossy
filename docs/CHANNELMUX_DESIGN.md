@@ -995,6 +995,12 @@ The implementation must preserve these invariants:
 
 When the server reads a packet from the shared TUN device:
 
+Before publishing a first authenticated peer binding, the server must ensure
+that the stable shared-device reader owner is active. This makes reverse packet
+dispatch independent of which client type reaches authenticated readiness
+first; a proactive packet-adapter client must not depend on an earlier
+host-TUN/Python connection to arm the reader.
+
 1. parse the packet as IPv4 or IPv6
 2. extract destination address
 3. classify the destination:
