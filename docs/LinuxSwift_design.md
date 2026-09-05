@@ -224,6 +224,74 @@ reconnect execution. TUN service routing is deferred to later work packages.
 Work packages are ordered by dependency. A package is complete only when every
 Definition of Done item is met; compiling alone is not completion.
 
+### LSW-004D — Long-lived Linux overlay runtime owner
+
+Replace the bounded transaction owner with one foreground runtime that owns a
+live admitted transport, SecureLink session, ChannelMux binding, reconnect
+supervisor, and lifecycle state. It is the only component allowed to promote
+transport connected into application ready.
+
+Definition of Done:
+
+- the executable starts a long-lived runtime from the supported sectioned
+  configuration and does not use `--runtime-probe` as the normal data path;
+- one serialized owner coordinates lower transport I/O, SecureLink, ChannelMux,
+  reconnect timers, and shutdown without blocking listener or Admin work;
+- fresh connection epochs recreate SecureLink and ChannelMux state, reject
+  callbacks or frames from older epochs, and replay required startup/catalog
+  state only after authentication;
+- SIGINT, SIGTERM, configuration failure, transport failure, and retry
+  exhaustion leave an observable terminal state and close every owned socket
+  and timer exactly once; and
+- process-level Python-versus-Linux-Swift tests prove application-ready,
+  disconnect, reconnect, and stop transitions for TCP, cleartext WebSocket,
+  and myudp without exposing PSKs.
+
+### LSW-004E — Swift-owned service catalog and channel data plane
+
+Make the live Linux runtime own the existing service vocabulary rather than
+only exchanging supplied ChannelMux frames. This package excludes TUN: it
+carries configured TCP and UDP own/remote services through the admitted
+overlay and preserves the established ChannelMux service contracts.
+
+Definition of Done:
+
+- supported `own_servers` and `remote_servers` configuration shapes are
+  parsed, validated, and represented in Swift without invoking Python at
+  runtime;
+- the client publishes and consumes the compatible remote-service catalog,
+  including deterministic replacement, withdrawal, and reconnect replay;
+- Swift-owned TCP and UDP listeners create, route, half-close, and tear down
+  ChannelMux channels with bounded per-channel and aggregate queues;
+- connection identity, channel counters, backpressure, malformed-frame drops,
+  and service failures appear in redacted runtime/Admin snapshots; and
+- mixed-runtime E2E cases run the built Linux Swift process against a Python
+  runtime in both directions for one TCP and one UDP service over each admitted
+  transport, including service withdrawal and reconnect recovery.
+
+### LSW-004F — Service-owning overlay qualification
+
+Promote the service-owning runtime from a protocol probe to the Linux Swift
+overlay endpoint qualification lane. The shared E2E harness must exercise the
+same observable service behavior used for the supported Python runtime paths.
+
+Definition of Done:
+
+- `test_overlay_e2e.py` starts the built Linux Swift executable rather than a
+  bespoke Swift helper and runs Python-server/Linux-Swift-client and
+  Linux-Swift-server/Python-client service cases;
+- TCP and UDP service payloads, multiple sequential channels, concurrent
+  channels, connection close, and bounded reconnect are asserted end to end;
+- endpoint Admin status and peers views report layered readiness, selected peer,
+  service/channel state, and redacted failures consistently with the live
+  process;
+- unsupported QUIC, TLS WebSocket, TUN, proxy, and package/service-manager
+  modes fail with specific guidance and cannot silently fall back to Python;
+- requirements, architecture, testing, drift-report, and README evidence map
+  the process E2E tests to their delivered contracts; and
+- the qualification lane is Linux-only, skips explicitly when Swift is absent,
+  and serializes its package build safely under parallel pytest execution.
+
 ### LSW-005 — Linux TUN packet adapter
 
 Implement the raw-packet Linux TUN adapter for the established ChannelMux
@@ -323,8 +391,9 @@ Definition of Done:
 ## Suggested sequence and open decisions
 
 The admitted TCP, cleartext WebSocket, and myudp transports supply the secure
-ChannelMux baseline for the LSW-005 TUN milestone. QUIC and TLS WebSocket
-remain gated by LSW-005B and LSW-005C.
+ChannelMux baseline. LSW-004D through LSW-004F turn that baseline into a
+service-owning endpoint before the LSW-005 TUN milestone. QUIC and TLS
+WebSocket remain gated by LSW-005B and LSW-005C.
 LSW-006 through LSW-008 make the result supportable.
 
 Before implementation, select and pin the Linux crypto dependency strategy;
