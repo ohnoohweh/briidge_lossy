@@ -26,6 +26,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
     private let policy: ObstacleBridgeLinuxReconnectPolicy
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.live-runtime")
+    private let statusLock = NSLock()
+    private var statusProjection: ObstacleBridgeLinuxRuntimeStatus
     private var session: ObstacleBridgeLinuxConfiguredSession?
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
     private var retryTimer: DispatchSourceTimer?
@@ -35,8 +37,18 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil)
 
     public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init()) {
-        self.configuredRuntime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
+        self.configuredRuntime = runtime
+        self.statusProjection = runtime.status()
         self.policy = policy
+    }
+
+    /// A redacted snapshot that Admin workers may read without touching the
+    /// serialized transport owner.
+    public func status() -> ObstacleBridgeLinuxRuntimeStatus {
+        statusLock.lock()
+        defer { statusLock.unlock() }
+        return statusProjection
     }
 
     public func start() {
@@ -44,6 +56,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             guard let self else { return }
             self.cancelRetry()
             self.configuredRuntime.disconnect()
+            self.refreshStatusProjection()
             self.stopped = false
             self.attempts = 0
             self.failureReason = nil
@@ -59,6 +72,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             session = nil
             channelMux = nil
             configuredRuntime.disconnect()
+            refreshStatusProjection()
             publish(state: "stopped", failureReason: nil)
         }
     }
@@ -77,6 +91,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 self.session = nil
                 self.channelMux = nil
                 configuredRuntime.disconnect()
+                refreshStatusProjection()
                 configuredRuntime.advanceCandidate()
                 failureReason = error.localizedDescription
                 connectOrSchedule()
@@ -94,6 +109,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.session = nil
             self.channelMux = nil
             self.configuredRuntime.disconnect()
+            self.refreshStatusProjection()
             self.configuredRuntime.advanceCandidate()
             self.attempts = 0
             self.connectOrSchedule()
@@ -109,12 +125,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let connectedSession = try configuredRuntime.connect(sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
             channelMux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
+            refreshStatusProjection()
             failureReason = nil
             publish(state: "connected", failureReason: nil)
         } catch {
             session = nil
             channelMux = nil
             configuredRuntime.disconnect()
+            refreshStatusProjection()
             configuredRuntime.advanceCandidate()
             failureReason = error.localizedDescription
             guard attempts < policy.maximumAttempts else {
@@ -150,6 +168,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason)
         snapshot = value
         onSnapshot?(value)
+    }
+
+    private func refreshStatusProjection() {
+        let value = configuredRuntime.status()
+        statusLock.lock()
+        statusProjection = value
+        statusLock.unlock()
     }
 
     private func freshSessionID() -> UInt64 {
