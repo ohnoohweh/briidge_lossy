@@ -65,6 +65,8 @@ ARC-CMP-001:
     - tests/unit/test_ws_multi_peer.py::test_server_closes_peer_that_never_establishes_rtt_liveness
     - tests/unit/test_ws_multi_peer.py::test_send_app_routes_to_matching_server_peer_queue
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpFramingRoundTripsAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
@@ -683,6 +685,10 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
     - tests/unit/test_connection_snapshots.py::test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
+    - swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configDrivenRuntimePumpsProtectedDataAgainstPythonPeers
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_secure_link_psk_happy_path_other_transports
