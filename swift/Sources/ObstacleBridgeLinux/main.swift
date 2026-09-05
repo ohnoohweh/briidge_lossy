@@ -122,7 +122,7 @@ enum ObstacleBridgeLinuxMain {
         do {
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configPath)
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration)
-            let admin = ObstacleBridgeLinuxAdminServer(runtime: runtime.configuredRuntime)
+            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime)
             try admin.start(port: options.adminPort)
             runtime.start()
             let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\"}"

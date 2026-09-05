@@ -21,13 +21,19 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 /// Minimal Linux-native Admin HTTP surface. It owns no transport state and
 /// reads only the runtime's redacted status projection.
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
-    private let runtime: ObstacleBridgeLinuxConfiguredRuntime
+    private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { self.runtime = runtime }
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime) {
+        self.statusProvider = { runtime.status() }
+    }
+
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime) {
+        self.statusProvider = { liveRuntime.status() }
+    }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
         guard listener < 0 else { return }
@@ -94,7 +100,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     }
 
     private func statusData() -> Data {
-        let status = runtime.status()
+        let status = statusProvider()
         let payload: [String: Any] = [
             "platform": "linux-swift",
             "overlay_transport": status.transport,
@@ -110,7 +116,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     }
 
     private func peersData() -> Data {
-        let status = runtime.status()
+        let status = statusProvider()
         return json([["peer_id": "configured-peer", "transport": status.transport, "state": status.state, "app_ready": status.appReady, "configured_candidates": status.configuredCandidates, "active_host": status.activeHost as Any, "port": status.port, "failure_reason": status.failureReason as Any]])
     }
 
