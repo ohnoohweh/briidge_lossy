@@ -159,6 +159,30 @@ The build script now supports that split explicitly:
 
 This keeps Swift-backed regression time reasonable as we add more macOS/iOS parity cases.
 
+- `linux-swift`
+
+```bash
+swift test --filter ObstacleBridgeCryptoTests
+./scripts/build_linux_app.sh
+pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secure_link_psk_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k foreground_runtime_lifecycle
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --status
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --runtime-probe cGF5bG9hZA==
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --run --admin-port 8080
+```
+
+The Linux Swift lane pins the selected Swift Crypto backend's SHA-256,
+HMAC/HKDF/PBKDF2, AEAD, Ed25519, X25519, and Python-derived SecureLink PSK
+transcript vectors. It also exercises authenticated SecureLink PSK handshake
+and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
+peers implemented in local Python fixtures, including candidate rotation,
+reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The overlay E2E process lane invokes the built Linux executable against a
+Python SecureLink reference peer for each admitted transport, including the
+foreground runtime's readiness and SIGTERM shutdown lifecycle.
+The Linux TUN and elevated lifecycle paths remain outside this lane.
+
 - `ios`
 
 ```bash
