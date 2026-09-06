@@ -210,7 +210,9 @@ protected-data state machine, pinned by a deterministic Swift client/server
 exchange. A one-connection loopback TCP PSK echo listener verifies that server
 state across real Linux framing; foreground listener transport, ChannelMux,
 and Admin ownership remain the prerequisite for a Linux Swift service endpoint
-to accept a Python client.
+to accept a Python client. The live runtime can adopt an already-authenticated
+inbound configured session and apply its ordinary ChannelMux, service-owner,
+receive-worker, and Admin lifecycle to that epoch.
 For TCP and cleartext WebSocket it rotates through comma-separated configured
 peer candidates on connection failure and provides an explicit fresh-epoch
 reconnect operation plus a bounded fresh-epoch retry for a failed one-shot

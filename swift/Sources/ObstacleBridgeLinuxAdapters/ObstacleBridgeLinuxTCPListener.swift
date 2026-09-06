@@ -35,16 +35,38 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
     /// Authenticates one Python-compatible TCP client then echoes each
     /// protected application record until the peer closes it.
     public func serveOne(psk: Data, serverNonce: Data) throws {
+        let accepted = try acceptConfiguredSession(psk: psk, serverNonce: serverNonce)
+        defer { accepted.close() }
+        while true {
+            do { _ = try accepted.send(try accepted.receiveInbound()) }
+            catch ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF { return }
+        }
+    }
+
+    /// Accept and authenticate an inbound TCP epoch so the live runtime can
+    /// adopt the same configured-session boundary used by outgoing clients.
+    func acceptConfiguredSession(psk: Data, serverNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
         let clientFD = accept(descriptor, nil, nil)
         guard clientFD >= 0 else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(errno) }
-        defer { _ = Glibc.close(clientFD) }
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
         try writeFrame(try server.handleClientHello(readFrame(clientFD), serverNonce: serverNonce), fd: clientFD)
         try writeFrame(try server.handleClientProof(readFrame(clientFD)), fd: clientFD)
-        while true {
-            do { try writeFrame(try server.protect(server.unprotect(readFrame(clientFD))), fd: clientFD) }
-            catch ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF { return }
+        let lock = NSLock()
+        var open = true
+        let receive: () throws -> Data = { [weak self] in
+            guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+            return try self.readFrame(clientFD)
         }
+        let send: (Data) throws -> Void = { [weak self] payload in
+            guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+            try self.writeFrame(payload, fd: clientFD)
+        }
+        let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
+            lock.lock(); let shouldClose = open; open = false; lock.unlock()
+            if shouldClose { _ = Glibc.close(clientFD) }
+        })
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: port, transport: .tcp)
+        return ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: raw, secureLink: nil, secureLinkServer: server, transport: .tcp)
     }
 
     public func close() { if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 } }

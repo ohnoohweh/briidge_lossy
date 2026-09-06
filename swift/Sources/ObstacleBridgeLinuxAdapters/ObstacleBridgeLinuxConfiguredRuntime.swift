@@ -31,19 +31,21 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
 /// Config-driven lower transport plus optional SecureLink PSK state. The
 /// session is explicit: callers must close it when their higher-level runtime
 /// decides the transport epoch has ended.
-public final class ObstacleBridgeLinuxConfiguredSession {
+public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private let lower: ObstacleBridgeLinuxOverlayTransportClient
     private let lowerSession: ObstacleBridgeLinuxOverlayTransportSession
     private let secureLink: ObstacleBridgeSecureLinkPSKClient?
+    private let secureLinkServer: ObstacleBridgeSecureLinkPSKServer?
     private let requestLock = NSLock()
     private var receiveOwnerActive = false
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    fileprivate init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, transport: ObstacleBridgeLinuxTransport) {
+    init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
         self.lower = lower
         self.lowerSession = lowerSession
         self.secureLink = secureLink
+        self.secureLinkServer = secureLinkServer
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
 
@@ -53,9 +55,8 @@ public final class ObstacleBridgeLinuxConfiguredSession {
             let ownerActive = receiveOwnerActive
             requestLock.unlock()
             if ownerActive { return try sendThroughReceiveOwner(payload) }
-            if let secureLink {
-                return try secureLink.unprotect(lowerSession.exchange(secureLink.protect(payload)))
-            }
+            if let secureLink { return try secureLink.unprotect(lowerSession.exchange(secureLink.protect(payload))) }
+            if let secureLinkServer { return try secureLinkServer.unprotect(lowerSession.exchange(secureLinkServer.protect(payload))) }
             return try lowerSession.exchange(payload)
         } catch {
             snapshot = .init(transport: snapshot.transport, state: "failed", attempts: snapshot.attempts, failureReason: error.localizedDescription)
@@ -70,6 +71,7 @@ public final class ObstacleBridgeLinuxConfiguredSession {
     public func sendOneWay(_ payload: Data) throws {
         do {
             if let secureLink { try lowerSession.send(secureLink.protect(payload)) }
+            else if let secureLinkServer { try lowerSession.send(secureLinkServer.protect(payload)) }
             else { try lowerSession.send(payload) }
         } catch {
             fail(error)
@@ -80,7 +82,9 @@ public final class ObstacleBridgeLinuxConfiguredSession {
     public func receiveInbound() throws -> Data {
         do {
             let wire = try lowerSession.receive()
-            return try secureLink?.unprotect(wire) ?? wire
+            if let secureLink { return try secureLink.unprotect(wire) }
+            if let secureLinkServer { return try secureLinkServer.unprotect(wire) }
+            return wire
         } catch {
             fail(error)
             throw error
@@ -211,6 +215,18 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     public func reconnect(sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
         disconnect()
         return try connect(sessionID: sessionID, clientNonce: clientNonce)
+    }
+
+    /// Promotes an already-authenticated listener-side epoch. The caller owns
+    /// admission/handshake; subsequent ChannelMux, receive-worker, and close
+    /// behavior shares the ordinary configured-session contract.
+    func adoptInbound(_ session: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
+        activeSession?.close()
+        activeSession = session
+        connectionEpoch &+= 1
+        activeHost = host
+        secureLinkState = configuration.secureLinkPSK == nil ? "off" : "authenticated"
+        snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
 
     /// Advances the configured peer order after a connected epoch proves

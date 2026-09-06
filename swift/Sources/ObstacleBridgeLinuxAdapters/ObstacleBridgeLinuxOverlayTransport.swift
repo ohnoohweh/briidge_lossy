@@ -304,7 +304,7 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     private let lock = NSLock()
     private var closed = false
 
-    fileprivate init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, close: @escaping () -> Void) {
+    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, close: @escaping () -> Void) {
         self.exchangeImpl = exchange
         self.sendImpl = send
         self.receiveImpl = receive

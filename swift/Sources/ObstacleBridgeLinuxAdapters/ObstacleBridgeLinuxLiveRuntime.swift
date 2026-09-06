@@ -99,6 +99,37 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         }
     }
 
+    /// Listener-side entry point. The TCP/WS/myudp acceptor authenticates the
+    /// peer first, then hands the resulting configured session to the same
+    /// ChannelMux, receive-worker, service-owner, and Admin lifecycle used by
+    /// an outgoing epoch.
+    func adoptInboundSession(_ connectedSession: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
+        queue.async { [weak self] in
+            guard let self else { return }
+            self.cancelRetry()
+            self.configuredRuntime.disconnect()
+            self.stopped = false
+            self.attempts = 1
+            self.configuredRuntime.adoptInbound(connectedSession, host: host)
+            do {
+                self.session = connectedSession
+                let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: self.configuredRuntime, session: connectedSession)
+                mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
+                mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
+                self.channelMux = mux
+                self.startReceiveWorker(session: connectedSession, mux: mux)
+                try self.publishRemoteCatalog(); try self.startOwnServiceOwners()
+                self.refreshStatusProjection(); self.failureReason = nil
+                self.publish(state: "connected", failureReason: nil)
+            } catch {
+                self.failureReason = error.localizedDescription
+                connectedSession.close(); self.session = nil; self.channelMux = nil
+                self.replaceReceiveWorker(with: nil); self.stopServiceOwners(); self.stopRemoteServiceOwners()
+                self.refreshStatusProjection(); self.publish(state: "failed", failureReason: self.failureReason)
+            }
+        }
+    }
+
     public func stop() {
         queue.sync {
             stopped = true
