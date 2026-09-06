@@ -201,7 +201,8 @@ class LinuxSwiftSecureLinkPeer:
         try:
             sock_type = socket.SOCK_DGRAM if self.transport == 'myudp' else socket.SOCK_STREAM
             with socket.socket(socket.AF_INET, sock_type) as listener:
-                listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                if sock_type == socket.SOCK_STREAM:
+                    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 listener.bind(('127.0.0.1', 0))
                 if sock_type == socket.SOCK_STREAM:
                     listener.listen(1)
@@ -266,23 +267,90 @@ class LinuxSwiftSecureLinkPeer:
 
     def _serve_myudp(self, listener: socket.socket) -> None:
         peer: Optional[tuple[str, int]] = None
-        counter = 0
+        next_receive_counter = 1
+        next_send_counter = 1
+        pending: dict[int, bytes] = {}
+        stream = bytearray()
+        completed: list[bytes] = []
+        highest_received = 0
+
+        def increment(counter: int) -> int:
+            return 1 if counter == 0xffff else counter + 1
+
+        def is_ahead(candidate: int, reference: int) -> bool:
+            distance = (candidate - reference + 0xffff) % 0xffff
+            return 0 < distance < 0x7fff
+
+        def consume(chunk: bytes) -> None:
+            stream.extend(chunk)
+            while len(stream) >= 4:
+                payload_length = int.from_bytes(stream[:4], 'big')
+                if payload_length > 65_535:
+                    raise RuntimeError('Linux Swift myudp stream record too large')
+                if len(stream) < payload_length + 4:
+                    return
+                completed.append(bytes(stream[4:payload_length + 4]))
+                del stream[:payload_length + 4]
+
+        def send_control(last_in_order: int, missing: list[int]) -> None:
+            assert peer is not None
+            payload = struct.pack('!HHH', last_in_order, highest_received, len(missing))
+            payload += b''.join(struct.pack('!H', counter) for counter in missing)
+            listener.sendto(bytes([PTYPE_CONTROL]) + struct.pack('!HQQ', len(payload), 0, 0) + payload, peer)
 
         def receive() -> bytes:
-            nonlocal peer, counter
-            wire, peer = listener.recvfrom(65535)
-            if len(wire) < 27 or wire[0] != PTYPE_DATA or wire[19:21] != b'\x01\x01':
-                raise RuntimeError('Linux Swift myudp framing mismatch')
-            record_length = int.from_bytes(wire[21:23], 'big')
-            if record_length != len(wire) - 23:
-                raise RuntimeError('Linux Swift myudp record length mismatch')
-            counter = int.from_bytes(wire[23:25], 'big')
-            return wire[27:]
+            nonlocal peer, next_receive_counter, highest_received
+            while not completed:
+                wire, peer = listener.recvfrom(65535)
+                if len(wire) < 19 or len(wire) != 19 + int.from_bytes(wire[1:3], 'big'):
+                    raise RuntimeError('Linux Swift myudp framing mismatch')
+                if wire[0] in (0, PTYPE_CONTROL):
+                    continue
+                if wire[0] != PTYPE_DATA or len(wire) < 27 or wire[19] != 1:
+                    raise RuntimeError('Linux Swift myudp framing mismatch')
+                chunk_count = wire[20]
+                offset = 21
+                for _ in range(chunk_count):
+                    if offset + 6 > len(wire):
+                        raise RuntimeError('Linux Swift myudp record length mismatch')
+                    record_length = int.from_bytes(wire[offset:offset + 2], 'big')
+                    counter = int.from_bytes(wire[offset + 2:offset + 4], 'big')
+                    payload_length = int.from_bytes(wire[offset + 4:offset + 6], 'big')
+                    if record_length != payload_length + 4 or offset + 2 + record_length > len(wire):
+                        raise RuntimeError('Linux Swift myudp record length mismatch')
+                    chunk = bytes(wire[offset + 6:offset + 6 + payload_length])
+                    if counter == next_receive_counter:
+                        consume(chunk)
+                        next_receive_counter = increment(next_receive_counter)
+                        while next_receive_counter in pending:
+                            consume(pending.pop(next_receive_counter))
+                            next_receive_counter = increment(next_receive_counter)
+                    elif is_ahead(counter, next_receive_counter):
+                        pending.setdefault(counter, chunk)
+                    if highest_received == 0 or is_ahead(counter, highest_received):
+                        highest_received = counter
+                    offset += 2 + record_length
+                if offset != len(wire):
+                    raise RuntimeError('Linux Swift myudp record length mismatch')
+                last_in_order = 0 if next_receive_counter == 1 else next_receive_counter - 1
+                missing: list[int] = []
+                candidate = next_receive_counter
+                while candidate != increment(highest_received) and len(missing) < 64:
+                    if candidate not in pending:
+                        missing.append(candidate)
+                    candidate = increment(candidate)
+                send_control(last_in_order, missing)
+            return completed.pop(0)
 
         def send(payload: bytes) -> None:
+            nonlocal next_send_counter
             assert peer is not None
-            batch = b'\x01\x01' + struct.pack('!H', len(payload) + 4) + struct.pack('!HH', counter, len(payload)) + payload
-            listener.sendto(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch, peer)
+            record = struct.pack('!I', len(payload)) + payload
+            for offset in range(0, len(record), 1425):
+                chunk = record[offset:offset + 1425]
+                batch = b'\x01\x01' + struct.pack('!H', len(chunk) + 4) + struct.pack('!HH', next_send_counter, len(chunk)) + chunk
+                listener.sendto(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch, peer)
+                next_send_counter = increment(next_send_counter)
 
         self._secure_link_transaction(receive, send)
 
@@ -307,6 +375,8 @@ class LinuxSwiftSecureLinkPeer:
                     receive()
                 except TimeoutError:
                     continue
+                except ConnectionResetError:
+                    return
                 except OSError:
                     if self._closing.is_set():
                         return
@@ -324,6 +394,8 @@ class LinuxSwiftSecureLinkPeer:
                     application = receive()
                 except TimeoutError:
                     continue
+                except ConnectionResetError:
+                    return
                 except OSError:
                     if self._closing.is_set():
                         return
@@ -7558,11 +7630,16 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
     binary_path = _linux_swift_runner_binary()
     psk = 'linux-swift-listener-python-runtime-psk'
-    def reserve_port() -> int:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
-            reservation.bind(('127.0.0.1', 0))
-            return int(reservation.getsockname()[1])
-    overlay_port, service_port, target_port, swift_admin = [reserve_port() for _ in range(4)]
+    allocated_ports: set[int] = set()
+    def reserve_worker_port(slot: int) -> int:
+        port = alloc_admin_port(
+            allocated_ports,
+            case_index=950 + slot,
+            host_pair=('127.0.0.1', '::1'),
+        )
+        allocated_ports.add(port)
+        return port
+    overlay_port, service_port, target_port, swift_admin, python_admin = [reserve_worker_port(slot) for slot in range(5)]
     bounce = BounceBackServer('linux_swift_listener_python_target', service_protocol, '127.0.0.1', target_port, tmp_path / 'linux_swift_listener_python_target.log')
     swift_proc = python_proc = None
     try:
@@ -7595,6 +7672,7 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
                 *transport_args,
                 '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk, '--no-compress-layer',
                 '--channel-mux-egress', '{"mode":"direct"}', '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
+                '--admin-web-port', str(python_admin),
             ], tmp_path)
         def wait_for_swift_ready() -> dict[str, object]:
             end = time.time() + 10.0

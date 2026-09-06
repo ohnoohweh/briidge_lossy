@@ -184,8 +184,10 @@ The Linux Swift lane pins the selected Swift Crypto backend's SHA-256,
 HMAC/HKDF/PBKDF2, AEAD, Ed25519, X25519, and Python-derived SecureLink PSK
 transcript vectors. It also exercises authenticated SecureLink PSK handshake
 and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
-peers implemented in local Python fixtures, including candidate rotation,
-reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+peers implemented in local Python fixtures. The myudp fixture consumes the
+length-prefixed reliable byte stream, orders/deduplicates DATA_BATCH chunks,
+and emits cumulative CONTROL acknowledgements. Coverage includes candidate
+rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
 The portable suite also pairs the Swift PSK client and server state machines in
 one deterministic protected-data exchange, while the adapter suite exercises
 the one-connection loopback TCP listener over real Linux framing. The built
@@ -193,8 +195,10 @@ Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to
 check the next Admin-visible epoch; two simultaneous TCP/UDP local service
-channels are also carried before replacement. TCP and cleartext WebSocket use
-the same process lane; myudp listener admission is deferred to LSW-005A after
+channels are also carried before replacement. Its Swift and Python process
+ports are partitioned per `xdist` worker, including the Python Admin listener,
+so the matrix remains valid under the 16-worker Linux gate. TCP and cleartext
+WebSocket use the same process lane; myudp listener admission is deferred to LSW-005A after
 the Linux TUN adapter milestone.
 Runtime-configuration tests also require unsupported QUIC, TLS WebSocket, TUN,
 proxy-provider, and package/service-manager modes to fail before networking.

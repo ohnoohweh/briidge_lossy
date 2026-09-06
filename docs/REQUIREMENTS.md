@@ -149,7 +149,11 @@ Current implementation note:
   service round trips over TCP, cleartext WebSocket, and myudp, including the
   Python TCP RTT PING/PONG lower-transport control exchange, the WebSocket
   APP/PING/PONG envelope, myudp DATA_BATCH stream/control framing, and recovery
-  after the Python peer process restarts. An explicitly enabled Python listener may publish its
+  after the Python peer process restarts. The independent Python myudp peer used
+  for this qualification must consume the length-prefixed reliable stream,
+  order and deduplicate chunks, and return cumulative transport acknowledgements;
+  mixed-runtime process ports, including Admin listeners, are isolated across
+  parallel test workers. An explicitly enabled Python listener may publish its
   `remote_servers` catalog to connected peers; the mixed-runtime lane proves
   that Swift installs and serves that reverse-direction TCP/UDP catalog over
   all admitted overlays. The authenticated Python Admin catalog operation

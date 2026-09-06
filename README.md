@@ -10,8 +10,10 @@ The project currently targets six platform families:
   a redacted Admin Web/API including receive-loop health. The mixed-runtime
   E2E lane includes PSK and bidirectional TCP/UDP service round trips against
   the full Python runtime over TCP, cleartext WebSocket, and myudp, including
-  Python-peer process restart recovery; an opt-in Python listener catalog
-  qualifies reverse-direction service delivery and live catalog withdrawal.
+  Python-peer process restart recovery. Its process ports and Python myudp
+  reference stream are qualified under the 16-worker Linux gate; an opt-in
+  Python listener catalog qualifies reverse-direction service delivery and
+  live catalog withdrawal.
   The built executable admits Python peers sequentially in TCP and cleartext
   WebSocket `listener_mode`:
   it completes PSK plus peer-address control, adopts the live runtime, serves
