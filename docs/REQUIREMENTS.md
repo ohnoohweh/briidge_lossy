@@ -157,14 +157,13 @@ Current implementation note:
   The WebSocket boundary preserves the Python APP/PING/PONG
   subframe envelope before SecureLink processing. The portable target also
   carries the reciprocal PSK server handshake and protected-data state machine.
-  The TCP foreground `listener_mode` starts Admin before accepting sequential PSK
-  peer, answers the Python TCP PING/PONG and peer-address control frames below
+  TCP and cleartext WebSocket foreground `listener_mode` start Admin before
+  accepting sequential PSK peers and answer Python PING/PONG and peer-address control frames below
   SecureLink, adopts the authenticated session into the live runtime, and
   serves Swift-owned TCP and UDP services in a built-process E2E test. That
   test also replaces the Python client and checks the next layered Admin and
   peer projection, and proves two concurrent Swift-owned TCP/UDP service
-  channels. WebSocket
-  and myudp listener transport remain required before that server role is
+  channels over both transports. Myudp listener transport remains required before that server role is
   admitted across all Linux runtime endpoints.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.

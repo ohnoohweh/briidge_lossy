@@ -145,8 +145,8 @@ enum ObstacleBridgeLinuxMain {
             var resources: [Any] = []
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
-                let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port)
-                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.tcp-listener")
+                let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port, transport: configuration.transport, webSocketPath: configuration.webSocketPath)
+                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.\(configuration.transport.rawValue)-listener")
                 acceptor.async {
                     while listener.isOpen {
                         var generator = SystemRandomNumberGenerator()

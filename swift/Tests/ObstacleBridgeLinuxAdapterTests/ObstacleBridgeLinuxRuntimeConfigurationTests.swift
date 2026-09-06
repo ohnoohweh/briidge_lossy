@@ -26,6 +26,19 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.host == "listener")
     }
 
+    @Test func parsesCleartextWebSocketListenerConfigurationWithoutOutboundPeer() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "ws", "listener_mode": true],
+            "ws_session": ["ws_own_port": 4343, "ws_path": "/overlay"],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+        ]))
+        #expect(config.listenerMode)
+        #expect(config.transport == .ws)
+        #expect(config.port == 4343)
+        #expect(config.webSocketPath == "/overlay")
+        #expect(config.host == "listener")
+    }
+
     @Test func parsesCleartextWebSocketAndDefaultsPath() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "ws"],

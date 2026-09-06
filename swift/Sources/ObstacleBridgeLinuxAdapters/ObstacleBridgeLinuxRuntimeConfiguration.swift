@@ -93,14 +93,15 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         case .quic: throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(transport.unavailableReason ?? "Linux transport unavailable")
         }
         let session = root[sessionName] as? [String: Any] ?? [:]
-        if listenerMode && transport != .tcp {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux listener_mode currently admits tcp only; WebSocket and myudp listener owners are not yet qualified")
+        if listenerMode && transport == .myudp {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux listener_mode currently admits TCP and cleartext WebSocket only; myudp listener ownership is not yet qualified")
         }
         let host = string(session[peerKey]) ?? (listenerMode ? "listener" : "")
         guard listenerMode || !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires \(sessionName).\(peerKey)")
         }
-        let configuredPort = listenerMode ? integer(session["tcp_own_port"] ?? session[portKey]) : integer(session[portKey])
+        let ownPortKey = transport == .ws ? "ws_own_port" : "tcp_own_port"
+        let configuredPort = listenerMode ? integer(session[ownPortKey] ?? session[portKey]) : integer(session[portKey])
         guard let port = configuredPort, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires \(sessionName).\(portKey) between 1 and 65535")
         }

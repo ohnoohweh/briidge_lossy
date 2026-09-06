@@ -7548,9 +7548,10 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.parametrize('overlay_transport', ['tcp', 'ws'])
 @pytest.mark.parametrize('service_protocol', ['tcp', 'udp'])
-def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(tmp_path: Path, service_protocol: str) -> None:
-    """A Python TCP client drives services owned by the Swift listener role."""
+def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_path: Path, service_protocol: str, overlay_transport: str) -> None:
+    """A Python client drives services owned by the Swift listener role."""
     if not sys.platform.startswith('linux'):
         pytest.skip('Linux Swift process E2E coverage requires Linux')
     if not shutil.which('swift'):
@@ -7566,10 +7567,12 @@ def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(
     swift_proc = python_proc = None
     try:
         bounce.start()
-        config_path = tmp_path / 'linux_swift_tcp_listener.json'
+        session_name = 'tcp_session' if overlay_transport == 'tcp' else 'ws_session'
+        own_port_key = 'tcp_own_port' if overlay_transport == 'tcp' else 'ws_own_port'
+        config_path = tmp_path / f'linux_swift_{overlay_transport}_listener.json'
         config_path.write_text(json.dumps({
-            'runner': {'overlay_transport': 'tcp', 'listener_mode': True},
-            'tcp_session': {'tcp_own_port': overlay_port},
+            'runner': {'overlay_transport': overlay_transport, 'listener_mode': True},
+            session_name: {own_port_key: overlay_port, 'ws_path': '/overlay'},
             'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk},
             'own_servers': [{
                 'name': f'swift-listener-{service_protocol}',
@@ -7577,14 +7580,19 @@ def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(
                 'target': {'protocol': service_protocol, 'host': '127.0.0.1', 'port': target_port},
             }],
         }), encoding='utf-8')
-        swift_proc = start_proc('linux_swift_tcp_listener', [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(swift_admin), '--hold-sec', '20'], tmp_path, admin_port=swift_admin)
+        swift_proc = start_proc(f'linux_swift_{overlay_transport}_listener', [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(swift_admin), '--hold-sec', '30'], tmp_path, admin_port=swift_admin)
         time.sleep(0.25)
         python_config = tmp_path / 'linux_swift_tcp_listener_python_client.json'
         python_config.write_text('{}', encoding='utf-8')
         def start_python_client() -> Proc:
-            return start_proc('linux_swift_tcp_listener_python_client', bridge_entrypoint() + [
-                '--config', str(python_config), '--overlay-transport', 'tcp',
+            transport_args = ([
                 '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(overlay_port), '--tcp-bind', '127.0.0.1', '--tcp-own-port', '0',
+            ] if overlay_transport == 'tcp' else [
+                '--ws-peer', '127.0.0.1', '--ws-peer-port', str(overlay_port), '--ws-bind', '127.0.0.1', '--ws-own-port', '0', '--ws-path', '/overlay', '--ws-proxy-mode', 'off',
+            ])
+            return start_proc(f'linux_swift_{overlay_transport}_listener_python_client', bridge_entrypoint() + [
+                '--config', str(python_config), '--overlay-transport', overlay_transport,
+                *transport_args,
                 '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk, '--no-compress-layer',
                 '--channel-mux-egress', '{"mode":"direct"}', '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
             ], tmp_path)
@@ -7606,7 +7614,7 @@ def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(
         assert isinstance(layers, list)
         assert next(layer for layer in layers if layer['name'] == 'secure_link')['authenticated'] is True
         _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
-        assert peers == [{'peer_id': 'configured-peer', 'transport': 'tcp', 'state': 'connected', 'app_ready': True, 'configured_candidates': ['listener'], 'active_host': 'listener', 'port': overlay_port, 'failure_reason': None}]
+        assert peers == [{'peer_id': 'configured-peer', 'transport': overlay_transport, 'state': 'connected', 'app_ready': True, 'configured_candidates': ['listener'], 'active_host': 'listener', 'port': overlay_port, 'failure_reason': None}]
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
         def assert_service_round_trip(payload: bytes) -> None:
             with socket.socket(socket.AF_INET, socket_type) as client:

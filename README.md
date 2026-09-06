@@ -12,12 +12,12 @@ The project currently targets six platform families:
   the full Python runtime over TCP, cleartext WebSocket, and myudp, including
   Python-peer process restart recovery; an opt-in Python listener catalog
   qualifies reverse-direction service delivery and live catalog withdrawal.
-  The built executable also admits Python TCP peers sequentially in TCP `listener_mode`:
+  The built executable admits Python peers sequentially in TCP and cleartext
+  WebSocket `listener_mode`:
   it completes PSK plus peer-address control, adopts the live runtime, serves
   Swift-owned TCP/UDP services on concurrent channels, and admits a
   replacement client epoch.
-  WebSocket/myudp listener admission and
-  TUN remain in development.
+  Myudp listener admission and TUN remain in development.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.

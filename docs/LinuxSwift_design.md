@@ -213,9 +213,9 @@ and Admin ownership remain the prerequisite for a Linux Swift service endpoint
 to accept a Python client. The live runtime can adopt an already-authenticated
 inbound configured session and apply its ordinary ChannelMux, service-owner,
 receive-worker, and Admin lifecycle to that epoch.
-`runner.listener_mode` currently admits a TCP PSK listener without an outbound
+`runner.listener_mode` currently admits TCP and cleartext WebSocket PSK listeners without an outbound
 peer configuration and starts its local Admin endpoint before accepting the
-first peer. WebSocket and myudp listener modes remain unadmitted.
+first peer. Myudp listener mode remains unadmitted.
 For TCP and cleartext WebSocket it rotates through comma-separated configured
 peer candidates on connection failure and provides an explicit fresh-epoch
 reconnect operation plus a bounded fresh-epoch retry for a failed one-shot
@@ -282,16 +282,16 @@ Promote the service-owning runtime from a protocol probe to the Linux Swift
 overlay endpoint qualification lane. The shared E2E harness must exercise the
 same observable service behavior used for the supported Python runtime paths.
 
-Current evidence includes the built Swift executable in TCP `listener_mode`:
-it handles the Python TCP PING/PONG and peer-address control exchange below
+Current evidence includes the built Swift executable in TCP and cleartext WebSocket
+`listener_mode`: it handles the Python PING/PONG and peer-address control exchange below
 SecureLink, authenticates sequential Python clients, retires the preceding
 runtime epoch before adoption, and carries Swift-owned TCP and UDP service
 traffic. The process test also terminates and replaces the Python client,
 checking layered Admin readiness and the redacted `/api/peers` projection for
 the replacement epoch. It also carries service traffic after replacement and
 two concurrent local channels. The remaining qualification scope is
-WebSocket/myudp listener ownership and equivalent process-level service and
-lifecycle evidence.
+myudp listener ownership and equivalent process-level service and lifecycle
+evidence.
 
 Definition of Done:
 

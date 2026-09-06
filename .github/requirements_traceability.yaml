@@ -47,7 +47,7 @@ REQ-OVL-003:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
   unit_tests:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpFramingRoundTripsAgainstPythonPeer
@@ -137,7 +137,7 @@ REQ-AUT-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
     # Full Python TCP/WS/myudp catalog publication, live withdrawal, reverse service delivery, and recovery.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
@@ -159,6 +159,7 @@ REQ-AUT-001:
     - swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerCompletesPortableClientHandshake
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesTcpListenerConfigurationWithoutOutboundPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesCleartextWebSocketListenerConfigurationWithoutOutboundPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configDrivenRuntimePumpsProtectedDataAgainstPythonPeers
@@ -169,7 +170,7 @@ REQ-AUT-002:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_happy_path
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_compress_layer_mismatched_peer_settings
