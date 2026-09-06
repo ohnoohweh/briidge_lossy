@@ -185,6 +185,9 @@ transcript vectors. It also exercises authenticated SecureLink PSK handshake
 and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
 peers implemented in local Python fixtures, including candidate rotation,
 reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The portable suite also pairs the Swift PSK client and server state machines in
+one deterministic protected-data exchange; listener transport admission remains
+the separate LSW-004F runtime boundary.
 The lower-transport tests require a Python peer to send TCP, cleartext
 WebSocket, and myudp application frames before a Swift request; the live
 cleartext runtime test verifies one epoch-tagged reader and its ordered

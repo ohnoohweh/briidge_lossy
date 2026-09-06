@@ -150,6 +150,7 @@ REQ-AUT-001:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_supported_transports_with_secure_link_psk
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     - swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector
+    - swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerCompletesPortableClientHandshake
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configDrivenRuntimePumpsProtectedDataAgainstPythonPeers

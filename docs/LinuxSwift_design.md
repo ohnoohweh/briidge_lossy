@@ -205,6 +205,10 @@ reconnect timer, and shutdown. It exposes redacted `/api/status` and
 ordered stop. Process E2E coverage starts that built executable with a Python
 peer over TCP, cleartext WebSocket, and myudp, verifies application readiness,
 and verifies clean signal-driven shutdown.
+The portable crypto target also owns the reciprocal PSK server handshake and
+protected-data state machine, pinned by a deterministic Swift client/server
+exchange. Listener transport ownership is the remaining prerequisite for a
+Linux Swift process to accept a Python client.
 For TCP and cleartext WebSocket it rotates through comma-separated configured
 peer candidates on connection failure and provides an explicit fresh-epoch
 reconnect operation plus a bounded fresh-epoch retry for a failed one-shot

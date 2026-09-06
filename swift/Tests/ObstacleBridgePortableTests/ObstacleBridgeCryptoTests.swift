@@ -76,6 +76,20 @@ struct ObstacleBridgeCryptoTests {
         #expect(try ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce).hex == "ad06b7c23e7cd546b0b700ed1dc4dbb3a655f14ca3df8d580e98cd398b196991")
     }
 
+    @Test func secureLinkPskServerCompletesPortableClientHandshake() throws {
+        let psk = Data("linux-server-psk".utf8)
+        let sessionID: UInt64 = 0x0102_0304_0506_0708
+        let clientNonce = Data(0..<32)
+        let serverNonce = Data(0x20..<0x40)
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let proof = try client.handleServerHello(server.handleClientHello(try client.begin(sessionID: sessionID, clientNonce: clientNonce), serverNonce: serverNonce))
+        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+        #expect(client.isAuthenticated && server.isAuthenticated)
+        #expect(try server.unprotect(client.protect(Data("python-client".utf8))) == Data("python-client".utf8))
+        #expect(try client.unprotect(server.protect(Data("linux-server".utf8))) == Data("linux-server".utf8))
+    }
+
     @Test func invalidSizesAreRejectedBeforeCryptoOperations() throws {
         #expect(throws: ObstacleBridgeCryptoError.invalidKeyLength(expected: 32, actual: 31)) {
             try ObstacleBridgeCrypto.aesGCMSeal(plaintext: Data(), key: Data(repeating: 0, count: 31), nonce: Data(repeating: 0, count: 12))

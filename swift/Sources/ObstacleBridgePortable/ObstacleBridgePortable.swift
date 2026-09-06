@@ -406,6 +406,86 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     }
 }
 
+/// Server half of the SecureLink v1 PSK handshake.  It deliberately mirrors
+/// the client directional keys so a Linux listener can authenticate a Python
+/// client without delegating any cryptographic operation to Python.
+public final class ObstacleBridgeSecureLinkPSKServer {
+    private let psk: Data
+    private var sessionID: UInt64 = 0
+    private var clientNonce = Data()
+    private var c2sKey = Data()
+    private var s2cKey = Data()
+    private var txCounter: UInt64 = 1
+    private var rxCounter: UInt64 = 0
+    public private(set) var isAuthenticated = false
+
+    public init(psk: Data) throws {
+        guard !psk.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidPSK }
+        self.psk = psk
+    }
+
+    /// Validates CLIENT_HELLO and returns SERVER_HELLO using the supplied
+    /// nonce so callers can pin deterministic Python-derived vectors.
+    public func handleClientHello(_ wire: Data, serverNonce: Data) throws -> Data {
+        let parsed = try parse(wire)
+        guard parsed.type == 1, parsed.counter == 0, parsed.payload.count == 34,
+              parsed.payload[32] == 1, parsed.payload[33] == 0, serverNonce.count == 32 else {
+            throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+        }
+        sessionID = parsed.sessionID
+        clientNonce = Data(parsed.payload.prefix(32))
+        let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
+        c2sKey = keys.clientToServer
+        s2cKey = keys.serverToClient
+        txCounter = 1; rxCounter = 0; isAuthenticated = false
+        let proof = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
+        return frame(type: 2, counter: 0, payload: serverNonce + Data([1]) + proof)
+    }
+
+    /// Validates the encrypted empty client proof and returns the encrypted
+    /// server acknowledgement which completes the handshake.
+    public func handleClientProof(_ wire: Data) throws -> Data {
+        let plaintext = try unprotect(wire)
+        guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
+        isAuthenticated = true
+        return try protect(Data())
+    }
+
+    public func protect(_ payload: Data) throws -> Data {
+        guard sessionID != 0, s2cKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        let counter = txCounter
+        let header = frameHeader(type: 4, counter: counter)
+        let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(plaintext: payload, key: s2cKey, nonce: nonce(counter: counter), authenticatedData: header)
+        txCounter &+= 1
+        return header + ciphertext
+    }
+
+    public func unprotect(_ wire: Data) throws -> Data {
+        let parsed = try parse(wire)
+        guard parsed.type == 4, parsed.sessionID == sessionID, parsed.counter > rxCounter, c2sKey.count == 32 else {
+            throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+        }
+        do {
+            let plaintext = try ObstacleBridgeCrypto.chaChaPolyOpen(ciphertextAndTag: parsed.payload, key: c2sKey, nonce: nonce(counter: parsed.counter), authenticatedData: parsed.header)
+            rxCounter = parsed.counter
+            return plaintext
+        } catch { throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed }
+    }
+
+    private func frame(type: UInt8, counter: UInt64, payload: Data) -> Data { frameHeader(type: type, counter: counter) + payload }
+    private func frameHeader(type: UInt8, counter: UInt64) -> Data {
+        var header = Data([1, type, 0, 0]); var sid = sessionID.bigEndian; var sequence = counter.bigEndian
+        header.append(Data(bytes: &sid, count: MemoryLayout<UInt64>.size)); header.append(Data(bytes: &sequence, count: MemoryLayout<UInt64>.size))
+        return header
+    }
+    private func nonce(counter: UInt64) -> Data { var value = counter.bigEndian; return Data([0, 0, 0, 0]) + Data(bytes: &value, count: MemoryLayout<UInt64>.size) }
+    private func parse(_ wire: Data) throws -> (type: UInt8, sessionID: UInt64, counter: UInt64, header: Data, payload: Data) {
+        guard wire.count >= 20, wire[0] == 1 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
+        return (wire[1], readUInt64(wire, offset: 4), readUInt64(wire, offset: 12), Data(wire.prefix(20)), Data(wire.dropFirst(20)))
+    }
+    private func readUInt64(_ data: Data, offset: Int) -> UInt64 { (offset..<(offset + 8)).reduce(UInt64(0)) { ($0 << 8) | UInt64(data[$1]) } }
+}
+
 private extension UInt64 {
     var bigEndianData: Data {
         var value = bigEndian
