@@ -160,7 +160,9 @@ Current implementation note:
   The TCP foreground `listener_mode` starts Admin before accepting sequential PSK
   peer, answers the Python TCP PING/PONG and peer-address control frames below
   SecureLink, adopts the authenticated session into the live runtime, and
-  serves Swift-owned TCP and UDP services in a built-process E2E test. WebSocket
+  serves Swift-owned TCP and UDP services in a built-process E2E test. That
+  test also replaces the Python client and checks the next layered Admin and
+  peer projection. WebSocket
   and myudp listener transport remain required before that server role is
   admitted across all Linux runtime endpoints.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.

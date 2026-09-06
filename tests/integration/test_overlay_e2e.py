@@ -7581,23 +7581,32 @@ def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(
         time.sleep(0.25)
         python_config = tmp_path / 'linux_swift_tcp_listener_python_client.json'
         python_config.write_text('{}', encoding='utf-8')
-        python_proc = start_proc('linux_swift_tcp_listener_python_client', bridge_entrypoint() + [
-            '--config', str(python_config), '--overlay-transport', 'tcp',
-            '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(overlay_port), '--tcp-bind', '127.0.0.1', '--tcp-own-port', '0',
-            '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk, '--no-compress-layer',
-            '--channel-mux-egress', '{"mode":"direct"}', '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
-        ], tmp_path)
-        end = time.time() + 10.0
-        status: dict[str, object] = {}
-        while time.time() < end:
-            try:
-                _code, status = fetch_json(f'http://127.0.0.1:{swift_admin}/api/status', timeout=0.5)
-                if status.get('app_ready') is True:
-                    break
-            except OSError:
-                pass
-            time.sleep(0.1)
-        assert status.get('app_ready') is True, status
+        def start_python_client() -> Proc:
+            return start_proc('linux_swift_tcp_listener_python_client', bridge_entrypoint() + [
+                '--config', str(python_config), '--overlay-transport', 'tcp',
+                '--tcp-peer', '127.0.0.1', '--tcp-peer-port', str(overlay_port), '--tcp-bind', '127.0.0.1', '--tcp-own-port', '0',
+                '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk, '--no-compress-layer',
+                '--channel-mux-egress', '{"mode":"direct"}', '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
+            ], tmp_path)
+        def wait_for_swift_ready() -> dict[str, object]:
+            end = time.time() + 10.0
+            status: dict[str, object] = {}
+            while time.time() < end:
+                try:
+                    _code, status = fetch_json(f'http://127.0.0.1:{swift_admin}/api/status', timeout=0.5)
+                    if status.get('app_ready') is True:
+                        return status
+                except OSError:
+                    pass
+                time.sleep(0.1)
+            raise AssertionError(status)
+        python_proc = start_python_client()
+        status = wait_for_swift_ready()
+        layers = status['connection_layers']
+        assert isinstance(layers, list)
+        assert next(layer for layer in layers if layer['name'] == 'secure_link')['authenticated'] is True
+        _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
+        assert peers == [{'peer_id': 'configured-peer', 'transport': 'tcp', 'state': 'connected', 'app_ready': True, 'configured_candidates': ['listener'], 'active_host': 'listener', 'port': overlay_port, 'failure_reason': None}]
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
         with socket.socket(socket.AF_INET, socket_type) as client:
             client.settimeout(4.0); client.connect(('127.0.0.1', service_port))
@@ -7605,6 +7614,10 @@ def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(
             if service_protocol == 'tcp': client.sendall(payload)
             else: client.send(payload)
             assert client.recv(len(payload)) == response_payload(payload)
+        os.killpg(python_proc.popen.pid, signal.SIGTERM)
+        assert python_proc.popen.wait(timeout=5.0) in (0, 143)
+        python_proc = start_python_client()
+        assert wait_for_swift_ready()['app_ready'] is True
     finally:
         for proc in (python_proc, swift_proc):
             if proc is not None and proc.popen.poll() is None:
