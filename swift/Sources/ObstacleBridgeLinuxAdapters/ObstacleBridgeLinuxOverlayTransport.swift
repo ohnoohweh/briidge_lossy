@@ -131,28 +131,40 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             if transport == .myudp {
                 let datagram = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port)
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
-                return ObstacleBridgeLinuxOverlayTransportSession { payload in try datagram.exchange(payload) } close: { datagram.close() }
+                return ObstacleBridgeLinuxOverlayTransportSession(
+                    exchange: { payload in try datagram.exchange(payload) },
+                    send: { payload in _ = try datagram.send(payload) },
+                    receive: { try datagram.receive().payload },
+                    close: { datagram.close() }
+                )
             }
             let connection = try POSIXStreamConnection(host: host, port: port)
             if transport == .ws { try performWebSocketUpgrade(connection) }
             snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
-            return ObstacleBridgeLinuxOverlayTransportSession { [weak self] payload in
+            let send: (Data) throws -> Void = { [weak self] payload in
                 guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 switch self.transport {
                 case .tcp:
                     try connection.write(self.tcpWire(payload))
-                    return try self.readTCPApplicationFrame(connection)
                 case .ws:
                     try connection.write(self.webSocketClientFrame(opcode: 0x2, payload: payload))
-                    return try self.readWebSocketApplicationFrame(connection)
                 case .myudp:
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 case .quic:
                     throw ObstacleBridgeLinuxOverlayTransportError.unavailableTransport(self.transport.unavailableReason ?? "transport unavailable")
                 }
-            } close: {
-                connection.close()
             }
+            let receive: () throws -> Data = { [weak self] in
+                guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                switch self.transport {
+                case .tcp: return try self.readTCPApplicationFrame(connection)
+                case .ws: return try self.readWebSocketApplicationFrame(connection)
+                case .myudp, .quic: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                }
+            }
+            return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
+                connection.close()
+            })
         } catch {
             snapshot = .init(transport: transport.rawValue, state: "failed", attempts: 1, failureReason: error.localizedDescription)
             throw error
@@ -242,24 +254,44 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
 
 public final class ObstacleBridgeLinuxOverlayTransportSession {
     private let exchangeImpl: (Data) throws -> Data
+    private let sendImpl: ((Data) throws -> Void)?
+    private let receiveImpl: (() throws -> Data)?
     private let closeImpl: () -> Void
+    private let lock = NSLock()
     private var closed = false
 
-    fileprivate init(exchange: @escaping (Data) throws -> Data, close: @escaping () -> Void) {
+    fileprivate init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, close: @escaping () -> Void) {
         self.exchangeImpl = exchange
+        self.sendImpl = send
+        self.receiveImpl = receive
         self.closeImpl = close
     }
 
     deinit { close() }
 
     public func exchange(_ payload: Data) throws -> Data {
-        guard !closed else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+        lock.lock(); let isClosed = closed; lock.unlock()
+        guard !isClosed else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
         return try exchangeImpl(payload)
     }
 
+    public func send(_ payload: Data) throws {
+        lock.lock(); let isClosed = closed; lock.unlock()
+        guard !isClosed, let sendImpl else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+        try sendImpl(payload)
+    }
+
+    public func receive() throws -> Data {
+        lock.lock(); let isClosed = closed; lock.unlock()
+        guard !isClosed, let receiveImpl else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+        return try receiveImpl()
+    }
+
     public func close() {
-        guard !closed else { return }
+        lock.lock()
+        guard !closed else { lock.unlock(); return }
         closed = true
+        lock.unlock()
         closeImpl()
     }
 }

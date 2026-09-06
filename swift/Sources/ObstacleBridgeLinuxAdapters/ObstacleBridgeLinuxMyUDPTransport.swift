@@ -59,17 +59,31 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     }
 
     public func exchange(_ payload: Data) throws -> Data {
+        let counter = try send(payload)
+        let reply = try receive()
+        guard reply.counter == counter else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        return reply.payload
+    }
+
+    /// Emits one DATA batch and returns its transport counter. A duplex owner
+    /// may receive peer batches independently through `receive()`.
+    @discardableResult public func send(_ payload: Data) throws -> UInt16 {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         let counter = nextCounter
         nextCounter = counter == UInt16.max ? 1 : counter &+ 1
         let wire = try ObstacleBridgeMyUDPCodec.encodeData(payload: payload, counter: counter, transmittedNanoseconds: DispatchTime.now().uptimeNanoseconds)
-        let sent = wire.withUnsafeBytes { send(descriptor, $0.baseAddress, wire.count, 0) }
+        let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
         guard sent == wire.count else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+        return counter
+    }
+
+    public func receive() throws -> (counter: UInt16, payload: Data) {
+        guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         var buffer = [UInt8](repeating: 0, count: 1_452)
         let received = recv(descriptor, &buffer, buffer.count, 0)
         guard received > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
-        guard let decoded = try? ObstacleBridgeMyUDPCodec.decodeData(Data(buffer.prefix(Int(received)))), decoded.counter == counter else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-        return decoded.payload
+        guard let decoded = try? ObstacleBridgeMyUDPCodec.decodeData(Data(buffer.prefix(Int(received)))) else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        return (decoded.counter, decoded.payload)
     }
 
     public func close() {

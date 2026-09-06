@@ -173,6 +173,15 @@ Current implementation note:
 - `REQ-LIFE-003`: After reconnection, traffic forwarding shall resume and probes shall again succeed. A TUN return path already admitted for the current authenticated lifecycle epoch shall reconcile a stale local ChannelMux gate only when the current outer session is app-ready; it shall remain blocked for a new or disconnected epoch.
 - `REQ-LIFE-004`: Restart-specific regressions for concurrent channel cases shall remain covered so existing functionality does not silently erode.
 - `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.
+
+  Implementation note: the Linux Swift cleartext TCP, WebSocket, and myudp
+  sessions expose independent send/receive operations. Each live epoch has one
+  cancellable receive worker with a bounded handoff queue; replacement or stop
+  cancels the old reader before publishing the next epoch. Its redacted Admin
+  status reports state, epoch, frame/drop totals, queue depth, and final
+  failure. Protected SecureLink receive ownership remains outside this
+  cleartext contract until its directional counter/receive-owner work is
+  admitted.
 - `REQ-LIFE-006`: Operator-triggered reconnect requests exposed by the admin API and WebAdmin shall be scoped to the selected established peer connection rather than being process-global across unrelated peer sessions. When the selected client overlay path does not expose a transport-local reconnect hook but does expose a restart-based reconnect owner, the operator-triggered reconnect flow shall use that bounded runtime recovery path instead of failing as unsupported.
 - `REQ-LIFE-007`: Startup through the default runtime entrypoint shall tolerate a missing or empty default config file by continuing with built-in defaults, while malformed JSON config input shall fail fast with a clear error.
 - `REQ-LIFE-008`: When startup uses the default runtime entrypoint and Admin Web is enabled, the launcher shall print a clickable Admin Web entrypoint URL derived from the effective Admin Web bind/port/path configuration before handing control to the supervised bridge process. For wildcard/global Admin Web binds, the launcher may additionally print clearly labeled network-reachability hints derived from the local host and best-effort public address discovery, but those extra lines shall remain advisory rather than a guarantee of external reachability and may be emitted after the supervised bridge process has already started so slow public-address discovery does not delay local operator access. When the launcher is using its default redirected-child mode and the supervised bridge process exits nonzero during startup, the launcher shall replay any captured child stderr tail to the operator instead of failing silently.

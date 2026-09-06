@@ -676,16 +676,26 @@ REQ-LIFE-004:
 REQ-LIFE-005:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_service_round_trip
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_remote_catalog_listener_round_trip
     - tests/integration/test_reconnect_regression.py::test_reconnect_retry_uses_configured_minimum_delay
     - tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsAuthenticatedSessionAndStops
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeReportsRetryExhaustionAndCancelsItOnStop
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeInstallsAndWithdrawsPeerRemoteCatalog
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeRoutesLocalTcpServiceFramesThroughAuthenticatedPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeRoutesLocalUdpServiceFramesThroughAuthenticatedPythonPeer
     - tests/unit/test_launcher_entrypoint.py::test_launcher_waits_interval_for_code_77
     - tests/unit/test_launcher_entrypoint.py::test_show_restart_countdown_starts_and_closes_placeholder
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_peer_status_reports_python_reconnect_timer_fields
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusReflectsConnectAndDisconnectTransitions
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxReceiveWorkerTests.swift::workerDeliversEpochTaggedFramesAndCancelsBlockingReceive
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionReceivesPeerFrameBeforeLocalSend
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketDuplexSessionReceivesPeerFrameBeforeLocalSend
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration
 
 REQ-LIFE-006:
   integration_tests:

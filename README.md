@@ -6,8 +6,9 @@ The project currently targets six platform families:
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
 - **Linux Swift build baseline**: a Swift Package Manager executable and
   portable crypto contract build on Linux, with TCP, cleartext WebSocket, and
-  myudp overlay sessions plus a redacted Admin Web/API; TUN runtime remains in
-  development.
+  myudp overlay sessions, Swift-owned TCP/UDP service/catalog primitives, and
+  a redacted Admin Web/API including cleartext receive-loop health; protected
+  asynchronous receive and the TUN runtime remain in development.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.

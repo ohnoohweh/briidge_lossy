@@ -219,6 +219,29 @@ is created; they are not advertised as Linux runtime features.
 The portable ChannelMux header codec and Linux mux binding admit only
 `app_ready` sessions, bound one synchronous frame in flight, replay supplied
 startup/catalog frames on each fresh binding, and reject stale reconnect epochs.
+The Linux configuration reader represents supported structured TCP and UDP
+`own_servers` and `remote_servers` entries directly. Its service layer has
+Python-compatible RS3 catalog encoding plus deterministic epoch replacement
+and withdrawal state, and POSIX TCP/UDP listener owners that create local
+ChannelMux OPEN/DATA/CLOSE frames with bounded queues. The foreground runtime
+starts configured local listeners only after its authenticated overlay epoch is
+ready and exposes aggregate service channel, queue, malformed-frame, drop, and
+failure counters on the redacted Admin status response. Received RS3 catalogs
+atomically replace or withdraw remote listener owners and the public
+authenticated-frame handoff routes matching OPEN/DATA/CLOSE frames into them.
+Each cleartext lower transport session exposes independent send and receive
+operations. The live runtime attaches one epoch-tagged receive worker, with a
+bounded handoff queue, to TCP, cleartext WebSocket, and myudp sessions; stop
+and reconnect cancel that worker before a replacement epoch becomes visible.
+Redacted Admin status exposes its state, epoch, frame/drop totals, queue depth,
+and final receive failure. SecureLink-protected receive ownership remains the
+explicit scope of LSW-004E-B. Process-level mixed-runtime service
+qualification remains required before these service primitives constitute a
+complete service-owning endpoint. The Linux process E2E lane already proves
+local TCP and UDP listener round trips through the built foreground executable
+over TCP, cleartext WebSocket, and myudp against the Python SecureLink/ChannelMux
+reference endpoint; reverse-direction catalog delivery, reconnect recovery,
+and full Python-runtime service qualification remain pending.
 The Linux myudp owner exchanges v2 DATA batches over connected POSIX UDP,
 advances candidates after a failed live epoch, recovers after a silent-peer
 timeout, and carries SecureLink PSK plus ChannelMux frames against Python
@@ -230,6 +253,32 @@ reconnect execution. TUN service routing is deferred to later work packages.
 
 Work packages are ordered by dependency. A package is complete only when every
 Definition of Done item is met; compiling alone is not completion.
+
+### LSW-004E-B — Duplex SecureLink and ChannelMux dispatch ownership
+
+Make SecureLink protection state and ChannelMux receive dispatch safe for the
+duplex lower-session contract. The authenticated session owns directional
+counters and is the only component permitted to decrypt inbound frames or
+advance their receive state.
+
+Definition of Done:
+
+- SecureLink has separate, serialized transmit and receive counter/key state;
+  handshake, acknowledgement, application traffic, rekey, EOF, and failure
+  transitions remain byte-compatible with the Python implementation;
+- a receive worker unprotects each valid inbound application record exactly
+  once and dispatches it on the live runtime queue to ChannelMux; malformed,
+  replayed, stale-epoch, or unauthenticated records fail closed and increment
+  redacted diagnostics;
+- ChannelMux control frames, including RS3 catalog publication/replacement and
+  OPEN/DATA/CLOSE, may arrive without a locally queued request and are routed
+  to the service owner in receive order;
+- send and receive failures race safely with stop/reconnect: no frame is
+  delivered after epoch withdrawal, no nonce/counter is reused, and only one
+  reconnect decision is emitted; and
+- focused Python-derived SecureLink vectors plus mixed Swift/Python duplex
+  tests pin simultaneous inbound/outbound traffic, peer-initiated catalog
+  updates, and a mid-stream reconnect for every admitted lower transport.
 
 ### LSW-004E — Swift-owned service catalog and channel data plane
 
@@ -375,9 +424,11 @@ Definition of Done:
 ## Suggested sequence and open decisions
 
 The admitted TCP, cleartext WebSocket, and myudp transports and foreground
-runtime supply the secure ChannelMux baseline. LSW-004E and LSW-004F turn that
-baseline into a service-owning endpoint before the LSW-005 TUN milestone. QUIC
-and TLS WebSocket remain gated by LSW-005B and LSW-005C.
+runtime provide the duplex cleartext lower-transport baseline. LSW-004E-B gives
+SecureLink/ChannelMux one protected receive-owner contract. LSW-004E and
+LSW-004F then turn it into a service-owning endpoint
+before the LSW-005 TUN milestone. QUIC and TLS WebSocket remain gated by
+LSW-005B and LSW-005C.
 LSW-006 through LSW-008 make the result supportable.
 
 Before implementation, select and pin the Linux crypto dependency strategy;

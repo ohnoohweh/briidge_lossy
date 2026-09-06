@@ -36,6 +36,41 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.port == 4242)
     }
 
+    @Test func parsesStructuredOwnAndRemoteServices() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "channel_mux": [
+                "own_servers": [[
+                    "name": "tcp-echo",
+                    "listen": ["protocol": "tcp", "bind": "127.0.0.1", "port": 7001],
+                    "target": ["protocol": "tcp", "host": "127.0.0.1", "port": 7002],
+                ]],
+                "remote_servers": [[
+                    "listen": ["protocol": "udp", "bind": "127.0.0.1", "port": 8001],
+                    "target": ["protocol": "udp", "host": "127.0.0.1", "port": 8002],
+                ]],
+            ],
+        ]))
+        #expect(config.ownServices.count == 1)
+        #expect(config.ownServices[0].name == "tcp-echo")
+        #expect(config.ownServices[0].listenProtocol == .tcp)
+        #expect(config.remoteServices[0].targetProtocol == .udp)
+    }
+
+    @Test func rejectsUnsupportedOrMismatchedServiceDefinitions() {
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has invalid own_servers service at index 0")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "tcp"],
+                "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+                "own_servers": [[
+                    "listen": ["protocol": "tcp", "bind": "127.0.0.1", "port": 7001],
+                    "target": ["protocol": "udp", "host": "127.0.0.1", "port": 7002],
+                ]],
+            ]))
+        }
+    }
+
     @Test func rejectsUnqualifiedOrUnsafeRuntimeChoicesBeforeNetworking() {
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC is unavailable: the Network.framework owner has no qualified Linux backend")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(["runner": ["overlay_transport": "quic"]]))

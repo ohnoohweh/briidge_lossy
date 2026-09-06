@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import ObstacleBridgePortable
 
 public struct ObstacleBridgeLinuxLiveRuntimeSnapshot: Equatable, Sendable {
     public let state: String
@@ -31,6 +32,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var session: ObstacleBridgeLinuxConfiguredSession?
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
     private var retryTimer: DispatchSourceTimer?
+    private var receiveWorker: ObstacleBridgeLinuxReceiveWorker?
+    private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
+    private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
+    private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
+    private let remoteCatalogStore = ObstacleBridgeLinuxServiceCatalogStore()
+    private let catalogInstanceID: UInt64
     private var stopped = true
     private var attempts = 0
     private var failureReason: String?
@@ -41,14 +48,42 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.configuredRuntime = runtime
         self.statusProjection = runtime.status()
         self.policy = policy
+        var generator = SystemRandomNumberGenerator()
+        self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
     }
 
     /// A redacted snapshot that Admin workers may read without touching the
     /// serialized transport owner.
     public func status() -> ObstacleBridgeLinuxRuntimeStatus {
         statusLock.lock()
-        defer { statusLock.unlock() }
-        return statusProjection
+        let receive = receiveWorker?.snapshot()
+        let summaries = (serviceOwners + remoteServiceOwners).map { $0.snapshot() }
+        let activeTCPChannels = summaries.reduce(0) { $0 + $1.activeTCPChannels }
+        let activeUDPChannels = summaries.reduce(0) { $0 + $1.activeUDPChannels }
+        let queuedServiceFrames = summaries.reduce(0) { $0 + $1.queuedFrames }
+        let droppedServiceFrames = summaries.reduce(0) { $0 + $1.droppedFrames }
+        let malformedServiceFrames = summaries.reduce(0) { $0 + $1.malformedFrames }
+        let serviceFailures = summaries.reduce(0) { $0 + $1.serviceFailures }
+        let openedTCPChannels = summaries.reduce(0) { $0 + $1.openedTCPChannels }
+        let openedUDPChannels = summaries.reduce(0) { $0 + $1.openedUDPChannels }
+        let base = statusProjection
+        statusLock.unlock()
+        return .init(
+            transport: base.transport, state: base.state, attempts: base.attempts,
+            failureReason: base.failureReason, configuredCandidates: base.configuredCandidates,
+            activeHost: base.activeHost, port: base.port, secureLinkMode: base.secureLinkMode,
+            secureLinkState: base.secureLinkState, appReady: base.appReady,
+            activeTCPChannels: activeTCPChannels, activeUDPChannels: activeUDPChannels,
+            queuedServiceFrames: queuedServiceFrames, droppedServiceFrames: droppedServiceFrames,
+            malformedServiceFrames: malformedServiceFrames, serviceFailures: serviceFailures,
+            openedTCPChannels: openedTCPChannels, openedUDPChannels: openedUDPChannels,
+            receiveLoopState: receive?.state ?? "stopped",
+            receiveEpoch: receive?.epoch ?? base.receiveEpoch,
+            receivedFrames: receive?.receivedFrames ?? 0,
+            droppedReceiveFrames: receive?.droppedFrames ?? 0,
+            receiveQueueDepth: receive?.queueDepth ?? 0,
+            receiveFailureReason: receive?.failureReason
+        )
     }
 
     public func start() {
@@ -71,6 +106,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             session?.close()
             session = nil
             channelMux = nil
+            replaceReceiveWorker(with: nil)
+            stopServiceOwners()
+            stopRemoteServiceOwners()
             configuredRuntime.disconnect()
             refreshStatusProjection()
             publish(state: "stopped", failureReason: nil)
@@ -108,12 +146,33 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.session?.close()
             self.session = nil
             self.channelMux = nil
+            self.replaceReceiveWorker(with: nil)
+            self.stopServiceOwners()
+            self.stopRemoteServiceOwners()
             self.configuredRuntime.disconnect()
             self.refreshStatusProjection()
             self.configuredRuntime.advanceCandidate()
             self.attempts = 0
             self.connectOrSchedule()
         }
+    }
+
+    /// Bound ports for configured local services. This supports operational
+    /// discovery when a service deliberately requests port zero in tests or a
+    /// managed deployment; it contains no peer, payload, or secret material.
+    public func localServicePorts() -> [UInt16: Int] {
+        queue.sync { Dictionary(uniqueKeysWithValues: serviceOwners.map { ($0.specification.serviceID, $0.port) }) }
+    }
+
+    /// Delivers one authenticated ChannelMux frame from the overlay reader.
+    /// The current lower transport supplies replies synchronously; this API is
+    /// also the receive-side handoff used by a future duplex reader.
+    public func receiveChannelMuxFrame(_ frame: ObstacleBridgeChannelMuxFrame) {
+        queue.async { [weak self] in self?.routeInboundFrame(frame) }
+    }
+
+    public func remoteServicePorts() -> [UInt16: Int] {
+        queue.sync { Dictionary(uniqueKeysWithValues: remoteServiceOwners.map { ($0.specification.serviceID, $0.port) }) }
     }
 
     private func connectOrSchedule() {
@@ -125,12 +184,18 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let connectedSession = try configuredRuntime.connect(sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
             channelMux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
+            startCleartextReceiveWorker(session: connectedSession)
+            try publishRemoteCatalog()
+            try startOwnServiceOwners()
             refreshStatusProjection()
             failureReason = nil
             publish(state: "connected", failureReason: nil)
         } catch {
             session = nil
             channelMux = nil
+            replaceReceiveWorker(with: nil)
+            stopServiceOwners()
+            stopRemoteServiceOwners()
             configuredRuntime.disconnect()
             refreshStatusProjection()
             configuredRuntime.advanceCandidate()
@@ -177,6 +242,114 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         statusLock.unlock()
     }
 
+    private func startOwnServiceOwners() throws {
+        stopServiceOwners()
+        for spec in configuredRuntime.configuration.ownServices {
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec) { [weak self] owner, frames in
+                guard let runtime = self else { return }
+                runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
+            }
+            try owner.start()
+            serviceOwners.append(owner)
+        }
+    }
+
+    private func stopServiceOwners() {
+        for owner in serviceOwners { owner.stop() }
+        serviceOwners.removeAll()
+    }
+
+    private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
+        stopRemoteServiceOwners()
+        for spec in specs {
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec) { [weak self] owner, frames in
+                guard let runtime = self else { return }
+                runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
+            }
+            try owner.start()
+            remoteServiceOwners.append(owner)
+        }
+    }
+
+    private func stopRemoteServiceOwners() {
+        for owner in remoteServiceOwners { owner.stop() }
+        remoteServiceOwners.removeAll()
+        channelOwners.removeAll()
+    }
+
+    private func publishRemoteCatalog() throws {
+        guard let channelMux, !configuredRuntime.configuration.remoteServices.isEmpty else { return }
+        let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
+        let payload = try ObstacleBridgeLinuxServiceCatalog.encode(instanceID: catalogInstanceID, connectionSequence: sequence, services: configuredRuntime.configuration.remoteServices)
+        let reply = try channelMux.exchange(.init(channelID: 0, protocolType: .udp, counter: 0, messageType: .remoteServicesSetV2, body: payload))
+        routeInboundFrame(reply)
+    }
+
+    private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
+        guard !stopped, let channelMux else { return }
+        for frame in frames {
+            if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
+            do { routeInboundFrame(try channelMux.exchange(frame)) }
+            catch {
+                failureReason = error.localizedDescription
+                reconnect()
+                return
+            }
+        }
+    }
+
+    private func startCleartextReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession) {
+        guard session.supportsDuplexReceive else { return }
+        let epoch = configuredRuntime.connectionEpoch
+        let worker = ObstacleBridgeLinuxReceiveWorker(epoch: epoch, receive: { try session.receiveRaw() }, cancelReceive: { session.cancelReceive() }) { [weak self] workerEpoch, payload in
+            self?.queue.async { [weak self] in
+                guard let self, self.configuredRuntime.connectionEpoch == workerEpoch,
+                      let frame = try? ObstacleBridgeChannelMuxCodec.decode(payload) else { return }
+                self.routeInboundFrame(frame)
+            }
+        }
+        replaceReceiveWorker(with: worker)
+        worker.start()
+    }
+
+    /// The Admin queue may snapshot this reference while the serialized runtime
+    /// replaces an epoch. Keep the publication atomic and cancel an old reader
+    /// only after no status reader can retain the mutable owner slot.
+    private func replaceReceiveWorker(with worker: ObstacleBridgeLinuxReceiveWorker?) {
+        statusLock.lock()
+        let previous = receiveWorker
+        receiveWorker = worker
+        statusLock.unlock()
+        previous?.stop()
+    }
+
+    private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {
+        if frame.messageType == .remoteServicesSetV2 {
+            guard let decoded = try? ObstacleBridgeLinuxServiceCatalog.decode(frame.body),
+                  let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services),
+                  install.accepted else { return }
+            do { try startRemoteServiceOwners(install.installed) }
+            catch { failureReason = error.localizedDescription }
+            return
+        }
+        let key = channelKey(frame)
+        if frame.messageType == .open {
+            if let existing = channelOwners[key] {
+                existing.handleInbound(frame)
+                return
+            }
+            guard let owner = remoteServiceOwners.first(where: { $0.acceptsInboundOpen(frame) }) else { return }
+            channelOwners[key] = owner
+            owner.handleInbound(frame)
+            return
+        }
+        guard let owner = channelOwners[key] else { return }
+        owner.handleInbound(frame)
+        if frame.messageType == .close { channelOwners.removeValue(forKey: key) }
+    }
+
+    private func channelKey(_ frame: ObstacleBridgeChannelMuxFrame) -> String { "\(frame.protocolType.rawValue):\(frame.channelID)" }
+
     private func freshSessionID() -> UInt64 {
         var generator = SystemRandomNumberGenerator()
         return UInt64.random(in: 1...UInt64.max, using: &generator)
@@ -189,6 +362,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     deinit {
         retryTimer?.cancel()
+        stopServiceOwners()
+        stopRemoteServiceOwners()
         configuredRuntime.disconnect()
     }
 }

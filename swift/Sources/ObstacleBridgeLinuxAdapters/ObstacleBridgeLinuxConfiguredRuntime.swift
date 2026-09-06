@@ -12,6 +12,20 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
     public let secureLinkMode: String
     public let secureLinkState: String
     public let appReady: Bool
+    public let activeTCPChannels: Int
+    public let activeUDPChannels: Int
+    public let queuedServiceFrames: Int
+    public let droppedServiceFrames: Int
+    public let malformedServiceFrames: Int
+    public let serviceFailures: Int
+    public let openedTCPChannels: Int
+    public let openedUDPChannels: Int
+    public let receiveLoopState: String
+    public let receiveEpoch: UInt64
+    public let receivedFrames: Int
+    public let droppedReceiveFrames: Int
+    public let receiveQueueDepth: Int
+    public let receiveFailureReason: String?
 }
 
 /// Config-driven lower transport plus optional SecureLink PSK state. The
@@ -41,6 +55,15 @@ public final class ObstacleBridgeLinuxConfiguredSession {
             throw error
         }
     }
+
+    /// Raw lower receive is safe only for cleartext epochs. SecureLink
+    /// directional counter ownership is introduced by LSW-004E-B.
+    public var supportsDuplexReceive: Bool { secureLink == nil }
+    public func receiveRaw() throws -> Data {
+        guard secureLink == nil else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+        return try lowerSession.receive()
+    }
+    public func cancelReceive() { lowerSession.close() }
 
     public func close() {
         lowerSession.close()
@@ -147,7 +170,21 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             port: configuration.port,
             secureLinkMode: configuration.secureLinkPSK == nil ? "off" : "psk",
             secureLinkState: secureLinkState,
-            appReady: snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated")
+            appReady: snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated"),
+            activeTCPChannels: 0,
+            activeUDPChannels: 0,
+            queuedServiceFrames: 0,
+            droppedServiceFrames: 0,
+            malformedServiceFrames: 0,
+            serviceFailures: 0,
+            openedTCPChannels: 0,
+            openedUDPChannels: 0,
+            receiveLoopState: "stopped",
+            receiveEpoch: connectionEpoch,
+            receivedFrames: 0,
+            droppedReceiveFrames: 0,
+            receiveQueueDepth: 0,
+            receiveFailureReason: nil
         )
     }
 

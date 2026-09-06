@@ -22,6 +22,13 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(status["app_ready"] as? Bool == false)
         let layers = status["connection_layers"] as? [[String: Any]]
         #expect(layers?.count == 2)
+        let mux = status["channel_mux"] as? [String: Any]
+        #expect(mux?["tcp_open"] as? Int == 0)
+        #expect(mux?["udp_open"] as? Int == 0)
+        #expect(mux?["dropped_frames"] as? Int == 0)
+        let receiveLoop = status["receive_loop"] as? [String: Any]
+        #expect(receiveLoop?["state"] as? String == "stopped")
+        #expect(receiveLoop?["queue_depth"] as? Int == 0)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: status), as: UTF8.self).contains("never-expose-this"))
 
         let peers = try await getJSON("http://127.0.0.1:\(server.port)/api/peers")

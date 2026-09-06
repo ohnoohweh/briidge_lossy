@@ -111,6 +111,24 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],
                 ["name": "secure_link", "state": status.secureLinkState, "authenticated": status.secureLinkState == "authenticated"],
             ],
+            "channel_mux": [
+                "tcp_open": status.activeTCPChannels,
+                "udp_open": status.activeUDPChannels,
+                "queued_frames": status.queuedServiceFrames,
+                "dropped_frames": status.droppedServiceFrames,
+                "malformed_frames": status.malformedServiceFrames,
+                "service_failures": status.serviceFailures,
+                "tcp_opened_total": status.openedTCPChannels,
+                "udp_opened_total": status.openedUDPChannels,
+            ],
+            "receive_loop": [
+                "state": status.receiveLoopState,
+                "connection_epoch": status.receiveEpoch,
+                "received_frames": status.receivedFrames,
+                "dropped_frames": status.droppedReceiveFrames,
+                "queue_depth": status.receiveQueueDepth,
+                "failure_reason": status.receiveFailureReason as Any,
+            ],
         ]
         return json(payload)
     }

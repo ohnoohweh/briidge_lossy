@@ -143,10 +143,11 @@ class MyudpDelayLossCase:
 class LinuxSwiftSecureLinkPeer:
     """Small Python reference endpoint for the Linux Swift process E2E lane."""
 
-    def __init__(self, transport: str, psk: bytes, *, keep_open: bool = False) -> None:
+    def __init__(self, transport: str, psk: bytes, *, keep_open: bool = False, mux_echo: bool = False) -> None:
         self.transport = transport
         self.psk = bytes(psk)
         self.keep_open = keep_open
+        self.mux_echo = mux_echo
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
@@ -295,7 +296,7 @@ class LinuxSwiftSecureLinkPeer:
             raise RuntimeError('Linux Swift SecureLink client proof mismatch')
         acknowledgement = self._header(4, session_id, 1)
         send(acknowledgement + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (1).to_bytes(8, 'big'), b'', acknowledgement))
-        if self.keep_open:
+        if self.keep_open and not self.mux_echo:
             while not self._closing.is_set():
                 try:
                     receive()
@@ -310,6 +311,34 @@ class LinuxSwiftSecureLinkPeer:
                         return
                     raise
                 raise RuntimeError('unexpected application payload from idle Linux Swift runtime')
+            return
+        if self.mux_echo:
+            counter = 2
+            while not self._closing.is_set():
+                try:
+                    application = receive()
+                except TimeoutError:
+                    continue
+                except OSError:
+                    if self._closing.is_set():
+                        return
+                    raise
+                except RuntimeError as exc:
+                    if str(exc) == 'unexpected EOF from Linux Swift client':
+                        return
+                    raise
+                plaintext = ChaCha20Poly1305(client_to_server).decrypt(
+                    b'\0' * 4 + counter.to_bytes(8, 'big'), application[20:], application[:20],
+                )
+                if len(plaintext) >= 8 and plaintext[:2] == b'O5' and plaintext[5] == 1:
+                    reply_plaintext = plaintext[:5] + b'\0\0\0'
+                else:
+                    reply_plaintext = plaintext
+                response = self._header(4, session_id, counter)
+                send(response + ChaCha20Poly1305(server_to_client).encrypt(
+                    b'\0' * 4 + counter.to_bytes(8, 'big'), reply_plaintext, response,
+                ))
+                counter += 1
             return
         application = receive()
         plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
@@ -7177,6 +7206,151 @@ def test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle(
         if proc is not None:
             if proc.popen.poll() is None:
                 os.killpg(proc.popen.pid, signal.SIGTERM)
+            assert proc.popen.wait(timeout=5.0) == 0
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize(
+    ('transport', 'session_name', 'peer_key', 'port_key'),
+    [
+        ('tcp', 'tcp_session', 'tcp_peer', 'tcp_peer_port'),
+        ('ws', 'ws_session', 'ws_peer', 'ws_peer_port'),
+        ('myudp', 'udp_session', 'udp_peer', 'udp_peer_port'),
+    ],
+)
+@pytest.mark.parametrize('service_protocol', ['tcp', 'udp'])
+def test_overlay_e2e_python_peer_linux_swift_service_round_trip(
+    tmp_path: Path,
+    service_protocol: str,
+    transport: str,
+    session_name: str,
+    peer_key: str,
+    port_key: str,
+) -> None:
+    """The built foreground client owns a TCP/UDP listener and returns mux data."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-service-e2e-psk'
+    peer = LinuxSwiftSecureLinkPeer(transport, psk, keep_open=True, mux_echo=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        service_port = int(reservation.getsockname()[1])
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    proc = None
+    try:
+        config_path = tmp_path / f'linux_swift_{service_protocol}_service_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': transport},
+            session_name: {peer_key: '127.0.0.1', port_key: peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+            'own_servers': [{
+                'name': f'python-reference-{service_protocol}-echo',
+                'listen': {'protocol': service_protocol, 'bind': '127.0.0.1', 'port': service_port},
+                'target': {'protocol': service_protocol, 'host': '127.0.0.1', 'port': 7},
+            }],
+        }), encoding='utf-8')
+        if transport == 'ws':
+            runtime_config = json.loads(config_path.read_text(encoding='utf-8'))
+            runtime_config[session_name]['ws_path'] = '/overlay'
+            runtime_config[session_name]['ws_tls'] = False
+            config_path.write_text(json.dumps(runtime_config), encoding='utf-8')
+        proc = start_proc(
+            f'linux_swift_{service_protocol}_service',
+            [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '20'],
+            tmp_path,
+            admin_port=admin_port,
+        )
+        end = time.time() + 10.0
+        status = None
+        while time.time() < end:
+            try:
+                _code, status = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.0)
+            except Exception:
+                status = None
+            if status and status.get('app_ready') is True:
+                break
+            time.sleep(0.1)
+        assert status and status.get('app_ready') is True, status
+        socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
+        with socket.socket(socket.AF_INET, socket_type) as client:
+            client.settimeout(3.0)
+            client.connect(('127.0.0.1', service_port))
+            client.settimeout(3.0)
+            payload = f'linux-swift-{service_protocol}-service'.encode('ascii')
+            if service_protocol == 'tcp':
+                client.sendall(payload)
+            else:
+                client.send(payload)
+            assert client.recv(len(payload)) == payload
+        _code, status = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1.0)
+        assert int(status['channel_mux'][f'{service_protocol}_opened_total']) >= 1
+    finally:
+        if proc is not None and proc.popen.poll() is None:
+            os.killpg(proc.popen.pid, signal.SIGTERM)
+            assert proc.popen.wait(timeout=5.0) == 0
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_remote_catalog_listener_round_trip(tmp_path: Path) -> None:
+    """RS3 replay from the peer installs the requested remote TCP listener."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-remote-catalog-e2e-psk'
+    peer = LinuxSwiftSecureLinkPeer('tcp', psk, keep_open=True, mux_echo=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        service_port = int(reservation.getsockname()[1])
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    proc = None
+    try:
+        config_path = tmp_path / 'linux_swift_remote_catalog_runtime.json'
+        remote_service = {
+            'name': 'python-requested-tcp-echo',
+            'listen': {'protocol': 'tcp', 'bind': '127.0.0.1', 'port': service_port},
+            'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 7},
+        }
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'tcp'},
+            'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+            'remote_servers': [remote_service],
+        }), encoding='utf-8')
+        proc = start_proc(
+            'linux_swift_remote_catalog_service',
+            [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '20'],
+            tmp_path,
+            admin_port=admin_port,
+        )
+        end = time.time() + 10.0
+        while time.time() < end:
+            try:
+                with socket.create_connection(('127.0.0.1', service_port), timeout=0.2) as client:
+                    client.settimeout(3.0)
+                    payload = b'linux-swift-remote-catalog'
+                    client.sendall(payload)
+                    assert client.recv(len(payload)) == payload
+                    break
+            except OSError:
+                time.sleep(0.1)
+        else:
+            raise AssertionError('remote catalog listener did not become available')
+    finally:
+        if proc is not None and proc.popen.poll() is None:
+            os.killpg(proc.popen.pid, signal.SIGTERM)
             assert proc.popen.wait(timeout=5.0) == 0
         peer.close()
 

@@ -1,4 +1,5 @@
 import Foundation
+import ObstacleBridgePortable
 
 public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, LocalizedError {
     case unreadableFile(String)
@@ -9,15 +10,27 @@ public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, Loca
     case unsupportedSecureLinkMode(String)
     case missingPSK
     case unsupportedWebSocketTLS
+    case invalidService(String)
 
     public var errorDescription: String? {
         switch self {
-        case .unreadableFile(let message), .missingValue(let message), .invalidValue(let message), .unavailableTransport(let message), .unsupportedSecureLinkMode(let message): return message
+        case .unreadableFile(let message), .missingValue(let message), .invalidValue(let message), .unavailableTransport(let message), .unsupportedSecureLinkMode(let message), .invalidService(let message): return message
         case .malformedJSON: return "runtime config must be a JSON object"
         case .missingPSK: return "secure_link_mode=psk requires a non-empty secure_link_psk"
         case .unsupportedWebSocketTLS: return "Linux wss is unavailable until a TLS backend is qualified"
         }
     }
+}
+
+public struct ObstacleBridgeLinuxServiceSpec: Equatable, Sendable {
+    public let serviceID: UInt16
+    public let name: String?
+    public let listenProtocol: ObstacleBridgeChannelMuxProtocol
+    public let listenHost: String
+    public let listenPort: Int
+    public let targetProtocol: ObstacleBridgeChannelMuxProtocol
+    public let targetHost: String
+    public let targetPort: Int
 }
 
 /// The Linux admission view of the existing sectioned runtime configuration.
@@ -31,14 +44,18 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let port: Int
     public let webSocketPath: String
     public let secureLinkPSK: Data?
+    public let ownServices: [ObstacleBridgeLinuxServiceSpec]
+    public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, webSocketPath: String = "/", secureLinkPSK: Data? = nil) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, webSocketPath: String = "/", secureLinkPSK: Data? = nil, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         self.host = self.peerCandidates.first ?? host
         self.port = port
         self.webSocketPath = webSocketPath
         self.secureLinkPSK = secureLinkPSK
+        self.ownServices = ownServices
+        self.remoteServices = remoteServices
     }
 
     public static func load(path: String) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
@@ -94,10 +111,49 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         }
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
-        return .init(transport: transport, host: candidates.joined(separator: ","), port: port, webSocketPath: string(session["ws_path"]) ?? "/", secureLinkPSK: psk)
+        return .init(
+            transport: transport,
+            host: candidates.joined(separator: ","),
+            port: port,
+            webSocketPath: string(session["ws_path"]) ?? "/",
+            secureLinkPSK: psk,
+            ownServices: try serviceSpecs(root, key: "own_servers"),
+            remoteServices: try serviceSpecs(root, key: "remote_servers")
+        )
     }
 
     private static func string(_ value: Any?) -> String? { value as? String }
     private static func integer(_ value: Any?) -> Int? { value as? Int ?? (value as? NSNumber)?.intValue }
     private static func boolean(_ value: Any?) -> Bool? { value as? Bool ?? (value as? NSNumber)?.boolValue }
+
+    private static func serviceSpecs(_ root: [String: Any], key: String) throws -> [ObstacleBridgeLinuxServiceSpec] {
+        let mux = root["channel_mux"] as? [String: Any]
+        guard let values = (mux?[key] ?? root[key]) as? [Any] else { return [] }
+        return try values.enumerated().map { index, value in
+            guard let row = value as? [String: Any],
+                  let listen = row["listen"] as? [String: Any],
+                  let target = row["target"] as? [String: Any],
+                  let listenName = string(listen["protocol"]),
+                  let targetName = string(target["protocol"]),
+                  let listenProtocol = channelProtocol(listenName),
+                  let targetProtocol = channelProtocol(targetName),
+                  let listenHost = string(listen["bind"]),
+                  let listenPort = integer(listen["port"]),
+                  let targetHost = string(target["host"]),
+                  let targetPort = integer(target["port"]),
+                  (1...65535).contains(listenPort),
+                  (1...65535).contains(targetPort),
+                  listenProtocol == targetProtocol
+            else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has invalid \(key) service at index \(index)") }
+            return .init(serviceID: UInt16(index + 1), name: string(row["name"]), listenProtocol: listenProtocol, listenHost: listenHost, listenPort: listenPort, targetProtocol: targetProtocol, targetHost: targetHost, targetPort: targetPort)
+        }
+    }
+
+    private static func channelProtocol(_ value: String) -> ObstacleBridgeChannelMuxProtocol? {
+        switch value.lowercased() {
+        case "udp": return .udp
+        case "tcp": return .tcp
+        default: return nil
+        }
+    }
 }

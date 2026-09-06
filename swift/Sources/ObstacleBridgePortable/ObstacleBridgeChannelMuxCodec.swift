@@ -9,6 +9,14 @@ public struct ObstacleBridgeChannelMuxFrame: Equatable, Sendable {
     public let counter: UInt16
     public let messageType: ObstacleBridgeChannelMuxMessageType
     public let body: Data
+
+    public init(channelID: UInt16, protocolType: ObstacleBridgeChannelMuxProtocol, counter: UInt16, messageType: ObstacleBridgeChannelMuxMessageType, body: Data) {
+        self.channelID = channelID
+        self.protocolType = protocolType
+        self.counter = counter
+        self.messageType = messageType
+        self.body = body
+    }
 }
 
 public enum ObstacleBridgeChannelMuxCodecError: Error, Equatable { case invalidFrame, payloadTooLarge }
