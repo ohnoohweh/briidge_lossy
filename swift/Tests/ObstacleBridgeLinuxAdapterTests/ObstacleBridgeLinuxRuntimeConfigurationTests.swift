@@ -15,6 +15,17 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.secureLinkPSK == Data("test-secret".utf8))
     }
 
+    @Test func parsesTcpListenerConfigurationWithoutOutboundPeer() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp", "listener_mode": true],
+            "tcp_session": ["tcp_own_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+        ]))
+        #expect(config.listenerMode)
+        #expect(config.port == 4242)
+        #expect(config.host == "listener")
+    }
+
     @Test func parsesCleartextWebSocketAndDefaultsPath() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "ws"],

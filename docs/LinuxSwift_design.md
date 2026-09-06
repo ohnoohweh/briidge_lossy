@@ -213,6 +213,9 @@ and Admin ownership remain the prerequisite for a Linux Swift service endpoint
 to accept a Python client. The live runtime can adopt an already-authenticated
 inbound configured session and apply its ordinary ChannelMux, service-owner,
 receive-worker, and Admin lifecycle to that epoch.
+`runner.listener_mode` currently admits a TCP PSK listener without an outbound
+peer configuration and starts its local Admin endpoint before accepting the
+first peer. WebSocket and myudp listener modes remain unadmitted.
 For TCP and cleartext WebSocket it rotates through comma-separated configured
 peer candidates on connection failure and provides an explicit fresh-epoch
 reconnect operation plus a bounded fresh-epoch retry for a failed one-shot

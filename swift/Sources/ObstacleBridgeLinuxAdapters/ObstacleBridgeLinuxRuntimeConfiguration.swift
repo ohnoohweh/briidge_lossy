@@ -39,6 +39,7 @@ public struct ObstacleBridgeLinuxServiceSpec: Equatable, Sendable {
 /// are not silently interpreted by this early transport slice.
 public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let transport: ObstacleBridgeLinuxTransport
+    public let listenerMode: Bool
     public let host: String
     public let peerCandidates: [String]
     public let port: Int
@@ -47,8 +48,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, webSocketPath: String = "/", secureLinkPSK: Data? = nil, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", secureLinkPSK: Data? = nil, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
+        self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         self.host = self.peerCandidates.first ?? host
         self.port = port
@@ -73,6 +75,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
         }
         let runner = root["runner"] as? [String: Any] ?? [:]
+        let listenerMode = boolean(runner["listener_mode"]) == true
         guard let transportText = string(runner["overlay_transport"] ?? root["overlay_transport"]),
               let transport = ObstacleBridgeLinuxTransport(rawValue: transportText.lowercased()) else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires runner.overlay_transport")
@@ -90,10 +93,15 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         case .quic: throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(transport.unavailableReason ?? "Linux transport unavailable")
         }
         let session = root[sessionName] as? [String: Any] ?? [:]
-        guard let host = string(session[peerKey]), !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        if listenerMode && transport != .tcp {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux listener_mode currently admits tcp only; WebSocket and myudp listener owners are not yet qualified")
+        }
+        let host = string(session[peerKey]) ?? (listenerMode ? "listener" : "")
+        guard listenerMode || !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires \(sessionName).\(peerKey)")
         }
-        guard let port = integer(session[portKey]), (1...65535).contains(port) else {
+        let configuredPort = listenerMode ? integer(session["tcp_own_port"] ?? session[portKey]) : integer(session[portKey])
+        guard let port = configuredPort, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires \(sessionName).\(portKey) between 1 and 65535")
         }
         if transport == .ws, boolean(session["ws_tls"]) == true {
@@ -115,6 +123,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             transport: transport,
             host: candidates.joined(separator: ","),
             port: port,
+            listenerMode: listenerMode,
             webSocketPath: string(session["ws_path"]) ?? "/",
             secureLinkPSK: psk,
             ownServices: try serviceSpecs(root, key: "own_servers"),

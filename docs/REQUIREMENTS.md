@@ -158,8 +158,10 @@ Current implementation note:
   subframe envelope before SecureLink processing. The portable target also
   carries the reciprocal PSK server handshake and protected-data state machine;
   a one-connection loopback TCP listener exercises it over real Linux framing.
-  Foreground listener transport remains required before that server role is
-  admitted as a runtime endpoint.
+  The TCP foreground `listener_mode` starts Admin before accepting one PSK
+  peer and adopts the authenticated session into the live runtime. WebSocket
+  and myudp listener transport remain required before that server role is
+  admitted across all Linux runtime endpoints.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
 - `REQ-AUT-004`: The admin web interface and admin API shall expose secure-link state in an operator-usable way: peer-scoped secure-link state shall be reported with the corresponding peer rows and peer views so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states, including the reported authentication failure category, while the peer box preserves connection uptime and transport-appropriate protocol statistics. SecureLink shall report separate passed totals for frames from the client and to the client, plus a dropped total for frames from the client; passed totals include protected control/confirmation frames and application frames that cross the SecureLink adapter boundary. On secure-link-wrapped `myudp` listener and peer rows, `/api/peers` shall continue to report the underlying `myudp` frame/transmit counters for the corresponding active peer after protected traffic has flowed; the wrapper must not collapse those counters to zero, and its protocol statistics shall count frames crossing to and from SecureLink.

@@ -142,10 +142,25 @@ enum ObstacleBridgeLinuxMain {
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration)
             let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime)
             try admin.start(port: options.adminPort)
-            runtime.start()
-            let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\"}"
+            var resources: [Any] = []
+            if configuration.listenerMode {
+                guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
+                let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port)
+                let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.tcp-listener")
+                acceptor.async {
+                    var generator = SystemRandomNumberGenerator()
+                    let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+                    if let session = try? listener.acceptConfiguredSession(psk: psk, serverNonce: nonce) {
+                        runtime.adoptInboundSession(session)
+                    }
+                }
+                resources.append(listener); resources.append(acceptor)
+            } else {
+                runtime.start()
+            }
+            let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
-            let resources = installForegroundShutdown(runtime: runtime, admin: admin, holdSeconds: options.holdSeconds)
+            resources.append(contentsOf: installForegroundShutdown(runtime: runtime, admin: admin, holdSeconds: options.holdSeconds))
             withExtendedLifetime(resources) { dispatchMain() }
         } catch {
             writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")

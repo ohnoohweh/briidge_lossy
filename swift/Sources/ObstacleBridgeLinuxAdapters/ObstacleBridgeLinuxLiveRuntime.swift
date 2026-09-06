@@ -103,7 +103,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// peer first, then hands the resulting configured session to the same
     /// ChannelMux, receive-worker, service-owner, and Admin lifecycle used by
     /// an outgoing epoch.
-    func adoptInboundSession(_ connectedSession: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
+    public func adoptInboundSession(_ connectedSession: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
         queue.async { [weak self] in
             guard let self else { return }
             self.cancelRetry()

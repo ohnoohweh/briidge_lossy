@@ -45,7 +45,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
 
     /// Accept and authenticate an inbound TCP epoch so the live runtime can
     /// adopt the same configured-session boundary used by outgoing clients.
-    func acceptConfiguredSession(psk: Data, serverNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
+    public func acceptConfiguredSession(psk: Data, serverNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
         let clientFD = accept(descriptor, nil, nil)
         guard clientFD >= 0 else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(errno) }
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
