@@ -3166,8 +3166,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             payload=payload,
         )
 
-    def _send_remote_services_catalog_if_any(self) -> None:
-        if not self._remote_services_requested:
+    def replace_remote_services_catalog(self, services: list["ChannelMux.ServiceSpec"]) -> None:
+        """Install and publish a new remote-service catalog for this epoch.
+
+        An empty list is a deliberate RS3 withdrawal, not an absent catalog.
+        Bump the sequence so peers replace a previously installed catalog.
+        """
+        self._remote_services_requested = list(services)
+        self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
+        self._send_remote_services_catalog_if_any(allow_empty=True)
+
+    def _send_remote_services_catalog_if_any(self, *, allow_empty: bool = False) -> None:
+        if not self._remote_services_requested and not allow_empty:
             return
         try:
             payload = self._encode_remote_services_set_v2(self._remote_services_requested)

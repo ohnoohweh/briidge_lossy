@@ -253,8 +253,10 @@ CONTROL/IDLE frames while acknowledging ordered inbound chunks. The Linux
 myudp owner exchanges v2 DATA batches over connected POSIX UDP, preserves
 ordered stream-record reassembly across chunk boundaries, advances candidates
 after a failed live epoch, recovers after a silent-peer timeout, and carries
-SecureLink PSK plus ChannelMux frames against Python peers. Service withdrawal
-from a live Python catalog remains pending. The Linux Admin HTTP server serves redacted `/api/status` and `/api/peers`
+SecureLink PSK plus ChannelMux frames against Python peers. The authenticated
+Python Admin catalog operation publishes a newer RS3 catalog, including an
+empty withdrawal, and Swift replaces or stops its remote listener owners
+without a reconnect. The Linux Admin HTTP server serves redacted `/api/status` and `/api/peers`
 payloads from that runtime state on a listener isolated from transport and
 reconnect execution. TUN service routing is deferred to later work packages.
 
@@ -262,28 +264,6 @@ reconnect execution. TUN service routing is deferred to later work packages.
 
 Work packages are ordered by dependency. A package is complete only when every
 Definition of Done item is met; compiling alone is not completion.
-
-### LSW-004E — Swift-owned service catalog and channel data plane
-
-Make the live Linux runtime own the existing service vocabulary rather than
-only exchanging supplied ChannelMux frames. This package excludes TUN: it
-carries configured TCP and UDP own/remote services through the admitted
-overlay and preserves the established ChannelMux service contracts.
-
-Definition of Done:
-
-- supported `own_servers` and `remote_servers` configuration shapes are
-  parsed, validated, and represented in Swift without invoking Python at
-  runtime;
-- the client publishes and consumes the compatible remote-service catalog,
-  including deterministic replacement, withdrawal, and reconnect replay;
-- Swift-owned TCP and UDP listeners create, route, half-close, and tear down
-  ChannelMux channels with bounded per-channel and aggregate queues;
-- connection identity, channel counters, backpressure, malformed-frame drops,
-  and service failures appear in redacted runtime/Admin snapshots; and
-- mixed-runtime E2E cases run the built Linux Swift process against a Python
-  runtime in both directions for one TCP and one UDP service over each admitted
-  transport, including service withdrawal and reconnect recovery.
 
 ### LSW-004F — Service-owning overlay qualification
 
@@ -408,7 +388,7 @@ Definition of Done:
 
 The admitted TCP, cleartext WebSocket, and myudp transports and foreground
 runtime provide the duplex lower-transport and protected receive-owner
-baseline. LSW-004E and LSW-004F turn it into a service-owning endpoint
+baseline. LSW-004F turns it into a service-owning endpoint
 before the LSW-005 TUN milestone. QUIC and TLS WebSocket remain gated by
 LSW-005B and LSW-005C.
 LSW-006 through LSW-008 make the result supportable.

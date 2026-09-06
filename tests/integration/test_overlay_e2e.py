@@ -7480,6 +7480,34 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
                 time.sleep(0.1)
         assert remote_ready, 'Swift did not install the full Python-runtime remote service catalog'
 
+        # An explicit empty RS3 catalog withdraws the previously published
+        # listener without waiting for a reconnect. The Python Admin action is
+        # the supported live catalog owner; Swift must stop its matching local
+        # listener for every admitted lower transport.
+        code, response = request_json(
+            f'http://127.0.0.1:{python_admin}/api/channelmux/remote-services',
+            method='POST', payload={'remote_servers': []}, timeout=2.0,
+        )
+        assert code == 200 and response.get('ok') is True
+        withdrawn = False
+        end = time.time() + 6.0
+        while time.time() < end and not withdrawn:
+            try:
+                with socket.socket(socket.AF_INET, socket_type) as client:
+                    client.settimeout(0.35)
+                    client.connect(('127.0.0.1', remote_service_port))
+                    payload = b'withdrawn-catalog-must-not-answer'
+                    if service_protocol == 'tcp':
+                        client.sendall(payload)
+                    else:
+                        client.send(payload)
+                    withdrawn = client.recv(len(payload)) == b''
+            except OSError:
+                withdrawn = True
+            if not withdrawn:
+                time.sleep(0.1)
+        assert withdrawn, 'Swift did not withdraw the live Python remote service catalog'
+
         # A lower-peer process loss must cancel the old Swift receive epoch,
         # reconnect with a fresh SecureLink session, recreate local service
         # ownership, and forward a later probe through the replacement Python

@@ -200,7 +200,8 @@ cleartext WebSocket, and myudp, including Python TCP RTT PING/PONG control
 frames, the WebSocket APP/PING/PONG subframe envelope, myudp DATA_BATCH
 stream/control framing, and recovery after a Python peer-process restart. The
 same lane explicitly enables Python listener catalog publication and proves
-reverse-direction TCP/UDP service delivery on all admitted transports.
+reverse-direction TCP/UDP service delivery, an explicit live empty-catalog
+withdrawal, and reconnect recovery on all admitted transports.
 The overlay E2E process lane invokes the built Linux executable against a
 Python SecureLink reference peer for each admitted transport, including the
 foreground runtime's readiness and SIGTERM shutdown lifecycle.

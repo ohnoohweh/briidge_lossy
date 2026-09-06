@@ -152,8 +152,9 @@ Current implementation note:
   after the Python peer process restarts. An explicitly enabled Python listener may publish its
   `remote_servers` catalog to connected peers; the mixed-runtime lane proves
   that Swift installs and serves that reverse-direction TCP/UDP catalog over
-  all admitted overlays. Live catalog withdrawal remains a separate runtime
-  capability. The WebSocket boundary preserves the Python APP/PING/PONG
+  all admitted overlays. The authenticated Python Admin catalog operation
+  publishes replacement or empty-withdrawal RS3 catalogs without reconnect.
+  The WebSocket boundary preserves the Python APP/PING/PONG
   subframe envelope before SecureLink processing.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
