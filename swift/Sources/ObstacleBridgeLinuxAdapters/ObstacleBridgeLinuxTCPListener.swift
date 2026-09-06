@@ -77,6 +77,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
     }
 
     public func close() { if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 } }
+    public var isOpen: Bool { descriptor >= 0 }
     deinit { close() }
 
     private func readFrame(_ fd: Int32, observedPeerPort: Int? = nil) throws -> Data {

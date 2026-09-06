@@ -148,12 +148,16 @@ enum ObstacleBridgeLinuxMain {
                 let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port)
                 let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.tcp-listener")
                 acceptor.async {
-                    var generator = SystemRandomNumberGenerator()
-                    let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
-                    do {
-                        runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
-                    } catch {
-                        writeError("ObstacleBridgeLinux: TCP listener admission failed: \(error.localizedDescription)")
+                    while listener.isOpen {
+                        var generator = SystemRandomNumberGenerator()
+                        let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+                        do {
+                            runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
+                        } catch where listener.isOpen {
+                            writeError("ObstacleBridgeLinux: TCP listener admission failed: \(error.localizedDescription)")
+                        } catch {
+                            break
+                        }
                     }
                 }
                 resources.append(listener); resources.append(acceptor)

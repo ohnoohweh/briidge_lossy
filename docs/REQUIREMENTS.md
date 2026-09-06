@@ -157,7 +157,7 @@ Current implementation note:
   The WebSocket boundary preserves the Python APP/PING/PONG
   subframe envelope before SecureLink processing. The portable target also
   carries the reciprocal PSK server handshake and protected-data state machine.
-  The TCP foreground `listener_mode` starts Admin before accepting one PSK
+  The TCP foreground `listener_mode` starts Admin before accepting sequential PSK
   peer, answers the Python TCP PING/PONG and peer-address control frames below
   SecureLink, adopts the authenticated session into the live runtime, and
   serves Swift-owned TCP and UDP services in a built-process E2E test. WebSocket

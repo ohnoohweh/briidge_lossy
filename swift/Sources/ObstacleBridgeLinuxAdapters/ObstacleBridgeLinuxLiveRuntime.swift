@@ -90,6 +90,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.cancelRetry()
+            self.session?.close()
+            self.session = nil
+            self.channelMux = nil
+            self.replaceReceiveWorker(with: nil)
+            self.stopServiceOwners()
+            self.stopRemoteServiceOwners()
             self.configuredRuntime.disconnect()
             self.refreshStatusProjection()
             self.stopped = false

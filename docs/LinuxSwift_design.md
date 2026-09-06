@@ -284,8 +284,9 @@ same observable service behavior used for the supported Python runtime paths.
 
 Current evidence includes the built Swift executable in TCP `listener_mode`:
 it handles the Python TCP PING/PONG and peer-address control exchange below
-SecureLink, authenticates a Python client, adopts that session into the live
-runtime, and carries Swift-owned TCP and UDP service traffic. The remaining
+SecureLink, authenticates sequential Python clients, retires the preceding
+runtime epoch before adoption, and carries Swift-owned TCP and UDP service
+traffic. The remaining
 qualification scope is multi-channel and reconnect lifecycle coverage, process
 Admin/peer-state assertions, and WebSocket/myudp listener ownership.
 
