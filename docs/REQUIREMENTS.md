@@ -157,7 +157,8 @@ Current implementation note:
   The WebSocket boundary preserves the Python APP/PING/PONG
   subframe envelope before SecureLink processing. The portable target also
   carries the reciprocal PSK server handshake and protected-data state machine;
-  a Linux listener transport remains required before that server role is
+  a one-connection loopback TCP listener exercises it over real Linux framing.
+  Foreground listener transport remains required before that server role is
   admitted as a runtime endpoint.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.

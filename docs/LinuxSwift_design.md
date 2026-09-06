@@ -207,8 +207,10 @@ peer over TCP, cleartext WebSocket, and myudp, verifies application readiness,
 and verifies clean signal-driven shutdown.
 The portable crypto target also owns the reciprocal PSK server handshake and
 protected-data state machine, pinned by a deterministic Swift client/server
-exchange. Listener transport ownership is the remaining prerequisite for a
-Linux Swift process to accept a Python client.
+exchange. A one-connection loopback TCP PSK echo listener verifies that server
+state across real Linux framing; foreground listener transport, ChannelMux,
+and Admin ownership remain the prerequisite for a Linux Swift service endpoint
+to accept a Python client.
 For TCP and cleartext WebSocket it rotates through comma-separated configured
 peer candidates on connection failure and provides an explicit fresh-epoch
 reconnect operation plus a bounded fresh-epoch retry for a failed one-shot

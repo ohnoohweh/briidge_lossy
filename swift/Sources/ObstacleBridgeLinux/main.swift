@@ -20,6 +20,8 @@ enum ObstacleBridgeLinuxMain {
             print("\(ObstacleBridgePortableRuntime.productName) build baseline (\(ObstacleBridgeLinuxAdapters.platform))")
         case let values where values.count == 5 && values[0] == "--transport-probe":
             runTransportProbe(transportName: values[1], host: values[2], portText: values[3], payloadBase64: values[4])
+        case let values where values.count == 3 && values[0] == "--tcp-psk-echo-listener":
+            runTCPPSKEchoListener(portText: values[1], psk: values[2])
         case let values where values.count == 2 && values[0] == "--runtime-config":
             validateRuntimeConfig(path: values[1])
         case let values where values.count == 3 && values[0] == "--runtime-config" && values[2] == "--status":
@@ -43,6 +45,7 @@ enum ObstacleBridgeLinuxMain {
           ObstacleBridgeLinux --help
           ObstacleBridgeLinux --version
           ObstacleBridgeLinux --transport-probe <tcp|ws> <host> <port> <payload-base64>
+          ObstacleBridgeLinux --tcp-psk-echo-listener <port> <psk>
           ObstacleBridgeLinux --runtime-config <path>
           ObstacleBridgeLinux --runtime-config <path> --status
           ObstacleBridgeLinux --runtime-config <path> --runtime-probe <payload-base64>
@@ -72,6 +75,21 @@ enum ObstacleBridgeLinuxMain {
             print(response.base64EncodedString())
         } catch {
             writeError("ObstacleBridgeLinux: transport probe failed: \(error.localizedDescription)")
+            exit(1)
+        }
+    }
+
+    private static func runTCPPSKEchoListener(portText: String, psk: String) {
+        guard let port = Int(portText), !psk.isEmpty else {
+            writeError("ObstacleBridgeLinux: TCP PSK listener requires a port and non-empty PSK")
+            exit(2)
+        }
+        do {
+            let listener = try ObstacleBridgeLinuxTCPPSKListener(port: port)
+            print("{\"port\":\(listener.port),\"state\":\"listening\"}")
+            try listener.serveOne(psk: Data(psk.utf8), serverNonce: Data((0..<32).map(UInt8.init)))
+        } catch {
+            writeError("ObstacleBridgeLinux: TCP PSK listener failed: \(error.localizedDescription)")
             exit(1)
         }
     }

@@ -4,6 +4,26 @@ import Testing
 @testable import ObstacleBridgePortable
 
 struct ObstacleBridgeLinuxOverlayTransportTests {
+    @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() throws {
+        let psk = Data("tcp-listener-psk".utf8)
+        let listener = try ObstacleBridgeLinuxTCPPSKListener(port: 0)
+        defer { listener.close() }
+        let served = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            _ = try? listener.serveOne(psk: psk, serverNonce: Data(0..<32))
+            served.signal()
+        }
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: listener.port, transport: .tcp)
+        let session = try lower.openSession()
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let nonce = Data(0x20..<0x40)
+        let proof = try client.handleServerHello(session.exchange(try client.begin(sessionID: 9, clientNonce: nonce)))
+        try client.handleServerAcknowledgement(session.exchange(proof))
+        #expect(try client.unprotect(session.exchange(client.protect(Data("python-client".utf8)))) == Data("python-client".utf8))
+        session.close()
+        #expect(served.wait(timeout: .now() + 2) == .success)
+    }
+
     @Test func tcpFramingRoundTripsAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "tcp")
         defer { peer.stop() }
