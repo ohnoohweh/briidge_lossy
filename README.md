@@ -14,7 +14,8 @@ The project currently targets six platform families:
   qualifies reverse-direction service delivery and live catalog withdrawal.
   The built executable also admits Python TCP peers sequentially in TCP `listener_mode`:
   it completes PSK plus peer-address control, adopts the live runtime, serves
-  Swift-owned TCP/UDP services, and admits a replacement client epoch.
+  Swift-owned TCP/UDP services on concurrent channels, and admits a
+  replacement client epoch.
   WebSocket/myudp listener admission and
   TUN remain in development.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.

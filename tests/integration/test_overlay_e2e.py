@@ -7608,16 +7608,29 @@ def test_overlay_e2e_linux_swift_tcp_listener_python_runtime_service_round_trip(
         _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
         assert peers == [{'peer_id': 'configured-peer', 'transport': 'tcp', 'state': 'connected', 'app_ready': True, 'configured_candidates': ['listener'], 'active_host': 'listener', 'port': overlay_port, 'failure_reason': None}]
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
-        with socket.socket(socket.AF_INET, socket_type) as client:
-            client.settimeout(4.0); client.connect(('127.0.0.1', service_port))
-            payload = b'python-client-to-swift-listener'
-            if service_protocol == 'tcp': client.sendall(payload)
-            else: client.send(payload)
-            assert client.recv(len(payload)) == response_payload(payload)
+        def assert_service_round_trip(payload: bytes) -> None:
+            with socket.socket(socket.AF_INET, socket_type) as client:
+                client.settimeout(4.0); client.connect(('127.0.0.1', service_port))
+                if service_protocol == 'tcp': client.sendall(payload)
+                else: client.send(payload)
+                assert client.recv(len(payload)) == response_payload(payload)
+        assert_service_round_trip(b'python-client-to-swift-listener')
+        concurrent_errors: list[BaseException] = []
+        def concurrent_probe(index: int) -> None:
+            try:
+                assert_service_round_trip(f'concurrent-swift-listener-{index}'.encode())
+            except BaseException as exc:
+                concurrent_errors.append(exc)
+        probes = [threading.Thread(target=concurrent_probe, args=(index,)) for index in range(2)]
+        for probe in probes: probe.start()
+        for probe in probes: probe.join(timeout=6.0)
+        assert not any(probe.is_alive() for probe in probes)
+        assert not concurrent_errors
         os.killpg(python_proc.popen.pid, signal.SIGTERM)
         assert python_proc.popen.wait(timeout=5.0) in (0, 143)
         python_proc = start_python_client()
         assert wait_for_swift_ready()['app_ready'] is True
+        assert_service_round_trip(b'python-client-after-replacement')
     finally:
         for proc in (python_proc, swift_proc):
             if proc is not None and proc.popen.poll() is None:

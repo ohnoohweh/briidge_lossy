@@ -192,7 +192,8 @@ the one-connection loopback TCP listener over real Linux framing. The built
 Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to
-check the next Admin-visible epoch. WebSocket and myudp foreground
+check the next Admin-visible epoch; two simultaneous TCP/UDP local service
+channels are also carried before replacement. WebSocket and myudp foreground
 listener admission remain the separate LSW-004F runtime boundary.
 The lower-transport tests require a Python peer to send TCP, cleartext
 WebSocket, and myudp application frames before a Swift request; the live
