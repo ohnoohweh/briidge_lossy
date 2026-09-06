@@ -172,6 +172,7 @@ pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secur
 pytest -q tests/integration/test_overlay_e2e.py -k foreground_runtime_lifecycle
 pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_service_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k python_runtime_linux_swift_service_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k linux_swift_tcp_listener_python_runtime_service_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round_trip
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --status
@@ -187,10 +188,11 @@ peers implemented in local Python fixtures, including candidate rotation,
 reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
 The portable suite also pairs the Swift PSK client and server state machines in
 one deterministic protected-data exchange, while the adapter suite exercises
-the one-connection loopback TCP listener over real Linux framing; foreground
-TCP `listener_mode` parsing is also pinned without an outbound peer. WebSocket
-and myudp foreground listener admission remain the separate LSW-004F runtime
-boundary.
+the one-connection loopback TCP listener over real Linux framing. The built
+Linux executable E2E lane admits a full Python TCP client, including its
+PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
+services through the adopted live runtime. WebSocket and myudp foreground
+listener admission remain the separate LSW-004F runtime boundary.
 The lower-transport tests require a Python peer to send TCP, cleartext
 WebSocket, and myudp application frames before a Swift request; the live
 cleartext runtime test verifies one epoch-tagged reader and its ordered

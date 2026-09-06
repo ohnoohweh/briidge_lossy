@@ -46,16 +46,23 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
     /// Accept and authenticate an inbound TCP epoch so the live runtime can
     /// adopt the same configured-session boundary used by outgoing clients.
     public func acceptConfiguredSession(psk: Data, serverNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
-        let clientFD = accept(descriptor, nil, nil)
+        var peerAddress = sockaddr_in()
+        var peerAddressLength = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let clientFD = withUnsafeMutablePointer(to: &peerAddress) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                accept(descriptor, $0, &peerAddressLength)
+            }
+        }
         guard clientFD >= 0 else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(errno) }
+        let peerPort = Int(UInt16(bigEndian: peerAddress.sin_port))
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
-        try writeFrame(try server.handleClientHello(readFrame(clientFD), serverNonce: serverNonce), fd: clientFD)
-        try writeFrame(try server.handleClientProof(readFrame(clientFD)), fd: clientFD)
+        try writeFrame(try server.handleClientHello(readFrame(clientFD, observedPeerPort: peerPort), serverNonce: serverNonce), fd: clientFD)
+        try writeFrame(try server.handleClientProof(readFrame(clientFD, observedPeerPort: peerPort)), fd: clientFD)
         let lock = NSLock()
         var open = true
         let receive: () throws -> Data = { [weak self] in
             guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
-            return try self.readFrame(clientFD)
+            return try self.readFrame(clientFD, observedPeerPort: peerPort)
         }
         let send: (Data) throws -> Void = { [weak self] payload in
             guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
@@ -72,18 +79,39 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
     public func close() { if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 } }
     deinit { close() }
 
-    private func readFrame(_ fd: Int32) throws -> Data {
-        let header = try readExactly(fd, count: 4)
-        let length = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-        guard length >= 1, length <= 65_536 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-        let body = try readExactly(fd, count: Int(length))
-        guard body.first == 0 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-        return Data(body.dropFirst())
+    private func readFrame(_ fd: Int32, observedPeerPort: Int? = nil) throws -> Data {
+        while true {
+            let header = try readExactly(fd, count: 4)
+            let length = header.reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
+            guard length >= 1, length <= 65_536 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            let body = try readExactly(fd, count: Int(length))
+            guard let kind = body.first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            let payload = Data(body.dropFirst())
+            switch kind {
+            case 0 where payload == Data("OBPA\u{02}\u{01}\u{00}".utf8):
+                guard let observedPeerPort, (1...65535).contains(observedPeerPort) else {
+                    throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                }
+                var reply = Data("OBPA\u{02}\u{02}\u{04}\u{7f}\u{00}\u{00}\u{01}".utf8)
+                var port = UInt16(observedPeerPort).bigEndian
+                reply.append(Data(bytes: &port, count: MemoryLayout<UInt16>.size))
+                try writeWire(kind: 0, payload: reply, fd: fd)
+            case 0: return payload
+            case 1:
+                guard payload.count >= 8 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+                try writeWire(kind: 2, payload: Data(payload.prefix(8)), fd: fd)
+            case 2: continue
+            default: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+            }
+        }
     }
     private func writeFrame(_ payload: Data, fd: Int32) throws {
+        try writeWire(kind: 0, payload: payload, fd: fd)
+    }
+    private func writeWire(kind: UInt8, payload: Data, fd: Int32) throws {
         guard payload.count < 65_536 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
         var wire = Data(); var length = UInt32(payload.count + 1).bigEndian
-        wire.append(Data(bytes: &length, count: 4)); wire.append(0); wire.append(payload)
+        wire.append(Data(bytes: &length, count: 4)); wire.append(kind); wire.append(payload)
         var offset = 0
         while offset < wire.count {
             let count = wire.withUnsafeBytes { Glibc.send(fd, $0.baseAddress!.advanced(by: offset), wire.count - offset, 0) }

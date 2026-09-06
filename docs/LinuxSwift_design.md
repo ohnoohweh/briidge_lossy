@@ -282,6 +282,13 @@ Promote the service-owning runtime from a protocol probe to the Linux Swift
 overlay endpoint qualification lane. The shared E2E harness must exercise the
 same observable service behavior used for the supported Python runtime paths.
 
+Current evidence includes the built Swift executable in TCP `listener_mode`:
+it handles the Python TCP PING/PONG and peer-address control exchange below
+SecureLink, authenticates a Python client, adopts that session into the live
+runtime, and carries Swift-owned TCP and UDP service traffic. The remaining
+qualification scope is multi-channel and reconnect lifecycle coverage, process
+Admin/peer-state assertions, and WebSocket/myudp listener ownership.
+
 Definition of Done:
 
 - `test_overlay_e2e.py` starts the built Linux Swift executable rather than a

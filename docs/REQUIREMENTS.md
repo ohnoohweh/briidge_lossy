@@ -156,10 +156,11 @@ Current implementation note:
   publishes replacement or empty-withdrawal RS3 catalogs without reconnect.
   The WebSocket boundary preserves the Python APP/PING/PONG
   subframe envelope before SecureLink processing. The portable target also
-  carries the reciprocal PSK server handshake and protected-data state machine;
-  a one-connection loopback TCP listener exercises it over real Linux framing.
+  carries the reciprocal PSK server handshake and protected-data state machine.
   The TCP foreground `listener_mode` starts Admin before accepting one PSK
-  peer and adopts the authenticated session into the live runtime. WebSocket
+  peer, answers the Python TCP PING/PONG and peer-address control frames below
+  SecureLink, adopts the authenticated session into the live runtime, and
+  serves Swift-owned TCP and UDP services in a built-process E2E test. WebSocket
   and myudp listener transport remain required before that server role is
   admitted across all Linux runtime endpoints.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.
