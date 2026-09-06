@@ -106,8 +106,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     let connection = try POSIXStreamConnection(host: host, port: port)
                     defer { connection.close() }
                     try performWebSocketUpgrade(connection)
-                    try connection.write(webSocketClientFrame(opcode: 0x2, payload: payload))
-                    result = try readWebSocketApplicationFrame(connection)
+                    try connection.write(webSocketClientFrame(opcode: 0x2, payload: webSocketWire(payload)))
+                    result = try readWebSocketApplicationPayload(connection)
                 case .myudp:
                     let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port)
                     defer { connection.close() }
@@ -147,7 +147,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .tcp:
                     try connection.write(self.tcpWire(payload))
                 case .ws:
-                    try connection.write(self.webSocketClientFrame(opcode: 0x2, payload: payload))
+                    try connection.write(self.webSocketClientFrame(opcode: 0x2, payload: self.webSocketWire(payload)))
                 case .myudp:
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 case .quic:
@@ -158,7 +158,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 switch self.transport {
                 case .tcp: return try self.readTCPApplicationFrame(connection)
-                case .ws: return try self.readWebSocketApplicationFrame(connection)
+                case .ws: return try self.readWebSocketApplicationPayload(connection)
                 case .myudp, .quic: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 }
             }
@@ -245,6 +245,27 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         frame.append(contentsOf: mask)
         for (index, byte) in payload.enumerated() { frame.append(byte ^ mask[index % mask.count]) }
         return frame
+    }
+
+    /// Python's WebSocket transport carries the same APP/PING/PONG subframe
+    /// as its TCP transport inside each binary WebSocket message.
+    private func webSocketWire(_ payload: Data) -> Data { Data([0]) + payload }
+
+    private func readWebSocketApplicationPayload(_ connection: POSIXStreamConnection) throws -> Data {
+        while true {
+            let body = try readWebSocketApplicationFrame(connection)
+            guard let kind = body.first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            switch kind {
+            case 0: return Data(body.dropFirst())
+            case 1:
+                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+                var pong = Data([2]); pong.append(body[1...8])
+                try connection.write(webSocketClientFrame(opcode: 0x2, payload: pong))
+            case 2:
+                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            default: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+            }
+        }
     }
 
     private func readWebSocketApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {

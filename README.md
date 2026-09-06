@@ -11,7 +11,8 @@ The project currently targets six platform families:
   E2E lane includes TCP-overlay PSK and TCP/UDP service round trips against
   the full Python runtime, including Python-peer process restart recovery;
   an opt-in Python listener catalog also qualifies reverse-direction TCP/UDP
-  service delivery. Full-runtime WebSocket/myudp and TUN remain in development.
+  service delivery over TCP and cleartext WebSocket. Full-runtime myudp and
+  TUN remain in development.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.

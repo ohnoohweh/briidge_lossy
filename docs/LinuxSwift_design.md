@@ -246,11 +246,11 @@ and UDP listener round trips through the built foreground executable over TCP,
 cleartext WebSocket, and myudp against the Python SecureLink/ChannelMux
 reference endpoint. It also proves Swift TCP-overlay SecureLink authentication
 and TCP/UDP service round trips against a full Python runtime, including the
-Python TCP RTT PING/PONG lower-transport control exchange. Its opt-in Python
-listener catalog publication also proves reverse-direction TCP/UDP catalog
-delivery and service traffic. Service withdrawal and full-runtime coverage for
-the remaining admitted lower transports remain pending; the same full-runtime
-TCP lane proves service recovery after the Python peer process restarts.
+Python TCP RTT PING/PONG lower-transport control exchange. The equivalent
+full-runtime cleartext WebSocket lane consumes the Python APP/PING/PONG
+subframe envelope. Both lanes prove opt-in reverse-direction TCP/UDP catalog
+delivery, service traffic, and recovery after the Python peer process restarts.
+Service withdrawal and full-runtime myudp coverage remain pending.
 The Linux myudp owner exchanges v2 DATA batches over connected POSIX UDP,
 advances candidates after a failed live epoch, recovers after a silent-peer
 timeout, and carries SecureLink PSK plus ChannelMux frames against Python

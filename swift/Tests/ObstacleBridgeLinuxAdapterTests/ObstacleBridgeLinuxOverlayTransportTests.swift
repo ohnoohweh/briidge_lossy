@@ -388,7 +388,7 @@ final class PythonOverlayPeer {
             key=[x.split(b':',1)[1].strip() for x in r.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]
             accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
             c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
-            p=b'python-first'; c.sendall(bytes([130,len(p)])+p); c.close(); s.close()
+            p=b'\\0python-first'; c.sendall(bytes([130,len(p)])+p); c.close(); s.close()
             """
         }
         if mode == "myudp-duplex" {
@@ -516,10 +516,11 @@ final class PythonOverlayPeer {
             a,b=nread(2); assert a==130 and b&128; n=b&127
             if n==126: n=int.from_bytes(nread(2),'big')
             elif n==127: n=int.from_bytes(nread(8),'big')
-            m=nread(4); return bytes(x^m[i%4] for i,x in enumerate(nread(n)))
+            m=nread(4); p=bytes(x^m[i%4] for i,x in enumerate(nread(n))); assert p[:1]==b'\\0'; return p[1:]
         def write_payload(p):
             if MODE.startswith('tcp'):
                 c.sendall(struct.pack('!I',len(p)+1)+b'\\x00'+p); return
+            p=b'\\0'+p
             if len(p)<126: c.sendall(bytes([130,len(p)])+p)
             else: c.sendall(bytes([130,126])+len(p).to_bytes(2,'big')+p)
         def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')

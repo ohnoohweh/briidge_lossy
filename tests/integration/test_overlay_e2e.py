@@ -247,14 +247,19 @@ class LinuxSwiftSecureLinkPeer:
             elif length == 127:
                 length = int.from_bytes(self._read_exact(connection, 8), 'big')
             mask = self._read_exact(connection, 4)
-            return bytes(value ^ mask[index % 4] for index, value in enumerate(self._read_exact(connection, length)))
+            payload = bytes(value ^ mask[index % 4] for index, value in enumerate(self._read_exact(connection, length)))
+            if payload[:1] != b'\x00':
+                raise RuntimeError('Linux Swift WebSocket application marker mismatch')
+            return payload[1:]
 
         def send(payload: bytes) -> None:
             if self.transport == 'tcp':
                 connection.sendall(struct.pack('!I', len(payload) + 1) + b'\x00' + payload)
-            elif len(payload) < 126:
-                connection.sendall(bytes([0x82, len(payload)]) + payload)
             else:
+                payload = b'\x00' + payload
+            if self.transport == 'ws' and len(payload) < 126:
+                connection.sendall(bytes([0x82, len(payload)]) + payload)
+            elif self.transport == 'ws':
                 connection.sendall(bytes([0x82, 126]) + len(payload).to_bytes(2, 'big') + payload)
 
         self._secure_link_transaction(receive, send)
@@ -7358,8 +7363,9 @@ def test_overlay_e2e_python_peer_linux_swift_remote_catalog_listener_round_trip(
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize('service_protocol', ['tcp', 'udp'])
-def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Path, service_protocol: str) -> None:
-    """A Swift-owned TCP/UDP listener reaches a real Python SecureLink runtime."""
+@pytest.mark.parametrize('overlay_transport', ['tcp', 'ws'])
+def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Path, service_protocol: str, overlay_transport: str) -> None:
+    """Swift TCP/UDP services interoperate with each admitted Python runtime."""
     if not sys.platform.startswith('linux'):
         pytest.skip('Linux Swift process E2E coverage requires Linux')
     if not shutil.which('swift'):
@@ -7375,11 +7381,19 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
     server_proc = swift_proc = None
     try:
         bounce.start()
+        if overlay_transport == 'tcp':
+            python_transport_args = ['--tcp-bind', '127.0.0.1', '--tcp-own-port', str(overlay_port)]
+            swift_session = {'tcp_peer': '127.0.0.1', 'tcp_peer_port': overlay_port}
+            swift_session_name = 'tcp_session'
+        else:
+            python_transport_args = ['--ws-bind', '127.0.0.1', '--ws-own-port', str(overlay_port)]
+            swift_session = {'ws_peer': '127.0.0.1', 'ws_peer_port': overlay_port, 'ws_tls': False, 'ws_path': '/'}
+            swift_session_name = 'ws_session'
         python_config = tmp_path / 'linux_swift_python_runtime_server.json'
         python_config.write_text('{}', encoding='utf-8')
         python_server_command = bridge_entrypoint() + [
                 '--config', str(python_config),
-                '--overlay-transport', 'tcp', '--tcp-bind', '127.0.0.1', '--tcp-own-port', str(overlay_port),
+                '--overlay-transport', overlay_transport, *python_transport_args,
                 '--admin-web', '--admin-web-bind', '127.0.0.1', '--admin-web-port', str(python_admin),
                 '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk,
                 '--no-compress-layer',
@@ -7398,13 +7412,13 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
             tmp_path,
             admin_port=python_admin,
         )
-        # The Python TCP listener admits one overlay session; a readiness
+        # The Python listener admits one overlay session; a readiness
         # socket would consume that session before the Swift client can start.
         time.sleep(0.3)
         config_path = tmp_path / 'linux_swift_python_runtime_client.json'
         config_path.write_text(json.dumps({
-            'runner': {'overlay_transport': 'tcp'},
-            'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': overlay_port},
+            'runner': {'overlay_transport': overlay_transport},
+            swift_session_name: swift_session,
             'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk},
             'own_servers': [{
                 'name': f'swift-to-python-{service_protocol}',
