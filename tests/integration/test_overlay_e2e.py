@@ -7363,7 +7363,7 @@ def test_overlay_e2e_python_peer_linux_swift_remote_catalog_listener_round_trip(
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize('service_protocol', ['tcp', 'udp'])
-@pytest.mark.parametrize('overlay_transport', ['tcp', 'ws'])
+@pytest.mark.parametrize('overlay_transport', ['tcp', 'ws', 'myudp'])
 def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Path, service_protocol: str, overlay_transport: str) -> None:
     """Swift TCP/UDP services interoperate with each admitted Python runtime."""
     if not sys.platform.startswith('linux'):
@@ -7385,10 +7385,14 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
             python_transport_args = ['--tcp-bind', '127.0.0.1', '--tcp-own-port', str(overlay_port)]
             swift_session = {'tcp_peer': '127.0.0.1', 'tcp_peer_port': overlay_port}
             swift_session_name = 'tcp_session'
-        else:
+        elif overlay_transport == 'ws':
             python_transport_args = ['--ws-bind', '127.0.0.1', '--ws-own-port', str(overlay_port)]
             swift_session = {'ws_peer': '127.0.0.1', 'ws_peer_port': overlay_port, 'ws_tls': False, 'ws_path': '/'}
             swift_session_name = 'ws_session'
+        else:
+            python_transport_args = ['--udp-bind', '127.0.0.1', '--udp-own-port', str(overlay_port)]
+            swift_session = {'udp_peer': '127.0.0.1', 'udp_peer_port': overlay_port}
+            swift_session_name = 'udp_session'
         python_config = tmp_path / 'linux_swift_python_runtime_server.json'
         python_config.write_text('{}', encoding='utf-8')
         python_server_command = bridge_entrypoint() + [

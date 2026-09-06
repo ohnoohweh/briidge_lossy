@@ -9,37 +9,101 @@ public struct ObstacleBridgeMyUDPDataFrame: Equatable, Sendable {
     public let echoedNanoseconds: UInt64
 }
 
-/// myudp v2 DATA framing shared with the Python reference: protocol header
-/// (ptype, length, tx_ns, echo_ns), then a v1 one-record DATA batch.
+public struct ObstacleBridgeMyUDPStreamChunk: Equatable, Sendable {
+    public let counter: UInt16
+    public let payload: Data
+    public init(counter: UInt16, payload: Data) { self.counter = counter; self.payload = payload }
+}
+
+public struct ObstacleBridgeMyUDPWireFrame: Equatable, Sendable {
+    public let type: UInt8
+    public let payload: Data
+    public let transmittedNanoseconds: UInt64
+    public let echoedNanoseconds: UInt64
+    public init(type: UInt8, payload: Data, transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64) {
+        self.type = type; self.payload = payload; self.transmittedNanoseconds = transmittedNanoseconds; self.echoedNanoseconds = echoedNanoseconds
+    }
+}
+
+/// myudp v2 framing shared with Python. DATA batches carry a reliable byte
+/// stream; upper-layer messages are length-prefixed records in that stream.
 public enum ObstacleBridgeMyUDPCodec {
     public static let protocolHeaderSize = 19
     public static let maximumPayloadSize = 1425
+    public static let maximumBatchPayloadSize = 1433
+    public static let dataType: UInt8 = 1
+    public static let controlType: UInt8 = 2
+    public static let idleType: UInt8 = 0
 
     public static func encodeData(payload: Data, counter: UInt16, transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64 = 0) throws -> Data {
-        guard !payload.isEmpty, payload.count <= maximumPayloadSize, counter != 0 else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
-        let recordLength = payload.count + 4
-        var batch = Data([1, 1])
-        append(UInt16(recordLength), to: &batch)
-        append(counter, to: &batch)
-        append(UInt16(payload.count), to: &batch)
-        batch.append(payload)
-        var result = Data([1])
-        append(UInt16(batch.count), to: &result)
-        append(transmittedNanoseconds, to: &result)
-        append(echoedNanoseconds, to: &result)
-        result.append(batch)
-        return result
+        try encodeData(chunks: [.init(counter: counter, payload: payload)], transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
     }
 
-    public static func decodeData(_ wire: Data) throws -> ObstacleBridgeMyUDPDataFrame {
-        guard wire.count >= protocolHeaderSize, wire[0] == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+    public static func encodeData(chunks: [ObstacleBridgeMyUDPStreamChunk], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64 = 0) throws -> Data {
+        guard !chunks.isEmpty, chunks.count <= 64 else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
+        var batch = Data([1, UInt8(chunks.count)])
+        for chunk in chunks {
+            guard chunk.counter != 0, !chunk.payload.isEmpty, chunk.payload.count <= maximumPayloadSize else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
+            append(UInt16(chunk.payload.count + 4), to: &batch)
+            append(chunk.counter, to: &batch)
+            append(UInt16(chunk.payload.count), to: &batch)
+            batch.append(chunk.payload)
+        }
+        guard batch.count <= maximumBatchPayloadSize else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
+        return try encode(type: dataType, payload: batch, transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
+    }
+
+    public static func encodeControl(lastInOrder: UInt16, highestReceived: UInt16, missing: [UInt16] = [], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64 = 0) throws -> Data {
+        guard missing.count <= 64 else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
+        var payload = Data()
+        append(lastInOrder, to: &payload); append(highestReceived, to: &payload); append(UInt16(missing.count), to: &payload)
+        for counter in missing { append(counter, to: &payload) }
+        return try encode(type: controlType, payload: payload, transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
+    }
+
+    public static func decodeWire(_ wire: Data) throws -> ObstacleBridgeMyUDPWireFrame {
+        guard wire.count >= protocolHeaderSize else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
         let bodyLength = Int(readUInt16(wire, 1))
-        guard wire.count == protocolHeaderSize + bodyLength, bodyLength >= 8, wire[19] == 1, wire[20] == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-        let recordLength = Int(readUInt16(wire, 21))
-        let counter = readUInt16(wire, 23)
-        let payloadLength = Int(readUInt16(wire, 25))
-        guard counter != 0, recordLength == payloadLength + 4, payloadLength > 0, payloadLength <= maximumPayloadSize, wire.count == 27 + payloadLength else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-        return .init(counter: counter, payload: Data(wire.dropFirst(27)), transmittedNanoseconds: readUInt64(wire, 3), echoedNanoseconds: readUInt64(wire, 11))
+        guard wire.count == protocolHeaderSize + bodyLength else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        return .init(type: wire[0], payload: Data(wire.dropFirst(protocolHeaderSize)), transmittedNanoseconds: readUInt64(wire, 3), echoedNanoseconds: readUInt64(wire, 11))
+    }
+
+    public static func decodeDataChunks(_ wire: Data) throws -> (chunks: [ObstacleBridgeMyUDPStreamChunk], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64) {
+        let frame = try decodeWire(wire)
+        guard frame.type == dataType, frame.payload.count >= 2, frame.payload[0] == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        let count = Int(frame.payload[1])
+        guard count > 0, count <= 64 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        var offset = 2
+        var chunks: [ObstacleBridgeMyUDPStreamChunk] = []
+        for _ in 0..<count {
+            guard offset + 2 <= frame.payload.count else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            let recordLength = Int(readUInt16(frame.payload, offset)); offset += 2
+            guard recordLength >= 5, offset + recordLength <= frame.payload.count else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            let counter = readUInt16(frame.payload, offset)
+            let payloadLength = Int(readUInt16(frame.payload, offset + 2))
+            guard counter != 0, payloadLength > 0, payloadLength <= maximumPayloadSize, recordLength == payloadLength + 4 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            chunks.append(.init(counter: counter, payload: Data(frame.payload[(offset + 4)..<(offset + recordLength)])))
+            offset += recordLength
+        }
+        guard offset == frame.payload.count else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        return (chunks, frame.transmittedNanoseconds, frame.echoedNanoseconds)
+    }
+
+    /// Compatibility helper for callers that deliberately use a single DATA
+    /// record. Production transport code uses `decodeDataChunks`.
+    public static func decodeData(_ wire: Data) throws -> ObstacleBridgeMyUDPDataFrame {
+        let decoded = try decodeDataChunks(wire)
+        guard decoded.chunks.count == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        let chunk = decoded.chunks[0]
+        return .init(counter: chunk.counter, payload: chunk.payload, transmittedNanoseconds: decoded.transmittedNanoseconds, echoedNanoseconds: decoded.echoedNanoseconds)
+    }
+
+    private static func encode(type: UInt8, payload: Data, transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64) throws -> Data {
+        guard payload.count <= maximumBatchPayloadSize else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
+        var result = Data([type])
+        append(UInt16(payload.count), to: &result); append(transmittedNanoseconds, to: &result); append(echoedNanoseconds, to: &result)
+        result.append(payload)
+        return result
     }
 
     private static func append(_ value: UInt16, to data: inout Data) { data.append(UInt8(value >> 8)); data.append(UInt8(value & 0xff)) }

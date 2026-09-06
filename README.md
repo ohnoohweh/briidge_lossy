@@ -8,10 +8,10 @@ The project currently targets six platform families:
   portable crypto contract build on Linux, with TCP, cleartext WebSocket, and
   myudp overlay sessions, Swift-owned TCP/UDP service/catalog primitives, and
   a redacted Admin Web/API including receive-loop health. The mixed-runtime
-  E2E lane includes TCP-overlay PSK and TCP/UDP service round trips against
-  the full Python runtime, including Python-peer process restart recovery;
-  an opt-in Python listener catalog also qualifies reverse-direction TCP/UDP
-  service delivery over TCP and cleartext WebSocket. Full-runtime myudp and
+  E2E lane includes PSK and bidirectional TCP/UDP service round trips against
+  the full Python runtime over TCP, cleartext WebSocket, and myudp, including
+  Python-peer process restart recovery; an opt-in Python listener catalog
+  qualifies reverse-direction service delivery. Live catalog withdrawal and
   TUN remain in development.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.

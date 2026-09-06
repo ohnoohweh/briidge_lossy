@@ -239,22 +239,22 @@ and receive counter/key ownership; the same receive worker authenticates each
 inbound protected record once before ChannelMux dispatch. ChannelMux routes
 peer-initiated control frames without a local request, and a protected receive
 failure withdraws its epoch before the bounded reconnect owner exposes a
-replacement. Process-level mixed-runtime service
-qualification remains required before these service primitives constitute a
-complete service-owning endpoint. The Linux process E2E lane proves local TCP
+replacement. Process-level mixed-runtime service qualification establishes the
+current service-owning endpoint boundary. The Linux process E2E lane proves local TCP
 and UDP listener round trips through the built foreground executable over TCP,
 cleartext WebSocket, and myudp against the Python SecureLink/ChannelMux
-reference endpoint. It also proves Swift TCP-overlay SecureLink authentication
-and TCP/UDP service round trips against a full Python runtime, including the
-Python TCP RTT PING/PONG lower-transport control exchange. The equivalent
-full-runtime cleartext WebSocket lane consumes the Python APP/PING/PONG
-subframe envelope. Both lanes prove opt-in reverse-direction TCP/UDP catalog
-delivery, service traffic, and recovery after the Python peer process restarts.
-Service withdrawal and full-runtime myudp coverage remain pending.
-The Linux myudp owner exchanges v2 DATA batches over connected POSIX UDP,
-advances candidates after a failed live epoch, recovers after a silent-peer
-timeout, and carries SecureLink PSK plus ChannelMux frames against Python
-peers. The Linux Admin HTTP server serves redacted `/api/status` and `/api/peers`
+reference endpoint. A full Python runtime qualifies SecureLink authentication,
+bidirectional TCP/UDP service traffic, opt-in reverse-direction catalog
+delivery, and recovery after a Python peer-process restart on all three
+admitted lower transports. TCP consumes Python RTT PING/PONG lower-transport
+control; cleartext WebSocket consumes the Python APP/PING/PONG subframe
+envelope; myudp consumes DATA_BATCH stream records and ignores transport-only
+CONTROL/IDLE frames while acknowledging ordered inbound chunks. The Linux
+myudp owner exchanges v2 DATA batches over connected POSIX UDP, preserves
+ordered stream-record reassembly across chunk boundaries, advances candidates
+after a failed live epoch, recovers after a silent-peer timeout, and carries
+SecureLink PSK plus ChannelMux frames against Python peers. Service withdrawal
+from a live Python catalog remains pending. The Linux Admin HTTP server serves redacted `/api/status` and `/api/peers`
 payloads from that runtime state on a listener isolated from transport and
 reconnect execution. TUN service routing is deferred to later work packages.
 
