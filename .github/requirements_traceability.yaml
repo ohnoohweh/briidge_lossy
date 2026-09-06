@@ -130,7 +130,7 @@ REQ-OVL-007:
 # and filtering superseded myudp listener rows before synthetic mux hints are
 # added for peer-scoped traffic accounting.
 REQ-AUT-001:
-  # Includes built Swift TCP listener admission after Python PING/PONG and
+  # Includes built Swift TCP/cleartext-WebSocket listener admission after Python PING/PONG and
   # peer-address control framing, before the reciprocal PSK handshake, and
   # validates Admin-visible replacement-epoch readiness and concurrent
   # Swift-owned TCP/UDP service channels.

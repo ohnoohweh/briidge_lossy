@@ -194,7 +194,10 @@ PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to
 check the next Admin-visible epoch; two simultaneous TCP/UDP local service
 channels are also carried before replacement. TCP and cleartext WebSocket use
-the same process lane; myudp listener admission remains the LSW-004F runtime boundary.
+the same process lane; myudp listener admission is deferred to LSW-005A after
+the Linux TUN adapter milestone.
+Runtime-configuration tests also require unsupported QUIC, TLS WebSocket, TUN,
+proxy-provider, and package/service-manager modes to fail before networking.
 The lower-transport tests require a Python peer to send TCP, cleartext
 WebSocket, and myudp application frames before a Swift request; the live
 cleartext runtime test verifies one epoch-tagged reader and its ordered

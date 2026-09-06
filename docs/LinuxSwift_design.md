@@ -207,12 +207,9 @@ peer over TCP, cleartext WebSocket, and myudp, verifies application readiness,
 and verifies clean signal-driven shutdown.
 The portable crypto target also owns the reciprocal PSK server handshake and
 protected-data state machine, pinned by a deterministic Swift client/server
-exchange. A one-connection loopback TCP PSK echo listener verifies that server
-state across real Linux framing; foreground listener transport, ChannelMux,
-and Admin ownership remain the prerequisite for a Linux Swift service endpoint
-to accept a Python client. The live runtime can adopt an already-authenticated
-inbound configured session and apply its ordinary ChannelMux, service-owner,
-receive-worker, and Admin lifecycle to that epoch.
+exchange. The foreground TCP and cleartext WebSocket listeners accept Python
+clients into that server state and hand authenticated epochs to the live
+ChannelMux, service-owner, receive-worker, and Admin lifecycle.
 `runner.listener_mode` currently admits TCP and cleartext WebSocket PSK listeners without an outbound
 peer configuration and starts its local Admin endpoint before accepting the
 first peer. Myudp listener mode remains unadmitted.
@@ -276,40 +273,6 @@ reconnect execution. TUN service routing is deferred to later work packages.
 Work packages are ordered by dependency. A package is complete only when every
 Definition of Done item is met; compiling alone is not completion.
 
-### LSW-004F — Service-owning overlay qualification
-
-Promote the service-owning runtime from a protocol probe to the Linux Swift
-overlay endpoint qualification lane. The shared E2E harness must exercise the
-same observable service behavior used for the supported Python runtime paths.
-
-Current evidence includes the built Swift executable in TCP and cleartext WebSocket
-`listener_mode`: it handles the Python PING/PONG and peer-address control exchange below
-SecureLink, authenticates sequential Python clients, retires the preceding
-runtime epoch before adoption, and carries Swift-owned TCP and UDP service
-traffic. The process test also terminates and replaces the Python client,
-checking layered Admin readiness and the redacted `/api/peers` projection for
-the replacement epoch. It also carries service traffic after replacement and
-two concurrent local channels. The remaining qualification scope is
-myudp listener ownership and equivalent process-level service and lifecycle
-evidence.
-
-Definition of Done:
-
-- `test_overlay_e2e.py` starts the built Linux Swift executable rather than a
-  bespoke Swift helper and runs Python-server/Linux-Swift-client and
-  Linux-Swift-server/Python-client service cases;
-- TCP and UDP service payloads, multiple sequential channels, concurrent
-  channels, connection close, and bounded reconnect are asserted end to end;
-- endpoint Admin status and peers views report layered readiness, selected peer,
-  service/channel state, and redacted failures consistently with the live
-  process;
-- unsupported QUIC, TLS WebSocket, TUN, proxy, and package/service-manager
-  modes fail with specific guidance and cannot silently fall back to Python;
-- requirements, architecture, testing, drift-report, and README evidence map
-  the process E2E tests to their delivered contracts; and
-- the qualification lane is Linux-only, skips explicitly when Swift is absent,
-  and serializes its package build safely under parallel pytest execution.
-
 ### LSW-005 — Linux TUN packet adapter
 
 Implement the raw-packet Linux TUN adapter for the established ChannelMux
@@ -326,6 +289,22 @@ Definition of Done:
 - a privileged Linux test with a Python peer proves bidirectional packet flow
   and counter updates; and
 - malformed packets or creation failure leak no descriptor or running adapter.
+
+### LSW-005A — Linux myudp listener admission
+
+Add server-side myudp ownership after the TUN adapter milestone, preserving the
+already admitted peer-client wire contract.
+
+Definition of Done:
+
+- one bound UDP socket demultiplexes peer epochs without handing the shared
+  descriptor to a single session;
+- peer-scoped reliable-stream counters, CONTROL/IDLE handling, inactivity
+  expiry, cancellation, and reconnect cleanup match the Python listener;
+- SecureLink, ChannelMux, TCP/UDP services, Admin peer rows, and bounded queues
+  remain isolated per accepted peer; and
+- built-process Python-client/Linux-Swift-listener E2E tests cover service
+  traffic, concurrency, withdrawal, and reconnect without socket leakage.
 
 ### LSW-005B — Linux QUIC transport admission
 
@@ -410,9 +389,9 @@ Definition of Done:
 
 The admitted TCP, cleartext WebSocket, and myudp transports and foreground
 runtime provide the duplex lower-transport and protected receive-owner
-baseline. LSW-004F turns it into a service-owning endpoint
-before the LSW-005 TUN milestone. QUIC and TLS WebSocket remain gated by
-LSW-005B and LSW-005C.
+baseline. The service-owning TCP and cleartext WebSocket endpoint is delivered
+before the LSW-005 TUN milestone. Myudp listener ownership follows in LSW-005A;
+QUIC and TLS WebSocket remain gated by LSW-005B and LSW-005C.
 LSW-006 through LSW-008 make the result supportable.
 
 Before implementation, select and pin the Linux crypto dependency strategy;

@@ -112,6 +112,26 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
                 "secure_link": ["secure_link_mode": "psk"],
             ]))
         }
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "tcp"],
+                "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
+                "TUN_routing": ["enabled_on_startup": true],
+            ]))
+        }
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift proxy mode is unavailable; run a supported Python deployment explicitly instead of expecting fallback")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "tcp"],
+                "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
+                "proxy_provider": ["enabled": true],
+            ]))
+        }
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift package/service-manager mode is unavailable; run the foreground executable under an operator-owned supervisor")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "tcp", "service_mode": true],
+                "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
+            ]))
+        }
     }
 
     @Test func runtimeStatusReportsAdmissionStateWithoutLeakingPsk() throws {

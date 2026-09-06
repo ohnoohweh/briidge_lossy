@@ -75,6 +75,16 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
         }
         let runner = root["runner"] as? [String: Any] ?? [:]
+        if let tun = root["TUN_routing"] as? [String: Any],
+           boolean(tun["enabled_on_startup"] ?? tun["enabled"]) == true {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
+        }
+        if let proxy = root["proxy_provider"] as? [String: Any], boolean(proxy["enabled"]) == true {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift proxy mode is unavailable; run a supported Python deployment explicitly instead of expecting fallback")
+        }
+        if root["service_manager"] != nil || root["linux_package"] != nil || boolean(runner["service_mode"]) == true {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift package/service-manager mode is unavailable; run the foreground executable under an operator-owned supervisor")
+        }
         let listenerMode = boolean(runner["listener_mode"]) == true
         guard let transportText = string(runner["overlay_transport"] ?? root["overlay_transport"]),
               let transport = ObstacleBridgeLinuxTransport(rawValue: transportText.lowercased()) else {

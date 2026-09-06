@@ -7634,6 +7634,11 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         for probe in probes: probe.join(timeout=6.0)
         assert not any(probe.is_alive() for probe in probes)
         assert not concurrent_errors
+        _code, service_status = fetch_json(f'http://127.0.0.1:{swift_admin}/api/status', timeout=0.5)
+        mux_status = service_status['channel_mux']
+        assert mux_status[f'{service_protocol}_opened_total'] >= 3
+        assert service_status['receive_loop']['received_frames'] > 0
+        assert psk not in json.dumps(service_status)
         os.killpg(python_proc.popen.pid, signal.SIGTERM)
         assert python_proc.popen.wait(timeout=5.0) in (0, 143)
         python_proc = start_python_client()

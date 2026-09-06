@@ -18,6 +18,8 @@ The project currently targets six platform families:
   Swift-owned TCP/UDP services on concurrent channels, and admits a
   replacement client epoch.
   Myudp listener admission and TUN remain in development.
+  Enabled TUN, proxy-provider, and package/service-manager settings fail with
+  explicit guidance; the Swift executable never falls back to Python silently.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
