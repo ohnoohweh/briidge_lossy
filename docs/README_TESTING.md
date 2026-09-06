@@ -196,8 +196,8 @@ The service lane additionally exercises the built foreground executable's TCP
 and UDP listeners over all three admitted lower transports and an RS3 remote
 catalog listener installation. A separate full-Python-runtime test proves the
 Swift TCP-overlay PSK handshake and asynchronous TCP/UDP service round trips,
-including Python TCP RTT PING/PONG control frames. Reverse-direction service
-and reconnect qualification remain pending.
+including Python TCP RTT PING/PONG control frames and recovery after a Python
+peer-process restart. Reverse-direction service qualification remains pending.
 The overlay E2E process lane invokes the built Linux executable against a
 Python SecureLink reference peer for each admitted transport, including the
 foreground runtime's readiness and SIGTERM shutdown lifecycle.

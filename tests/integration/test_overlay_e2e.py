@@ -7377,9 +7377,7 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
         bounce.start()
         python_config = tmp_path / 'linux_swift_python_runtime_server.json'
         python_config.write_text('{}', encoding='utf-8')
-        server_proc = start_proc(
-            'linux_swift_python_runtime_server',
-            bridge_entrypoint() + [
+        python_server_command = bridge_entrypoint() + [
                 '--config', str(python_config),
                 '--overlay-transport', 'tcp', '--tcp-bind', '127.0.0.1', '--tcp-own-port', str(overlay_port),
                 '--admin-web', '--admin-web-bind', '127.0.0.1', '--admin-web-port', str(python_admin),
@@ -7387,7 +7385,10 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
                 '--no-compress-layer',
                 '--channel-mux-egress', '{"mode":"direct"}',
                 '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
-            ],
+            ]
+        server_proc = start_proc(
+            'linux_swift_python_runtime_server',
+            python_server_command,
             tmp_path,
             admin_port=python_admin,
         )
@@ -7434,6 +7435,35 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
             else:
                 client.send(payload)
             assert client.recv(len(payload)) == response_payload(payload)
+
+        # A lower-peer process loss must cancel the old Swift receive epoch,
+        # reconnect with a fresh SecureLink session, recreate local service
+        # ownership, and forward a later probe through the replacement Python
+        # runtime process.
+        os.killpg(server_proc.popen.pid, signal.SIGTERM)
+        assert server_proc.popen.wait(timeout=5.0) in (0, 143)
+        server_proc = start_proc(
+            'linux_swift_python_runtime_server_restarted',
+            python_server_command,
+            tmp_path,
+            admin_port=python_admin,
+        )
+        recovered = False
+        end = time.time() + 12.0
+        while time.time() < end and not recovered:
+            try:
+                with socket.socket(socket.AF_INET, socket_type) as client:
+                    client.settimeout(0.5)
+                    client.connect(('127.0.0.1', service_port))
+                    payload = b'linux-swift-recovered-runtime'
+                    if service_protocol == 'tcp':
+                        client.sendall(payload)
+                    else:
+                        client.send(payload)
+                    recovered = client.recv(len(payload)) == response_payload(payload)
+            except OSError:
+                time.sleep(0.1)
+        assert recovered, 'Linux Swift service did not recover after Python runtime restart'
     finally:
         if swift_proc is not None and swift_proc.popen.poll() is None:
             os.killpg(swift_proc.popen.pid, signal.SIGTERM)
