@@ -53,6 +53,16 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         return value
     }
 
+    /// Sends a frame whose result is expected to arrive asynchronously (for
+    /// example a service OPEN/DATA exchange).  A live duplex peer must not be
+    /// forced into the legacy request/reply matcher merely because it has no
+    /// immediate ChannelMux acknowledgement to send.
+    public func sendUnsolicited(_ frame: ObstacleBridgeChannelMuxFrame) throws {
+        guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
+        let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
+        try session.sendOneWay(wire)
+    }
+
     /// Marks this mux as driven by the one live receive owner. Once enabled,
     /// request/reply compatibility waits on that owner instead of reading the
     /// lower descriptor a second time.

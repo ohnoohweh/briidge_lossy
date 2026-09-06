@@ -32,6 +32,8 @@ public final class ObstacleBridgeLinuxServiceDataPlane {
     }
 
     private let maximumQueuedFrames: Int
+    private let instanceID: UInt64
+    private let connectionSequence: UInt32
     private var nextTCPChannel: UInt16 = 1
     private var nextUDPChannel: UInt16 = 1
     private var channels: [UInt16: Channel] = [:]
@@ -42,8 +44,10 @@ public final class ObstacleBridgeLinuxServiceDataPlane {
     private var openedTCPChannels = 0
     private var openedUDPChannels = 0
 
-    public init(maximumQueuedFrames: Int = 128) {
+    public init(maximumQueuedFrames: Int = 128, instanceID: UInt64 = 0, connectionSequence: UInt32 = 0) {
         self.maximumQueuedFrames = max(1, maximumQueuedFrames)
+        self.instanceID = instanceID
+        self.connectionSequence = connectionSequence
     }
 
     public func acceptLocalService(_ spec: ObstacleBridgeLinuxServiceSpec) throws -> UInt16 {
@@ -154,7 +158,7 @@ public final class ObstacleBridgeLinuxServiceDataPlane {
         let metadata: [String: Any] = ["name": spec.name ?? NSNull(), "lifecycle_hooks": NSNull(), "options": NSNull()]
         let metadataData = try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
         var value = Data("O5".utf8)
-        append(UInt64(0), to: &value); append(UInt32(0), to: &value); append(spec.serviceID, to: &value)
+        append(instanceID, to: &value); append(connectionSequence, to: &value); append(spec.serviceID, to: &value)
         value.append(spec.listenProtocol.rawValue); append(UInt16(bind.count), to: &value); value.append(bind)
         append(UInt16(spec.listenPort), to: &value); value.append(spec.targetProtocol.rawValue); append(UInt16(host.count), to: &value); value.append(host)
         append(UInt16(spec.targetPort), to: &value); append(UInt32(metadataData.count), to: &value); value.append(metadataData)

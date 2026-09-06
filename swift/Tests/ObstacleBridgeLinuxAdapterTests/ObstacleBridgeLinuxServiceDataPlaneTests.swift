@@ -5,13 +5,15 @@ import Testing
 
 struct ObstacleBridgeLinuxServiceDataPlaneTests {
     @Test func localTcpConnectionProducesOpenDataAndClose() throws {
-        let plane = ObstacleBridgeLinuxServiceDataPlane()
+        let plane = ObstacleBridgeLinuxServiceDataPlane(instanceID: 9, connectionSequence: 4)
         let id = try plane.acceptLocalService(service)
         try plane.localData(channelID: id, payload: Data("hello".utf8))
         try plane.localEOF(channelID: id)
         let frames = plane.drainOutbound()
         #expect(frames.map(\.messageType) == [.open, .data, .close])
         #expect(frames[0].channelID == id)
+        #expect(Data(frames[0].body.dropFirst(2).prefix(8)) == Data(repeating: 0, count: 7) + Data([9]))
+        #expect(Data(frames[0].body.dropFirst(10).prefix(4)) == Data([0, 0, 0, 4]))
         #expect(frames[1].body == Data("hello".utf8))
 
         let peer = ObstacleBridgeLinuxServiceDataPlane()

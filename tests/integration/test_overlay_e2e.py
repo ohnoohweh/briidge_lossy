@@ -7357,6 +7357,95 @@ def test_overlay_e2e_python_peer_linux_swift_remote_catalog_listener_round_trip(
 
 @pytest.mark.integration
 @pytest.mark.slow
+@pytest.mark.parametrize('service_protocol', ['tcp', 'udp'])
+def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Path, service_protocol: str) -> None:
+    """A Swift-owned TCP/UDP listener reaches a real Python SecureLink runtime."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = 'linux-swift-python-runtime-service-psk'
+    def reserve_port() -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            return int(reservation.getsockname()[1])
+    overlay_port, service_port, target_port, python_admin, swift_admin = [reserve_port() for _ in range(5)]
+    bounce = BounceBackServer('linux_swift_python_runtime_target', service_protocol, '127.0.0.1', target_port, tmp_path / 'linux_swift_python_runtime_target.log')
+    server_proc = swift_proc = None
+    try:
+        bounce.start()
+        python_config = tmp_path / 'linux_swift_python_runtime_server.json'
+        python_config.write_text('{}', encoding='utf-8')
+        server_proc = start_proc(
+            'linux_swift_python_runtime_server',
+            bridge_entrypoint() + [
+                '--config', str(python_config),
+                '--overlay-transport', 'tcp', '--tcp-bind', '127.0.0.1', '--tcp-own-port', str(overlay_port),
+                '--admin-web', '--admin-web-bind', '127.0.0.1', '--admin-web-port', str(python_admin),
+                '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk,
+                '--no-compress-layer',
+                '--channel-mux-egress', '{"mode":"direct"}',
+                '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
+            ],
+            tmp_path,
+            admin_port=python_admin,
+        )
+        # The Python TCP listener admits one overlay session; a readiness
+        # socket would consume that session before the Swift client can start.
+        time.sleep(0.3)
+        config_path = tmp_path / 'linux_swift_python_runtime_client.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'tcp'},
+            'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': overlay_port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk},
+            'own_servers': [{
+                'name': f'swift-to-python-{service_protocol}',
+                'listen': {'protocol': service_protocol, 'bind': '127.0.0.1', 'port': service_port},
+                'target': {'protocol': service_protocol, 'host': '127.0.0.1', 'port': target_port},
+            }],
+        }), encoding='utf-8')
+        swift_proc = start_proc(
+            'linux_swift_python_runtime_client',
+            [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(swift_admin), '--hold-sec', '20'],
+            tmp_path,
+            admin_port=swift_admin,
+        )
+        end = time.time() + 12.0
+        last_status: dict[str, object] = {}
+        while time.time() < end:
+            try:
+                _code, status = fetch_json(f'http://127.0.0.1:{swift_admin}/api/status', timeout=1.0)
+                last_status = status
+                if status.get('app_ready') is True:
+                    break
+            except Exception:
+                pass
+            time.sleep(0.1)
+        else:
+            raise AssertionError(f'Linux Swift client did not authenticate against Python runtime: {last_status}')
+        socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
+        with socket.socket(socket.AF_INET, socket_type) as client:
+            client.settimeout(4.0)
+            client.connect(('127.0.0.1', service_port))
+            payload = b'linux-swift-to-python-runtime'
+            if service_protocol == 'tcp':
+                client.sendall(payload)
+            else:
+                client.send(payload)
+            assert client.recv(len(payload)) == response_payload(payload)
+    finally:
+        if swift_proc is not None and swift_proc.popen.poll() is None:
+            os.killpg(swift_proc.popen.pid, signal.SIGTERM)
+            assert swift_proc.popen.wait(timeout=5.0) == 0
+        if server_proc is not None and server_proc.popen.poll() is None:
+            os.killpg(server_proc.popen.pid, signal.SIGTERM)
+            assert server_proc.popen.wait(timeout=5.0) in (0, 143)
+        bounce.stop()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize("case_name", RECONNECT_CASES)
 def test_overlay_e2e_reconnect(case_name: str, tmp_path: Path) -> None:
     run_case_reconnect(CASES[case_name], tmp_path, CASE_INDEX_BASE_RECONNECT + ALL_CASES.index(case_name))

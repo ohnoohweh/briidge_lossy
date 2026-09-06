@@ -171,6 +171,7 @@ swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
 pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secure_link_psk_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k foreground_runtime_lifecycle
 pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_service_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k python_runtime_linux_swift_service_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round_trip
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --status
@@ -193,9 +194,10 @@ routes protected unsolicited ChannelMux frames, and verifies that receive
 failure withdraws the active epoch before bounded reconnect.
 The service lane additionally exercises the built foreground executable's TCP
 and UDP listeners over all three admitted lower transports and an RS3 remote
-catalog listener installation. The fixture is a protocol reference peer; it
-does not substitute for the remaining full-Python-runtime reverse-direction
-and reconnect qualification.
+catalog listener installation. A separate full-Python-runtime test proves the
+Swift TCP-overlay PSK handshake and asynchronous TCP/UDP service round trips,
+including Python TCP RTT PING/PONG control frames. Reverse-direction service
+and reconnect qualification remain pending.
 The overlay E2E process lane invokes the built Linux executable against a
 Python SecureLink reference peer for each admitted transport, including the
 foreground runtime's readiness and SIGTERM shutdown lifecycle.

@@ -180,12 +180,35 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     }
 
     private func readTCPApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {
-        let header = try connection.readExactly(4)
-        let length = header.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-        guard length > 0, length <= 1_048_576 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-        let body = try connection.readExactly(Int(length))
-        guard body.first == 0 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-        return Data(body.dropFirst())
+        // Python's TCP lower transport multiplexes RTT controls with APP
+        // frames. Those controls may arrive before the SecureLink server hello,
+        // so consume PINGs here and immediately return a compatible PONG rather
+        // than exposing the control byte to the SecureLink decoder.
+        while true {
+            let header = try connection.readExactly(4)
+            let length = header.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+            guard length > 0, length <= 1_048_576 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            let body = try connection.readExactly(Int(length))
+            guard let kind = body.first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            switch kind {
+            case 0:
+                return Data(body.dropFirst())
+            case 1:
+                // PING payload begins with the sender's big-endian tx_ns.
+                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+                var pongLength = UInt32(9).bigEndian
+                var pong = Data(bytes: &pongLength, count: MemoryLayout<UInt32>.size)
+                pong.append(2)
+                pong.append(body[1...8])
+                try connection.write(pong)
+            case 2:
+                // A PONG completes a lower-layer liveness exchange and carries
+                // no application payload for this client.
+                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            default:
+                throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+            }
+        }
     }
 
     private func performWebSocketUpgrade(_ connection: POSIXStreamConnection) throws {

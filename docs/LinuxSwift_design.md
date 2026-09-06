@@ -241,11 +241,14 @@ peer-initiated control frames without a local request, and a protected receive
 failure withdraws its epoch before the bounded reconnect owner exposes a
 replacement. Process-level mixed-runtime service
 qualification remains required before these service primitives constitute a
-complete service-owning endpoint. The Linux process E2E lane already proves
-local TCP and UDP listener round trips through the built foreground executable
-over TCP, cleartext WebSocket, and myudp against the Python SecureLink/ChannelMux
-reference endpoint; reverse-direction catalog delivery, reconnect recovery,
-and full Python-runtime service qualification remain pending.
+complete service-owning endpoint. The Linux process E2E lane proves local TCP
+and UDP listener round trips through the built foreground executable over TCP,
+cleartext WebSocket, and myudp against the Python SecureLink/ChannelMux
+reference endpoint. It also proves Swift TCP-overlay SecureLink authentication
+and TCP/UDP service round trips against a full Python runtime, including the
+Python TCP RTT PING/PONG lower-transport control exchange. Reverse-direction
+catalog delivery, service withdrawal, reconnect recovery, and full-runtime
+coverage for the remaining admitted lower transports remain pending.
 The Linux myudp owner exchanges v2 DATA batches over connected POSIX UDP,
 advances candidates after a failed live epoch, recovers after a silent-peer
 timeout, and carries SecureLink PSK plus ChannelMux frames against Python

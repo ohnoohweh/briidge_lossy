@@ -250,8 +250,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     private func startOwnServiceOwners() throws {
         stopServiceOwners()
+        let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         for spec in configuredRuntime.configuration.ownServices {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec) { [weak self] owner, frames in
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
@@ -267,8 +268,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
         stopRemoteServiceOwners()
+        let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         for spec in specs {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec) { [weak self] owner, frames in
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
@@ -287,15 +289,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         guard let channelMux, !configuredRuntime.configuration.remoteServices.isEmpty else { return }
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         let payload = try ObstacleBridgeLinuxServiceCatalog.encode(instanceID: catalogInstanceID, connectionSequence: sequence, services: configuredRuntime.configuration.remoteServices)
-        let reply = try channelMux.exchange(.init(channelID: 0, protocolType: .udp, counter: 0, messageType: .remoteServicesSetV2, body: payload))
-        routeInboundFrame(reply)
+        try channelMux.sendUnsolicited(.init(channelID: 0, protocolType: .udp, counter: 0, messageType: .remoteServicesSetV2, body: payload))
     }
 
     private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
         guard !stopped, let channelMux else { return }
         for frame in frames {
             if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
-            do { routeInboundFrame(try channelMux.exchange(frame)) }
+            do { try channelMux.sendUnsolicited(frame) }
             catch {
                 failureReason = error.localizedDescription
                 reconnect()
