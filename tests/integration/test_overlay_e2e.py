@@ -7370,7 +7370,7 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
             reservation.bind(('127.0.0.1', 0))
             return int(reservation.getsockname()[1])
-    overlay_port, service_port, target_port, python_admin, swift_admin = [reserve_port() for _ in range(5)]
+    overlay_port, service_port, remote_service_port, target_port, python_admin, swift_admin = [reserve_port() for _ in range(6)]
     bounce = BounceBackServer('linux_swift_python_runtime_target', service_protocol, '127.0.0.1', target_port, tmp_path / 'linux_swift_python_runtime_target.log')
     server_proc = swift_proc = None
     try:
@@ -7384,6 +7384,12 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
                 '--secure-link', '--secure-link-mode', 'psk', '--secure-link-psk', psk,
                 '--no-compress-layer',
                 '--channel-mux-egress', '{"mode":"direct"}',
+                '--channel-mux-listener-publish-remote-services',
+                '--remote-servers', json.dumps({
+                    'name': f'python-to-swift-{service_protocol}',
+                    'listen': {'protocol': service_protocol, 'bind': '127.0.0.1', 'port': remote_service_port},
+                    'target': {'protocol': service_protocol, 'host': '127.0.0.1', 'port': target_port},
+                }),
                 '--tun-execution-mode', 'inline', '--no-tun-enabled-on-startup',
             ]
         server_proc = start_proc(
@@ -7435,6 +7441,26 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
             else:
                 client.send(payload)
             assert client.recv(len(payload)) == response_payload(payload)
+
+        # The real Python listener publishes an opt-in remote catalog. Swift
+        # installs its listener and drives the reverse-direction service OPEN
+        # / DATA path back through the Python runtime.
+        remote_ready = False
+        end = time.time() + 8.0
+        while time.time() < end and not remote_ready:
+            try:
+                with socket.socket(socket.AF_INET, socket_type) as client:
+                    client.settimeout(0.5)
+                    client.connect(('127.0.0.1', remote_service_port))
+                    payload = b'python-catalog-to-swift-service'
+                    if service_protocol == 'tcp':
+                        client.sendall(payload)
+                    else:
+                        client.send(payload)
+                    remote_ready = client.recv(len(payload)) == response_payload(payload)
+            except OSError:
+                time.sleep(0.1)
+        assert remote_ready, 'Swift did not install the full Python-runtime remote service catalog'
 
         # A lower-peer process loss must cancel the old Swift receive epoch,
         # reconnect with a fresh SecureLink session, recreate local service

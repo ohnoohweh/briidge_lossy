@@ -374,6 +374,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         "Example JSON item: "
                         """'{"listen":{"protocol":"udp","bind":"::","port":16666},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'""")
             )
+        if not _has('--channel-mux-listener-publish-remote-services'):
+            p.add_argument(
+                '--channel-mux-listener-publish-remote-services',
+                action='store_true',
+                default=False,
+                help=(
+                    'Allow a listener instance to publish its configured '
+                    '--remote-servers catalog to connected peers. Disabled by '
+                    'default because a shared listener may have ambiguous '
+                    'service intent across multiple peers.'
+                ),
+            )
         if not _has('--channel-mux-egress'):
             p.add_argument(
                 '--channel-mux-egress',
@@ -469,7 +481,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     len(retained_services),
                 )
             services = retained_services
-        if listener_mode and remote_services:
+        if listener_mode and remote_services and not bool(getattr(args, 'channel_mux_listener_publish_remote_services', False)):
             mux.log.info(
                 "[MUX] listener mode detected: ignoring %d --remote-servers entries; "
                 "the listening peer must not expose ambiguous local services when multiple overlay peers connect",
