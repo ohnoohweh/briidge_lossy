@@ -18,6 +18,7 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private let receive: () throws -> Data
     private let cancelReceive: () -> Void
     private let sink: (UInt64, Data) -> Void
+    private let onFailure: (UInt64, String) -> Void
     private let reader = DispatchQueue(label: "org.obstaclebridge.linux.receive-reader")
     private let dispatchQueue = DispatchQueue(label: "org.obstaclebridge.linux.receive-dispatch")
     private let lock = NSLock()
@@ -29,8 +30,8 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
     private var dropped = 0
     private var failure: String?
 
-    public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void) {
-        self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.cancelReceive = cancelReceive; self.sink = sink
+    public init(epoch: UInt64, capacity: Int = 128, receive: @escaping () throws -> Data, cancelReceive: @escaping () -> Void, sink: @escaping (UInt64, Data) -> Void, onFailure: @escaping (UInt64, String) -> Void = { _, _ in }) {
+        self.epoch = epoch; self.capacity = max(1, capacity); self.receive = receive; self.cancelReceive = cancelReceive; self.sink = sink; self.onFailure = onFailure
     }
 
     public func start() {
@@ -53,7 +54,12 @@ public final class ObstacleBridgeLinuxReceiveWorker: @unchecked Sendable {
             lock.lock(); let isStopped = stopped; lock.unlock(); if isStopped { return }
             do { enqueue(try receive()) }
             catch {
-                lock.lock(); if !stopped { failure = error.localizedDescription }; lock.unlock()
+                let reason = error.localizedDescription
+                lock.lock()
+                let reportFailure = !stopped
+                if reportFailure { failure = reason }
+                lock.unlock()
+                if reportFailure { onFailure(epoch, reason) }
                 return
             }
         }

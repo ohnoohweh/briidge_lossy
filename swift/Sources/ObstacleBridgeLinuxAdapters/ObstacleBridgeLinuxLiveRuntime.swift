@@ -183,8 +183,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let nonce = freshNonce()
             let connectedSession = try configuredRuntime.connect(sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
-            channelMux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
-            startCleartextReceiveWorker(session: connectedSession)
+            let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
+            mux.onUnsolicitedFrame = { [weak self] frame in
+                self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
+            }
+            mux.activateReceiveOwner()
+            connectedSession.activateReceiveOwner()
+            channelMux = mux
+            startReceiveWorker(session: connectedSession, mux: mux)
             try publishRemoteCatalog()
             try startOwnServiceOwners()
             refreshStatusProjection()
@@ -298,16 +304,26 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         }
     }
 
-    private func startCleartextReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession) {
+    private func startReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession, mux: ObstacleBridgeLinuxChannelMuxSession) {
         guard session.supportsDuplexReceive else { return }
         let epoch = configuredRuntime.connectionEpoch
-        let worker = ObstacleBridgeLinuxReceiveWorker(epoch: epoch, receive: { try session.receiveRaw() }, cancelReceive: { session.cancelReceive() }) { [weak self] workerEpoch, payload in
-            self?.queue.async { [weak self] in
+        let worker = ObstacleBridgeLinuxReceiveWorker(
+            epoch: epoch,
+            receive: {
+                while true {
+                    if let payload = try session.receiveForOwner() { return payload }
+                }
+            },
+            cancelReceive: { session.cancelReceive() },
+            sink: { [weak self] workerEpoch, payload in
                 guard let self, self.configuredRuntime.connectionEpoch == workerEpoch,
                       let frame = try? ObstacleBridgeChannelMuxCodec.decode(payload) else { return }
-                self.routeInboundFrame(frame)
+                mux.receive(frame)
+            },
+            onFailure: { [weak self] workerEpoch, reason in
+                self?.queue.async { [weak self] in self?.receiveFailed(epoch: workerEpoch, reason: reason) }
             }
-        }
+        )
         replaceReceiveWorker(with: worker)
         worker.start()
     }
@@ -321,6 +337,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         receiveWorker = worker
         statusLock.unlock()
         previous?.stop()
+    }
+
+    private func receiveFailed(epoch: UInt64, reason: String) {
+        guard !stopped, configuredRuntime.connectionEpoch == epoch else { return }
+        failureReason = reason
+        reconnect()
     }
 
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {

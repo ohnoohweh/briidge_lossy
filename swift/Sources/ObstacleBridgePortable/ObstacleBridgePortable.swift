@@ -261,13 +261,21 @@ public enum ObstacleBridgeSecureLinkPSKClientError: Error, Equatable {
 /// machine usable over Linux TCP and WebSocket lower transports.
 public final class ObstacleBridgeSecureLinkPSKClient {
     private let psk: Data
+    private let lifecycleLock = NSLock()
+    private let transmitLock = NSLock()
+    private let receiveLock = NSLock()
     private var sessionID: UInt64 = 0
     private var clientNonce = Data()
     private var c2sKey = Data()
     private var s2cKey = Data()
     private var txCounter: UInt64 = 1
     private var rxCounter: UInt64 = 0
-    private(set) public var isAuthenticated = false
+    private var authenticated = false
+
+    public var isAuthenticated: Bool {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        return authenticated
+    }
 
     public init(psk: Data) throws {
         guard !psk.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidPSK }
@@ -276,30 +284,44 @@ public final class ObstacleBridgeSecureLinkPSKClient {
 
     public func begin(sessionID: UInt64, clientNonce: Data) throws -> Data {
         guard sessionID != 0, clientNonce.count == 32 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        lifecycleLock.lock()
         self.sessionID = sessionID
         self.clientNonce = clientNonce
+        lifecycleLock.unlock()
+        transmitLock.lock()
         self.c2sKey = Data()
-        self.s2cKey = Data()
         self.txCounter = 1
+        transmitLock.unlock()
+        receiveLock.lock()
+        self.s2cKey = Data()
         self.rxCounter = 0
-        self.isAuthenticated = false
+        receiveLock.unlock()
+        lifecycleLock.lock(); self.authenticated = false; lifecycleLock.unlock()
         return frame(type: 1, sessionID: sessionID, counter: 0, payload: clientNonce + Data([1, 0]))
     }
 
     /// Validates SERVER_HELLO and returns the encrypted client proof frame.
     public func handleServerHello(_ wire: Data) throws -> Data {
         let parsed = try parse(wire)
-        guard parsed.type == 2, parsed.sessionID == sessionID, parsed.counter == 0, parsed.payload.count >= 65 else {
+        lifecycleLock.lock()
+        let expectedSessionID = sessionID
+        let expectedClientNonce = clientNonce
+        lifecycleLock.unlock()
+        guard parsed.type == 2, parsed.sessionID == expectedSessionID, parsed.counter == 0, parsed.payload.count >= 65 else {
             throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         let serverNonce = Data(parsed.payload.prefix(32))
         guard parsed.payload[32] == 1 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         let proof = Data(parsed.payload[33..<65])
-        let expected = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
+        let expected = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: expectedSessionID, clientNonce: expectedClientNonce, serverNonce: serverNonce)
         guard proof == expected else { throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed }
-        let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
+        let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: expectedSessionID, clientNonce: expectedClientNonce, serverNonce: serverNonce)
+        transmitLock.lock()
         c2sKey = keys.clientToServer
+        transmitLock.unlock()
+        receiveLock.lock()
         s2cKey = keys.serverToClient
+        receiveLock.unlock()
         return try protect(Data())
     }
 
@@ -308,25 +330,31 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     public func handleServerAcknowledgement(_ wire: Data) throws {
         let plaintext = try unprotect(wire)
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
-        isAuthenticated = true
+        lifecycleLock.lock(); authenticated = true; lifecycleLock.unlock()
     }
 
     public func protect(_ payload: Data) throws -> Data {
-        guard sessionID != 0, c2sKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
-        let header = frameHeader(type: 4, sessionID: sessionID, counter: txCounter)
+        lifecycleLock.lock(); let activeSessionID = sessionID; lifecycleLock.unlock()
+        transmitLock.lock()
+        defer { transmitLock.unlock() }
+        guard activeSessionID != 0, c2sKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        let header = frameHeader(type: 4, sessionID: activeSessionID, counter: txCounter)
         let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(
             plaintext: payload,
             key: c2sKey,
             nonce: nonce(counter: txCounter),
             authenticatedData: header
         )
-        defer { txCounter &+= 1 }
+        txCounter &+= 1
         return header + ciphertext
     }
 
     public func unprotect(_ wire: Data) throws -> Data {
         let parsed = try parse(wire)
-        guard parsed.type == 4, parsed.sessionID == sessionID, parsed.counter > rxCounter, s2cKey.count == 32 else {
+        lifecycleLock.lock(); let activeSessionID = sessionID; lifecycleLock.unlock()
+        receiveLock.lock()
+        defer { receiveLock.unlock() }
+        guard parsed.type == 4, parsed.sessionID == activeSessionID, parsed.counter > rxCounter, s2cKey.count == 32 else {
             throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         let plaintext: Data

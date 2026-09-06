@@ -187,7 +187,10 @@ reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
 The lower-transport tests require a Python peer to send TCP, cleartext
 WebSocket, and myudp application frames before a Swift request; the live
 cleartext runtime test verifies one epoch-tagged reader and its ordered
-cancellation, while Admin tests pin redacted receive-loop metrics.
+cancellation, while Admin tests pin redacted receive-loop metrics. The PSK
+duplex lane repeats peer-first protected frames on all admitted transports,
+routes protected unsolicited ChannelMux frames, and verifies that receive
+failure withdraws the active epoch before bounded reconnect.
 The service lane additionally exercises the built foreground executable's TCP
 and UDP listeners over all three admitted lower transports and an RS3 remote
 catalog listener installation. The fixture is a protocol reference peer; it

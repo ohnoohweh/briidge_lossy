@@ -7,6 +7,47 @@ import Glibc
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
+        try assertProtectedReceiveFailureReconnects(mode: "tcp-securelink-close-after-ack", transport: .tcp)
+    }
+
+    @Test func protectedWebSocketReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
+        try assertProtectedReceiveFailureReconnects(mode: "ws-securelink-close-after-ack", transport: .ws)
+    }
+
+    @Test func protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
+        try assertProtectedReceiveFailureReconnects(mode: "myudp-securelink-close-after-ack", transport: .myudp)
+    }
+
+    private func assertProtectedReceiveFailureReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
+        let peer = try PythonOverlayPeer(mode: mode)
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2)
+        )
+        let failed = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "failed" { failed.signal() } }
+        runtime.start()
+        #expect(failed.wait(timeout: .now() + 3) == .success)
+        #expect(runtime.snapshot.attempts == 2)
+        #expect(runtime.snapshot.failureReason != nil)
+        #expect(runtime.status().receiveLoopState == "stopped")
+        runtime.stop()
+    }
+
+    @Test func protectedPeerInitiatedCatalogReachesLiveServiceOwner() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-catalog-duplex")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        runtime.start()
+        #expect(waitUntil { (runtime.remoteServicePorts()[7] ?? 0) > 0 })
+        runtime.stop()
+    }
+
     @Test func liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop() throws {
         let peer = try PythonOverlayPeer(mode: "tcp-duplex")
         defer { peer.stop() }

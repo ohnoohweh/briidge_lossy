@@ -234,8 +234,12 @@ operations. The live runtime attaches one epoch-tagged receive worker, with a
 bounded handoff queue, to TCP, cleartext WebSocket, and myudp sessions; stop
 and reconnect cancel that worker before a replacement epoch becomes visible.
 Redacted Admin status exposes its state, epoch, frame/drop totals, queue depth,
-and final receive failure. SecureLink-protected receive ownership remains the
-explicit scope of LSW-004E-B. Process-level mixed-runtime service
+and final receive failure. SecureLink PSK keeps independent serialized transmit
+and receive counter/key ownership; the same receive worker authenticates each
+inbound protected record once before ChannelMux dispatch. ChannelMux routes
+peer-initiated control frames without a local request, and a protected receive
+failure withdraws its epoch before the bounded reconnect owner exposes a
+replacement. Process-level mixed-runtime service
 qualification remains required before these service primitives constitute a
 complete service-owning endpoint. The Linux process E2E lane already proves
 local TCP and UDP listener round trips through the built foreground executable
@@ -253,32 +257,6 @@ reconnect execution. TUN service routing is deferred to later work packages.
 
 Work packages are ordered by dependency. A package is complete only when every
 Definition of Done item is met; compiling alone is not completion.
-
-### LSW-004E-B — Duplex SecureLink and ChannelMux dispatch ownership
-
-Make SecureLink protection state and ChannelMux receive dispatch safe for the
-duplex lower-session contract. The authenticated session owns directional
-counters and is the only component permitted to decrypt inbound frames or
-advance their receive state.
-
-Definition of Done:
-
-- SecureLink has separate, serialized transmit and receive counter/key state;
-  handshake, acknowledgement, application traffic, rekey, EOF, and failure
-  transitions remain byte-compatible with the Python implementation;
-- a receive worker unprotects each valid inbound application record exactly
-  once and dispatches it on the live runtime queue to ChannelMux; malformed,
-  replayed, stale-epoch, or unauthenticated records fail closed and increment
-  redacted diagnostics;
-- ChannelMux control frames, including RS3 catalog publication/replacement and
-  OPEN/DATA/CLOSE, may arrive without a locally queued request and are routed
-  to the service owner in receive order;
-- send and receive failures race safely with stop/reconnect: no frame is
-  delivered after epoch withdrawal, no nonce/counter is reused, and only one
-  reconnect decision is emitted; and
-- focused Python-derived SecureLink vectors plus mixed Swift/Python duplex
-  tests pin simultaneous inbound/outbound traffic, peer-initiated catalog
-  updates, and a mid-stream reconnect for every admitted lower transport.
 
 ### LSW-004E — Swift-owned service catalog and channel data plane
 
@@ -424,9 +402,8 @@ Definition of Done:
 ## Suggested sequence and open decisions
 
 The admitted TCP, cleartext WebSocket, and myudp transports and foreground
-runtime provide the duplex cleartext lower-transport baseline. LSW-004E-B gives
-SecureLink/ChannelMux one protected receive-owner contract. LSW-004E and
-LSW-004F then turn it into a service-owning endpoint
+runtime provide the duplex lower-transport and protected receive-owner
+baseline. LSW-004E and LSW-004F turn it into a service-owning endpoint
 before the LSW-005 TUN milestone. QUIC and TLS WebSocket remain gated by
 LSW-005B and LSW-005C.
 LSW-006 through LSW-008 make the result supportable.

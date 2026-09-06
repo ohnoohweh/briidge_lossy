@@ -35,6 +35,9 @@ public final class ObstacleBridgeLinuxConfiguredSession {
     private let lower: ObstacleBridgeLinuxOverlayTransportClient
     private let lowerSession: ObstacleBridgeLinuxOverlayTransportSession
     private let secureLink: ObstacleBridgeSecureLinkPSKClient?
+    private let requestLock = NSLock()
+    private var receiveOwnerActive = false
+    private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
     fileprivate init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, transport: ObstacleBridgeLinuxTransport) {
@@ -46,6 +49,10 @@ public final class ObstacleBridgeLinuxConfiguredSession {
 
     public func send(_ payload: Data) throws -> Data {
         do {
+            requestLock.lock()
+            let ownerActive = receiveOwnerActive
+            requestLock.unlock()
+            if ownerActive { return try sendThroughReceiveOwner(payload) }
             if let secureLink {
                 return try secureLink.unprotect(lowerSession.exchange(secureLink.protect(payload)))
             }
@@ -56,12 +63,48 @@ public final class ObstacleBridgeLinuxConfiguredSession {
         }
     }
 
-    /// Raw lower receive is safe only for cleartext epochs. SecureLink
-    /// directional counter ownership is introduced by LSW-004E-B.
-    public var supportsDuplexReceive: Bool { secureLink == nil }
-    public func receiveRaw() throws -> Data {
-        guard secureLink == nil else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-        return try lowerSession.receive()
+    /// Separately scheduled transport directions. SecureLink owns the
+    /// directional counters, so the receive worker never observes ciphertext
+    /// outside this boundary.
+    public var supportsDuplexReceive: Bool { true }
+    public func sendOneWay(_ payload: Data) throws {
+        do {
+            if let secureLink { try lowerSession.send(secureLink.protect(payload)) }
+            else { try lowerSession.send(payload) }
+        } catch {
+            fail(error)
+            throw error
+        }
+    }
+
+    public func receiveInbound() throws -> Data {
+        do {
+            let wire = try lowerSession.receive()
+            return try secureLink?.unprotect(wire) ?? wire
+        } catch {
+            fail(error)
+            throw error
+        }
+    }
+
+    /// Used exclusively by the epoch's receive worker. Compatibility request
+    /// replies are consumed here, so an older diagnostic caller cannot create
+    /// a second descriptor reader beside ChannelMux dispatch.
+    public func receiveForOwner() throws -> Data? {
+        let payload = try receiveInbound()
+        requestLock.lock()
+        if let pending = pendingCompatibilityReply {
+            pendingCompatibilityReply?.value = payload
+            pending.signal.signal()
+            requestLock.unlock()
+            return nil
+        }
+        requestLock.unlock()
+        return payload
+    }
+
+    public func activateReceiveOwner() {
+        requestLock.lock(); receiveOwnerActive = true; requestLock.unlock()
     }
     public func cancelReceive() { lowerSession.close() }
 
@@ -73,6 +116,36 @@ public final class ObstacleBridgeLinuxConfiguredSession {
     }
 
     deinit { close() }
+
+    private func fail(_ error: Error) {
+        snapshot = .init(transport: snapshot.transport, state: "failed", attempts: snapshot.attempts, failureReason: error.localizedDescription)
+    }
+
+    private func sendThroughReceiveOwner(_ payload: Data) throws -> Data {
+        let signal = DispatchSemaphore(value: 0)
+        requestLock.lock()
+        guard pendingCompatibilityReply == nil else {
+            requestLock.unlock()
+            throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+        }
+        pendingCompatibilityReply = (signal, nil)
+        requestLock.unlock()
+        do { try sendOneWay(payload) }
+        catch {
+            requestLock.lock(); pendingCompatibilityReply = nil; requestLock.unlock()
+            throw error
+        }
+        guard signal.wait(timeout: .now() + 10) == .success else {
+            requestLock.lock(); pendingCompatibilityReply = nil; requestLock.unlock()
+            throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
+        }
+        requestLock.lock()
+        let reply = pendingCompatibilityReply?.value
+        pendingCompatibilityReply = nil
+        requestLock.unlock()
+        guard let reply else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+        return reply
+    }
 }
 
 /// Config-driven connection admission. ChannelMux, TUN, automatic reconnect,

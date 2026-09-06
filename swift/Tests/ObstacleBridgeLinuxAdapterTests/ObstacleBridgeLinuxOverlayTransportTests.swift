@@ -84,6 +84,43 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(runtime.status().appReady)
     }
 
+    @Test func tcpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend() throws {
+        try secureLinkPeerFirstReceive(mode: "tcp-securelink-duplex", transport: .tcp)
+    }
+
+    @Test func webSocketSecureLinkReceivesProtectedPeerFrameBeforeLocalSend() throws {
+        try secureLinkPeerFirstReceive(mode: "ws-securelink-duplex", transport: .ws)
+    }
+
+    @Test func myudpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend() throws {
+        try secureLinkPeerFirstReceive(mode: "myudp-securelink-duplex", transport: .myudp)
+    }
+
+    @Test func protectedUnsolicitedChannelMuxFrameReachesOneReceiveOwner() throws {
+        for (mode, transport) in [("tcp-securelink-mux-duplex", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-mux-duplex", .ws)] {
+            let peer = try PythonOverlayPeer(mode: mode)
+            defer { peer.stop() }
+            let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+                transport: transport, host: "127.0.0.1", port: peer.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8)
+            ))
+            let session = try runtime.connect(sessionID: 67, clientNonce: Data(repeating: 7, count: 32))
+            defer { runtime.disconnect() }
+            let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
+            let delivered = DispatchSemaphore(value: 0)
+            var received: ObstacleBridgeChannelMuxFrame?
+            mux.onUnsolicitedFrame = { frame in received = frame; delivered.signal() }
+            mux.activateReceiveOwner()
+            let worker = ObstacleBridgeLinuxReceiveWorker(epoch: runtime.connectionEpoch, receive: { try session.receiveInbound() }, cancelReceive: { session.cancelReceive() }) { _, wire in
+                if let frame = try? ObstacleBridgeChannelMuxCodec.decode(wire) { mux.receive(frame) }
+            }
+            worker.start()
+            #expect(delivered.wait(timeout: .now() + 3) == .success)
+            #expect(received == .init(channelID: 7, protocolType: .udp, counter: 1, messageType: .data, body: Data("hello".utf8)))
+            worker.stop()
+        }
+    }
+
     @Test func myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-secure-mux")
         defer { peer.stop() }
@@ -298,6 +335,20 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(secureLink.isAuthenticated)
         #expect(lower.snapshot.state == "connected")
     }
+
+    private func secureLinkPeerFirstReceive(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
+        let peer = try PythonOverlayPeer(mode: mode)
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: transport, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let session = try runtime.connect(sessionID: 66, clientNonce: Data(repeating: 6, count: 32))
+        defer { runtime.disconnect() }
+        #expect(try session.receiveInbound() == Data("python-first".utf8))
+        try session.sendOneWay(Data("swift-second".utf8))
+        #expect(try session.receiveInbound() == Data("python:swift-second".utf8))
+    }
 }
 
 final class PythonOverlayPeer {
@@ -374,10 +425,11 @@ final class PythonOverlayPeer {
             data,peer=s.recvfrom(1452); s.sendto(data,peer); s.close()
             """
         }
-        if mode == "myudp-securelink" || mode == "myudp-secure-mux" {
+        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" {
             return """
             import hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            MODE = "\(mode)"
             PREFIX = \(mode == "myudp-secure-mux" ? "b''" : "b'python:'")
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             def recv():
@@ -395,7 +447,17 @@ final class PythonOverlayPeer {
             proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); send(header(2,sid,0)+sn+b'\\x01'+proof,counter,peer)
             salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof,counter,peer=recv(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); send(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack),counter,peer)
-            app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer); s.close()
+            if MODE == 'myudp-securelink-close-after-ack':
+                s.close()
+            elif MODE == 'myudp-securelink-mux-duplex':
+                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello',first),77,peer)
+            elif MODE == 'myudp-securelink-duplex':
+                first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
+                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),77,peer)
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),counter,peer)
+            else:
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer)
+            s.close()
             """
         }
         if mode == "myudp" {
@@ -466,7 +528,7 @@ final class PythonOverlayPeer {
             for i in range(1,(length+31)//32+1):
                 prior=hmac.new(prk,prior+info+bytes([i]),hashlib.sha256).digest(); out+=prior
             return out[:length]
-        if MODE.endswith('securelink') or MODE == 'tcp-secure-mux-echo':
+        if 'securelink' in MODE or MODE == 'tcp-secure-mux-echo':
             hello=read_payload(); assert hello[:2]==b'\\x01\\x01' and hello[20+32:20+34]==b'\\x01\\x00'
             sid=int.from_bytes(hello[4:12],'big'); cn=hello[20:52]; sn=bytes(range(32)); psk=b'linux-swift-psk'
             proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest()
@@ -475,15 +537,29 @@ final class PythonOverlayPeer {
             material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof=read_payload(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''
             ack=header(4,sid,1); write_payload(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
-            for counter in range(2, 8):
-                app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+counter.to_bytes(8,'big'),app[20:],app[:20])
-                if MODE == 'tcp-secure-mux-echo' and len(plain) >= 8 and plain[5] == 1:
-                    reply_plain = plain[:5] + b'\\x00\\x00\\x00'
-                elif MODE == 'tcp-secure-mux-echo':
-                    reply_plain = plain
+            if MODE.endswith('close-after-ack'):
+                c.close(); s.close()
+            elif MODE.endswith('duplex'):
+                if MODE == 'tcp-securelink-catalog-duplex':
+                    import json
+                    rows=[{'svc_id':7,'l_proto':'udp','l_bind':'127.0.0.1','l_port':49100,'r_proto':'udp','r_host':'127.0.0.1','r_port':7,'name':'peer','lifecycle_hooks':None,'options':None}]
+                    body=json.dumps(rows,separators=(',',':')).encode()
+                    catalog=b'RS3'+(1).to_bytes(8,'big')+(1).to_bytes(4,'big')+len(body).to_bytes(4,'big')+body
+                    first_plain=b'\\0\\0\\0\\0\\0\\x04'+len(catalog).to_bytes(2,'big')+catalog
                 else:
-                    reply_plain = b'python:' + plain
-                response=header(4,sid,counter); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+counter.to_bytes(8,'big'),reply_plain,response))
+                    first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
+                first=header(4,sid,2); write_payload(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first))
+            if not MODE.endswith('close-after-ack'):
+                for counter in range(2, 8):
+                    app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+counter.to_bytes(8,'big'),app[20:],app[:20])
+                    if MODE == 'tcp-secure-mux-echo' and len(plain) >= 8 and plain[5] == 1:
+                        reply_plain = plain[:5] + b'\\x00\\x00\\x00'
+                    elif MODE == 'tcp-secure-mux-echo':
+                        reply_plain = plain
+                    else:
+                        reply_plain = b'python:' + plain
+                    response_counter=counter + (1 if MODE.endswith('duplex') else 0)
+                    response=header(4,sid,response_counter); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+response_counter.to_bytes(8,'big'),reply_plain,response))
         else:
             payload=read_payload(); write_payload(payload)
         c.close(); s.close()
