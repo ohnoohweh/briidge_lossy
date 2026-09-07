@@ -2504,7 +2504,38 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 self._register_tun_reader(dev)
 
     def _tun_admission_allowed(self) -> bool:
-        return bool(self._overlay_connected and self._accepting_enabled and self._tun_admission_epoch == self._connection_lifecycle_epoch)
+        if (
+            self._overlay_connected
+            and self._accepting_enabled
+            and self._tun_admission_epoch == self._connection_lifecycle_epoch
+        ):
+            return True
+
+        # A listener's shared TUN reader can outlive a transient, stale
+        # lifecycle callback.  Do not let that callback strand replies when
+        # the outer session is already authenticated again: the reader was
+        # admitted for this exact epoch, so no new lifecycle boundary is being
+        # crossed here.  In particular, this preserves the fail-closed rule
+        # for a new/disconnected epoch (where ``_tun_admission_epoch`` is
+        # ``None`` or differs from the current epoch).
+        if (
+            self._tun_admission_epoch == self._connection_lifecycle_epoch
+            and self._session_overlay_inflow_allowed()
+            and self._session_app_ready()
+        ):
+            was_connected = self._overlay_connected
+            was_accepting = self._accepting_enabled
+            self._overlay_connected = True
+            self._accepting_enabled = True
+            self._log_overlay_accepting_state(
+                reason="tun_admission_reconciled_from_ready_session",
+                was_overlay_connected=was_connected,
+                new_overlay_connected=True,
+                was_accepting_enabled=was_accepting,
+                new_accepting_enabled=True,
+            )
+            return True
+        return False
 
     def _pause_tun_admission(self) -> None:
         for dev in list(self._tun_helper_devices.values()) + list(self._svc_tun_devices.values()):
