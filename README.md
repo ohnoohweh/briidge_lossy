@@ -4,24 +4,11 @@ ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for 
 The project currently targets six platform families:
 
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
-- **Linux Swift build baseline**: a Swift Package Manager executable and
-  portable crypto contract build on Linux, with TCP, cleartext WebSocket, and
-  myudp overlay sessions, Swift-owned TCP/UDP service/catalog primitives, and
-  a redacted Admin Web/API including receive-loop health. The mixed-runtime
-  E2E lane includes PSK and bidirectional TCP/UDP service round trips against
-  the full Python runtime over TCP, cleartext WebSocket, and myudp, including
-  Python-peer process restart recovery. Its process ports and Python myudp
-  reference stream are qualified under the 16-worker Linux gate; an opt-in
-  Python listener catalog qualifies reverse-direction service delivery and
-  live catalog withdrawal.
-  The built executable admits Python peers sequentially in TCP and cleartext
-  WebSocket `listener_mode`:
-  it completes PSK plus peer-address control, adopts the live runtime, serves
-  Swift-owned TCP/UDP services on concurrent channels, and admits a
-  replacement client epoch.
-  Myudp listener admission and TUN remain in development.
-  Enabled TUN, proxy-provider, and package/service-manager settings fail with
-  explicit guidance; the Swift executable never falls back to Python silently.
+- **Linux Swift build baseline**: an initial, incomplete, experimental Swift
+  command-line product. It provides a Linux build and selected interoperable
+  overlay/service paths; TUN, packaging, and several listener paths remain
+  unfinished. See [Linux Swift Client Design](docs/LinuxSwift_design.md) for
+  the supported scope, limitations, and roadmap.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
