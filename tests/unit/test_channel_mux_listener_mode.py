@@ -421,6 +421,28 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         mux._on_local_tun_packet(dev, packet)
         self.assertEqual(len(sent), 1)
 
+    def test_tun_admission_recovers_stale_gate_within_authenticated_epoch(self):
+        asyncio.run(self._test_tun_admission_recovers_stale_gate_within_authenticated_epoch())
+
+    async def _test_tun_admission_recovers_stale_gate_within_authenticated_epoch(self):
+        session = _FakeSession(connected=True)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        await mux.on_connection_lifecycle(ConnectionLifecycleEvent(ConnectionState.CONNECTED, 1, "authenticated"))
+        # Simulate a delayed DISCONNECTED callback that has cleared only the
+        # mux gate; the wrapped session has already returned to app-ready.
+        mux._overlay_connected = False
+        mux._accepting_enabled = False
+        dev = ChannelMux.TunDevice(fd=10, ifname="obtun0", mtu=1500)
+        dev.chan_id = 7
+        sent = []
+        mux._send_mux = lambda chan, proto, mtype, payload: sent.append((chan, proto, mtype, payload))
+
+        mux._on_local_tun_packet(dev, _ipv4_packet("192.0.2.1", "198.51.100.1"))
+
+        self.assertTrue(mux._overlay_connected)
+        self.assertTrue(mux._accepting_enabled)
+        self.assertEqual(len(sent), 1)
+
     def test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy(self):
         asyncio.run(self._test_tun_connectivity_probe_remains_available_while_tun_ingress_is_busy())
 
@@ -3593,6 +3615,7 @@ class ChannelMuxSessionBudgetTests(unittest.TestCase):
         try:
             mux._overlay_connected = False
             mux._accepting_enabled = True
+            mux._tun_admission_epoch = None
             spec = ChannelMux.ServiceSpec(5, 'tun', 'obtun0', 1500, 'tun', 'obtun1', 1500)
             svc_key = ('local', 0, 5)
             mux._local_services[svc_key] = spec
