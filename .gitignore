@@ -12,6 +12,8 @@ Cert_SecureLink/
 .venv/
 .pytest_cache/
 /ios/build/
+/build/
+/.build/
 /src/obstacle_bridge/_generated/
 /ios/logs/
 /.tmp-home/

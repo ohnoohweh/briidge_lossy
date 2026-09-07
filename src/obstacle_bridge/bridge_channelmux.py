@@ -374,6 +374,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         "Example JSON item: "
                         """'{"listen":{"protocol":"udp","bind":"::","port":16666},"target":{"protocol":"udp","host":"127.0.0.1","port":16666}}'""")
             )
+        if not _has('--channel-mux-listener-publish-remote-services'):
+            p.add_argument(
+                '--channel-mux-listener-publish-remote-services',
+                action='store_true',
+                default=False,
+                help=(
+                    'Allow a listener instance to publish its configured '
+                    '--remote-servers catalog to connected peers. Disabled by '
+                    'default because a shared listener may have ambiguous '
+                    'service intent across multiple peers.'
+                ),
+            )
         if not _has('--channel-mux-egress'):
             p.add_argument(
                 '--channel-mux-egress',
@@ -469,7 +481,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     len(retained_services),
                 )
             services = retained_services
-        if listener_mode and remote_services:
+        if listener_mode and remote_services and not bool(getattr(args, 'channel_mux_listener_publish_remote_services', False)):
             mux.log.info(
                 "[MUX] listener mode detected: ignoring %d --remote-servers entries; "
                 "the listening peer must not expose ambiguous local services when multiple overlay peers connect",
@@ -3154,8 +3166,18 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             payload=payload,
         )
 
-    def _send_remote_services_catalog_if_any(self) -> None:
-        if not self._remote_services_requested:
+    def replace_remote_services_catalog(self, services: list["ChannelMux.ServiceSpec"]) -> None:
+        """Install and publish a new remote-service catalog for this epoch.
+
+        An empty list is a deliberate RS3 withdrawal, not an absent catalog.
+        Bump the sequence so peers replace a previously installed catalog.
+        """
+        self._remote_services_requested = list(services)
+        self._mux_connection_seq = (self._mux_connection_seq + 1) & 0xFFFFFFFF
+        self._send_remote_services_catalog_if_any(allow_empty=True)
+
+    def _send_remote_services_catalog_if_any(self, *, allow_empty: bool = False) -> None:
+        if not self._remote_services_requested and not allow_empty:
             return
         try:
             payload = self._encode_remote_services_set_v2(self._remote_services_requested)

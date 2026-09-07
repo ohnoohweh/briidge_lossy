@@ -139,6 +139,39 @@ Current implementation note:
 - Implementation note (testability): The delivered integration harness now generates localhost TLS fixture material at runtime and allocates loopback port blocks by probing host availability before selecting a case slot. This keeps localhost private keys out of version control and preserves stable Linux shared integration coverage even when unrelated host daemons already bind uncommon local ports.
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
+  Implementation note: the Linux Swift portable-crypto target pins the PSK
+  transcript derivation and proof bytes to Python-derived vectors. Linux Swift
+  TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
+  protected-data tests. The overlay E2E suite runs the built Linux Swift
+  executable against a Python reference peer for each admitted transport and
+  its foreground runtime lifecycle. A separate full-Python-runtime E2E lane
+  qualifies the Linux Swift PSK handshake and asynchronous ChannelMux TCP/UDP
+  service round trips over TCP, cleartext WebSocket, and myudp, including the
+  Python TCP RTT PING/PONG lower-transport control exchange, the WebSocket
+  APP/PING/PONG envelope, myudp DATA_BATCH stream/control framing, and recovery
+  after the Python peer process restarts. The independent Python myudp peer used
+  for this qualification must consume the length-prefixed reliable stream,
+  order and deduplicate chunks, and return cumulative transport acknowledgements;
+  mixed-runtime process ports, including Admin listeners, are isolated across
+  parallel test workers. An explicitly enabled Python listener may publish its
+  `remote_servers` catalog to connected peers; the mixed-runtime lane proves
+  that Swift installs and serves that reverse-direction TCP/UDP catalog over
+  all admitted overlays. The authenticated Python Admin catalog operation
+  publishes replacement or empty-withdrawal RS3 catalogs without reconnect.
+  The WebSocket boundary preserves the Python APP/PING/PONG
+  subframe envelope before SecureLink processing. The portable target also
+  carries the reciprocal PSK server handshake and protected-data state machine.
+  TCP and cleartext WebSocket foreground `listener_mode` start Admin before
+  accepting sequential PSK peers and answer Python PING/PONG and peer-address control frames below
+  SecureLink, adopts the authenticated session into the live runtime, and
+  serves Swift-owned TCP and UDP services in a built-process E2E test. That
+  test also replaces the Python client and checks the next layered Admin and
+  peer projection, and proves two concurrent Swift-owned TCP/UDP service
+  channels over both transports. Myudp listener transport remains required before that server role is
+  admitted across all Linux runtime endpoints.
+  Enabled Linux Swift TUN, proxy-provider, and package/service-manager
+  configurations fail before networking with mode-specific guidance and never
+  dispatch to Python implicitly.
 - `REQ-AUT-002`: When both peers are configured with the same PSK, the secure-link protected data phase shall authenticate successfully before overlay traffic is accepted and forwarded. On the listener/server side, authentication shall complete as soon as the client proof-of-key-possession frame is decrypted; it shall not wait for a first real application payload before reporting the session as authenticated.
 - `REQ-AUT-003`: When peers are configured with different PSKs, the protected data phase shall not start, overlay traffic shall not be forwarded, and the session shall remain observable as an authentication failure rather than a false connected state.
 - `REQ-AUT-004`: The admin web interface and admin API shall expose secure-link state in an operator-usable way: peer-scoped secure-link state shall be reported with the corresponding peer rows and peer views so an operator can distinguish disabled, handshaking, authenticated, and failed protected-overlay states, including the reported authentication failure category, while the peer box preserves connection uptime and transport-appropriate protocol statistics. SecureLink shall report separate passed totals for frames from the client and to the client, plus a dropped total for frames from the client; passed totals include protected control/confirmation frames and application frames that cross the SecureLink adapter boundary. On secure-link-wrapped `myudp` listener and peer rows, `/api/peers` shall continue to report the underlying `myudp` frame/transmit counters for the corresponding active peer after protected traffic has flowed; the wrapper must not collapse those counters to zero, and its protocol statistics shall count frames crossing to and from SecureLink.
@@ -167,6 +200,16 @@ Current implementation note:
 - `REQ-LIFE-003`: After reconnection, traffic forwarding shall resume and probes shall again succeed. A TUN return path already admitted for the current authenticated lifecycle epoch shall reconcile a stale local ChannelMux gate only when the current outer session is app-ready; it shall remain blocked for a new or disconnected epoch.
 - `REQ-LIFE-004`: Restart-specific regressions for concurrent channel cases shall remain covered so existing functionality does not silently erode.
 - `REQ-LIFE-005`: Repeated failed reconnect attempts shall be throttled by a configurable minimum retry delay so client overlays do not hammer connection setup continuously while a peer remains unavailable.
+
+  Implementation note: the Linux Swift cleartext TCP, WebSocket, and myudp
+  sessions expose independent send/receive operations. Each live epoch has one
+  cancellable receive worker with a bounded handoff queue; replacement or stop
+  cancels the old reader before publishing the next epoch. Its redacted Admin
+  status reports state, epoch, frame/drop totals, queue depth, and final
+  failure. SecureLink PSK applies the same single-reader boundary with separate
+  serialized transmit and receive counter/key ownership; protected records are
+  authenticated before ChannelMux receives them, and receive failures use the
+  same epoch withdrawal and bounded reconnect path.
 - `REQ-LIFE-006`: Operator-triggered reconnect requests exposed by the admin API and WebAdmin shall be scoped to the selected established peer connection rather than being process-global across unrelated peer sessions. When the selected client overlay path does not expose a transport-local reconnect hook but does expose a restart-based reconnect owner, the operator-triggered reconnect flow shall use that bounded runtime recovery path instead of failing as unsupported.
 - `REQ-LIFE-007`: Startup through the default runtime entrypoint shall tolerate a missing or empty default config file by continuing with built-in defaults, while malformed JSON config input shall fail fast with a clear error.
 - `REQ-LIFE-008`: When startup uses the default runtime entrypoint and Admin Web is enabled, the launcher shall print a clickable Admin Web entrypoint URL derived from the effective Admin Web bind/port/path configuration before handing control to the supervised bridge process. For wildcard/global Admin Web binds, the launcher may additionally print clearly labeled network-reachability hints derived from the local host and best-effort public address discovery, but those extra lines shall remain advisory rather than a guarantee of external reachability and may be emitted after the supervised bridge process has already started so slow public-address discovery does not delay local operator access. When the launcher is using its default redirected-child mode and the supervised bridge process exits nonzero during startup, the launcher shall replay any captured child stderr tail to the operator instead of failing silently.

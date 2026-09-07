@@ -579,6 +579,10 @@ class AdminWebUI:
                 await self._handle_config(writer, method, body)
                 return
 
+            if path == "/api/channelmux/remote-services":
+                await self._handle_remote_services_catalog(writer, method, body)
+                return
+
             if path == "/api/logs":
                 await self._handle_logs(writer, raw_path)
                 return
@@ -1698,6 +1702,31 @@ class AdminWebUI:
     async def _handle_meta(self, writer):
         payload = self._build_meta_payload()
         self._log_api_response("/api/meta", 200, payload)
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_remote_services_catalog(self, writer, method: str, body: bytes):
+        if method != "POST":
+            await self._send(writer, 405, b"Method Not Allowed", "text/plain; charset=utf-8")
+            return
+        try:
+            req = json.loads((body or b"{}").decode("utf-8"))
+        except Exception:
+            await self._send_json(writer, 400, {"ok": False, "error": "invalid JSON body"})
+            return
+        try:
+            ok, error = self._call_runner(
+                self.runner.replace_remote_services_catalog,
+                req.get("remote_servers", []),
+                timeout=1.0,
+            )
+        except concurrent.futures.TimeoutError:
+            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            return
+        if not ok:
+            await self._send_json(writer, 400, {"ok": False, "error": error})
+            return
+        payload = {"ok": True, "remote_servers": list(req.get("remote_servers", []))}
+        self._log_api_response("/api/channelmux/remote-services", 200, payload, summary="published live remote-service catalog")
         await self._send_json(writer, 200, payload)
 
     async def _handle_config(self, writer, method: str, body: bytes):

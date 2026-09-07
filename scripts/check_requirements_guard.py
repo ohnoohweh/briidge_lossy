@@ -21,7 +21,10 @@ ARC_ID_RE = re.compile(r"`(ARC-CMP-\d+)`")
 YAML_REQ_RE = re.compile(r"^(REQ-[A-Z]+-\d+):\s*$")
 YAML_ARC_RE = re.compile(r"^(ARC-CMP-\d+):\s*$")
 YAML_TEST_RE = re.compile(r"^\s*-\s+(.+?)\s*$")
-TEST_DEF_RE = re.compile(r"^\s*(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(", re.MULTILINE)
+TEST_DEF_RE = re.compile(
+    r"^\s*(?:(?:async\s+)?def|(?:@Test\s+)?func)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
 TRACEABILITY_TEST_KEYS = ("tests", "integration_tests", "unit_tests")
 
 

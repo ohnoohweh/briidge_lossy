@@ -160,6 +160,70 @@ The build script now supports that split explicitly:
 
 This keeps Swift-backed regression time reasonable as we add more macOS/iOS parity cases.
 
+- `linux-swift`
+
+```bash
+swift test --filter ObstacleBridgeCryptoTests
+swift test --filter ObstacleBridgeLinuxReceiveWorkerTests
+swift test --filter ObstacleBridgeLinuxOverlayTransportTests
+swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+./scripts/build_linux_app.sh
+pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secure_link_psk_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k foreground_runtime_lifecycle
+pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_service_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k python_runtime_linux_swift_service_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k linux_swift_listener_python_runtime_service_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round_trip
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --status
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --runtime-probe cGF5bG9hZA==
+./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --run --admin-port 8080
+```
+
+The Linux Swift lane pins the selected Swift Crypto backend's SHA-256,
+HMAC/HKDF/PBKDF2, AEAD, Ed25519, X25519, and Python-derived SecureLink PSK
+transcript vectors. It also exercises authenticated SecureLink PSK handshake
+and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
+peers implemented in local Python fixtures. The myudp fixture consumes the
+length-prefixed reliable byte stream, orders/deduplicates DATA_BATCH chunks,
+and emits cumulative CONTROL acknowledgements. Coverage includes candidate
+rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The portable suite also pairs the Swift PSK client and server state machines in
+one deterministic protected-data exchange, while the adapter suite exercises
+the one-connection loopback TCP listener over real Linux framing. The built
+Linux executable E2E lane admits a full Python TCP client, including its
+PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
+services through the adopted live runtime and replaces that Python client to
+check the next Admin-visible epoch; two simultaneous TCP/UDP local service
+channels are also carried before replacement. Its Swift and Python process
+ports are partitioned per `xdist` worker, including the Python Admin listener,
+so the matrix remains valid under the 16-worker Linux gate. TCP and cleartext
+WebSocket use the same process lane; myudp listener admission is deferred to LSW-005A after
+the Linux TUN adapter milestone.
+Runtime-configuration tests also require unsupported QUIC, TLS WebSocket, TUN,
+proxy-provider, and package/service-manager modes to fail before networking.
+The lower-transport tests require a Python peer to send TCP, cleartext
+WebSocket, and myudp application frames before a Swift request; the live
+cleartext runtime test verifies one epoch-tagged reader and its ordered
+cancellation, while Admin tests pin redacted receive-loop metrics. The PSK
+duplex lane repeats peer-first protected frames on all admitted transports,
+routes protected unsolicited ChannelMux frames, and verifies that receive
+failure withdraws the active epoch before bounded reconnect.
+The service lane additionally exercises the built foreground executable's TCP
+and UDP listeners over all three admitted lower transports and an RS3 remote
+catalog listener installation. A separate full-Python-runtime test proves the
+Swift PSK handshake and asynchronous TCP/UDP service round trips over TCP,
+cleartext WebSocket, and myudp, including Python TCP RTT PING/PONG control
+frames, the WebSocket APP/PING/PONG subframe envelope, myudp DATA_BATCH
+stream/control framing, and recovery after a Python peer-process restart. The
+same lane explicitly enables Python listener catalog publication and proves
+reverse-direction TCP/UDP service delivery, an explicit live empty-catalog
+withdrawal, and reconnect recovery on all admitted transports.
+The overlay E2E process lane invokes the built Linux executable against a
+Python SecureLink reference peer for each admitted transport, including the
+foreground runtime's readiness and SIGTERM shutdown lifecycle.
+The Linux TUN and elevated lifecycle paths remain outside this lane.
+
 - `ios`
 
 ```bash

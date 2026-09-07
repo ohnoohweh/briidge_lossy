@@ -29,6 +29,7 @@ DRIFT_EVIDENCE = [
         "unit_files": [],
         "integration_files": [
             ("tests/integration/test_overlay_e2e.py", "mixed_runtime"),
+            ("tests/integration/test_overlay_e2e.py", "python_peer_linux_swift"),
         ],
     },
     {

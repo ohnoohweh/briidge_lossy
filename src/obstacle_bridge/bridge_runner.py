@@ -2861,6 +2861,21 @@ class Runner:
         setattr(self.args, "_config_file_state", "loaded")
         return (True, "")
 
+    def replace_remote_services_catalog(self, raw_services: list) -> tuple[bool, str]:
+        """Publish a live RS3 replacement, including an explicit withdrawal."""
+        if not isinstance(raw_services, list):
+            return (False, "remote_servers must be a list")
+        try:
+            services = ChannelMux._parse_remote_servers(raw_services)
+        except Exception as exc:
+            return (False, f"invalid remote_servers: {exc}")
+        if not self._muxes:
+            return (False, "no active ChannelMux session")
+        for mux in self._muxes:
+            mux.replace_remote_services_catalog(services)
+        setattr(self.args, "remote_servers", list(raw_services))
+        return (True, "")
+
     def update_config(self, updates: dict) -> tuple[bool, str]:
         if not isinstance(updates, dict):
             return (False, "updates must be an object")
