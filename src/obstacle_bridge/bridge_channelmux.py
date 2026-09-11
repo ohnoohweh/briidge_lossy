@@ -2263,6 +2263,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         for key, chan in list(self._tcp_chan_by_open_key.items()):
             if int(key[0]) != int(peer_key):
                 continue
+            self._cancel_backpressure_task(chan)
             tup = self._tcp_by_chan.pop(chan, None)
             self._tcp_pending_data.pop(chan, None)
             self._tcp_role_by_chan.pop(chan, None)
@@ -2665,11 +2666,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         self._tun_frag_rx.clear()
         self._ctrl_chunk_rx.clear()
         # Backpressure tasks
-        for t in list(self._tcp_backpressure_tasks.values()):
-            try: t.cancel()
-            except Exception: pass
-        self._tcp_backpressure_tasks.clear()
-        self._tcp_backpressure_evt.clear()
+        for chan in list(self._tcp_backpressure_tasks):
+            self._cancel_backpressure_task(chan)
 
     def _channel_mux_egress_config(self) -> dict[str, Any]:
         raw = getattr(self.args, "channel_mux_egress", None) if self.args is not None else None
@@ -6644,9 +6642,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             )
             self._schedule_service_hook(spec, svc_key, "listener", "on_channel_connected", channel_id=chan)
 
-            # Install backpressure worker
-            self._ensure_backpressure_task(chan, writer)
-
             # Send OPEN v4 (peer dials r_proto/r_host/r_port with full tuple metadata)
             try:
                 self._send_open_for_service(chan, ChannelMux.Proto.TCP, spec)
@@ -6684,6 +6679,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 finally:
                     self.log.info("[TCP/SRV] chan=%s EOF -> CLOSE (srv teardown begin)", chan)
                     self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
+                    self._cancel_backpressure_task(chan)
                     try:
                         writer.close()
                         await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()
@@ -6838,9 +6834,6 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         self.log.info("[TCP/CLI] chan=%s pending drain error: %r", chan, e)
                         raise
 
-                # Backpressure worker
-                self._ensure_backpressure_task(chan, writer)
-
                 # Start RX pump: remote->overlay
                 async def _rx():
                     try:
@@ -6876,6 +6869,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                     finally:
                         self.log.info("[TCP/CLI] chan=%s EOF -> CLOSE", chan)
                         self._send_mux(chan, ChannelMux.Proto.TCP, ChannelMux.MType.CLOSE, b"")
+                        self._cancel_backpressure_task(chan)
                         try:
                             writer.close()
                             await getattr(writer, "wait_closed", lambda: asyncio.sleep(0))()
@@ -6970,6 +6964,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
 
         # CLOSE
         if mtype == ChannelMux.MType.CLOSE:
+            self._cancel_backpressure_task(chan)
             tup = self._tcp_by_chan.pop(chan, None)
             role = self._tcp_role_by_chan.pop(chan, None)
             if tup:
@@ -6992,41 +6987,49 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self.log.info("[TCP] chan=%s CLOSE => local teardown map_size=%s", chan, len(self._tcp_by_chan))
 
     # ---------- TCP backpressure ----------
+    def _cancel_backpressure_task(self, chan: int) -> None:
+        """Idempotently detach and cancel a TCP channel's drain worker."""
+        task = self._tcp_backpressure_tasks.pop(chan, None)
+        self._tcp_backpressure_evt.pop(chan, None)
+        if task is not None:
+            task.cancel()
+
     def _ensure_backpressure_task(self, chan: int, writer: asyncio.StreamWriter) -> None:
+        """Start a drain worker only while this writer has queued bytes."""
         if chan in self._tcp_backpressure_tasks:
             return
-        evt = self._tcp_backpressure_evt.setdefault(chan, asyncio.Event())
+        transport = getattr(writer, "transport", None)
+        if not transport or getattr(transport, "is_closing", lambda: False)():
+            return
+        try:
+            initial_wbs = transport.get_write_buffer_size()
+        except Exception:
+            return
         thr = int(getattr(self, "_tcp_drain_threshold", 1))
         latency_ms = int(getattr(self, "_tcp_bp_latency_ms", 300))
         poll_s = float(getattr(self, "_tcp_bp_poll_interval_s", 0.05))
+        if initial_wbs <= 0 or (initial_wbs < thr and latency_ms <= 0):
+            return
+        evt = asyncio.Event()
         latency_ns = max(0, latency_ms) * 1_000_000
 
         async def _bp():
             try:
-                nonzero_since_ns = 0
+                nonzero_since_ns = time.monotonic_ns()
                 while True:
-                    # wait for size-based signal or poll
-                    try:
-                        await asyncio.wait_for(evt.wait(), timeout=poll_s)
-                        evt.clear()
-                    except asyncio.TimeoutError:
-                        pass
                     transport = getattr(writer, "transport", None)
-                    if not transport:
+                    if not transport or getattr(transport, "is_closing", lambda: False)():
                         break
                     try:
                         wbs = transport.get_write_buffer_size()
                     except Exception:
-                        wbs = 0
+                        break
+                    if wbs <= 0:
+                        break
                     now_ns = time.monotonic_ns()
-                    if wbs > 0:
-                        if nonzero_since_ns == 0:
-                            nonzero_since_ns = now_ns
-                    else:
-                        nonzero_since_ns = 0
                     do_drain = False
                     reason = ""
-                    if wbs >= thr:
+                    if thr > 0 and wbs >= thr:
                         do_drain = True
                         reason = f"wbuf={wbs} thr={thr}"
                     elif latency_ns > 0 and nonzero_since_ns and (now_ns - nonzero_since_ns) >= latency_ns:
@@ -7042,12 +7045,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                         except Exception as e:
                             self.log.info("[TCP/BP] chan=%s drain failed: %r", chan, e)
                             break
+                    try:
+                        await asyncio.wait_for(evt.wait(), timeout=max(0.001, poll_s))
+                        evt.clear()
+                    except asyncio.TimeoutError:
+                        pass
             except asyncio.CancelledError:
                 return
             finally:
-                self._tcp_backpressure_tasks.pop(chan, None)
-                self._tcp_backpressure_evt.pop(chan, None)
+                if self._tcp_backpressure_tasks.get(chan) is asyncio.current_task():
+                    self._tcp_backpressure_tasks.pop(chan, None)
+                if self._tcp_backpressure_evt.get(chan) is evt:
+                    self._tcp_backpressure_evt.pop(chan, None)
 
+        self._tcp_backpressure_evt[chan] = evt
         self._tcp_backpressure_tasks[chan] = self.loop.create_task(_bp())
 
     def _maybe_signal_backpressure(self, chan: int, writer: asyncio.StreamWriter) -> None:
@@ -7057,11 +7068,14 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 return
             wbs = transport.get_write_buffer_size()
             thr = int(getattr(self, "_tcp_drain_threshold", 1))
-            if wbs >= thr:
-                evt = self._tcp_backpressure_evt.get(chan)
-                if evt:
-                    self.log.debug("[TCP/BP] chan=%s signal drain; wbuf=%s thr=%s", chan, wbs, thr)
-                    evt.set()
+            latency_ms = int(getattr(self, "_tcp_bp_latency_ms", 300))
+            if wbs <= 0 or (wbs < thr and latency_ms <= 0):
+                return
+            self._ensure_backpressure_task(chan, writer)
+            evt = self._tcp_backpressure_evt.get(chan)
+            if evt and thr > 0 and wbs >= thr:
+                self.log.debug("[TCP/BP] chan=%s signal drain; wbuf=%s thr=%s", chan, wbs, thr)
+                evt.set()
         except Exception:
             pass
     # ---------- TCP endpoint helper ----------

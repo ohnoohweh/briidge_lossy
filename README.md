@@ -1499,6 +1499,7 @@ Optional operations follow-up:
 - MyUDP transport design: [docs/MYUDP_DESIGN.md](docs/MYUDP_DESIGN.md)
 - Security design and threat scenarios: [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+- Runtime performance investigation and monitoring: [docs/Runtime.md](docs/Runtime.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
@@ -1598,6 +1599,8 @@ Important caveat:
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.
+
+For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime performance investigation and monitoring guide](docs/Runtime.md).
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
 - Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.

@@ -126,6 +126,63 @@ class _FakeDatagramTransport:
         self.closed = True
 
 
+class _FakeBackpressureTransport:
+    def __init__(self, write_buffer_size=0):
+        self.write_buffer_size = int(write_buffer_size)
+        self.closed = False
+
+    def get_write_buffer_size(self):
+        return self.write_buffer_size
+
+    def is_closing(self):
+        return self.closed
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeBackpressureWriter:
+    def __init__(self, transport):
+        self.transport = transport
+
+    def close(self):
+        self.transport.close()
+
+    async def drain(self):
+        return None
+
+
+def test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close():
+    async def _run():
+        mux = ChannelMux(_FakeSession(connected=True), asyncio.get_running_loop())
+        chan = 71
+        transport = _FakeBackpressureTransport(write_buffer_size=0)
+        writer = _FakeBackpressureWriter(transport)
+        mux._tcp_drain_threshold = 1024
+        mux._tcp_bp_latency_ms = 10_000
+        try:
+            mux._ensure_backpressure_task(chan, writer)
+            assert chan not in mux._tcp_backpressure_tasks
+
+            transport.write_buffer_size = 8
+            mux._maybe_signal_backpressure(chan, writer)
+            task = mux._tcp_backpressure_tasks[chan]
+            assert not task.done()
+
+            mux._tcp_by_chan[chan] = (1, writer)
+            mux._tcp_role_by_chan[chan] = "server"
+            mux._rx_tcp(chan, ChannelMux.MType.CLOSE, b"")
+            assert chan not in mux._tcp_backpressure_tasks
+            assert chan not in mux._tcp_backpressure_evt
+            await asyncio.sleep(0)
+            assert task.cancelled()
+        finally:
+            for task in list(mux._tcp_backpressure_tasks.values()):
+                task.cancel()
+
+    asyncio.run(_run())
+
+
 async def _start_tcp_capture_server() -> tuple[asyncio.AbstractServer, int, list[bytes]]:
     captured: list[bytes] = []
 
