@@ -876,6 +876,17 @@ def test_channel_mux_tcp_transport_owner_source_exists() -> None:
     assert "handleInboundMuxFrame(" in runtime
     assert "ObstacleBridgeChannelMuxTcpRuntime" in runtime
     assert "TransportEvent" in runtime
+    assert "struct BackpressureSnapshot" in runtime
+    assert "private struct PendingTCPWrites" in runtime
+    assert "private var pendingTCPWrites: [Int: PendingTCPWrites] = [:]" in runtime
+    assert "func backpressureSnapshot(chanID: Int) -> BackpressureSnapshot" in runtime
+    assert "private func enqueueTCPWrite(" in runtime
+    assert "private func drainTCPWrites(" in runtime
+    assert "private func cancelTCPWriteDrain(chanID: Int)" in runtime
+    assert "pendingTCPWrites.removeAll()" in runtime
+    assert "cancelTCPWriteDrain(chanID: frame.chanID)" in runtime
+    assert "cancelTCPWriteDrain(chanID: chanID)" in runtime
+    assert "sendOnTCPConnection(" not in runtime
 
 
 def test_secure_link_psk_codec_source_exists() -> None:
