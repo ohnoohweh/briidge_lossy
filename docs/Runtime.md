@@ -166,45 +166,61 @@ retrospective timed samples. Tree-wide `pidstat` results are in
 `ps -eo pid,ppid,comm,%cpu,%mem --sort=-%cpu | head -20` for unrelated
 contention.
 
-### VPS capture findings — 2026-09-11
+### Current VPS baseline — 2026-09-11
 
-A five-minute, target-PID-only capture on a one-logical-CPU VPS showed
-sustained but not 90% CPU consumption for the main Python child. These figures
-describe that capture, not a universal baseline; preserve later report
-directories so changes can be compared against the same duration and workload.
+The current five-minute capture covers the main bridge process, its TUN helper,
+host CPU and network counters, and a successful 120-second `py-spy` flame
+graph. Replace this section with a later capture rather than accumulating
+historical measurements here.
 
 | Evidence from the 300-second capture | Finding | Interpretation |
 | --- | --- | --- |
-| Main Python process CPU time | About 102.8 CPU seconds, or 34.3% of one CPU; the leader thread was 25.5–37.3%. | The reported 90% peak did not occur during this interval. The bridge is nevertheless a material consumer on this small VPS. |
-| Host scheduler and CPU pressure | Average runnable queue 8.3, CPU idle about 0.05%, and CPU PSI `some` about 97%. | The guest was severely CPU-contended. Attribute the incident to both bridge work and host-wide contention until a host-wide top-process view is captured. |
-| Main-process memory | RSS stayed about 123–126 MiB; no swap was in use. | This capture does not show a growing resident-memory leak as the immediate cause. |
-| Process context switching | Roughly 229 voluntary plus involuntary context switches per second between the two report starts. | Consistent with a timer/polling workload and CPU contention, but insufficient by itself to identify the loop. |
-| Launcher output | An unlinked temporary capture file was open and had grown to about 2.1 MiB. | Redirected child stdout/stderr is accumulating while the launcher runs. It is a disk-retention issue, not an explanation for the measured CPU at this size. |
-| Capture coverage | `pidstat`, `mpstat`, and `sar` were unavailable; a helper child was not profiled. | The report cannot split user/system CPU, establish per-process I/O or network rates, or give total bridge-plus-helper CPU. |
+| Bridge process tree CPU | Main process: 41.25% CPU (39.13% user, 2.12% system); TUN helper: 5.77%. The tree therefore averaged about 47% of the one available CPU. | The bridge is the leading host CPU consumer and remains significant under modest traffic. A main-thread sample briefly reached 88%, but CPU was not sustained at 90%. |
+| Host scheduler and CPU pressure | Host average: 43.96% idle, 46.52% user, 6.48% system, and 2.11% steal. CPU PSI `some` was 3.15% over 10 seconds and `full` was 0%. | The host is not CPU-saturated during this capture. The bridge tree accounts for most of the observed user CPU, so profile-guided runtime work is more useful than VPS resizing alone. |
+| Memory and storage I/O | Main RSS averaged 51.1 MiB; helper RSS averaged 22.0 MiB; no swap. Main disk I/O averaged 2.29 KiB/s write and no reads. | There is no immediate memory-growth or disk-I/O explanation for the CPU usage. |
+| Network workload | `obtun0` averaged 86.8 RX and 93.0 TX packets/s (19.5 and 65.1 KiB/s); `eth0` averaged about 122 KiB/s RX and 126 KiB/s TX. | The capture is not traffic-free. Packet and callback costs, not bulk throughput, are the relevant CPU metric. |
+| Flame graph | `py-spy` collected 4,155 samples with no errors. Prominent inclusive paths are UDP completed-payload delivery, SecureLink/compression delivery, shared-TUN source normalization/routing, and WebAdmin live snapshot/JSON work. | The active CPU work is real forwarding and observability work. No ChannelMux TCP backpressure-worker frame appeared in the flame graph; the repaired worker is not the leading current cost. |
+| WebAdmin | The profile includes a WebAdmin server thread (6.9% inclusive), request handling (6.4%), live WebSocket handling (4.0%), and snapshot deep copies. | Close live WebAdmin clients for an A/B capture. If the CPU reduction is material, cache/reuse topic snapshots and avoid unnecessary deep copies before tuning the forwarding path. |
+| Launcher output retention | Redirected launcher output is still held in deleted temporary files; the observed active capture file was about 140 KiB. | This remains a bounded-output-retention concern, but it is not a material CPU or disk-pressure cause in this capture. |
 
-The source audit identified a high-priority churn-related CPU defect: ChannelMux
-created a TCP backpressure polling task at channel creation and did not cancel
-it on every teardown path. The runtime now creates that worker only after a
-write leaves bytes buffered, exits it once the buffer is empty, and cancels it
-idempotently on local EOF, remote `CLOSE`, peer reset, and shutdown. The VPS
-report predates this fix, so compare a post-deployment capture with the same
-TCP churn workload rather than assuming it explains every observed CPU spike.
+The deployed ChannelMux change creates a TCP backpressure worker only when a
+write leaves buffered bytes, exits it when the buffer drains, and cancels it on
+local EOF, remote `CLOSE`, peer reset, and shutdown. The current flame graph
+does not identify that lifecycle as an active hotspot. Keep the churn regression
+in place, then prioritize measured TUN/UDP forwarding and WebAdmin snapshot
+costs.
 
-For the next comparison capture, install `sysstat` and sample the main process
-tree for at least 300 seconds. The script includes helper descendants present
-at capture start and collects the host-wide CPU leaders alongside the report:
+The next diagnostic comparison should use the same five-minute duration with
+the WebAdmin client closed, then with the same client and traffic restored. If
+the forwarding path remains dominant, repeat `py-spy record` during a known
+88%+ spike and use packets/s plus TUN packet-size distribution to identify the
+specific shared-TUN normalization, routing, or crypto/compression operation to
+optimize.
 
-```bash
-sudo apt-get update && sudo apt-get install -y sysstat
-./scripts/runtime_analysis.sh --samples 300
-```
+## Runtime Language Direction: Python and Swift
 
-Install `py-spy` where policy permits: the script writes its 120-second flame
-graph automatically during a high-CPU run, or records why it could not attach.
-Then compare an idle baseline, a controlled TCP connect/disconnect churn run,
-and the post-churn idle state. A planned maintenance restart can establish a
-temporary baseline, but it is not a fix; the regression test and explicit task
-cancellation are the durable remedy.
+The current Linux capture does not justify a general conclusion that Python is
+unsuitable. It shows a Python bridge tree using about 47% of one CPU during
+real forwarding and WebAdmin activity, with identifiable TUN/UDP and snapshot
+hot paths. Those are partly design and data-copy costs; a direct Swift rewrite
+would not remove them without changing the underlying work.
+
+The iPhone experience supports a different, platform-specific decision. If
+the embedded Python stacks terminated while the native Swift implementation is
+stable, treat Swift as the primary supported iOS runtime. Native Swift fits
+NetworkExtension lifecycle, memory, backgrounding, watchdog, and packaging
+constraints far better than an embedded interpreter.
+
+| Scope | Direction | Decision gate |
+| --- | --- | --- |
+| iPhone/iOS | Prioritize Swift. | Preserve the stable native lifecycle and verify reconnect, background, and long-running tunnel behavior on devices. |
+| Linux VPS | Retain Python while optimizing measured hot paths. | Compare equivalent traffic with WebAdmin closed and open; use CPU per packet, latency, memory, and operational stability rather than CPU percentage alone. |
+| Wider Swift migration | Do not make a default rewrite decision yet. | Require same-workload A/B evidence, protocol and interoperability parity, operational support, and a material improvement in CPU per packet or reliability. |
+
+This is therefore a **Swift-first mobile** strategy, not evidence that Python
+must be removed from the server. Reassess the server choice only after the
+controlled comparisons above show that targeted Python and design improvements
+cannot meet the defined runtime budget.
 
 ```bash
 bridge_pid=12345
