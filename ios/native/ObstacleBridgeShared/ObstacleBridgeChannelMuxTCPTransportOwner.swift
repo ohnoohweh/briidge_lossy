@@ -18,6 +18,26 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     }
     typealias TransportEventSink = (TransportEvent) -> Void
 
+    struct BackpressureSnapshot {
+        var queuedBuffers: Int
+        var drainActive: Bool
+    }
+
+    /// Network.framework applies socket-level backpressure when a send
+    /// completion is delivered.  Keep only one such send in flight per mux
+    /// channel so a busy peer cannot leave an unbounded chain of completion
+    /// closures behind.  The state is also the owner of the completion's
+    /// lifecycle: close and stop remove it before cancelling the connection.
+    private enum ConnectionRole {
+        case server
+        case client
+    }
+
+    private struct PendingTCPWrites {
+        var buffers: [Data] = []
+        var isDraining = false
+    }
+
     private let runtime: ObstacleBridgeChannelMuxTcpRuntime
     private let queue: DispatchQueue
     private let eventPrefix: String
@@ -35,6 +55,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     private var startedServerChannels: Set<Int> = []
     private var clientConnections: [Int: NWConnection] = [:]
     private var activatedClientChannels: Set<Int> = []
+    private var pendingTCPWrites: [Int: PendingTCPWrites] = [:]
     private var active = true
 
     init(
@@ -69,11 +90,22 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         clientConnections.count
     }
 
+    /// Called on `queue`; primarily useful to assert that close paths leave no
+    /// queued Network.framework completion work for a departed mux channel.
+    func backpressureSnapshot(chanID: Int) -> BackpressureSnapshot {
+        let pending = pendingTCPWrites[chanID]
+        return BackpressureSnapshot(
+            queuedBuffers: pending?.buffers.count ?? 0,
+            drainActive: pending?.isDraining ?? false
+        )
+    }
+
     func stop() {
         guard active else {
             return
         }
         active = false
+        pendingTCPWrites.removeAll()
         for connection in serverConnections.values {
             cancelConnection(connection)
         }
@@ -152,12 +184,13 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             case .data:
                 let snapshot = runtime.handleInboundServerData(chanID: frame.chanID, body: frame.body)
                 for buffer in snapshot.writtenBuffers {
-                    sendOnTCPConnection(connection, payload: buffer, chanID: frame.chanID, event: "\(eventPrefix)_tcp_server_write_failed")
+                    enqueueTCPWrite(connection, payload: buffer, chanID: frame.chanID, role: .server, event: "\(eventPrefix)_tcp_server_write_failed")
                     transportEventSink?(.serverInbound(chanID: frame.chanID, bytes: buffer.count))
                 }
             case .close:
                 let snapshot = runtime.handleInboundServerClose(chanID: frame.chanID)
                 if snapshot.localConnectionClosed {
+                    cancelTCPWriteDrain(chanID: frame.chanID)
                     serverConnections.removeValue(forKey: frame.chanID)
                     cancelConnection(connection)
                     transportEventSink?(.serverClosed(chanID: frame.chanID))
@@ -187,7 +220,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             ])
             if let connection = clientConnections[frame.chanID] {
                 for buffer in snapshot.writtenBuffers {
-                    sendOnTCPConnection(connection, payload: buffer, chanID: frame.chanID, event: "\(eventPrefix)_tcp_client_write_failed")
+                    enqueueTCPWrite(connection, payload: buffer, chanID: frame.chanID, role: .client, event: "\(eventPrefix)_tcp_client_write_failed")
                     transportEventSink?(.clientInbound(chanID: frame.chanID, bytes: buffer.count))
                 }
             } else if snapshot.buffered || snapshot.sentImmediately {
@@ -195,8 +228,11 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             }
         case .close:
             let snapshot = runtime.handleInboundClientClose(chanID: frame.chanID)
-            if snapshot.closed, let connection = clientConnections.removeValue(forKey: frame.chanID) {
-                cancelConnection(connection)
+            if snapshot.closed {
+                cancelTCPWriteDrain(chanID: frame.chanID)
+                if let connection = clientConnections.removeValue(forKey: frame.chanID) {
+                    cancelConnection(connection)
+                }
             }
             activatedClientChannels.remove(frame.chanID)
             transportEventSink?(.clientClosed(chanID: frame.chanID))
@@ -260,6 +296,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     }
 
     private func closeServerConnection(chanID: Int) {
+        cancelTCPWriteDrain(chanID: chanID)
         let connection = serverConnections.removeValue(forKey: chanID)
         pendingServerOpenFrames.removeValue(forKey: chanID)
         startedServerChannels.remove(chanID)
@@ -398,7 +435,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         transportEventSink?(.clientConnected(chanID: chanID, localHost: connectSnapshot.localAddrHost, localPort: connectSnapshot.localAddrPort))
         if let connection = clientConnections[chanID] {
             for buffer in connectSnapshot.flushedBuffers {
-                sendOnTCPConnection(connection, payload: buffer, chanID: chanID, event: "\(eventPrefix)_tcp_client_flush_failed")
+                enqueueTCPWrite(connection, payload: buffer, chanID: chanID, role: .client, event: "\(eventPrefix)_tcp_client_flush_failed")
                 transportEventSink?(.clientInbound(chanID: chanID, bytes: buffer.count))
             }
         }
@@ -443,6 +480,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     }
 
     private func closeClientConnection(chanID: Int) {
+        cancelTCPWriteDrain(chanID: chanID)
         let connection = clientConnections.removeValue(forKey: chanID)
         do {
             let snapshot = try runtime.handleLocalClientEOF(chanID: chanID, overlayConnected: overlayConnectedProvider())
@@ -457,13 +495,61 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         transportEventSink?(.clientClosed(chanID: chanID))
     }
 
-    private func sendOnTCPConnection(_ connection: NWConnection, payload: Data, chanID: Int, event: String) {
-        connection.send(content: payload, completion: .contentProcessed { [weak self] error in
-            guard let self, let error else { return }
+    private func enqueueTCPWrite(
+        _ connection: NWConnection,
+        payload: Data,
+        chanID: Int,
+        role: ConnectionRole,
+        event: String
+    ) {
+        guard active, connectionIsCurrent(connection, chanID: chanID, role: role) else {
+            return
+        }
+        var pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
+        pending.buffers.append(payload)
+        pendingTCPWrites[chanID] = pending
+        drainTCPWrites(connection, chanID: chanID, role: role, event: event)
+    }
+
+    private func drainTCPWrites(_ connection: NWConnection, chanID: Int, role: ConnectionRole, event: String) {
+        guard active, connectionIsCurrent(connection, chanID: chanID, role: role),
+              var pending = pendingTCPWrites[chanID], !pending.isDraining,
+              !pending.buffers.isEmpty else {
+            return
+        }
+        let payload = pending.buffers.removeFirst()
+        pending.isDraining = true
+        pendingTCPWrites[chanID] = pending
+        connection.send(content: payload, completion: .contentProcessed { [weak self, weak connection] error in
+            guard let self, let connection else { return }
             self.queue.async {
-                self.eventSink?(event, ["chan_id": chanID, "error": error.localizedDescription])
+                guard self.active, self.connectionIsCurrent(connection, chanID: chanID, role: role),
+                      var current = self.pendingTCPWrites[chanID] else {
+                    return
+                }
+                current.isDraining = false
+                self.pendingTCPWrites[chanID] = current
+                if let error {
+                    self.eventSink?(event, ["chan_id": chanID, "error": error.localizedDescription])
+                    self.cancelTCPWriteDrain(chanID: chanID)
+                    return
+                }
+                self.drainTCPWrites(connection, chanID: chanID, role: role, event: event)
             }
         })
+    }
+
+    private func cancelTCPWriteDrain(chanID: Int) {
+        pendingTCPWrites.removeValue(forKey: chanID)
+    }
+
+    private func connectionIsCurrent(_ connection: NWConnection, chanID: Int, role: ConnectionRole) -> Bool {
+        switch role {
+        case .server:
+            return serverConnections[chanID] === connection
+        case .client:
+            return clientConnections[chanID] === connection
+        }
     }
 
     private func cancelConnection(_ connection: NWConnection) {

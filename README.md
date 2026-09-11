@@ -1499,6 +1499,7 @@ Optional operations follow-up:
 - MyUDP transport design: [docs/MYUDP_DESIGN.md](docs/MYUDP_DESIGN.md)
 - Security design and threat scenarios: [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md)
 - Testing guide and traceability entrypoints: [docs/README_TESTING.md](docs/README_TESTING.md)
+- Runtime performance investigation and monitoring: [docs/Runtime.md](docs/Runtime.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
@@ -1514,7 +1515,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `60` | `961` |
+| Python CLI/runtime, including macOS Python | `60` | `962` |
 | macOS Swift app | `1` | `57` |
 | iOS app/extension | `27` | `178` |
 
@@ -1553,10 +1554,10 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
-| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `6` | `0` | `6` |
+| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `8` | `0` | `8` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `57` | `0` | `57` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `63` | `152` | `215` |
+| Total parity-oriented evidence | Sum of the lanes above | `65` | `152` | `217` |
 
 Important caveat:
 
@@ -1598,6 +1599,8 @@ Important caveat:
 
 ### Trouble shooting recommendations
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.
+
+For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime performance investigation and monitoring guide](docs/Runtime.md).
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
 - Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.
