@@ -414,14 +414,23 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
                                 body: Data("reply-from-mux".utf8)
                             )
                         )
-                    }
-                    let serverReply = try readExact(localClientFD, size: "reply-from-mux".utf8.count)
-                    ownerQueue.async {
                         owner.handleInboundMuxFrame(
                             ObstacleBridgeChannelMuxCodec.MuxFrame(
                                 chanID: serverOpen.chanID,
                                 proto: .tcp,
                                 counter: 2,
+                                mtype: .data,
+                                body: Data("-again".utf8)
+                            )
+                        )
+                    }
+                    let serverReply = try readExact(localClientFD, size: "reply-from-mux-again".utf8.count)
+                    ownerQueue.async {
+                        owner.handleInboundMuxFrame(
+                            ObstacleBridgeChannelMuxCodec.MuxFrame(
+                                chanID: serverOpen.chanID,
+                                proto: .tcp,
+                                counter: 3,
                                 mtype: .close,
                                 body: Data()
                             )
@@ -429,6 +438,9 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
                     }
                     guard waitForCondition(timeout: 5.0, { recvEOF(localClientFD) }) else {
                         throw ProbeError.timeout("server path close")
+                    }
+                    let serverBackpressure = ownerQueue.sync {
+                        owner.backpressureSnapshot(chanID: serverOpen.chanID)
                     }
 
                     let inboundSpec = ObstacleBridgeChannelMuxCodec.ServiceSpec(
@@ -490,6 +502,9 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
                     }) else {
                         throw ProbeError.timeout("client path close frame")
                     }
+                    let clientBackpressure = ownerQueue.sync {
+                        owner.backpressureSnapshot(chanID: 41)
+                    }
 
                     let result: [String: Any] = [
                         "server_path": [
@@ -498,11 +513,15 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
                             "open_remote_port": serverOpen.remotePort ?? -1,
                             "received_text": String(data: serverReply, encoding: .utf8) ?? "",
                             "closed_after_remote_close": true,
+                            "queued_writes_after_close": serverBackpressure.queuedBuffers,
+                            "drain_active_after_close": serverBackpressure.drainActive,
                         ],
                         "client_path": [
                             "target_received_text": String(data: targetReceived, encoding: .utf8) ?? "",
                             "outbound_reply_frame_present": true,
                             "close_frame_present": true,
+                            "queued_writes_after_close": clientBackpressure.queuedBuffers,
+                            "drain_active_after_close": clientBackpressure.drainActive,
                         ],
                         "frame_types": snapshotFrames(captureQueue, &frames).map { $0.mtype },
                         "metrics": snapshotStrings(captureQueue, &metrics),
@@ -534,13 +553,17 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
         "accepted_chan_id": 1,
         "open_remote_host": "198.51.100.10",
         "open_remote_port": 443,
-        "received_text": "reply-from-mux",
+        "received_text": "reply-from-mux-again",
         "closed_after_remote_close": True,
+        "queued_writes_after_close": 0,
+        "drain_active_after_close": False,
     }
     assert payload["client_path"] == {
         "target_received_text": "hello-from-mux",
         "outbound_reply_frame_present": True,
         "close_frame_present": True,
+        "queued_writes_after_close": 0,
+        "drain_active_after_close": False,
     }
     assert payload["metrics"] == ["server_accepted", "client_dialed"]
     event_names = {event.split(":", 1)[0] for event in payload["errors"]}

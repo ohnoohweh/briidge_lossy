@@ -258,7 +258,7 @@ Current lifecycle implementation note:
 
 ## Mixed traffic and channel requirements
 
-- `REQ-MUX-001`: A connected peer shall be able to carry multiple simultaneous TCP channels over one overlay connection. Per-channel TCP backpressure workers shall be created only while a local writer has buffered bytes and shall be detached and cancelled on local EOF, remote `CLOSE`, peer reset, and shutdown.
+- `REQ-MUX-001`: A connected peer shall be able to carry multiple simultaneous TCP channels over one overlay connection. Python per-channel TCP backpressure workers shall be created only while a local writer has buffered bytes and shall be detached and cancelled on local EOF, remote `CLOSE`, peer reset, and shutdown. Swift shall serialize Network.framework sends through a demand-driven per-channel drain and discard its pending drain state on the same lifecycle transitions.
 - `REQ-MUX-002`: A connected peer shall be able to carry mixed UDP and TCP services at the same time.
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s. Listener-side ChannelMux channel identity shall include both the owning peer and channel identifier, because independent peers may legitimately allocate the same channel number. A process-shared TUN device shall route local replies through the mux that actively owns its reader, using that reader owner's peer/channel bindings rather than creator or attachment history.
 - `REQ-MUX-004`: Remote service publication shall remain scoped to the intended peer. An authenticated inbound peer's published TCP and UDP listeners shall instantiate and accept traffic even when the parent overlay transport remains in listener state.
