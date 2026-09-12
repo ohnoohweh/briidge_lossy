@@ -145,7 +145,8 @@ Current implementation note:
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
   Implementation note: the Linux Swift core-crypto target pins the PSK
-  transcript derivation and proof bytes to Python-derived vectors. Linux Swift
+  transcript derivation and proof bytes to the shared Python-derived corpus.
+  Linux Swift
   TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
   protected-data tests. The overlay E2E suite runs the built Linux Swift
   executable against a Python reference peer for each admitted transport and

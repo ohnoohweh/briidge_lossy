@@ -7,6 +7,7 @@ import struct
 from pathlib import Path
 
 from obstacle_bridge.bridge import ChannelMux
+from obstacle_bridge.bridge_securelink import SecureLinkPskSession
 import obstacle_bridge.bridge_transport_udp as myudp
 from obstacle_bridge.bridge_transport_ws import WebSocketBinaryPayloadCodec
 
@@ -49,6 +50,18 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     websocket_wire = WebSocketBinaryPayloadCodec().encode(b"\x00" + websocket_payload)
     assert websocket_wire.hex() == websocket["wire_hex"]
     assert WebSocketBinaryPayloadCodec().decode(websocket_wire) == websocket_wire
+
+    securelink = corpus["securelink_psk"]
+    psk = bytes.fromhex(securelink["psk_hex"])
+    client_nonce = bytes.fromhex(securelink["client_nonce_hex"])
+    server_nonce = bytes.fromhex(securelink["server_nonce_hex"])
+    session = object.__new__(SecureLinkPskSession)
+    session._psk = psk
+    client_to_server, server_to_client = session._derive_keys(int(securelink["session_id"]), client_nonce, server_nonce)
+    assert client_to_server.hex() == securelink["client_to_server_key_hex"]
+    assert server_to_client.hex() == securelink["server_to_client_key_hex"]
+    assert session._server_proof(int(securelink["session_id"]), client_nonce, server_nonce).hex() == securelink["server_proof_hex"]
+    assert session._client_rekey_commit_proof(int(securelink["session_id"]), client_nonce, server_nonce).hex() == securelink["client_rekey_commit_proof_hex"]
 
     chunk = corpus["control_chunk"]
     payload = bytes.fromhex(chunk["payload_hex"])

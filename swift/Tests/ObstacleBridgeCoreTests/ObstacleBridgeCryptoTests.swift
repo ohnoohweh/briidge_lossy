@@ -231,6 +231,20 @@ struct ObstacleBridgeCoreCodecTests {
         for value in try #require(websocket["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) { try ObstacleBridgeOverlayFrameCodec.decodeBody(.hex(value)) }
         }
+        let secureLink = try #require(corpus["securelink_psk"] as? [String: Any])
+        let psk = Data.hex(try #require(secureLink["psk_hex"] as? String))
+        let clientNonce = Data.hex(try #require(secureLink["client_nonce_hex"] as? String))
+        let serverNonce = Data.hex(try #require(secureLink["server_nonce_hex"] as? String))
+        let sessionID = UInt64(try #require(secureLink["session_id"] as? Int))
+        let expectedClientToServer = try #require(secureLink["client_to_server_key_hex"] as? String)
+        let expectedServerToClient = try #require(secureLink["server_to_client_key_hex"] as? String)
+        let expectedServerProof = try #require(secureLink["server_proof_hex"] as? String)
+        let expectedRekeyCommitProof = try #require(secureLink["client_rekey_commit_proof_hex"] as? String)
+        let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
+        #expect(keys.clientToServer.hex == expectedClientToServer)
+        #expect(keys.serverToClient.hex == expectedServerToClient)
+        #expect(try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce).hex == expectedServerProof)
+        #expect(try ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce).hex == expectedRekeyCommitProof)
         let chunk = try #require(corpus["control_chunk"] as? [String: Any])
         let transactionID = try #require(chunk["transaction_id"] as? Int)
         let maximumPayload = try #require(chunk["maximum_application_payload"] as? Int)
