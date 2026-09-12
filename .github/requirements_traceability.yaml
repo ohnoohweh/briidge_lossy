@@ -63,6 +63,8 @@ REQ-OVL-004:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_uses_per_transport_ports
     - tests/unit/test_ws_payload_mode.py::test_connect_disables_websocket_compression
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
+    - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
 
 REQ-OVL-005:
   integration_tests:

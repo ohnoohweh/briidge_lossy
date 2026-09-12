@@ -223,6 +223,14 @@ struct ObstacleBridgeCoreCodecTests {
         for value in try #require(myudp["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeData(.hex(value)) }
         }
+        let websocket = try #require(corpus["websocket_binary"] as? [String: Any])
+        let websocketPayload = Data.hex(try #require(websocket["payload_hex"] as? String))
+        let websocketWire = Data.hex(try #require(websocket["wire_hex"] as? String))
+        #expect(try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: websocketPayload)) == websocketWire)
+        #expect(try ObstacleBridgeOverlayFrameCodec.decodeBody(websocketWire) == .init(kind: .application, payload: websocketPayload))
+        for value in try #require(websocket["malformed_wire_hex"] as? [String]) {
+            #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) { try ObstacleBridgeOverlayFrameCodec.decodeBody(.hex(value)) }
+        }
         let chunk = try #require(corpus["control_chunk"] as? [String: Any])
         let transactionID = try #require(chunk["transaction_id"] as? Int)
         let maximumPayload = try #require(chunk["maximum_application_payload"] as? Int)

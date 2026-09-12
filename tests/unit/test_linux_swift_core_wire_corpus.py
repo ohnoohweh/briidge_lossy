@@ -8,6 +8,7 @@ from pathlib import Path
 
 from obstacle_bridge.bridge import ChannelMux
 import obstacle_bridge.bridge_transport_udp as myudp
+from obstacle_bridge.bridge_transport_ws import WebSocketBinaryPayloadCodec
 
 
 CORPUS = Path(__file__).resolve().parents[2] / "swift/Tests/ObstacleBridgeCoreTests/Fixtures/python_wire_codec_corpus.json"
@@ -42,6 +43,12 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     assert echoed_nanoseconds == int(myudp_data["echoed_nanoseconds"])
     decoded_chunks = myudp.MyUDP2BatchCodec.decode_batch(parsed_batch)
     assert [(chunk.counter, chunk.data) for chunk in decoded_chunks] == [(int(myudp_data["counter"]), data_payload)]
+
+    websocket = corpus["websocket_binary"]
+    websocket_payload = bytes.fromhex(websocket["payload_hex"])
+    websocket_wire = WebSocketBinaryPayloadCodec().encode(b"\x00" + websocket_payload)
+    assert websocket_wire.hex() == websocket["wire_hex"]
+    assert WebSocketBinaryPayloadCodec().decode(websocket_wire) == websocket_wire
 
     chunk = corpus["control_chunk"]
     payload = bytes.fromhex(chunk["payload_hex"])

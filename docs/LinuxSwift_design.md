@@ -529,9 +529,10 @@ termination and Python-peer authentication/service timeouts; R003 cannot close
 until the qualified suite is clean.
 
 The shared Python-derived corpus covers TCP APP framing and malformed records,
-the myUDP DATA_BATCH envelope and malformed records, CKV1 control chunks, O4/O5
-OPEN, and RS2/RS3 catalogs. It still needs SecureLink, WebSocket payload-mode,
-and codec-family truncation and trailing-byte cases before this package closes.
+the myUDP DATA_BATCH envelope and malformed records, WebSocket binary payload
+mode and malformed records, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3
+catalogs. It still needs SecureLink, text-oriented WebSocket payload modes, and
+codec-family truncation and trailing-byte cases before this package closes.
 
 Definition of Done:
 
@@ -561,9 +562,9 @@ and build qualification.
 
 - **Linux:** myUDP reliability/control frame handling still needs to consume the
   Core owner; the common Python-derived corpus still needs SecureLink,
-  WebSocket, and codec-family truncation and trailing-byte cases in Linux
-  SwiftPM; and remaining ChannelMux service/controller policy must leave its
-  adapter owner. The
+  text-oriented WebSocket modes, and codec-family truncation and trailing-byte
+  cases in Linux SwiftPM; and remaining ChannelMux service/controller policy
+  must leave its adapter owner. The
   broad Linux Swift suite must also complete without process signal termination
   before R003 can close.
 - **macOS and iOS:** native shared-runtime consumers must import the package

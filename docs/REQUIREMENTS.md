@@ -38,6 +38,11 @@ Implementation note: the current Synology service runner keeps shell `errexit` e
 - `REQ-OVL-002`: A peer client shall be able to establish a native UDP (`myudp`) overlay session to a listener and carry TCP application traffic across it.
 - `REQ-OVL-003`: A peer client shall be able to establish a TCP overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-004`: A peer client shall be able to establish a WebSocket overlay session to a listener and carry UDP application traffic across it.
+
+Implementation and verification note: the shared Core wire corpus derives the
+binary WebSocket application body from Python's `WebSocketBinaryPayloadCodec`,
+then requires the Swift Core codec to encode/decode the same bytes and reject
+empty, unknown-kind, and truncated-control records.
 - `REQ-OVL-005`: A peer client shall be able to establish a QUIC overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family. For WebSocket listener mode, binding to the IPv6 wildcard address `::` shall create a dual-stack listener that accepts both IPv6 and IPv4-mapped incoming connections where the operating system supports dual-stack IPv6 sockets; this wildcard bind is an intentional operator-selected all-interface overlay listener, and operators who need narrower exposure shall bind a specific local address instead. Binding to `0.0.0.0` remains IPv4-only.
 - `REQ-OVL-007`: Overlay peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6. The runtime configuration surface shall scope peer-family preference per transport (`udp_peer_resolve_family`, `tcp_peer_resolve_family`, `ws_peer_resolve_family`, `quic_peer_resolve_family`), and peer endpoint fields shall accept either one host/FQDN or an ordered comma-separated list of IPv4/IPv6 alternatives. When multiple alternatives are configured, the runtime shall prefer addresses that match the selected transport-local family policy, but if the preferred family cannot be used and a usable alternative family is available, connection bootstrap shall fall back to that alternative instead of failing solely because the first family choice was unavailable.

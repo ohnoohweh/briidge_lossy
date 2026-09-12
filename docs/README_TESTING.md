@@ -202,8 +202,9 @@ The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state 
 one deterministic protected-data exchange and the bounded binary, CKV1
 control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
 contracts. A shared Python-derived fixture pins TCP malformed records, myUDP
-DATA_BATCH envelope and malformed records, CKV1 chunk bytes, O4/O5 OPEN, and
-RS2/RS3 catalog bytes for the Core suite. The macOS Swift probe runs that Core codec suite
+DATA_BATCH envelope and malformed records, WebSocket binary payload-mode and
+malformed records, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for
+the Core suite. The macOS Swift probe runs that Core codec suite
 as well, while the adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The built
