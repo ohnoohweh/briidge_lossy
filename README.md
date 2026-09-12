@@ -8,8 +8,8 @@ The project currently targets six platform families:
   command-line product. It provides a Linux build and selected interoperable
   overlay/service paths. Its shared Core package owns bounded binary and typed
   JSON codecs for the O4/O5 service OPEN and RS2/RS3 service-catalog records;
-  its Python-derived Core corpus also pins TCP malformed-record, control-chunk,
-  service OPEN, and service-catalog bytes;
+  its Python-derived Core corpus also pins TCP and myUDP malformed-record,
+  control-chunk, service OPEN, and service-catalog bytes;
   TUN, packaging, and several listener paths remain unfinished. See [Linux
   Swift Client Design](docs/LinuxSwift_design.md) for the supported scope,
   limitations, and roadmap.

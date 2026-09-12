@@ -114,6 +114,8 @@ ARC-CMP-002:
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
     - tests/unit/test_connection_snapshots.py::test_myudp_stats_expose_stream_batch_budget_and_diagnostics
     - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
+    - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
@@ -164,7 +166,7 @@ ARC-CMP-003:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
-    # Shared corpus carries Python-derived TCP, CKV1, O4/O5, and RS2/RS3 vectors.
+    # Shared corpus carries Python-derived TCP, myUDP, CKV1, O4/O5, and RS2/RS3 vectors.
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     # Includes cross-transport shared binding/return-route behavior and disconnect cleanup.

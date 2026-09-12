@@ -7,6 +7,7 @@ import struct
 from pathlib import Path
 
 from obstacle_bridge.bridge import ChannelMux
+import obstacle_bridge.bridge_transport_udp as myudp
 
 
 CORPUS = Path(__file__).resolve().parents[2] / "swift/Tests/ObstacleBridgeCoreTests/Fixtures/python_wire_codec_corpus.json"
@@ -17,6 +18,30 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     tcp = corpus["tcp_application"]
     payload = bytes.fromhex(tcp["payload_hex"])
     assert struct.pack(">I", len(payload) + 1) + b"\x00" + payload == bytes.fromhex(tcp["wire_hex"])
+
+    myudp_data = corpus["myudp_data"]
+    data_payload = bytes.fromhex(myudp_data["payload_hex"])
+    batch = myudp.MyUDP2BatchCodec.encode_batch([
+        myudp.StreamChunk(int(myudp_data["counter"]), data_payload),
+    ])
+    original_now_ns = myudp.now_ns
+    try:
+        myudp.now_ns = lambda: int(myudp_data["transmitted_nanoseconds"])
+        protocol = myudp.Protocol(myudp.BaseFrameV2)
+        protocol._last_rx_tx_ns = int(myudp_data["echoed_nanoseconds"])
+        protocol._last_rx_wall_ns = int(myudp_data["transmitted_nanoseconds"])
+        wire = protocol.build_frame(myudp.Protocol.PTYPE_DATA, batch)
+    finally:
+        myudp.now_ns = original_now_ns
+    assert wire.hex() == myudp_data["wire_hex"]
+    parsed = myudp.Protocol(myudp.BaseFrameV2).parse_frame_with_times(wire)
+    assert parsed is not None
+    packet_type, parsed_batch, transmitted_nanoseconds, echoed_nanoseconds = parsed
+    assert packet_type == myudp.Protocol.PTYPE_DATA
+    assert transmitted_nanoseconds == int(myudp_data["transmitted_nanoseconds"])
+    assert echoed_nanoseconds == int(myudp_data["echoed_nanoseconds"])
+    decoded_chunks = myudp.MyUDP2BatchCodec.decode_batch(parsed_batch)
+    assert [(chunk.counter, chunk.data) for chunk in decoded_chunks] == [(int(myudp_data["counter"]), data_payload)]
 
     chunk = corpus["control_chunk"]
     payload = bytes.fromhex(chunk["payload_hex"])

@@ -295,6 +295,13 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-004`: The myudp transport shall correctly transfer large payloads under delayed and lossy conditions.
 - `REQ-MYU-005`: Bidirectional myudp traffic shall remain functional when both directions are active concurrently.
 - `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
+
+Implementation and verification note: the shared Core wire corpus derives a
+myUDP DATA_BATCH envelope from the Python reference `Protocol` and
+`MyUDP2BatchCodec`, then requires the Swift Core codec to encode and decode the
+same bytes while rejecting malformed, truncated, and trailing records. This is
+byte-contract evidence for the transport framing; loss recovery and control
+policy remain covered by the myUDP integration and unit suites.
 - `REQ-MYU-007`: The myudp transport shall expose an averaged transmit-delay metric for acknowledged `DATA` frames, derived from first-send time minus half of the current RTT estimate, so operators can distinguish payload delivery delay from raw RTT. When an idle RTT refresh updates the active session RTT estimate without a new acknowledged `DATA` frame, the runtime shall re-base `transmit_delay_est_ms` to half of the refreshed RTT estimate so stale delay spikes do not persist indefinitely during idle periods.
 
 Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.

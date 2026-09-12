@@ -1244,6 +1244,8 @@ REQ-MYU-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
+    - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
 
 REQ-MYU-002:
   integration_tests:

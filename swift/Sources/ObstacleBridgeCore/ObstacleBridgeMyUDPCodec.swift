@@ -76,7 +76,7 @@ public enum ObstacleBridgeMyUDPCodec {
         guard frame.type == dataType, frame.payload.count >= 2, frame.payload[0] == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
         let count = Int(frame.payload[1])
         guard count > 0, count <= 64 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-        var reader = ObstacleBridgeBinaryReader(frame.payload.dropFirst(2))
+        var reader = ObstacleBridgeBinaryReader(Data(frame.payload.dropFirst(2)))
         var chunks: [ObstacleBridgeMyUDPStreamChunk] = []
         for _ in 0..<count {
             do {

@@ -205,6 +205,24 @@ struct ObstacleBridgeCoreCodecTests {
         for value in try #require(tcp["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) { try ObstacleBridgeOverlayFrameCodec.decodeTCP(.hex(value)) }
         }
+        let myudp = try #require(corpus["myudp_data"] as? [String: Any])
+        let myudpPayload = Data.hex(try #require(myudp["payload_hex"] as? String))
+        let myudpWire = Data.hex(try #require(myudp["wire_hex"] as? String))
+        #expect(try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: myudpPayload,
+            counter: UInt16(try #require(myudp["counter"] as? Int)),
+            transmittedNanoseconds: UInt64(try #require(myudp["transmitted_nanoseconds"] as? Int)),
+            echoedNanoseconds: UInt64(try #require(myudp["echoed_nanoseconds"] as? Int))
+        ) == myudpWire)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeData(myudpWire) == .init(
+            counter: UInt16(try #require(myudp["counter"] as? Int)),
+            payload: myudpPayload,
+            transmittedNanoseconds: UInt64(try #require(myudp["transmitted_nanoseconds"] as? Int)),
+            echoedNanoseconds: UInt64(try #require(myudp["echoed_nanoseconds"] as? Int))
+        ))
+        for value in try #require(myudp["malformed_wire_hex"] as? [String]) {
+            #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeData(.hex(value)) }
+        }
         let chunk = try #require(corpus["control_chunk"] as? [String: Any])
         let transactionID = try #require(chunk["transaction_id"] as? Int)
         let maximumPayload = try #require(chunk["maximum_application_payload"] as? Int)
