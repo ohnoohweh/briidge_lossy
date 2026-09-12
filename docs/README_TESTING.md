@@ -202,7 +202,8 @@ The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state 
 one deterministic protected-data exchange and the bounded binary, CKV1
 control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
 contracts. The macOS Swift probe runs that Core codec suite as well, while the adapter suite exercises
-the one-connection loopback TCP listener over real Linux framing. The built
+the one-connection loopback TCP listener and Linux Core control-chunk delivery
+over real Linux framing. The built
 Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to

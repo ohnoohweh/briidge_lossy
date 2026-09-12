@@ -545,11 +545,28 @@ Definition of Done:
 - adapter directories contain no allowlisted ObstacleBridge wire magic or
   alternate serializer, enforced by a source-ownership guard.
 
-Core also owns control-chunk encoding and bounded reassembly, but neither Apple
-nor Linux runtime consumer delegates its chunk path yet. Apple’s richer codec
-and remaining overlay codecs remain direct consumers until their functions move
-to Core. R004 through R007 consume those Core owners; R009 expands the final
-cross-platform migration and build qualification.
+Core also owns control-chunk encoding and bounded reassembly. Linux ChannelMux
+normalizes completed `OPEN_CHUNK` and `REMOTE_SERVICES_SET_V2_CHUNK` records
+through that owner before delivery; Apple’s richer codec and remaining overlay
+codecs remain direct consumers until their functions move to Core. R004 through
+R007 consume those Core owners; R009 expands the final cross-platform migration
+and build qualification.
+
+#### R003 residual work by platform
+
+- **Linux:** remaining myUDP reliability/control framing needs a Core owner;
+  the common Python-derived malformed/truncated/trailing-byte corpus must run
+  in Linux SwiftPM; and remaining ChannelMux service/controller policy must
+  leave its adapter owner. The
+  broad Linux Swift suite must also complete without process signal termination
+  before R003 can close.
+- **macOS and iOS:** native shared-runtime consumers must import the package
+  product and replace direct ChannelMux, control-chunk, service, SecureLink,
+  myUDP, TCP, and WebSocket codec implementations. The same corpus must run in
+  macOS host and iOS package qualification.
+- **Windows sentinel:** no Windows runtime adapter is required by R003, but the
+  Core codec suite must remain free of Apple/Linux imports so a future Windows
+  build can consume it.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 

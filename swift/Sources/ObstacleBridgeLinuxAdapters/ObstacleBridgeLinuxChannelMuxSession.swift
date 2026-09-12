@@ -20,6 +20,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     private var awaited: ObstacleBridgeChannelMuxFrame?
     private var reply: ObstacleBridgeChannelMuxFrame?
     private var replySignal: DispatchSemaphore?
+    private let controlChunkReassembler = ObstacleBridgeControlChunkReassembler()
     public var onUnsolicitedFrame: ((ObstacleBridgeChannelMuxFrame) -> Void)?
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, session: ObstacleBridgeLinuxConfiguredSession, startupFrames: [ObstacleBridgeChannelMuxFrame] = []) throws {
@@ -72,7 +73,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
 
     /// Called only by the configured session's receive worker after it has
     /// authenticated and decoded a complete ChannelMux record.
-    public func receive(_ frame: ObstacleBridgeChannelMuxFrame) {
+    public func receive(_ inbound: ObstacleBridgeChannelMuxFrame) {
+        guard let frame = reassembledControlFrame(from: inbound) else { return }
         lock.lock()
         if let awaited, framesMatchReply(frame, awaited) {
             reply = frame
@@ -84,6 +86,29 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         let handler = onUnsolicitedFrame
         lock.unlock()
         handler?(frame)
+    }
+
+    private func reassembledControlFrame(from frame: ObstacleBridgeChannelMuxFrame) -> ObstacleBridgeChannelMuxFrame? {
+        let completedType: ObstacleBridgeChannelMuxMessageType
+        switch frame.messageType {
+        case .openChunk: completedType = .open
+        case .remoteServicesSetV2Chunk: completedType = .remoteServicesSetV2
+        default: return frame
+        }
+        guard let body = controlChunkReassembler.consume(
+            channelID: frame.channelID,
+            protocolType: frame.protocolType,
+            messageType: frame.messageType,
+            payload: frame.body,
+            peerID: nil
+        ) else { return nil }
+        return .init(
+            channelID: frame.channelID,
+            protocolType: frame.protocolType,
+            counter: frame.counter,
+            messageType: completedType,
+            body: body
+        )
     }
 
     private func framesMatchReply(_ inbound: ObstacleBridgeChannelMuxFrame, _ outbound: ObstacleBridgeChannelMuxFrame) -> Bool {

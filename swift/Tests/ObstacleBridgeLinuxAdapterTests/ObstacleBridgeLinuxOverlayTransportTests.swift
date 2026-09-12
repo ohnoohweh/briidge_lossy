@@ -141,6 +141,25 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         }
     }
 
+    @Test func linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: peer.port))
+        let session = try runtime.connect(sessionID: 68, clientNonce: Data(repeating: 8, count: 32))
+        defer { runtime.disconnect() }
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
+        let payload = Data(repeating: 0x42, count: 40)
+        let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: 5, maximumApplicationPayload: 32, payload: payload)
+        let delivered = DispatchSemaphore(value: 0)
+        var received: ObstacleBridgeChannelMuxFrame?
+        mux.onUnsolicitedFrame = { frame in received = frame; delivered.signal() }
+        for chunk in chunks.reversed() {
+            mux.receive(.init(channelID: 3, protocolType: .tcp, counter: 2, messageType: .openChunk, body: chunk))
+        }
+        #expect(delivered.wait(timeout: .now() + 1) == .success)
+        #expect(received == .init(channelID: 3, protocolType: .tcp, counter: 2, messageType: .open, body: payload))
+    }
+
     @Test func myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-secure-mux")
         defer { peer.stop() }
