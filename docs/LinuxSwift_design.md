@@ -572,8 +572,13 @@ parser.
 - **Linux:** myUDP reliability/control frame handling still needs to consume the
   Core owner; the common Python-derived corpus still needs text-oriented
   WebSocket modes and comparable malformed coverage for the remaining codec
-  families in Linux SwiftPM; and remaining ChannelMux service/controller policy
-  must leave its adapter owner.
+  families in Linux SwiftPM. In particular, Linux has no `ws_payload_mode`
+  configuration parser, `X-ObstacleBridge-WS-Payload-Mode` upgrade negotiation,
+  or text WebSocket opcode path; it currently hardcodes binary opcode `0x2`.
+  Completing that item requires extraction of the Apple payload codecs into
+  Core and Linux configuration, handshake, frame-opcode, and Python-peer
+  interoperability coverage. Remaining ChannelMux service/controller policy
+  must also leave its adapter owner.
 - **macOS and iOS:** native shared-runtime consumers must import the package
   product and replace direct ChannelMux, control-chunk, service, SecureLink,
   myUDP, TCP, and WebSocket codec implementations. The same corpus must run in
