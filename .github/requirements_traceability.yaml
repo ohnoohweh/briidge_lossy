@@ -136,7 +136,7 @@ REQ-AUT-001:
   # peer-address control framing, before the reciprocal PSK handshake, and
   # validates Admin-visible replacement-epoch readiness and concurrent
   # Python-derived Core corpus coverage for PSK transcript, proofs, and
-  # deterministic client/server handshake envelopes.
+  # deterministic client/server handshake envelopes through one frame codec.
   # Swift-owned TCP/UDP service channels. Its Python myudp peer models the
   # reliable length-prefixed stream and its process ports are xdist-isolated.
   integration_tests:

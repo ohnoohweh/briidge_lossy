@@ -559,6 +559,11 @@ codecs remain direct consumers until their functions move to Core. R004 through
 R007 consume those Core owners; R009 expands the final cross-platform migration
 and build qualification.
 
+The SecureLink PSK client and server both consume the same Core frame codec for
+the versioned envelope and authenticated-data header. Linux transport adapters
+therefore carry SecureLink bytes without owning a second header serializer or
+parser.
+
 #### R003 residual work by platform
 
 - **Linux:** myUDP reliability/control frame handling still needs to consume the

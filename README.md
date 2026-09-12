@@ -10,7 +10,8 @@ The project currently targets six platform families:
   JSON codecs for the O4/O5 service OPEN and RS2/RS3 service-catalog records;
   its Python-derived Core corpus also pins TCP, myUDP, and WebSocket binary
   malformed-record, SecureLink PSK transcript/handshake, control-chunk,
-  service OPEN, and service-catalog bytes;
+  service OPEN, and service-catalog bytes; SecureLink client/server envelope
+  serialization has one shared Core owner;
   TUN, packaging, and several listener paths remain unfinished. See [Linux
   Swift Client Design](docs/LinuxSwift_design.md) for the supported scope,
   limitations, and roadmap.
