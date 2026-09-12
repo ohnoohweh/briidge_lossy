@@ -75,6 +75,15 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
+    @Test func webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer() throws {
+        for mode in ["base64", "json-base64", "semi-text-shape"] {
+            let peer = try PythonOverlayPeer(mode: "ws-text-\(mode)")
+            defer { peer.stop() }
+            let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .ws, wsPath: "/overlay", wsPayloadMode: mode)
+            #expect(try client.roundTrip(Data("swift-text".utf8)) == Data("swift-text".utf8))
+        }
+    }
+
     @Test func unqualifiedTransportsAreRejectedBeforeSocketCreation() {
         #expect(throws: ObstacleBridgeLinuxOverlayTransportError.unavailableTransport("Linux QUIC is unavailable: the Network.framework owner has no qualified Linux backend")) {
             try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: 1, transport: .quic)
@@ -568,22 +577,35 @@ final class PythonOverlayPeer {
         if MODE.startswith('ws'):
             r=b''
             while b'\\r\\n\\r\\n' not in r: r+=c.recv(4096)
+            if MODE.startswith('ws-text-'): assert ('x-obstaclebridge-ws-payload-mode: '+MODE[8:]).encode() in r.lower()
             key=[x.split(b':',1)[1].strip() for x in r.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]
             accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
             c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
         def read_payload():
             if MODE.startswith('tcp'):
                 h=nread(4); n=struct.unpack('!I',h)[0]; b=nread(n); assert b[:1]==b'\\x00'; return b[1:]
-            a,b=nread(2); assert a==130 and b&128; n=b&127
+            a,b=nread(2); assert a==(129 if MODE.startswith('ws-text-') else 130) and b&128; n=b&127
             if n==126: n=int.from_bytes(nread(2),'big')
             elif n==127: n=int.from_bytes(nread(8),'big')
-            m=nread(4); p=bytes(x^m[i%4] for i,x in enumerate(nread(n))); assert p[:1]==b'\\0'; return p[1:]
+            m=nread(4); p=bytes(x^m[i%4] for i,x in enumerate(nread(n)))
+            if MODE == 'ws-text-base64': return base64.b64decode(p)
+            if MODE == 'ws-text-json-base64': return base64.b64decode(__import__('json').loads(p)['data'])
+            if MODE == 'ws-text-semi-text-shape':
+                a='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+'; bits=''.join(f'{a.index(chr(x)):06b}' for x in p if chr(x)!=' '); return bytes(int(bits[i:i+8],2) for i in range(0,len(bits)//8*8,8))
+            assert p[:1]==b'\\0'; return p[1:]
         def write_payload(p):
             if MODE.startswith('tcp'):
                 c.sendall(struct.pack('!I',len(p)+1)+b'\\x00'+p); return
-            p=b'\\0'+p
-            if len(p)<126: c.sendall(bytes([130,len(p)])+p)
-            else: c.sendall(bytes([130,126])+len(p).to_bytes(2,'big')+p)
+            if MODE == 'ws-text-base64':
+                p=base64.b64encode(p); opcode=129
+            elif MODE == 'ws-text-json-base64':
+                p=__import__('json').dumps({'data':base64.b64encode(p).decode()},separators=(',',':')).encode(); opcode=129
+            elif MODE == 'ws-text-semi-text-shape':
+                a='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+'; bits=''.join(f'{x:08b}' for x in p); bits += '0'*((-len(bits))%6); p=' '.join(''.join(a[int(bits[i+j:i+j+6],2)] for j in range(0,min(48,len(bits)-i),6)) for i in range(0,len(bits),48)).encode(); opcode=129
+            else:
+                p=b'\\0'+p; opcode=130
+            if len(p)<126: c.sendall(bytes([opcode,len(p)])+p)
+            else: c.sendall(bytes([opcode,126])+len(p).to_bytes(2,'big')+p)
         def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')
         def expand(prk,info,length):
             out=b''; prior=b''

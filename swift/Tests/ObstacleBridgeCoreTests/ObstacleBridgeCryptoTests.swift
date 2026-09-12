@@ -195,6 +195,17 @@ struct ObstacleBridgeCoreCodecTests {
         }
     }
 
+    @Test func webSocketTextPayloadModesRoundTripInCore() throws {
+        let wire = Data([0, 1, 2, 0xff])
+        for mode in [ObstacleBridgeWebSocketPayloadMode.base64, .jsonBase64, .semiTextShape] {
+            let payload = try ObstacleBridgeWebSocketPayloadCodec.encode(wire, mode: mode)
+            #expect(try ObstacleBridgeWebSocketPayloadCodec.decode(payload, mode: mode) == wire)
+        }
+        #expect(throws: ObstacleBridgeWebSocketPayloadCodecError.invalidPayload) {
+            try ObstacleBridgeWebSocketPayloadCodec.decode(.text("!"), mode: .semiTextShape)
+        }
+    }
+
     @Test func sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords() throws {
         let url = try #require(Bundle.module.url(forResource: "python_wire_codec_corpus", withExtension: "json"))
         let corpus = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])

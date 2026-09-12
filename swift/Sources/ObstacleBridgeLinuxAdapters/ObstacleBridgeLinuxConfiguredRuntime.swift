@@ -178,7 +178,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             let host = configuration.peerCandidates[index]
             let lower: ObstacleBridgeLinuxOverlayTransportClient
             do {
-                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath)
+                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode)
                 let lowerSession = try lower.openSession()
                 let secureLink: ObstacleBridgeSecureLinkPSKClient?
                 if let psk = configuration.secureLinkPSK {

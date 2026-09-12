@@ -11,7 +11,7 @@ The project currently targets six platform families:
   its Python-derived Core corpus also pins TCP, myUDP, and WebSocket binary
   malformed-record, SecureLink PSK transcript/handshake, control-chunk,
   service OPEN and service-catalog bytes, including service-record truncation
-  and trailing-byte rejection; SecureLink client/server envelope
+  and trailing-byte rejection, plus all WebSocket payload modes; SecureLink client/server envelope
   serialization has one shared Core owner. Linux TCP/UDP service listeners
   publish kernel-assigned ephemeral ports in their Core OPEN records, and the
   SwiftPM peer-fixture lane bounds child processes for reproducible full-suite

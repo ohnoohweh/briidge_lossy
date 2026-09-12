@@ -530,8 +530,8 @@ for the remaining ownership migration and corpus coverage listed below, not for
 test-runner stability.
 
 The shared Python-derived corpus covers TCP APP framing and malformed records,
-the myUDP DATA_BATCH envelope and malformed records, WebSocket binary payload
-mode and malformed records, SecureLink PSK transcript/key/proof and handshake
+the myUDP DATA_BATCH envelope and malformed records, all WebSocket payload
+modes (`binary`, `base64`, `json-base64`, and `semi-text-shape`), SecureLink PSK transcript/key/proof and handshake
 envelope vectors, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3 catalogs. It
 also pins O4/O5 and RS2/RS3 truncation and trailing-byte rejection in both the
 Python reference parser and Core. It still needs text-oriented WebSocket
@@ -570,15 +570,11 @@ parser.
 #### R003 residual work by platform
 
 - **Linux:** myUDP reliability/control frame handling still needs to consume the
-  Core owner; the common Python-derived corpus still needs text-oriented
-  WebSocket modes and comparable malformed coverage for the remaining codec
-  families in Linux SwiftPM. In particular, Linux has no `ws_payload_mode`
-  configuration parser, `X-ObstacleBridge-WS-Payload-Mode` upgrade negotiation,
-  or text WebSocket opcode path; it currently hardcodes binary opcode `0x2`.
-  Completing that item requires extraction of the Apple payload codecs into
-  Core and Linux configuration, handshake, frame-opcode, and Python-peer
-  interoperability coverage. Remaining ChannelMux service/controller policy
-  must also leave its adapter owner.
+  Core owner; the common Python-derived corpus still needs comparable malformed
+  coverage for the remaining codec families in Linux SwiftPM; and remaining
+  ChannelMux service/controller policy must leave its adapter owner. Core owns
+  all WebSocket payload modes, while Linux parses `ws_payload_mode`, negotiates
+  it during upgrade, and proves text-frame interoperability with Python.
 - **macOS and iOS:** native shared-runtime consumers must import the package
   product and replace direct ChannelMux, control-chunk, service, SecureLink,
   myUDP, TCP, and WebSocket codec implementations. The same corpus must run in

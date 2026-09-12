@@ -72,9 +72,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let port: Int
     private let transport: ObstacleBridgeLinuxTransport
     private let wsPath: String
+    private let wsPayloadMode: ObstacleBridgeWebSocketPayloadMode
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/") throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary") throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -85,6 +86,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.port = port
         self.transport = transport
         self.wsPath = wsPath.hasPrefix("/") ? wsPath : "/\(wsPath)"
+        self.wsPayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(wsPayloadMode)
         self.snapshot = .init(transport: transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
     }
 
@@ -107,7 +109,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     let connection = try POSIXStreamConnection(host: host, port: port)
                     defer { connection.close() }
                     try performWebSocketUpgrade(connection)
-                    try connection.write(webSocketClientFrame(opcode: 0x2, payload: webSocketWire(payload)))
+                    let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
                     result = try readWebSocketApplicationPayload(connection)
                 case .myudp:
                     let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port)
@@ -148,7 +150,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .tcp:
                     try connection.write(self.tcpWire(payload))
                 case .ws:
-                    try connection.write(self.webSocketClientFrame(opcode: 0x2, payload: self.webSocketWire(payload)))
+                    let message = try self.webSocketMessage(payload); try connection.write(self.webSocketClientFrame(opcode: message.0, payload: message.1))
                 case .myudp:
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 case .quic:
@@ -204,7 +206,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private func performWebSocketUpgrade(_ connection: POSIXStreamConnection) throws {
         var rng = SystemRandomNumberGenerator()
         let key = Data((0..<16).map { _ in UInt8.random(in: .min ... .max, using: &rng) }).base64EncodedString()
-        let request = "GET \(wsPath) HTTP/1.1\r\nHost: \(host):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: \(key)\r\n\r\n"
+        let request = "GET \(wsPath) HTTP/1.1\r\nHost: \(host):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: \(key)\r\nX-ObstacleBridge-WS-Payload-Mode: \(wsPayloadMode.rawValue)\r\n\r\n"
         try connection.write(Data(request.utf8))
         let response = try connection.readUntil(Data("\r\n\r\n".utf8), maximum: 16 * 1024)
         guard let responseText = String(data: response, encoding: .utf8), responseText.hasPrefix("HTTP/1.1 101") else {
@@ -239,24 +241,29 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
 
     /// Python's WebSocket transport carries the same APP/PING/PONG subframe
     /// as its TCP transport inside each binary WebSocket message.
+    private func webSocketMessage(_ payload: Data) throws -> (UInt8, Data) {
+        let wire = try webSocketWire(payload)
+        switch try ObstacleBridgeWebSocketPayloadCodec.encode(wire, mode: wsPayloadMode) { case .binary(let data): return (0x2, data); case .text(let text): return (0x1, Data(text.utf8)) }
+    }
     private func webSocketWire(_ payload: Data) throws -> Data {
         try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: payload))
     }
 
     private func readWebSocketApplicationPayload(_ connection: POSIXStreamConnection) throws -> Data {
         while true {
-            let frame = try ObstacleBridgeOverlayFrameCodec.decodeBody(try readWebSocketApplicationFrame(connection))
+            let frame = try ObstacleBridgeOverlayFrameCodec.decodeBody(try ObstacleBridgeWebSocketPayloadCodec.decode(try readWebSocketApplicationFrame(connection), mode: wsPayloadMode))
             switch frame.kind {
             case .application: return frame.payload
             case .ping:
-                try connection.write(webSocketClientFrame(opcode: 0x2, payload: try ObstacleBridgeOverlayFrameCodec.encodeBody(ObstacleBridgeOverlayFrameCodec.pong(forPing: frame))))
+                let pong = try ObstacleBridgeWebSocketPayloadCodec.encode(try ObstacleBridgeOverlayFrameCodec.encodeBody(ObstacleBridgeOverlayFrameCodec.pong(forPing: frame)), mode: wsPayloadMode)
+                switch pong { case .binary(let data): try connection.write(webSocketClientFrame(opcode: 0x2, payload: data)); case .text(let text): try connection.write(webSocketClientFrame(opcode: 0x1, payload: Data(text.utf8))) }
             case .pong:
                 break
             }
         }
     }
 
-    private func readWebSocketApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {
+    private func readWebSocketApplicationFrame(_ connection: POSIXStreamConnection) throws -> ObstacleBridgeWebSocketPayload {
         while true {
             let header = try connection.readExactly(2)
             guard header[0] & 0x80 != 0 else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }
@@ -274,7 +281,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             }
             let payload = try connection.readExactly(length)
             switch opcode {
-            case 0x2: return payload
+            case 0x2: return .binary(payload)
+            case 0x1: guard let text = String(data: payload, encoding: .utf8) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }; return .text(text)
             case 0x9:
                 try connection.write(webSocketClientFrame(opcode: 0xA, payload: payload))
             case 0x8: throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF
