@@ -2,8 +2,8 @@
 
 ## Purpose and authority
 
-This is the LSW-R001 source-ownership baseline for the common Swift migration.
-The machine-readable authority is
+This document defines source ownership and the Linux Swift parity matrix for
+the common Swift migration. The machine-readable authority is
 [LinuxSwift_r001_inventory.json](./LinuxSwift_r001_inventory.json). It assigns
 every checked-in Swift file under these source roots exactly once:
 
@@ -20,7 +20,7 @@ Run the verifier from the repository root:
 
 The first command fails when a source is unassigned, assigned more than once,
 or removed without updating the inventory. The report expands the feature
-baseline to one Linux Swift status row for every active requirement. It is the
+matrix to one Linux Swift status row for every active requirement. It is the
 authoritative answer to whether a feature is `verified`, `partial`, `missing`,
 or product-scoped `not-applicable`; it is not a claim that current Linux Swift
 behavior is in parity.
@@ -39,9 +39,9 @@ The checked inventory currently contains 64 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 
-## Python-led feature baseline
+## Python-led feature matrix
 
-The same inventory contains the LSW-R001 feature groups. Every active
+The inventory contains feature groups for every active
 `REQ-*` identifier is assigned once to a group with:
 
 - Python implementation and test references;
@@ -54,7 +54,7 @@ be extraction material, and current Linux Swift probes are evidence for their
 named scenarios, but neither can override Python behavior or fill an unmapped
 row.
 
-The baseline deliberately records Linux Swift as partial or missing for most
+The matrix records Linux Swift as partial or missing for most
 Linux-applicable feature groups. In particular, it exposes the missing Linux
 QUIC backend and the incomplete myUDP reliability, WebSocket, SecureLink,
 ChannelMux/TUN, lifecycle/listener, and Admin/configuration surfaces. The four
@@ -78,16 +78,16 @@ New observed drift belongs in this table and in a reproducing direct parity test
 before it is fixed. A successful source guard, compilation, or mixed-runtime
 smoke test does not resolve a frozen decision.
 
-## LSW-R001 accepted baseline boundary
+## Evidence scope
 
-The executable baseline is accepted, not functional parity. The Linux SwiftPM
+The qualified evidence does not establish functional parity. The Linux SwiftPM
 myUDP Python-peer fixture suite passes with
 the required stream-record envelopes and independent transport counters. The
 raw Apple ChannelMux parity runner imports `CryptoKit`, so its qualified
-evidence host is the existing `bridge-py-integration-macos-swift-probe` CI job;
-it must not be treated as a Linux pass or a skipped parity claim. R005 removes
-that Apple-only crypto dependency.
+evidence host is the `bridge-py-integration-macos-swift-probe` CI job; it must
+not be treated as a Linux pass or a skipped parity claim. The SecureLink/crypto
+consolidation removes that Apple-only crypto dependency.
 
-Those baseline lanes pass in one revision on their qualified hosts. Later
-packages close feature rows in this inventory; they must not relabel a partial
-or missing row as verified without implementation and executable evidence.
+These lanes pass on their qualified hosts. Remaining work closes feature rows
+in this inventory; a partial or missing row requires implementation and
+executable evidence before it becomes verified.

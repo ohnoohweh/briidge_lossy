@@ -229,6 +229,5 @@
     {"area": "myudp CONTROL missing list", "python_wins": "derive the bounded capacity from the wire payload budget", "swift_gap": "portable Linux codec caps entries at 64"},
     {"area": "myudp ring comparison", "python_wins": "use the Python half-ring boundary semantics", "swift_gap": "Linux transport differs at the 32767-distance edge"},
     {"area": "canonical JSON", "python_wins": "preserve Python protocol byte ordering", "swift_gap": "Linux service/catalog serialization uses generic sorted keys"}
-  ],
-  "baseline_blockers": []
+  ]
 }

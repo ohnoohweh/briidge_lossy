@@ -71,7 +71,7 @@ privileged daemon, updater, and automatic Linux QUIC support are out of scope
 for that first increment. This is not a parity waiver: the roadmap may be
 reported complete only after every Linux-Python feature applicable to the
 Linux Swift product is implemented and verified, including transport features
-delivered by later work packages. A feature may be marked not applicable only
+planned in the remaining work. A feature may be marked not applicable only
 when its requirement explicitly belongs to a different product surface; an
 unsupported, planned, skipped, or partially implemented Linux feature remains
 a parity gap.
@@ -315,11 +315,11 @@ Python Admin catalog operation publishes a newer RS3 catalog, including an
 empty withdrawal, and Swift replaces or stops its remote listener owners
 without a reconnect. The Linux Admin HTTP server serves redacted `/api/status` and `/api/peers`
 payloads from that runtime state on a listener isolated from transport and
-reconnect execution. TUN service routing is deferred to later work packages.
+reconnect execution. TUN service routing remains in the remaining work.
 
 ## Common Swift convergence analysis
 
-The current separation is by product history rather than by architectural
+The present separation follows product boundaries rather than the desired
 responsibility. The root package builds the narrow `ObstacleBridgePortable`
 target and the Linux targets, while Apple compiles roughly the same
 `ObstacleBridgeShared` files directly into each executable or Xcode target.
@@ -383,10 +383,10 @@ of full equivalence. Neither output may be used to claim Linux Swift parity.
 The target is an executable, requirement-centered matrix generated from
 checked-in metadata. The existing `.github/requirements_traceability.yaml`
 remains the compatibility requirement-to-test manifest while its flat parser is
-in service. LSW-R001 adds the versioned
-[`LinuxSwift_r001_inventory.json`](./LinuxSwift_r001_inventory.json) baseline
-and validator; R009 folds its per-product model into the general reporting and
-CI interfaces. Each active requirement has one row per product and the
+in service. The versioned
+[`LinuxSwift_r001_inventory.json`](./LinuxSwift_r001_inventory.json) inventory
+and validator provide the per-product model that later reporting and CI
+interfaces consume. Each active requirement has one row per product and the
 following links:
 
 | Matrix field | Required meaning |
@@ -497,49 +497,11 @@ changing a dashboard label or adding a waiver.
 - No new common behavior may be added under an adapter target while convergence
   is in progress. If two platforms need it, introduce it in core first.
 
-## Common-runtime refactor work packages
+## Remaining common-runtime work
 
-These packages precede or gate the remaining Linux feature packages. A package
+These work areas precede or gate the remaining Linux feature work. A package
 is complete only when every Definition of Done item is met; compiling alone is
 not completion.
-
-### LSW-R001 — Baseline acceptance complete
-
-LSW-R001 establishes the executable baseline before code moves between
-modules. Linux Python is the functional reference. Apple Swift is reusable
-source material only; neither existing Swift implementation wins an observable
-conflict without Python requirement and test evidence.
-
-Delivered artifacts:
-
-- [Linux Swift source map](./LinuxSwift_source_map.md) and its exact 64-file
-  inventory assign every source in `ObstacleBridgePortable`,
-  `ObstacleBridgeLinuxAdapters`, and `ObstacleBridgeShared` to core, an Apple
-  adapter, a Linux adapter, or deletion after migration;
-- [`LinuxSwift_r001_inventory.json`](./LinuxSwift_r001_inventory.json) is a
-  schema-versioned Python-led feature matrix. It expands all 92 active
-  requirements into a Linux Swift applicability/status row with implementation,
-  product-test, and direct-parity references where evidence exists;
-- `scripts/check_linux_swift_r001_inventory.py` validates source ownership,
-  requirement coverage, implementation paths, and test references, and emits
-  the expanded status report for review or CI;
-- the baseline records the exact current Linux Swift gaps rather than treating
-  current TCP/cleartext-WebSocket/myudp probes as full parity; and
-- frozen Python decisions cover myudp trailing bytes, CONTROL missing-list
-  capacity, half-ring comparison, and canonical JSON bytes. Existing direct
-  ChannelMux/myudp/SecureLink/WebSocket and Admin parity suites remain the
-  baseline evidence while later packages add missing behavior and vectors.
-
-The accepted baseline does not make Linux Swift parity green: it intentionally
-reports partial and missing Linux-applicable rows. The full Linux SwiftPM suite
-passes its Python-peer myUDP fixtures with the required stream-record envelope
-and monotonic transport-counter behavior. The raw Apple ChannelMux parity
-runner imports `CryptoKit`; its qualified evidence host is the
-`bridge-py-integration-macos-swift-probe` job rather than Linux SwiftPM. That
-host-qualified probe and the macOS Swift-backed suite pass for this baseline
-revision. R002 and later packages preserve this evidence while moving source,
-and may close a row only with a common implementation and executable
-Python-equivalent evidence.
 
 ### LSW-R002 — Establish the canonical package graph and ports
 
@@ -588,7 +550,7 @@ Definition of Done:
 - adapter directories contain no allowlisted ObstacleBridge wire magic or
   alternate serializer, enforced by a source-ownership guard.
 
-Depends on LSW-R001 and LSW-R002.
+Depends on LSW-R002.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 
@@ -685,7 +647,8 @@ Definition of Done:
   replacement/withdrawal, control-chunk reassembly, queue limits, startup
   replay, stale-epoch rejection, backpressure, counters, and TUN packet policy;
 - one typed service model preserves hooks/options on configuration, OPEN, and
-  catalog round trips, including compatibility formats selected in LSW-R001;
+  catalog round trips, including the compatibility formats recorded in the
+  inventory;
 - common TCP/UDP/TUN controllers emit connect/listen/write/close/packet effects;
   Apple, Linux, and future Windows owners only execute those effects;
 - portable IP parsing and packet inspection replace libc-specific address
@@ -767,10 +730,10 @@ Definition of Done:
 - `ObstacleBridgePortable`, behavior-bearing compatibility facades, obsolete
   source lists, and all migrated duplicate implementations are removed.
 
-Depends on LSW-R001 through LSW-R008 and gates the non-refactor LSW-008 release
+Depends on LSW-R002 through LSW-R008 and gates the non-refactor LSW-008 release
 qualification package below.
 
-## Linux feature delivery work packages
+## Remaining Linux feature work
 
 These packages add Linux mechanisms and product behavior on top of the common
 runtime. They must not introduce a Linux-specific version of a core function.
@@ -925,18 +888,17 @@ capability and still satisfy this parity gate.
 
 ## Suggested sequence and open decisions
 
-LSW-R001 baseline acceptance is complete. Source movement starts with LSW-R002
-and LSW-R003 while preserving the qualified baseline evidence. LSW-R004 myudp
-and LSW-R005 SecureLink can then proceed in parallel before converging in the
-common overlay coordinator.
+Source movement starts with LSW-R002 and LSW-R003 while preserving the current
+qualified evidence. LSW-R004 myudp and LSW-R005 SecureLink can then proceed in
+parallel before converging in the common overlay coordinator.
 LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
 myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates
 release qualification. This order prevents LSW-005 and LSW-005A from creating
 new state that would immediately need to be extracted.
 
-LSW-R001 has created the complete Python feature inventory and the initially
-red per-product matrix. Every later package closes its own rows by adding the
-Swift implementation and equivalent tests; LSW-R009 makes those relationships
+The complete Python feature inventory records the present partial and missing
+Linux Swift rows. Each remaining work area closes its rows by adding the Swift
+implementation and equivalent tests; LSW-R009 makes those relationships
 executable in required CI. LSW-008 may turn the product-level parity result
 green only after all Linux-applicable rows close.
 
