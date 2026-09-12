@@ -19,7 +19,7 @@ public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable {
 public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     public typealias FrameSink = (ObstacleBridgeLinuxServiceSocketOwner, [ObstacleBridgeChannelMuxFrame]) -> Void
 
-    private let spec: ObstacleBridgeLinuxServiceSpec
+    private var spec: ObstacleBridgeLinuxServiceSpec
     private let frameSink: FrameSink
     private let queue: DispatchQueue
     private let plane: ObstacleBridgeLinuxServiceDataPlane
@@ -67,6 +67,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
               spec.listenProtocol == spec.targetProtocol else { throw ObstacleBridgeLinuxServiceSocketOwnerError.unsupportedProtocol }
         let fd = try bindSocket(host: spec.listenHost, port: spec.listenPort, type: spec.listenProtocol == .tcp ? SOCK_STREAM : SOCK_DGRAM)
         if spec.listenProtocol == .tcp, listen(fd, 64) != 0 { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.listenFailure(code) }
+        spec = .init(serviceID: spec.serviceID, name: spec.name, listenProtocol: spec.listenProtocol, listenHost: spec.listenHost, listenPort: boundPort(fd), targetProtocol: spec.targetProtocol, targetHost: spec.targetHost, targetPort: spec.targetPort)
         listener = fd
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         listenerSource = source
@@ -198,6 +199,14 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
         guard result == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(code) }
         return fd
+    }
+
+    private func boundPort(_ fd: Int32) -> Int {
+        var address = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        guard withUnsafeMutablePointer(to: &address, { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
+        }) == 0 else { return 0 }
+        return Int(UInt16(bigEndian: address.sin_port))
     }
 
     private func connectSocket(host: String, port: Int, type: __socket_type) throws -> Int32 {

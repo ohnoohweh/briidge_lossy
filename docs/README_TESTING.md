@@ -208,7 +208,10 @@ vectors, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for the Core
 suite. The macOS Swift probe runs that Core codec suite
 as well, while the adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
-over real Linux framing. The built
+over real Linux framing. The Linux TCP and UDP service-socket tests also prove
+that an ephemeral listener publishes the kernel-assigned port in its O5 OPEN
+record; their Python-overlay peer harness bounds concurrent child processes so
+the complete SwiftPM lane remains reproducible. The built
 Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to

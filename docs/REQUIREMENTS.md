@@ -269,6 +269,9 @@ Current lifecycle implementation note:
 
 - `REQ-MUX-001`: A connected peer shall be able to carry multiple simultaneous TCP channels over one overlay connection. Python per-channel TCP backpressure workers shall be created only while a local writer has buffered bytes and shall be detached and cancelled on local EOF, remote `CLOSE`, peer reset, and shutdown. Swift shall serialize Network.framework sends through a demand-driven per-channel drain and discard its pending drain state on the same lifecycle transitions.
   Implementation note: common Swift ChannelMux service bytes use the Core bounded binary and typed JSON codecs for O4/O5 OPEN and RS2/RS3 catalogs. Linux socket owners consume the Core values and do not serialize those records independently.
+  A Linux socket owner configured with an ephemeral listener port replaces port
+  zero with the kernel-assigned `getsockname` port before emitting its Core O5
+  OPEN record, so a peer never receives an invalid service endpoint.
   Verification note: the shared Python/Swift Core corpus pins TCP APP malformed-record rejection, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3 catalog bytes; it expands with each migrated codec.
 - `REQ-MUX-002`: A connected peer shall be able to carry mixed UDP and TCP services at the same time.
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s. Listener-side ChannelMux channel identity shall include both the owning peer and channel identifier, because independent peers may legitimately allocate the same channel number. A process-shared TUN device shall route local replies through the mux that actively owns its reader, using that reader owner's peer/channel bindings rather than creator or attachment history.

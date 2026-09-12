@@ -523,10 +523,11 @@ serialization, and duplicate integer serializers in those Linux adapter files.
 
 This is partial delivery, not package completion. The Core suite covers bounded
 reads, truncation, O5/RS3 typed round trips, and malformed input, while existing
-Linux catalog/service tests cover the adapter-to-Core path. CI currently exposes
-unresolved myUDP Linux-Swift integration failures, including process signal
-termination and Python-peer authentication/service timeouts; R003 cannot close
-until the qualified suite is clean.
+Linux catalog/service tests cover the adapter-to-Core path. The Linux SwiftPM
+suite now completes locally without process-signal termination after the
+Python-overlay test fixture bounds simultaneous child peers. R003 remains open
+for the remaining ownership migration and corpus coverage listed below, not for
+test-runner stability.
 
 The shared Python-derived corpus covers TCP APP framing and malformed records,
 the myUDP DATA_BATCH envelope and malformed records, WebSocket binary payload
@@ -570,9 +571,7 @@ parser.
   Core owner; the common Python-derived corpus still needs text-oriented
   WebSocket modes and codec-family truncation and trailing-byte cases in Linux
   SwiftPM; and remaining ChannelMux service/controller policy must leave its
-  adapter owner. The
-  broad Linux Swift suite must also complete without process signal termination
-  before R003 can close.
+  adapter owner.
 - **macOS and iOS:** native shared-runtime consumers must import the package
   product and replace direct ChannelMux, control-chunk, service, SecureLink,
   myUDP, TCP, and WebSocket codec implementations. The same corpus must run in

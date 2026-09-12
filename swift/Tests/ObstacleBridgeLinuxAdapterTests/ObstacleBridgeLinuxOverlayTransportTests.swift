@@ -391,10 +391,18 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
 }
 
 final class PythonOverlayPeer {
+    // One test keeps two peers alive while it exercises transport routing;
+    // restricting all test fixtures to that maximum avoids Foundation pipe
+    // resource exhaustion when Swift Testing schedules the suite concurrently.
+    private static let launchSlots = DispatchSemaphore(value: 2)
     let process: Process
     let port: Int
+    private var stopped = false
 
     init(mode: String) throws {
+        Self.launchSlots.wait()
+        var started = false
+        defer { if !started { Self.launchSlots.signal() } }
         let script = Self.script(for: mode)
         let process = Process()
         let stdout = Pipe()
@@ -406,15 +414,20 @@ final class PythonOverlayPeer {
         let line = String(data: stdout.fileHandleForReading.availableData, encoding: .utf8) ?? ""
         guard let port = Int(line.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else {
             process.terminate()
+            process.waitUntilExit()
             throw OverlayTestError.peerDidNotStart
         }
         self.process = process
         self.port = port
+        started = true
     }
 
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         if process.isRunning { process.terminate() }
         process.waitUntilExit()
+        Self.launchSlots.signal()
     }
 
     private static func script(for mode: String) -> String {

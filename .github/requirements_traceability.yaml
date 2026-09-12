@@ -1025,6 +1025,7 @@ REQ-MUX-001:
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::channelMuxFramesUseReadySessionAndRejectStaleEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
 
 REQ-MUX-002:
   integration_tests:
@@ -1033,6 +1034,7 @@ REQ-MUX-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
   unit_tests:
     - tests/unit/test_connection_snapshots.py::test_snapshot_mixed_listeners_and_active_connections
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::udpListenerPublishesOpenAndDataFrames
 
 REQ-MUX-003:
   integration_tests:

@@ -11,7 +11,10 @@ The project currently targets six platform families:
   its Python-derived Core corpus also pins TCP, myUDP, and WebSocket binary
   malformed-record, SecureLink PSK transcript/handshake, control-chunk,
   service OPEN, and service-catalog bytes; SecureLink client/server envelope
-  serialization has one shared Core owner;
+  serialization has one shared Core owner. Linux TCP/UDP service listeners
+  publish kernel-assigned ephemeral ports in their Core OPEN records, and the
+  SwiftPM peer-fixture lane bounds child processes for reproducible full-suite
+  qualification;
   TUN, packaging, and several listener paths remain unfinished. See [Linux
   Swift Client Design](docs/LinuxSwift_design.md) for the supported scope,
   limitations, and roadmap.

@@ -165,6 +165,8 @@ ARC-CMP-003:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::controlChunksMatchPythonLayoutAndRemainBounded
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::udpListenerPublishesOpenAndDataFrames
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
     # Shared corpus carries Python-derived TCP, myUDP, WebSocket binary, CKV1, O4/O5, and RS2/RS3 vectors.
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
