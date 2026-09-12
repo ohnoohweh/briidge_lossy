@@ -9,6 +9,7 @@ from pathlib import Path
 from check_linux_swift_r001_inventory import INVENTORY_PATH as LSW_R001_INVENTORY_PATH
 from check_linux_swift_r001_inventory import validate as validate_lsw_r001_inventory
 from check_obstaclebridge_core_imports import validate as validate_core_imports
+from check_obstaclebridge_core_wire_ownership import validate as validate_core_wire_ownership
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -231,6 +232,7 @@ def main() -> int:
     else:
         errors.extend(f"LSW-R001 inventory: {error}" for error in validate_lsw_r001_inventory(lsw_r001_inventory))
     errors.extend(f"ObstacleBridgeCore import guard: {error}" for error in validate_core_imports())
+    errors.extend(f"ObstacleBridgeCore wire-ownership guard: {error}" for error in validate_core_wire_ownership())
     if errors:
         sys.stderr.write("\n".join(errors) + "\n")
         return 1

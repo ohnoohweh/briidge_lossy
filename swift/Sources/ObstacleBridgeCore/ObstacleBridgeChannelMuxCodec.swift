@@ -28,29 +28,22 @@ public enum ObstacleBridgeChannelMuxCodec {
 
     public static func encode(channelID: UInt16, protocolType: ObstacleBridgeChannelMuxProtocol, counter: UInt16, messageType: ObstacleBridgeChannelMuxMessageType, body: Data) throws -> Data {
         guard body.count <= Int(UInt16.max) else { throw ObstacleBridgeChannelMuxCodecError.payloadTooLarge }
-        var result = Data()
-        append(channelID, to: &result)
-        result.append(protocolType.rawValue)
-        append(counter, to: &result)
-        result.append(messageType.rawValue)
-        append(UInt16(body.count), to: &result)
-        result.append(body)
-        return result
+        var writer = ObstacleBridgeBinaryWriter(capacity: headerSize + body.count)
+        writer.append(channelID); writer.append(protocolType.rawValue); writer.append(counter)
+        writer.append(messageType.rawValue); writer.append(UInt16(body.count)); writer.append(body)
+        return writer.encoded
     }
 
     public static func decode(_ wire: Data) throws -> ObstacleBridgeChannelMuxFrame {
-        guard wire.count >= headerSize else { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
-        let channelID = readUInt16(wire, 0)
-        guard let protocolType = ObstacleBridgeChannelMuxProtocol(rawValue: wire[2]),
-              let messageType = ObstacleBridgeChannelMuxMessageType(rawValue: wire[5]) else { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
-        let counter = readUInt16(wire, 3)
-        let length = Int(readUInt16(wire, 6))
-        guard wire.count == headerSize + length else { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
-        return .init(channelID: channelID, protocolType: protocolType, counter: counter, messageType: messageType, body: Data(wire.dropFirst(headerSize)))
+        do {
+            var reader = ObstacleBridgeBinaryReader(wire)
+            let channelID = try reader.readUInt16()
+            guard let protocolType = ObstacleBridgeChannelMuxProtocol(rawValue: try reader.readUInt8()) else { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
+            let counter = try reader.readUInt16()
+            guard let messageType = ObstacleBridgeChannelMuxMessageType(rawValue: try reader.readUInt8()) else { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
+            let body = try reader.readData(count: Int(try reader.readUInt16()))
+            guard reader.isAtEnd else { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
+            return .init(channelID: channelID, protocolType: protocolType, counter: counter, messageType: messageType, body: body)
+        } catch { throw ObstacleBridgeChannelMuxCodecError.invalidFrame }
     }
-
-    private static func append(_ value: UInt16, to data: inout Data) {
-        data.append(UInt8(value >> 8)); data.append(UInt8(value & 0xff))
-    }
-    private static func readUInt16(_ data: Data, _ offset: Int) -> UInt16 { (UInt16(data[offset]) << 8) | UInt16(data[offset + 1]) }
 }

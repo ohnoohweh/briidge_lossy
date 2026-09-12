@@ -30,13 +30,13 @@ behavior is in parity.
 
 | Target owner | Disposition | Files | Meaning |
 | --- | --- | ---: | --- |
-| `ObstacleBridgeCore` | `extract` | 28 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
+| `ObstacleBridgeCore` | `extract` | 30 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
 | `ObstacleBridgeCore` | `split-contract` | 19 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
 | `ObstacleBridgeAppleAdapters` | `retain-or-split` | 12 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, Objective-C bridge mechanisms, and the package import probe Apple-specific. |
 | `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 6 | Keep POSIX descriptors, listener/server I/O, timers, and Linux HTTP serving; remove common protocol policy as its core owner lands. |
 | `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |
 
-The checked inventory currently contains 66 Swift files. Its file-level entries
+The checked inventory currently contains 68 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 
@@ -73,7 +73,7 @@ the Python result for the following already-observed differences:
 | myUDP trailing bytes | Accept a declared frame and let the caller retain outer trailing bytes. | The portable Linux decoder requires exact outer length. |
 | myUDP CONTROL missing list | Derive the bounded list capacity from the wire payload budget. | The portable Linux codec hard-caps the list at 64 entries. |
 | myUDP ring boundary | Use Python half-ring comparison semantics. | The Linux transport differs at distance 32767. |
-| Canonical JSON | Preserve Python protocol byte ordering. | Linux service/catalog serialization relies on generic sorted keys. |
+| Canonical JSON | Preserve Python protocol byte ordering. | Core service/catalog serialization uses the protocol key order; Linux Admin serialization remains generic until its Core migration. |
 
 New observed drift belongs in this table and in a reproducing direct parity test
 before it is fixed. A successful source guard, compilation, or mixed-runtime

@@ -159,6 +159,7 @@ ARC-CMP-003:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_local_eof_matches_python
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close
     - ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::boundedBinaryCodecAndServiceWireFormatsRoundTrip
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     # Includes cross-transport shared binding/return-route behavior and disconnect cleanup.
     - tests/unit/test_channel_mux_listener_mode.py::test_process_shared_tun_registry_reuses_prestarted_server_owned_tun

@@ -6,9 +6,11 @@ The project currently targets six platform families:
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
 - **Linux Swift build baseline**: an initial, incomplete, experimental Swift
   command-line product. It provides a Linux build and selected interoperable
-  overlay/service paths; TUN, packaging, and several listener paths remain
-  unfinished. See [Linux Swift Client Design](docs/LinuxSwift_design.md) for
-  the supported scope, limitations, and roadmap.
+  overlay/service paths. Its shared Core package owns bounded binary and typed
+  JSON codecs for the O4/O5 service OPEN and RS2/RS3 service-catalog records;
+  TUN, packaging, and several listener paths remain unfinished. See [Linux
+  Swift Client Design](docs/LinuxSwift_design.md) for the supported scope,
+  limitations, and roadmap.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.

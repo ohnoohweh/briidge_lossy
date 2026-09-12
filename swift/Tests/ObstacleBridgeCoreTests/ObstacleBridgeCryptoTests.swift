@@ -126,6 +126,40 @@ struct ObstacleBridgeCorePortTests {
     }
 }
 
+struct ObstacleBridgeCoreCodecTests {
+    @Test func boundedBinaryCodecAndServiceWireFormatsRoundTrip() throws {
+        var writer = ObstacleBridgeBinaryWriter()
+        writer.append(UInt8(7)); writer.append(UInt16(0x0102)); writer.append(UInt32(0x0304_0506)); writer.append(UInt64(0x0708_090a_0b0c_0d0e))
+        var reader = ObstacleBridgeBinaryReader(writer.encoded)
+        #expect(try reader.readUInt8() == 7)
+        #expect(try reader.readUInt16() == 0x0102)
+        #expect(try reader.readUInt32() == 0x0304_0506)
+        #expect(try reader.readUInt64() == 0x0708_090a_0b0c_0d0e)
+        #expect(reader.isAtEnd)
+        #expect(throws: ObstacleBridgeBinaryCodecError.truncated) { try reader.readUInt8() }
+
+        let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "echo", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7002)
+        let open = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: 9, connectionSequence: 4, service: service)
+        #expect(open.starts(with: Data("O5".utf8)))
+        #expect(try ObstacleBridgeServiceCodec.decodeOpen(open) == .init(instanceID: 9, connectionSequence: 4, service: service))
+
+        var legacyOpen = ObstacleBridgeBinaryWriter()
+        legacyOpen.appendUTF8("O4"); legacyOpen.append(UInt64(9)); legacyOpen.append(UInt32(4)); legacyOpen.append(UInt16(7)); legacyOpen.append(ObstacleBridgeChannelMuxProtocol.tcp.rawValue); legacyOpen.append(UInt8(9)); legacyOpen.appendUTF8("127.0.0.1"); legacyOpen.append(UInt16(7001)); legacyOpen.append(ObstacleBridgeChannelMuxProtocol.tcp.rawValue); legacyOpen.append(UInt8(9)); legacyOpen.appendUTF8("127.0.0.1"); legacyOpen.append(UInt16(7002))
+        #expect(try ObstacleBridgeServiceCodec.decodeOpen(legacyOpen.encoded).service == serviceWithoutMetadata(service))
+
+        let catalog = try ObstacleBridgeServiceCodec.encodeRemoteServices(instanceID: 9, connectionSequence: 4, services: [service])
+        #expect(catalog.starts(with: Data("RS3".utf8)))
+        #expect(String(decoding: catalog.dropFirst(19), as: UTF8.self) == "[{\"svc_id\":7,\"l_proto\":\"tcp\",\"l_bind\":\"127.0.0.1\",\"l_port\":7001,\"r_proto\":\"tcp\",\"r_host\":\"127.0.0.1\",\"r_port\":7002,\"name\":\"echo\",\"lifecycle_hooks\":null,\"options\":null}]")
+        let decoded = try ObstacleBridgeServiceCodec.decodeRemoteServices(catalog)
+        #expect(decoded.instanceID == 9 && decoded.connectionSequence == 4 && decoded.services == [service])
+        #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeOpen(Data("O5".utf8)) }
+    }
+
+    private func serviceWithoutMetadata(_ service: ObstacleBridgeServiceSpec) -> ObstacleBridgeServiceSpec {
+        .init(serviceID: service.serviceID, name: nil, listenProtocol: service.listenProtocol, listenHost: service.listenHost, listenPort: service.listenPort, targetProtocol: service.targetProtocol, targetHost: service.targetHost, targetPort: service.targetPort)
+    }
+}
+
 private extension Data {
     static func hex(_ value: String) -> Data {
         Data(stride(from: 0, to: value.count, by: 2).map {

@@ -54,66 +54,31 @@ public final class ObstacleBridgeLinuxServiceCatalogStore {
 /// reconnect so peers can replace stale installed listeners deterministically.
 public enum ObstacleBridgeLinuxServiceCatalog {
     public static func encode(instanceID: UInt64, connectionSequence: UInt32, services: [ObstacleBridgeLinuxServiceSpec]) throws -> Data {
-        guard Set(services.map(\.serviceID)).count == services.count else { throw ObstacleBridgeLinuxServiceCatalogError.duplicateServiceID }
-        let rows: [[String: Any]] = services.map { service in
-            [
-                "svc_id": Int(service.serviceID),
-                "l_proto": protocolName(service.listenProtocol),
-                "l_bind": service.listenHost,
-                "l_port": service.listenPort,
-                "r_proto": protocolName(service.targetProtocol),
-                "r_host": service.targetHost,
-                "r_port": service.targetPort,
-                "name": service.name ?? NSNull(),
-                "lifecycle_hooks": NSNull(),
-                "options": NSNull(),
-            ]
+        do {
+            let coreServices = try services.map { service -> ObstacleBridgeServiceSpec in
+                guard (1...Int(UInt16.max)).contains(service.listenPort), (1...Int(UInt16.max)).contains(service.targetPort) else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
+                return .init(serviceID: service.serviceID, name: service.name, listenProtocol: service.listenProtocol, listenHost: service.listenHost, listenPort: UInt16(service.listenPort), targetProtocol: service.targetProtocol, targetHost: service.targetHost, targetPort: UInt16(service.targetPort))
+            }
+            return try ObstacleBridgeServiceCodec.encodeRemoteServices(instanceID: instanceID, connectionSequence: connectionSequence, services: coreServices)
         }
-        let body = try JSONSerialization.data(withJSONObject: rows, options: [.sortedKeys])
-        guard body.count <= Int(UInt32.max) else { throw ObstacleBridgeLinuxServiceCatalogError.payloadTooLarge }
-        var output = Data("RS3".utf8)
-        append(instanceID, to: &output)
-        append(connectionSequence, to: &output)
-        append(UInt32(body.count), to: &output)
-        output.append(body)
-        return output
+        catch ObstacleBridgeServiceCodecError.duplicateServiceID { throw ObstacleBridgeLinuxServiceCatalogError.duplicateServiceID }
+        catch ObstacleBridgeServiceCodecError.payloadTooLarge { throw ObstacleBridgeLinuxServiceCatalogError.payloadTooLarge }
+        catch { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
     }
 
     public static func decode(_ payload: Data) throws -> (instanceID: UInt64, connectionSequence: UInt32, services: [ObstacleBridgeLinuxServiceSpec]) {
-        guard payload.count >= 19, payload.prefix(3) == Data("RS3".utf8) else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
-        let instanceID = readUInt64(payload, at: 3)
-        let connectionSequence = readUInt32(payload, at: 11)
-        let length = Int(readUInt32(payload, at: 15))
-        guard payload.count == 19 + length,
-              let rows = try JSONSerialization.jsonObject(with: payload.dropFirst(19)) as? [[String: Any]]
-        else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
-        let services = try rows.enumerated().map { index, row in
-            guard let serviceID = integer(row["svc_id"]), (1...65535).contains(serviceID),
-                  let listenProtocol = protocolValue(row["l_proto"]),
-                  let targetProtocol = protocolValue(row["r_proto"]),
-                  let listenHost = row["l_bind"] as? String,
-                  let listenPort = integer(row["l_port"]), (1...65535).contains(listenPort),
-                  let targetHost = row["r_host"] as? String,
-                  let targetPort = integer(row["r_port"]), (1...65535).contains(targetPort),
-                  listenProtocol == targetProtocol
-            else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
-            return ObstacleBridgeLinuxServiceSpec(serviceID: UInt16(serviceID), name: row["name"] as? String, listenProtocol: listenProtocol, listenHost: listenHost, listenPort: listenPort, targetProtocol: targetProtocol, targetHost: targetHost, targetPort: targetPort)
-        }
-        guard Set(services.map(\.serviceID)).count == services.count else { throw ObstacleBridgeLinuxServiceCatalogError.duplicateServiceID }
-        return (instanceID, connectionSequence, services)
+        do {
+            let decoded = try ObstacleBridgeServiceCodec.decodeRemoteServices(payload)
+            let services = try decoded.services.map(linuxSpec)
+            guard services.allSatisfy({ $0.listenProtocol == $0.targetProtocol }) else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
+            return (decoded.instanceID, decoded.connectionSequence, services)
+        } catch ObstacleBridgeLinuxServiceCatalogError.invalidPayload { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
+        catch ObstacleBridgeServiceCodecError.duplicateServiceID { throw ObstacleBridgeLinuxServiceCatalogError.duplicateServiceID }
+        catch { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
     }
 
-    private static func protocolName(_ value: ObstacleBridgeChannelMuxProtocol) -> String { value == .tcp ? "tcp" : "udp" }
-    private static func protocolValue(_ value: Any?) -> ObstacleBridgeChannelMuxProtocol? {
-        switch (value as? String)?.lowercased() {
-        case "tcp": return .tcp
-        case "udp": return .udp
-        default: return nil
-        }
+    private static func linuxSpec(_ value: ObstacleBridgeServiceSpec) throws -> ObstacleBridgeLinuxServiceSpec {
+        guard value.listenPort > 0, value.targetPort > 0 else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
+        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: value.targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
     }
-    private static func integer(_ value: Any?) -> Int? { value as? Int ?? (value as? NSNumber)?.intValue }
-    private static func append(_ value: UInt64, to data: inout Data) { var encoded = value.bigEndian; data.append(Data(bytes: &encoded, count: 8)) }
-    private static func append(_ value: UInt32, to data: inout Data) { var encoded = value.bigEndian; data.append(Data(bytes: &encoded, count: 4)) }
-    private static func readUInt32(_ data: Data, at offset: Int) -> UInt32 { data[offset..<(offset + 4)].reduce(0) { ($0 << 8) | UInt32($1) } }
-    private static func readUInt64(_ data: Data, at offset: Int) -> UInt64 { data[offset..<(offset + 8)].reduce(0) { ($0 << 8) | UInt64($1) } }
 }
