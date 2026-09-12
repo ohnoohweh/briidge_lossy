@@ -68,7 +68,7 @@ def validate(inventory: dict[str, object]) -> list[str]:
     if inventory.get("reference_product") != "python":
         errors.append("reference_product must be python")
     for blocker in inventory.get("baseline_blockers", []):
-        if blocker.get("status") not in {"failing", "blocked"}:
+        if blocker.get("status") not in {"failing", "blocked", "qualified-host-pending"}:
             errors.append(f"invalid baseline blocker status {blocker.get('status')!r}")
         if not blocker.get("lane") or not blocker.get("detail"):
             errors.append("baseline blockers require lane and detail")

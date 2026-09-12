@@ -231,7 +231,6 @@
     {"area": "canonical JSON", "python_wins": "preserve Python protocol byte ordering", "swift_gap": "Linux service/catalog serialization uses generic sorted keys"}
   ],
   "baseline_blockers": [
-    {"lane": "swift test", "status": "failing", "detail": "ObstacleBridgeLinuxOverlayTransportTests has four myUDP peer-fixture failures: myudpDuplexSessionReceivesPeerFrameAfterAddressRegistration, configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer, myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer, and myudpSecureLinkReceivesProtectedPeerFrameBeforeLocalSend."},
-    {"lane": "tests/unit/test_channel_mux_swift_parity.py on Linux", "status": "blocked", "detail": "The raw Apple runner imports CryptoKit, which is unavailable to the Linux toolchain. Run it on an Apple host until R005 replaces that dependency."}
+    {"lane": "bridge-py-integration-macos-swift-probe", "status": "qualified-host-pending", "detail": "tests/unit/test_channel_mux_swift_parity.py imports CryptoKit and is intentionally executed by the macOS Swift CI job, not by Linux SwiftPM. R001 acceptance requires that host-qualified job to pass for this revision; R005 removes the Apple-only crypto dependency."}
   ]
 }

@@ -189,6 +189,12 @@ peers implemented in local Python fixtures. The myudp fixture consumes the
 length-prefixed reliable byte stream, orders/deduplicates DATA_BATCH chunks,
 and emits cumulative CONTROL acknowledgements. Coverage includes candidate
 rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The fixture additionally proves the independent myUDP transport-counter sequence
+through the SecureLink handshake, peer-first payload delivery, and a protected
+ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
+`CryptoKit`; it runs on macOS through the
+`bridge-py-integration-macos-swift-probe` CI job and is not a Linux SwiftPM
+parity result.
 The portable suite also pairs the Swift PSK client and server state machines in
 one deterministic protected-data exchange, while the adapter suite exercises
 the one-connection loopback TCP listener over real Linux framing. The built

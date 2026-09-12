@@ -81,12 +81,12 @@ smoke test does not resolve a frozen decision.
 ## LSW-R001 completion boundary
 
 The executable baseline is delivered, not functional parity or a completed
-acceptance gate. The baseline verifier passes, but the recorded suite results
-still prevent LSW-R001 closure: the full Linux SwiftPM run exposes four myUDP
-peer-fixture failures, and the raw Apple ChannelMux parity runner cannot build
-on Linux because it imports `CryptoKit`. The latter must run on an Apple host
-until R005 removes the Apple-only crypto dependency; it is not a Linux pass or
-a skipped parity claim.
+acceptance gate. The Linux SwiftPM myUDP Python-peer fixture suite passes with
+the required stream-record envelopes and independent transport counters. The
+raw Apple ChannelMux parity runner imports `CryptoKit`, so its qualified
+evidence host is the existing `bridge-py-integration-macos-swift-probe` CI job;
+it must not be treated as a Linux pass or a skipped parity claim. R005 removes
+that Apple-only crypto dependency.
 
 LSW-R001 closes only when those baseline lanes have a qualified host and pass
 in one revision. Later packages close feature rows in this inventory; they must

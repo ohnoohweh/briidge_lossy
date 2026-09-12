@@ -415,8 +415,11 @@ final class PythonOverlayPeer {
             return """
             import socket, struct
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
-            _,peer=s.recvfrom(1452); p=b'python-first'; batch=b'\\x01\\x01'+struct.pack('!H',4+len(p))+struct.pack('!HH',77,len(p))+p
-            s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer); s.close()
+            _,peer=s.recvfrom(1452); p=b'python-first'; record=struct.pack('!I',len(p))+p; batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',1,len(record))+record
+            s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
+            try: s.settimeout(1); s.recvfrom(1452)
+            except OSError: pass
+            s.close()
             """
         }
         if mode == "tcp-duplex" {
@@ -453,10 +456,13 @@ final class PythonOverlayPeer {
             PREFIX = \(mode == "myudp-secure-mux" ? "b''" : "b'python:'")
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             def recv():
-                wire,peer=s.recvfrom(1452); assert wire[0]==1 and wire[19:21]==b'\\x01\\x01'
-                return wire[27:],int.from_bytes(wire[23:25],'big'),peer
+                while True:
+                    wire,peer=s.recvfrom(1452)
+                    if not (wire[0]==1 and wire[19:21]==b'\\x01\\x01'): continue
+                    stream=wire[27:]; size=int.from_bytes(stream[:4],'big'); assert len(stream)==4+size
+                    return stream[4:],int.from_bytes(wire[23:25],'big'),peer
             def send(payload,counter,peer):
-                batch=b'\\x01\\x01'+struct.pack('!H',4+len(payload))+struct.pack('!HH',counter,len(payload))+payload
+                record=struct.pack('!I',len(payload))+payload; batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',counter,len(record))+record
                 s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
             def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')
             def expand(prk,info,length):
@@ -470,13 +476,16 @@ final class PythonOverlayPeer {
             if MODE == 'myudp-securelink-close-after-ack':
                 s.close()
             elif MODE == 'myudp-securelink-mux-duplex':
-                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello',first),77,peer)
+                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello',first),3,peer)
             elif MODE == 'myudp-securelink-duplex':
                 first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
-                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),77,peer)
-                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),counter,peer)
+                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),3,peer)
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),4,peer)
             else:
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer)
+            if MODE != 'myudp-securelink-close-after-ack':
+                try: s.settimeout(1); s.recvfrom(1452)
+                except OSError: pass
             s.close()
             """
         }
