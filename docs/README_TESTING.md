@@ -199,8 +199,9 @@ ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
 `bridge-py-integration-macos-swift-probe` CI job and is not a Linux SwiftPM
 parity result.
 The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state machines in
-one deterministic protected-data exchange and the bounded binary plus O4/O5 and
-RS2/RS3 service-codec contracts, while the adapter suite exercises
+one deterministic protected-data exchange and the bounded binary, CKV1
+control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
+contracts. The macOS Swift probe runs that Core codec suite as well, while the adapter suite exercises
 the one-connection loopback TCP listener over real Linux framing. The built
 Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP

@@ -1011,6 +1011,8 @@ REQ-MUX-001:
     - tests/unit/test_channel_mux_listener_mode.py::test_channelmux_tcp_backpressure_is_demand_driven_and_cancelled_on_close
     - ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::boundedBinaryCodecAndServiceWireFormatsRoundTrip
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::controlChunksMatchPythonLayoutAndRemainBounded
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::channelMuxFramesUseReadySessionAndRejectStaleEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
 

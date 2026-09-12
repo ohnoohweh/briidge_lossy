@@ -1,5 +1,6 @@
 import Crypto
 import Foundation
+import ObstacleBridgeCore
 #if os(Linux)
 import Glibc
 #endif
@@ -171,12 +172,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         }
     }
 
-    private func tcpWire(_ payload: Data) -> Data {
-        var length = UInt32(payload.count + 1).bigEndian
-        var wire = Data(bytes: &length, count: MemoryLayout<UInt32>.size)
-        wire.append(0)
-        wire.append(payload)
-        return wire
+    private func tcpWire(_ payload: Data) throws -> Data {
+        try ObstacleBridgeOverlayFrameCodec.encodeTCP(.init(kind: .application, payload: payload))
     }
 
     private func readTCPApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {
@@ -186,27 +183,20 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         // than exposing the control byte to the SecureLink decoder.
         while true {
             let header = try connection.readExactly(4)
-            let length = header.withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
-            guard length > 0, length <= 1_048_576 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            var headerReader = ObstacleBridgeBinaryReader(header)
+            let length = try headerReader.readUInt32()
+            guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
             let body = try connection.readExactly(Int(length))
-            guard let kind = body.first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-            switch kind {
-            case 0:
-                return Data(body.dropFirst())
-            case 1:
-                // PING payload begins with the sender's big-endian tx_ns.
-                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-                var pongLength = UInt32(9).bigEndian
-                var pong = Data(bytes: &pongLength, count: MemoryLayout<UInt32>.size)
-                pong.append(2)
-                pong.append(body[1...8])
-                try connection.write(pong)
-            case 2:
+            let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(header + body)
+            switch frame.kind {
+            case .application:
+                return frame.payload
+            case .ping:
+                try connection.write(try ObstacleBridgeOverlayFrameCodec.encodeTCP(ObstacleBridgeOverlayFrameCodec.pong(forPing: frame)))
+            case .pong:
                 // A PONG completes a lower-layer liveness exchange and carries
                 // no application payload for this client.
-                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-            default:
-                throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                break
             }
         }
     }
@@ -249,21 +239,19 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
 
     /// Python's WebSocket transport carries the same APP/PING/PONG subframe
     /// as its TCP transport inside each binary WebSocket message.
-    private func webSocketWire(_ payload: Data) -> Data { Data([0]) + payload }
+    private func webSocketWire(_ payload: Data) throws -> Data {
+        try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: payload))
+    }
 
     private func readWebSocketApplicationPayload(_ connection: POSIXStreamConnection) throws -> Data {
         while true {
-            let body = try readWebSocketApplicationFrame(connection)
-            guard let kind = body.first else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-            switch kind {
-            case 0: return Data(body.dropFirst())
-            case 1:
-                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-                var pong = Data([2]); pong.append(body[1...8])
-                try connection.write(webSocketClientFrame(opcode: 0x2, payload: pong))
-            case 2:
-                guard body.count >= 9 else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
-            default: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+            let frame = try ObstacleBridgeOverlayFrameCodec.decodeBody(try readWebSocketApplicationFrame(connection))
+            switch frame.kind {
+            case .application: return frame.payload
+            case .ping:
+                try connection.write(webSocketClientFrame(opcode: 0x2, payload: try ObstacleBridgeOverlayFrameCodec.encodeBody(ObstacleBridgeOverlayFrameCodec.pong(forPing: frame))))
+            case .pong:
+                break
             }
         }
     }

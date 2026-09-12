@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reject ChannelMux service wire serializers below the Linux Core boundary."""
+"""Reject Core-owned wire serializers below the Linux adapter boundary."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ ADAPTER_FILES = (
     "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceCatalog.swift",
     "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift",
 )
+OVERLAY_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift"
 FORBIDDEN_FRAGMENTS = (
     'Data("O5"',
     'Data("O4"',
@@ -25,6 +26,12 @@ FORBIDDEN_FRAGMENTS = (
     "appendUInt32",
     "appendUInt64",
 )
+OVERLAY_FORBIDDEN_FRAGMENTS = (
+    "UInt32(payload.count + 1).bigEndian",
+    "var pongLength = UInt32(9).bigEndian",
+    "var pong = Data([2])",
+    "Data([0]) + payload",
+)
 
 
 def validate() -> list[str]:
@@ -34,6 +41,10 @@ def validate() -> list[str]:
         for fragment in FORBIDDEN_FRAGMENTS:
             if fragment in text:
                 errors.append(f"{relative_path} retains core wire serializer fragment {fragment!r}")
+    overlay_text = (ROOT / OVERLAY_ADAPTER_FILE).read_text(encoding="utf-8")
+    for fragment in OVERLAY_FORBIDDEN_FRAGMENTS:
+        if fragment in overlay_text:
+            errors.append(f"{OVERLAY_ADAPTER_FILE} retains Core overlay serializer fragment {fragment!r}")
     return errors
 
 

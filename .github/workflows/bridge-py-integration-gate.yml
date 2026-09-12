@@ -167,6 +167,7 @@ jobs:
           swiftc --version
           swift build --target ObstacleBridgeCore
           swift build --target ObstacleBridgeApplePackageProbe
+          swift test --filter ObstacleBridgeCoreCodecTests
 
       - name: Probe required Swift modules
         shell: bash

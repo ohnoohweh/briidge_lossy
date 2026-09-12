@@ -509,25 +509,47 @@ These work areas precede or gate the remaining Linux feature work. A package
 is complete only when every Definition of Done item is met; compiling alone is
 not completion.
 
-### LSW-R003 — Binary utilities and Linux service-codec ownership
+### LSW-R003 — Consolidate binary utilities, codecs, and service models
 
-`ObstacleBridgeCore` owns the bounded big-endian reader/writer, typed canonical
-JSON value, ChannelMux header codec, O4/O5 OPEN codec, and RS2/RS3 service
-catalog codec. The core myUDP framing codec also uses the same reader/writer.
-The Linux service catalog and service data plane delegate RS3/O5 serialization
-and parsing to Core; their local endian helpers and `JSONSerialization` wire
-logic are removed. The requirements guard runs a wire-ownership check that
-rejects ChannelMux service magic, adapter-side JSON serialization, and duplicate
-integer serializers in those Linux adapter files.
+Core owns the bounded big-endian reader/writer, typed canonical JSON value,
+ChannelMux header codec, O4/O5 OPEN codec, and RS2/RS3 service-catalog codec.
+The core myUDP framing codec uses the same reader/writer. Linux service catalog
+and service-data-plane adapters delegate RS3/O5 serialization and parsing to
+Core; their local endian helpers and `JSONSerialization` wire logic are removed.
+Core also owns the TCP/WebSocket APP, PING, and PONG record codec, which the
+Linux overlay adapter uses for its length-prefixed TCP and WebSocket-body paths.
+A requirements-guard ownership check rejects service magic, adapter-side JSON
+serialization, and duplicate integer serializers in those Linux adapter files.
 
-The Core codec suite covers bounded reads, truncation, O5/RS3 typed round trips,
-and malformed input. Existing Linux service-plane/catalog tests cover the
-adapter-to-Core path. The shared matrix continues to mark ChannelMux, myUDP,
-SecureLink, TCP, and WebSocket feature rows partial: the Apple consumers still
-compile their richer codec source directly, and control-chunk reassembly plus
-the remaining overlay codecs move in R004 through R007. R009 adds the common
-Apple/Linux malformed-vector corpus and rejects every remaining adapter wire
-serializer before the corresponding owner is migrated.
+This is partial delivery, not package completion. The Core suite covers bounded
+reads, truncation, O5/RS3 typed round trips, and malformed input, while existing
+Linux catalog/service tests cover the adapter-to-Core path. CI currently exposes
+unresolved myUDP Linux-Swift integration failures, including process signal
+termination and Python-peer authentication/service timeouts; R003 cannot close
+until the qualified suite is clean.
+
+Definition of Done:
+
+- Core owns one endian-safe binary cursor/writer and one typed JSON value used
+  by every codec;
+- the full ChannelMux codec and service model preserve O4/O5 OPEN, RS2/RS3
+  catalogs, `name`/`lifecycle_hooks`/`options`, control chunks, and strict
+  bounded reassembly;
+- myUDP envelope/batch/stream-record, SecureLink envelope, TCP APP/PING/PONG,
+  and ObstacleBridge WebSocket payload-mode codecs each have one Core owner;
+- Apple and Linux consumers import those types, and the portable header codec,
+  Linux RS3 catalog codec, Linux O5 encoder/parser, and duplicate endian helpers
+  are removed;
+- exact-byte vectors and a shared malformed/truncated/trailing-byte corpus pass
+  on Linux and macOS; and
+- adapter directories contain no allowlisted ObstacleBridge wire magic or
+  alternate serializer, enforced by a source-ownership guard.
+
+Core also owns control-chunk encoding and bounded reassembly, but neither Apple
+nor Linux runtime consumer delegates its chunk path yet. Apple’s richer codec
+and remaining overlay codecs remain direct consumers until their functions move
+to Core. R004 through R007 consume those Core owners; R009 expands the final
+cross-platform migration and build qualification.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 

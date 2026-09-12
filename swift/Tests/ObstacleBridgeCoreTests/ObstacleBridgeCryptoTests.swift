@@ -155,6 +155,46 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeOpen(Data("O5".utf8)) }
     }
 
+    @Test func controlChunksMatchPythonLayoutAndRemainBounded() throws {
+        let payload = Data(0..<25)
+        let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: 9, maximumApplicationPayload: 32, payload: payload)
+        #expect(chunks.count == 3)
+        #expect(chunks[0].hex == "434b56310000000900000003000102030405060708090a0b")
+        #expect(chunks[2].hex == "434b5631000000090002000318")
+        #expect(ObstacleBridgeControlChunkCodec.nextTransactionID(current: 0).transactionID == 1)
+        #expect(ObstacleBridgeControlChunkCodec.nextTransactionID(current: .max).next == 1)
+        #expect(throws: ObstacleBridgeControlChunkCodecError.invalidMaximumPayload) {
+            try ObstacleBridgeControlChunkCodec.chunk(transactionID: 1, maximumApplicationPayload: 20, payload: Data())
+        }
+
+        let reassembler = ObstacleBridgeControlChunkReassembler(maximumInflight: 1, maximumReassembledBytes: 25, ttl: 1)
+        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[1], peerID: 3, now: 10) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[1], peerID: 3, now: 11) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[0], peerID: 3, now: 11) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[2], peerID: 3, now: 11) == payload)
+        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: Data("CKV1".utf8), peerID: 3, now: 12) == nil)
+
+        let expired = ObstacleBridgeControlChunkReassembler(ttl: 1)
+        #expect(expired.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[0], peerID: 3, now: 10) == nil)
+        expired.prune(now: 11)
+        #expect(expired.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[1], peerID: 3, now: 11) == nil)
+    }
+
+    @Test func overlayAppPingPongFramesMatchPythonLayout() throws {
+        let application = ObstacleBridgeOverlayFrame(kind: .application, payload: Data("hello".utf8))
+        let wire = try ObstacleBridgeOverlayFrameCodec.encodeTCP(application)
+        #expect(wire.hex == "000000060068656c6c6f")
+        #expect(try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire) == application)
+        let ping = ObstacleBridgeOverlayFrame(kind: .ping, payload: Data.hex("01020304050607080000000000000000"))
+        #expect(try ObstacleBridgeOverlayFrameCodec.pong(forPing: ping) == .init(kind: .pong, payload: Data.hex("0102030405060708")))
+        #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) {
+            try ObstacleBridgeOverlayFrameCodec.decodeTCP(Data.hex("0000000101"))
+        }
+        #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) {
+            try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire + Data([0]))
+        }
+    }
+
     private func serviceWithoutMetadata(_ service: ObstacleBridgeServiceSpec) -> ObstacleBridgeServiceSpec {
         .init(serviceID: service.serviceID, name: nil, listenProtocol: service.listenProtocol, listenHost: service.listenHost, listenPort: service.listenPort, targetProtocol: service.targetProtocol, targetHost: service.targetHost, targetPort: service.targetPort)
     }
