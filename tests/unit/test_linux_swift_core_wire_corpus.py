@@ -26,3 +26,16 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     for index in range((len(payload) + capacity - 1) // capacity):
         expected.append(ChannelMux.CTRL_CHUNK_HDR.pack(ChannelMux.CTRL_CHUNK_MAGIC, int(chunk["transaction_id"]), index, 3) + payload[index * capacity:(index + 1) * capacity])
     assert [item.hex() for item in expected] == chunk["chunks_hex"]
+
+    service = corpus["service_records"]
+    bind = host = b"127.0.0.1"
+    metadata = b'{"name":"echo","lifecycle_hooks":null,"options":null}'
+    o4 = b"O4" + struct.pack(">QIHB", service["instance_id"], service["connection_sequence"], service["service_id"], 1) + bytes([len(bind)]) + bind + struct.pack(">HB", 7001, 1) + bytes([len(host)]) + host + struct.pack(">H", 7002)
+    o5 = b"O5" + struct.pack(">QIHBH", service["instance_id"], service["connection_sequence"], service["service_id"], 1, len(bind)) + bind + struct.pack(">HBH", 7001, 1, len(host)) + host + struct.pack(">HI", 7002, len(metadata)) + metadata
+    row = b'{"svc_id":7,"l_proto":"tcp","l_bind":"127.0.0.1","l_port":7001,"r_proto":"tcp","r_host":"127.0.0.1","r_port":7002,"name":"echo","lifecycle_hooks":null,"options":null}'
+    rs3 = b"RS3" + struct.pack(">QII", service["instance_id"], service["connection_sequence"], len(row) + 2) + b"[" + row + b"]"
+    rs2 = b"RS2" + struct.pack(">QIH", service["instance_id"], service["connection_sequence"], 1) + struct.pack(">HB", service["service_id"], 1) + bytes([len(bind)]) + bind + struct.pack(">HB", 7001, 1) + bytes([len(host)]) + host + struct.pack(">H", 7002)
+    assert o4.hex() == service["open_o4_hex"]
+    assert o5.hex() == service["open_o5_hex"]
+    assert rs2.hex() == service["rs2_hex"]
+    assert rs3.hex() == service["rs3_hex"]
