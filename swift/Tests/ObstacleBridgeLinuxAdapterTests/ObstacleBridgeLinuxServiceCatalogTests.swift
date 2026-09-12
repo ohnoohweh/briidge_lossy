@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
-@testable import ObstacleBridgePortable
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxServiceCatalogTests {
     @Test func rs3CatalogRoundTripsStructuredServices() throws {

@@ -2,8 +2,9 @@
   "schema_version": 1,
   "reference_product": "python",
   "source_roots": [
-    "swift/Sources/ObstacleBridgePortable",
+    "swift/Sources/ObstacleBridgeCore",
     "swift/Sources/ObstacleBridgeLinuxAdapters",
+    "swift/Probes/ObstacleBridgeApplePackageProbe",
     "ios/native/ObstacleBridgeShared"
   ],
   "source_ownership": [
@@ -11,7 +12,7 @@
       "owner": "ObstacleBridgeCore",
       "disposition": "extract",
       "files": [
-        "swift/Sources/ObstacleBridgePortable/ObstacleBridgePortable.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigSupport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminSnapshotSupport.swift",
@@ -45,7 +46,7 @@
       "owner": "ObstacleBridgeCore",
       "disposition": "split-contract",
       "files": [
-        "swift/Sources/ObstacleBridgePortable/ObstacleBridgeChannelMuxCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift",
@@ -70,6 +71,7 @@
       "disposition": "retain-or-split",
       "files": [
         "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
+        "swift/Probes/ObstacleBridgeApplePackageProbe/ObstacleBridgeApplePackageProbe.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift",
@@ -98,7 +100,8 @@
       "owner": "ObstacleBridgeCore",
       "disposition": "delete-after-migration",
       "files": [
-        "swift/Sources/ObstacleBridgePortable/ObstacleBridgeMyUDPCodec.swift"
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCorePorts.swift"
       ]
     }
   ],
@@ -167,9 +170,9 @@
       "id": "securelink-and-crypto",
       "requirements": ["REQ-AUT-001", "REQ-AUT-002", "REQ-AUT-003", "REQ-AUT-004", "REQ-AUT-005", "REQ-AUT-006", "REQ-AUT-007", "REQ-AUT-008", "REQ-AUT-009", "REQ-AUT-010", "REQ-AUT-011", "REQ-AUT-012", "REQ-AUT-013", "REQ-AUT-014", "REQ-AUT-015", "REQ-AUT-016", "REQ-AUT-017", "REQ-AUT-018", "REQ-AUT-019", "REQ-AUT-020"],
       "python_implementations": ["src/obstacle_bridge/bridge_securelink.py", "src/obstacle_bridge/bridge_runner.py", "src/obstacle_bridge/bridge_webadmin.py"],
-      "swift_implementations": ["swift/Sources/ObstacleBridgePortable/ObstacleBridgePortable.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCorePorts.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
       "python_tests": ["tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale"],
-      "swift_tests": ["swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer"],
       "parity_tests": ["tests/unit/test_channel_mux_swift_parity.py::test_swift_securelink_derive_keys_parity"],
       "linux_swift": {"applicability": "required", "status": "partial", "reason": "PSK vectors and basic mixed sessions are covered; certificate, operational reload, rekey, diagnostics, and complete lifecycle parity are not."}
     },
@@ -187,7 +190,7 @@
       "id": "channelmux-and-tun",
       "requirements": ["REQ-MUX-001", "REQ-MUX-002", "REQ-MUX-003", "REQ-MUX-004", "REQ-MUX-005", "REQ-MUX-006", "REQ-MUX-007", "REQ-MUX-008", "REQ-MUX-009", "REQ-MUX-011"],
       "python_implementations": ["src/obstacle_bridge/bridge_channelmux.py", "src/obstacle_bridge/bridge_channelmux_shared_tun.py", "src/obstacle_bridge/bridge_tun_linux.py", "src/obstacle_bridge/bridge_tun_routing.py"],
-      "swift_implementations": ["swift/Sources/ObstacleBridgePortable/ObstacleBridgeChannelMuxCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift"],
       "python_tests": ["tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer"],
       "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceDataPlaneTests.swift::localTcpConnectionProducesOpenDataAndClose"],
       "parity_tests": ["tests/unit/test_channel_mux_swift_parity.py::test_swift_control_chunk_reassembly_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_packet_matches_python"],
@@ -207,9 +210,9 @@
       "id": "myudp-reliability",
       "requirements": ["REQ-MYU-001", "REQ-MYU-002", "REQ-MYU-003", "REQ-MYU-004", "REQ-MYU-005", "REQ-MYU-006", "REQ-MYU-007"],
       "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py", "src/obstacle_bridge/bridge_stats.py"],
-      "swift_implementations": ["swift/Sources/ObstacleBridgePortable/ObstacleBridgeMyUDPCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"],
       "python_tests": ["tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder"],
-      "swift_tests": ["swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::myudpDataFrameMatchesPythonV2Layout", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpDataFrameMatchesPythonV2Layout", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
       "parity_tests": ["ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state", "tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_retransmit_timer_matches_python"],
       "linux_swift": {"applicability": "required", "status": "partial", "reason": "The reduced Linux transport lacks the Python reliability, CONTROL/IDLE, retransmission, coalescing, and diagnostics contract."}
     },

@@ -3,7 +3,7 @@ import Crypto
 
 /// The intentionally small portable surface introduced by LSW-002.
 /// Runtime migration from the Apple-oriented source tree begins in LSW-003.
-public enum ObstacleBridgePortableRuntime {
+public enum ObstacleBridgeCoreRuntime {
     public static let productName = "ObstacleBridgeLinux"
     public static let runtimeStatus = "Linux runtime migration is not yet implemented"
 }

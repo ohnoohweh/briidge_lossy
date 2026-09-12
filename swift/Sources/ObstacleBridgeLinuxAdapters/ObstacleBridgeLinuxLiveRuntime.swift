@@ -1,6 +1,6 @@
 import Dispatch
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public struct ObstacleBridgeLinuxLiveRuntimeSnapshot: Equatable, Sendable {
     public let state: String

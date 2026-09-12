@@ -3,7 +3,7 @@ import Foundation
 #if os(Linux)
 import Glibc
 #endif
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxMyUDPError: Error, Equatable, LocalizedError {
     case resolutionFailed

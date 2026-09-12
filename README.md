@@ -1502,7 +1502,7 @@ Optional operations follow-up:
 - Runtime performance investigation and monitoring: [docs/Runtime.md](docs/Runtime.md)
 - Enable local pre-commit guards once per clone: `./scripts/install_local_hooks.sh`
 
-Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product.
+Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product. The shared Swift package boundary is exercised separately through the `ObstacleBridgeCore` and `ObstacleBridgeApplePackageProbe` build targets.
 
 The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -1525,7 +1525,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
 | macOS Swift app | `3/92 = 3.3%` | `7/92 = 7.6%` | `10/92 = 10.9%` |
-| iOS app/extension | `10/92 = 10.9%` | `20/92 = 21.7%` | `24/92 = 26.1%` |
+| iOS app/extension | `10/92 = 10.9%` | `21/92 = 22.8%` | `24/92 = 26.1%` |
 
 #### Architecture traceability
 

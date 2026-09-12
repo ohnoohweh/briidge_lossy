@@ -3,7 +3,12 @@ import PackageDescription
 
 let package = Package(
     name: "ObstacleBridgeLinux",
+    platforms: [
+        .macOS(.v13),
+        .iOS(.v16),
+    ],
     products: [
+        .library(name: "ObstacleBridgeCore", targets: ["ObstacleBridgeCore"]),
         .executable(name: "ObstacleBridgeLinux", targets: ["ObstacleBridgeLinux"]),
     ],
     dependencies: [
@@ -11,34 +16,40 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "ObstacleBridgePortable",
+            name: "ObstacleBridgeCore",
             dependencies: [
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
-            path: "swift/Sources/ObstacleBridgePortable"
+            path: "swift/Sources/ObstacleBridgeCore"
         ),
         .target(
             name: "ObstacleBridgeLinuxAdapters",
             dependencies: [
-                "ObstacleBridgePortable",
+                "ObstacleBridgeCore",
                 .product(name: "Crypto", package: "swift-crypto"),
             ],
             path: "swift/Sources/ObstacleBridgeLinuxAdapters"
         ),
+        .target(
+            name: "ObstacleBridgeApplePackageProbe",
+            dependencies: ["ObstacleBridgeCore"],
+            path: "swift/Probes/ObstacleBridgeApplePackageProbe"
+        ),
         .executableTarget(
             name: "ObstacleBridgeLinux",
-            dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgePortable"],
+            dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
             path: "swift/Sources/ObstacleBridgeLinux"
         ),
         .testTarget(
-            name: "ObstacleBridgePortableTests",
-            dependencies: ["ObstacleBridgePortable"],
-            path: "swift/Tests/ObstacleBridgePortableTests"
+            name: "ObstacleBridgeCoreTests",
+            dependencies: ["ObstacleBridgeCore"],
+            path: "swift/Tests/ObstacleBridgeCoreTests"
         ),
         .testTarget(
             name: "ObstacleBridgeLinuxAdapterTests",
-            dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgePortable"],
+            dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
             path: "swift/Tests/ObstacleBridgeLinuxAdapterTests"
         ),
-    ]
+    ],
+    swiftLanguageModes: [.v6]
 )

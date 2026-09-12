@@ -3,7 +3,7 @@ import Foundation
 #if os(Linux)
 import Glibc
 #endif
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable {
     case unsupportedProtocol

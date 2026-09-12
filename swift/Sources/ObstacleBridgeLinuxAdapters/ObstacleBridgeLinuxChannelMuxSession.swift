@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxChannelMuxError: Error, Equatable {
     case notReady

@@ -164,6 +164,9 @@ This keeps Swift-backed regression time reasonable as we add more macOS/iOS pari
 - `linux-swift`
 
 ```bash
+swift build --target ObstacleBridgeCore
+swift build --target ObstacleBridgeApplePackageProbe
+swift test --filter ObstacleBridgeCoreTests
 swift test --filter ObstacleBridgeCryptoTests
 swift test --filter ObstacleBridgeLinuxReceiveWorkerTests
 swift test --filter ObstacleBridgeLinuxOverlayTransportTests
@@ -195,7 +198,7 @@ ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
 `CryptoKit`; it runs on macOS through the
 `bridge-py-integration-macos-swift-probe` CI job and is not a Linux SwiftPM
 parity result.
-The portable suite also pairs the Swift PSK client and server state machines in
+The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state machines in
 one deterministic protected-data exchange, while the adapter suite exercises
 the one-connection loopback TCP listener over real Linux framing. The built
 Linux executable E2E lane admits a full Python TCP client, including its

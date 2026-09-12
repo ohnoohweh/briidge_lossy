@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxServiceCatalogError: Error, Equatable {
     case invalidPayload

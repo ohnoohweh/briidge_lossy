@@ -139,7 +139,7 @@ Current implementation note:
 - Implementation note (testability): The delivered integration harness now generates localhost TLS fixture material at runtime and allocates loopback port blocks by probing host availability before selecting a case slot. This keeps localhost private keys out of version control and preserves stable Linux shared integration coverage even when unrelated host daemons already bind uncommon local ports.
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
-  Implementation note: the Linux Swift portable-crypto target pins the PSK
+  Implementation note: the Linux Swift core-crypto target pins the PSK
   transcript derivation and proof bytes to Python-derived vectors. Linux Swift
   TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
   protected-data tests. The overlay E2E suite runs the built Linux Swift

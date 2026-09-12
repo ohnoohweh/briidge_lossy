@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
     public let transport: String

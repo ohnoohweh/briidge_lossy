@@ -7,8 +7,9 @@ the common Swift migration. The machine-readable authority is
 [LinuxSwift_r001_inventory.json](./LinuxSwift_r001_inventory.json). It assigns
 every checked-in Swift file under these source roots exactly once:
 
-- `swift/Sources/ObstacleBridgePortable`;
-- `swift/Sources/ObstacleBridgeLinuxAdapters`; and
+- `swift/Sources/ObstacleBridgeCore`;
+- `swift/Sources/ObstacleBridgeLinuxAdapters`;
+- `swift/Probes/ObstacleBridgeApplePackageProbe`; and
 - `ios/native/ObstacleBridgeShared`.
 
 Run the verifier from the repository root:
@@ -30,12 +31,12 @@ behavior is in parity.
 | Target owner | Disposition | Files | Meaning |
 | --- | --- | ---: | --- |
 | `ObstacleBridgeCore` | `extract` | 28 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
-| `ObstacleBridgeCore` | `split-contract` | 18 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
-| `ObstacleBridgeAppleAdapters` | `retain-or-split` | 11 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, and Objective-C bridge mechanisms Apple-specific. |
+| `ObstacleBridgeCore` | `split-contract` | 19 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
+| `ObstacleBridgeAppleAdapters` | `retain-or-split` | 12 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, Objective-C bridge mechanisms, and the package import probe Apple-specific. |
 | `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 6 | Keep POSIX descriptors, listener/server I/O, timers, and Linux HTTP serving; remove common protocol policy as its core owner lands. |
-| `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced portable myUDP codec when the Python-complete common myUDP engine replaces it. |
+| `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |
 
-The checked inventory currently contains 64 Swift files. Its file-level entries
+The checked inventory currently contains 66 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 

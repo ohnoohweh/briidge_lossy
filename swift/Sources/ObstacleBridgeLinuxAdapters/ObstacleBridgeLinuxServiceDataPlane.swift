@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxServiceDataPlaneError: Error, Equatable {
     case unsupportedProtocol

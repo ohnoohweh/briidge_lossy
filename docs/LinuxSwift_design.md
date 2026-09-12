@@ -95,8 +95,8 @@ iOS extension    macOS app/runner    Linux CLI    future Windows host
                                operating-system APIs
 ```
 
-The target state is a real SwiftPM library named `ObstacleBridgeCore`. It
-replaces the narrow `ObstacleBridgePortable` target and the portable parts of
+The canonical common boundary is the SwiftPM library named `ObstacleBridgeCore`.
+It replaces the prior narrow portable target and the portable parts of
 `ios/native/ObstacleBridgeShared/`. Linux must not depend directly on a source
 directory named for iOS, and Apple products must consume the same core module
 rather than compile their own copy of the algorithms.
@@ -319,9 +319,9 @@ reconnect execution. TUN service routing remains in the remaining work.
 
 ## Common Swift convergence analysis
 
-The present separation follows product boundaries rather than the desired
-responsibility. The root package builds the narrow `ObstacleBridgePortable`
-target and the Linux targets, while Apple compiles roughly the same
+The remaining separation follows product boundaries rather than the desired
+responsibility. The root package builds `ObstacleBridgeCore` and the Linux
+targets, while Apple compiles roughly the same
 `ObstacleBridgeShared` files directly into each executable or Xcode target.
 `ObstacleBridgeShared` has no module API: its declarations are internal and
 flat compilation hides dependencies and cycles that a reusable library will
@@ -345,9 +345,9 @@ The duplicated areas and their required disposition are:
 
 | Area | Current evidence | Target disposition |
 | --- | --- | --- |
-| myudp v2 | `ObstacleBridgePortable/ObstacleBridgeMyUDPCodec.swift` and `ObstacleBridgeLinuxMyUDPTransport.swift` duplicate framing, counters, reordering, record assembly, and ACK logic from `ObstacleBridgeUdpOverlayCodec.swift`, `ObstacleBridgeUdpOverlaySessionCodec.swift`, and `ObstacleBridgeUdpOverlayPeerRuntime.swift`. The Linux path currently ignores inbound CONTROL/IDLE and has no retained retransmit window or batch coalescing. | Use the richer Apple Swift codec/session/peer engine as extraction material, close every gap against Python, and make the resulting core engine the sole Swift owner. Apple `Network` and Linux POSIX owners execute its datagram/timer effects; a future WinSock owner does the same. |
+| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` and `ObstacleBridgeLinuxMyUDPTransport.swift` duplicate framing, counters, reordering, record assembly, and ACK logic from `ObstacleBridgeUdpOverlayCodec.swift`, `ObstacleBridgeUdpOverlaySessionCodec.swift`, and `ObstacleBridgeUdpOverlayPeerRuntime.swift`. The Linux path currently ignores inbound CONTROL/IDLE and has no retained retransmit window or batch coalescing. | Use the richer Apple Swift codec/session/peer engine as extraction material, close every gap against Python, and make the resulting core engine the sole Swift owner. Apple `Network` and Linux POSIX owners execute its datagram/timer effects; a future WinSock owner does the same. |
 | ChannelMux and services | The portable target implements only the eight-byte mux header. Linux separately encodes O5 OPEN and RS3 catalogs, while the Apple codec also owns O4/O5, RS2/RS3, metadata, control chunks, and reassembly. | One core frame/service model and codec owns all wire formats. Core service/TCP/UDP/TUN state emits socket or packet effects; adapters never serialize ChannelMux themselves. |
-| SecureLink | `ObstacleBridgePortable.swift` contains a reduced PSK client/server implementation. Apple has a separate codec and a fuller runtime with rekey, timeout, retry, readiness, replay, and diagnostic state. | Move the full role-neutral state machine to core and use the pinned `Crypto` implementation. Keep the Objective-C Apple crypto class only as a compatibility facade. |
+| SecureLink | `ObstacleBridgeCore.swift` contains a reduced PSK client/server implementation. Apple has a separate codec and a fuller runtime with rekey, timeout, retry, readiness, replay, and diagnostic state. | Move the full role-neutral state machine to core and use the pinned `Crypto` implementation. Keep the Objective-C Apple crypto class only as a compatibility facade. |
 | Stream and WebSocket overlays | Linux implements ObstacleBridge APP/PING/PONG framing in its POSIX owner. Apple TCP and QUIC logical runtime files are effectively identical, while the nominally logical WebSocket runtime exposes `URLSessionWebSocketTask.Message`. | Core owns ObstacleBridge stream/WebSocket envelopes, buffering, liveness, and lifecycle decisions. Adapters own TCP, RFC 6455/backend integration, TLS/trust, and QUIC I/O. |
 | Lifecycle and readiness | Linux configured/live runtimes, receive worker, and reconnect supervisor duplicate epoch and retry decisions also repeated across four large Apple transport owners. | A serialized core coordinator owns epochs, candidate rotation policy, layered readiness, startup replay, reconnect, backpressure state, and cancellation effects. |
 | Configuration and Admin | Linux reparses a supported subset of configuration and hard-codes two Admin payloads. Apple has the fuller schema, onboarding, Admin router, auth, snapshots, and redaction, but mixes them with resolver, crypto, file, and `NWListener` services. | Core parses one typed configuration and shapes one Admin API. A platform capability set controls feature admission; OS adapters supply DNS, storage, secrets, HTTP, and assets. |
@@ -503,29 +503,29 @@ These work areas precede or gate the remaining Linux feature work. A package
 is complete only when every Definition of Done item is met; compiling alone is
 not completion.
 
-### LSW-R002 — Establish the canonical package graph and ports
+### LSW-R002 — Canonical package graph and ports
 
-Turn the root package into a project-wide Swift package with an importable
-`ObstacleBridgeCore` library. This target replaces `ObstacleBridgePortable`;
-the Linux executable remains a product of the same package.
+`ObstacleBridgeCore` is the importable library product for the shared Swift
+surface. Its Swift 6 package target contains the former portable codecs and
+crypto primitives plus OS-neutral endpoint, IP, event, clock, scheduler,
+entropy, stream, datagram, listener, resolver, packet-device, compression,
+persistence, and hook contracts. The contracts expose values and effects, never
+Darwin, Glibc, WinSDK, `Network`, Network Extension, XPC, Security, zlib, or UI
+handles.
 
-Definition of Done:
+The Linux executable and adapters import that product directly; there is no
+behavior-bearing `ObstacleBridgePortable` compatibility target. The package
+declares macOS and iOS support, and `ObstacleBridgeApplePackageProbe` imports
+the same library product for Apple consumers. The macOS Swift workflow builds
+both the core target and that probe. `check_obstaclebridge_core_imports.py` is
+called by the requirements guard and rejects OS, crypto-framework, compression,
+and UI imports from core.
 
-- `ObstacleBridgeCore` is a library product with only Foundation and the pinned
-  `Crypto` product in its common dependency closure;
-- platform-neutral events, endpoints, IP values, clocks, schedulers, entropy,
-  stream/datagram/listener, resolver, packet-device, compression, persistence,
-  and hook contracts are core-owned and expose no OS handle types;
-- event DTOs are moved below adapters to break current cycles such as the core
-  overlay depending on an Apple TCP owner's nested event type;
-- Linux, a macOS host probe, and an unsigned iOS simulator/package probe import
-  the same library product successfully in an explicitly selected Swift
-  language mode;
-- a dependency/import guard rejects Darwin, Glibc, WinSDK, `Network`, Network
-  Extension, XPC, `Security`, ServiceManagement, `CryptoKit`, `CommonCrypto`,
-  zlib, and UI imports in core; and
-- any temporary `ObstacleBridgePortable` compatibility target forwards only and
-  has a removal item in LSW-R009.
+The common port definitions establish the dependency direction only. R003
+moves concrete event DTOs and wire utilities below adapters; R004 through R008
+move protocol and runtime policy behind these contracts. An unsigned iOS
+simulator destination build remains a CI qualification item in R009, rather
+than evidence manufactured from a Linux compiler.
 
 ### LSW-R003 — Consolidate binary utilities, codecs, and service models
 
@@ -727,8 +727,8 @@ Definition of Done:
   incomplete state;
 - import, dependency-direction, and uniqueness guards prove that each wire
   codec and runtime policy has one owner; and
-- `ObstacleBridgePortable`, behavior-bearing compatibility facades, obsolete
-  source lists, and all migrated duplicate implementations are removed.
+- behavior-bearing compatibility facades, obsolete source lists, and all
+  migrated duplicate implementations are removed.
 
 Depends on LSW-R002 through LSW-R008 and gates the non-refactor LSW-008 release
 qualification package below.
@@ -888,8 +888,8 @@ capability and still satisfy this parity gate.
 
 ## Suggested sequence and open decisions
 
-Source movement starts with LSW-R002 and LSW-R003 while preserving the current
-qualified evidence. LSW-R004 myudp and LSW-R005 SecureLink can then proceed in
+LSW-R002 establishes the package boundary; LSW-R003 starts wire/source movement
+while preserving the current qualified evidence. LSW-R004 myudp and LSW-R005 SecureLink can then proceed in
 parallel before converging in the common overlay coordinator.
 LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
 myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates

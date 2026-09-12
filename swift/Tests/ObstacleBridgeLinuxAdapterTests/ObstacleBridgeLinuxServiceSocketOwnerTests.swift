@@ -5,7 +5,7 @@ import Testing
 import Glibc
 #endif
 @testable import ObstacleBridgeLinuxAdapters
-@testable import ObstacleBridgePortable
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxServiceSocketOwnerTests {
     @Test func tcpListenerPublishesOpenAndDataFrames() throws {

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import ObstacleBridgePortable
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeCryptoTests {
     @Test func channelMuxHeaderMatchesEstablishedWireShape() throws {
@@ -96,6 +96,32 @@ struct ObstacleBridgeCryptoTests {
         }
         #expect(throws: ObstacleBridgeCryptoError.invalidNonceLength(expected: 12, actual: 11)) {
             try ObstacleBridgeCrypto.chaChaPolySeal(plaintext: Data(), key: Data(repeating: 0, count: 32), nonce: Data(repeating: 0, count: 11))
+        }
+    }
+}
+
+struct ObstacleBridgeCorePortTests {
+    @Test func corePortsUseOnlyValueTypesAtTheAdapterBoundary() throws {
+        let endpoint = ObstacleBridgeEndpoint(host: "192.0.2.10", port: 443)
+        #expect(endpoint == ObstacleBridgeEndpoint(host: "192.0.2.10", port: 443))
+        #expect(ObstacleBridgeIPAddress("2001:db8::10").text == "2001:db8::10")
+        #expect(
+            ObstacleBridgeCoreEvent.transportConnected(epoch: 4, endpoint: endpoint)
+                == .transportConnected(epoch: 4, endpoint: endpoint)
+        )
+
+        let resolver = StaticResolver()
+        #expect(try resolver.resolve("bridge.example", port: 443) == [endpoint])
+        #expect(FixedClock().nowNanoseconds() == 42)
+    }
+
+    private struct FixedClock: ObstacleBridgeClock {
+        func nowNanoseconds() -> UInt64 { 42 }
+    }
+
+    private struct StaticResolver: ObstacleBridgeResolver {
+        func resolve(_ host: String, port: UInt16) throws -> [ObstacleBridgeEndpoint] {
+            [ObstacleBridgeEndpoint(host: "192.0.2.10", port: port)]
         }
     }
 }

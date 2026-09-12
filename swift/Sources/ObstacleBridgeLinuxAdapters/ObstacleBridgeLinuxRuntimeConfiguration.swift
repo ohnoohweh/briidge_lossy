@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, LocalizedError {
     case unreadableFile(String)

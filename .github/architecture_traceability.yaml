@@ -692,8 +692,8 @@ ARC-CMP-006:
     - tests/unit/test_secure_link_cert.py::test_local_identity_reload_applies_and_reauthenticates
     - tests/unit/test_connection_snapshots.py::test_connected_peer_snapshot_exposes_transport_connected_since_without_secure_link
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
-    - swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector
-    - swift/Tests/ObstacleBridgePortableTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerCompletesPortableClientHandshake
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerCompletesPortableClientHandshake
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesTcpListenerConfigurationWithoutOutboundPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesCleartextWebSocketListenerConfigurationWithoutOutboundPeer
