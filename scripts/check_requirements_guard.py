@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import re
 import subprocess
 import sys
 from pathlib import Path
+
+from check_linux_swift_r001_inventory import INVENTORY_PATH as LSW_R001_INVENTORY_PATH
+from check_linux_swift_r001_inventory import validate as validate_lsw_r001_inventory
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,6 +223,12 @@ def main() -> int:
     architecture_traceability = _load_architecture_traceability()
     errors = _validate_traceability(requirement_ids, traceability)
     errors.extend(_validate_architecture_traceability(architecture_ids, architecture_traceability))
+    try:
+        lsw_r001_inventory = json.loads(LSW_R001_INVENTORY_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"LSW-R001 inventory cannot be read: {exc}")
+    else:
+        errors.extend(f"LSW-R001 inventory: {error}" for error in validate_lsw_r001_inventory(lsw_r001_inventory))
     if errors:
         sys.stderr.write("\n".join(errors) + "\n")
         return 1
