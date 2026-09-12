@@ -275,6 +275,12 @@ struct ObstacleBridgeCoreCodecTests {
         let trailing = Data.hex(try #require(serviceRecord["trailing_hex"] as? String))
         #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeOpen(o4 + trailing) }
         #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeRemoteServices(rs3 + trailing) }
+        for bytes in try #require(serviceRecord["truncated_bytes"] as? [Int]) {
+            #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeOpen(Data(o4.dropLast(bytes))) }
+            #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeOpen(Data(o5.dropLast(bytes))) }
+            #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeRemoteServices(Data(rs2.dropLast(bytes))) }
+            #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeRemoteServices(Data(rs3.dropLast(bytes))) }
+        }
     }
 
     private func serviceWithoutMetadata(_ service: ObstacleBridgeServiceSpec) -> ObstacleBridgeServiceSpec {

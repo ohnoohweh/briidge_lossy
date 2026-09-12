@@ -7,6 +7,7 @@ import struct
 from pathlib import Path
 
 from obstacle_bridge.bridge import ChannelMux
+from obstacle_bridge.bridge_channelmux import ChannelMux as ServiceChannelMux
 from obstacle_bridge.bridge_securelink import SecureLinkPskSession
 import obstacle_bridge.bridge_transport_udp as myudp
 from obstacle_bridge.bridge_transport_ws import WebSocketBinaryPayloadCodec
@@ -89,3 +90,19 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     assert o5.hex() == service["open_o5_hex"]
     assert rs2.hex() == service["rs2_hex"]
     assert rs3.hex() == service["rs3_hex"]
+
+    service_codec = object.__new__(ServiceChannelMux)
+    assert service_codec._parse_open_with_meta(o4) is not None
+    assert service_codec._parse_open_with_meta(o5) is not None
+    assert service_codec._decode_remote_services_set_v2(rs2) is not None
+    assert service_codec._decode_remote_services_set_v2(rs3) is not None
+    trailing = bytes.fromhex(service["trailing_hex"])
+    assert service_codec._parse_open_with_meta(o4 + trailing) is None
+    assert service_codec._parse_open_with_meta(o5 + trailing) is None
+    assert service_codec._decode_remote_services_set_v2(rs2 + trailing) is None
+    assert service_codec._decode_remote_services_set_v2(rs3 + trailing) is None
+    for count in service["truncated_bytes"]:
+        assert service_codec._parse_open_with_meta(o4[:-count]) is None
+        assert service_codec._parse_open_with_meta(o5[:-count]) is None
+        assert service_codec._decode_remote_services_set_v2(rs2[:-count]) is None
+        assert service_codec._decode_remote_services_set_v2(rs3[:-count]) is None

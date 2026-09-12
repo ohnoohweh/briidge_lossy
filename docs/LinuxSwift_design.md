@@ -533,8 +533,10 @@ The shared Python-derived corpus covers TCP APP framing and malformed records,
 the myUDP DATA_BATCH envelope and malformed records, WebSocket binary payload
 mode and malformed records, SecureLink PSK transcript/key/proof and handshake
 envelope vectors, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3 catalogs. It
-still needs text-oriented WebSocket payload modes and codec-family truncation
-and trailing-byte cases before this package closes.
+also pins O4/O5 and RS2/RS3 truncation and trailing-byte rejection in both the
+Python reference parser and Core. It still needs text-oriented WebSocket
+payload modes and comparable malformed coverage for the remaining codec
+families before this package closes.
 
 Definition of Done:
 
@@ -569,9 +571,9 @@ parser.
 
 - **Linux:** myUDP reliability/control frame handling still needs to consume the
   Core owner; the common Python-derived corpus still needs text-oriented
-  WebSocket modes and codec-family truncation and trailing-byte cases in Linux
-  SwiftPM; and remaining ChannelMux service/controller policy must leave its
-  adapter owner.
+  WebSocket modes and comparable malformed coverage for the remaining codec
+  families in Linux SwiftPM; and remaining ChannelMux service/controller policy
+  must leave its adapter owner.
 - **macOS and iOS:** native shared-runtime consumers must import the package
   product and replace direct ChannelMux, control-chunk, service, SecureLink,
   myUDP, TCP, and WebSocket codec implementations. The same corpus must run in

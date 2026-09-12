@@ -1021,7 +1021,8 @@ REQ-MUX-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
-    # Shared corpus carries Python-derived TCP, CKV1, O4/O5, and RS2/RS3 vectors.
+    # Shared corpus carries Python-derived TCP, CKV1, O4/O5, and RS2/RS3 vectors,
+    # including O4/O5 and RS2/RS3 truncation and trailing-byte rejection.
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::channelMuxFramesUseReadySessionAndRejectStaleEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer

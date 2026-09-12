@@ -205,7 +205,8 @@ contracts. A shared Python-derived fixture pins TCP malformed records, myUDP
 DATA_BATCH envelope and malformed records, WebSocket binary payload-mode and
 malformed records, SecureLink PSK transcript/key/proof and handshake-envelope
 vectors, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for the Core
-suite. The macOS Swift probe runs that Core codec suite
+suite, including Python/Swift agreement on O4/O5 and RS2/RS3 truncation and
+trailing-byte rejection. The macOS Swift probe runs that Core codec suite
 as well, while the adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove

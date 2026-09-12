@@ -272,7 +272,10 @@ Current lifecycle implementation note:
   A Linux socket owner configured with an ephemeral listener port replaces port
   zero with the kernel-assigned `getsockname` port before emitting its Core O5
   OPEN record, so a peer never receives an invalid service endpoint.
-  Verification note: the shared Python/Swift Core corpus pins TCP APP malformed-record rejection, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3 catalog bytes; it expands with each migrated codec.
+  Verification note: the shared Python/Swift Core corpus pins TCP APP
+  malformed-record rejection, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3
+  catalog bytes, including O4/O5 and RS2/RS3 truncation and trailing-byte
+  rejection; it expands with each migrated codec.
 - `REQ-MUX-002`: A connected peer shall be able to carry mixed UDP and TCP services at the same time.
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s. Listener-side ChannelMux channel identity shall include both the owning peer and channel identifier, because independent peers may legitimately allocate the same channel number. A process-shared TUN device shall route local replies through the mux that actively owns its reader, using that reader owner's peer/channel bindings rather than creator or attachment history.
 - `REQ-MUX-004`: Remote service publication shall remain scoped to the intended peer. An authenticated inbound peer's published TCP and UDP listeners shall instantiate and accept traffic even when the parent overlay transport remains in listener state.
