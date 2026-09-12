@@ -135,6 +135,8 @@ REQ-AUT-001:
   # Includes built Swift TCP/cleartext-WebSocket listener admission after Python PING/PONG and
   # peer-address control framing, before the reciprocal PSK handshake, and
   # validates Admin-visible replacement-epoch readiness and concurrent
+  # Python-derived Core corpus coverage for PSK transcript, proofs, and
+  # deterministic client/server handshake envelopes.
   # Swift-owned TCP/UDP service channels. Its Python myudp peer models the
   # reliable length-prefixed stream and its process ports are xdist-isolated.
   integration_tests:

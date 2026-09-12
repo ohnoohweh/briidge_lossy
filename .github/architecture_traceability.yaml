@@ -665,6 +665,8 @@ ARC-CMP-005:
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
 
 ARC-CMP-006:
+  # The shared Core corpus pins Python-derived SecureLink PSK transcript,
+  # proof, and deterministic client/server handshake envelope bytes.
   # SecureLink integration coverage includes authenticated-readiness gating
   # and failure reporting without direct transport-reconnect ownership. A
   # Linux Swift TCP/cleartext-WebSocket listener process probe replaces the admitted epoch

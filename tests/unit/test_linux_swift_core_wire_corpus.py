@@ -62,6 +62,11 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     assert server_to_client.hex() == securelink["server_to_client_key_hex"]
     assert session._server_proof(int(securelink["session_id"]), client_nonce, server_nonce).hex() == securelink["server_proof_hex"]
     assert session._client_rekey_commit_proof(int(securelink["session_id"]), client_nonce, server_nonce).hex() == securelink["client_rekey_commit_proof_hex"]
+    client_hello = SecureLinkPskSession._build_frame(1, int(securelink["session_id"]), 0, client_nonce + b"\x01\x00")
+    server_hello = SecureLinkPskSession._build_frame(2, int(securelink["session_id"]), 0, server_nonce + b"\x01" + bytes.fromhex(securelink["server_proof_hex"]))
+    assert client_hello.hex() == securelink["client_hello_hex"]
+    assert server_hello.hex() == securelink["server_hello_hex"]
+    assert all(SecureLinkPskSession._parse_frame(bytes.fromhex(value)) is None for value in securelink["malformed_envelope_hex"])
 
     chunk = corpus["control_chunk"]
     payload = bytes.fromhex(chunk["payload_hex"])

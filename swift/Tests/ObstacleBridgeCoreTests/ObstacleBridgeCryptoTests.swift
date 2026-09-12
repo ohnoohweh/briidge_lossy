@@ -245,6 +245,16 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(keys.serverToClient.hex == expectedServerToClient)
         #expect(try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce).hex == expectedServerProof)
         #expect(try ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce).hex == expectedRekeyCommitProof)
+        let expectedClientHello = Data.hex(try #require(secureLink["client_hello_hex"] as? String))
+        let expectedServerHello = Data.hex(try #require(secureLink["server_hello_hex"] as? String))
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        #expect(try client.begin(sessionID: sessionID, clientNonce: clientNonce) == expectedClientHello)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        #expect(try server.handleClientHello(expectedClientHello, serverNonce: serverNonce) == expectedServerHello)
+        for value in try #require(secureLink["malformed_envelope_hex"] as? [String]) {
+            #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) { try server.handleClientHello(.hex(value), serverNonce: serverNonce) }
+            #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) { try client.handleServerHello(.hex(value)) }
+        }
         let chunk = try #require(corpus["control_chunk"] as? [String: Any])
         let transactionID = try #require(chunk["transaction_id"] as? Int)
         let maximumPayload = try #require(chunk["maximum_application_payload"] as? Int)
