@@ -200,9 +200,16 @@ source selected by the macOS build, assigns its Linux portability action, and
 defines the Linux v1 support and rejection matrix. It also identifies the
 parity evidence required before portable code or Linux adapters may be admitted.
 
-[Package.swift](../Package.swift) defines separate
-portable-runtime, Linux-adapter, and executable targets. The executable is
-currently a foreground diagnostic/runtime baseline: it reports `--help`,
+[Package.swift](../Package.swift) defines the Swift 6 `ObstacleBridgeCore`
+library, Linux-adapter and executable targets, and an Apple package-import
+probe. Core contains the existing portable codecs and crypto primitives plus
+OS-neutral endpoint, IP, event, clock, scheduler, entropy, stream, datagram,
+listener, resolver, packet-device, compression, persistence, and hook
+contracts. The import guard excludes operating-system, UI, compression, and
+Apple crypto frameworks from core; Linux adapters and the executable import the
+library directly. The macOS workflow builds the core target and Apple probe.
+
+The executable is a foreground diagnostic/runtime surface: it reports `--help`,
 `--version`, transport/config validation, runtime status, and bounded runtime
 probes.
 
@@ -219,17 +226,16 @@ The script selects a release build by default, writes
 scratch output are ignored. The build graph contains no macOS SDK or Xcode
 dependency.
 
-The portable target has an explicit `ObstacleBridgeCrypto` contract backed by
-the pinned `apple/swift-crypto` 4.5.1
-`Crypto` product. It requires caller-supplied 256-bit keys and 96-bit AEAD
-nonces, returns generic authentication failures rather than plaintext, and
-does not log secret data. Its tests cover known-answer vectors for SHA-256,
-HMAC-SHA-256, HKDF-SHA-256, PBKDF2-HMAC-SHA-256, AES-256-GCM,
-ChaCha20-Poly1305, Ed25519, and X25519, plus a Python-derived SecureLink PSK
-transcript vector. Existing Apple runtime sources are unchanged; platform
-adoption remains a later parity-preserving refactor.
+Core has an explicit `ObstacleBridgeCrypto` contract backed by the pinned
+`apple/swift-crypto` 4.5.1 `Crypto` product. It requires caller-supplied
+256-bit keys and 96-bit AEAD nonces, returns generic authentication failures
+rather than plaintext, and does not log secret data. Its tests cover
+known-answer vectors for SHA-256, HMAC-SHA-256, HKDF-SHA-256,
+PBKDF2-HMAC-SHA-256, AES-256-GCM, ChaCha20-Poly1305, Ed25519, and X25519, plus
+a Python-derived SecureLink PSK transcript vector. Apple runtime adoption
+remains in the remaining parity-preserving refactor work.
 
-Run the focused portable crypto qualification on Linux with:
+Run the focused core crypto qualification on Linux with:
 
 ```bash
 swift test --filter ObstacleBridgeCryptoTests
@@ -254,7 +260,7 @@ reconnect timer, and shutdown. It exposes redacted `/api/status` and
 ordered stop. Process E2E coverage starts that built executable with a Python
 peer over TCP, cleartext WebSocket, and myudp, verifies application readiness,
 and verifies clean signal-driven shutdown.
-The portable crypto target also owns the reciprocal PSK server handshake and
+Core also owns the reciprocal PSK server handshake and
 protected-data state machine, pinned by a deterministic Swift client/server
 exchange. The foreground TCP and cleartext WebSocket listeners accept Python
 clients into that server state and hand authenticated epochs to the live
@@ -503,30 +509,6 @@ These work areas precede or gate the remaining Linux feature work. A package
 is complete only when every Definition of Done item is met; compiling alone is
 not completion.
 
-### LSW-R002 — Canonical package graph and ports
-
-`ObstacleBridgeCore` is the importable library product for the shared Swift
-surface. Its Swift 6 package target contains the former portable codecs and
-crypto primitives plus OS-neutral endpoint, IP, event, clock, scheduler,
-entropy, stream, datagram, listener, resolver, packet-device, compression,
-persistence, and hook contracts. The contracts expose values and effects, never
-Darwin, Glibc, WinSDK, `Network`, Network Extension, XPC, Security, zlib, or UI
-handles.
-
-The Linux executable and adapters import that product directly; there is no
-behavior-bearing `ObstacleBridgePortable` compatibility target. The package
-declares macOS and iOS support, and `ObstacleBridgeApplePackageProbe` imports
-the same library product for Apple consumers. The macOS Swift workflow builds
-both the core target and that probe. `check_obstaclebridge_core_imports.py` is
-called by the requirements guard and rejects OS, crypto-framework, compression,
-and UI imports from core.
-
-The common port definitions establish the dependency direction only. R003
-moves concrete event DTOs and wire utilities below adapters; R004 through R008
-move protocol and runtime policy behind these contracts. An unsigned iOS
-simulator destination build remains a CI qualification item in R009, rather
-than evidence manufactured from a Linux compiler.
-
 ### LSW-R003 — Consolidate binary utilities, codecs, and service models
 
 Move wire ownership before moving state machines. Start with a bounded binary
@@ -549,8 +531,6 @@ Definition of Done:
   on Linux and macOS; and
 - adapter directories contain no allowlisted ObstacleBridge wire magic or
   alternate serializer, enforced by a source-ownership guard.
-
-Depends on LSW-R002.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 
@@ -690,7 +670,7 @@ Definition of Done:
   payload tests pass, after which the Linux subset parser and hard-coded Admin
   payload builders are removed.
 
-Depends on LSW-R002 through LSW-R007.
+Depends on LSW-R003 through LSW-R007.
 
 ### LSW-R009 — Migrate builds, enforce uniqueness, and add the Windows sentinel
 
@@ -730,7 +710,7 @@ Definition of Done:
 - behavior-bearing compatibility facades, obsolete source lists, and all
   migrated duplicate implementations are removed.
 
-Depends on LSW-R002 through LSW-R008 and gates the non-refactor LSW-008 release
+Depends on LSW-R003 through LSW-R008 and gates the non-refactor LSW-008 release
 qualification package below.
 
 ## Remaining Linux feature work
@@ -888,9 +868,9 @@ capability and still satisfy this parity gate.
 
 ## Suggested sequence and open decisions
 
-LSW-R002 establishes the package boundary; LSW-R003 starts wire/source movement
-while preserving the current qualified evidence. LSW-R004 myudp and LSW-R005 SecureLink can then proceed in
-parallel before converging in the common overlay coordinator.
+LSW-R003 starts wire/source movement while preserving the current qualified
+evidence. LSW-R004 myudp and LSW-R005 SecureLink can then proceed in parallel
+before converging in the common overlay coordinator.
 LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
 myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates
 release qualification. This order prevents LSW-005 and LSW-005A from creating
