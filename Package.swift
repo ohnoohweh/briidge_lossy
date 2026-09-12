@@ -43,7 +43,8 @@ let package = Package(
         .testTarget(
             name: "ObstacleBridgeCoreTests",
             dependencies: ["ObstacleBridgeCore"],
-            path: "swift/Tests/ObstacleBridgeCoreTests"
+            path: "swift/Tests/ObstacleBridgeCoreTests",
+            resources: [.process("Fixtures")]
         ),
         .testTarget(
             name: "ObstacleBridgeLinuxAdapterTests",

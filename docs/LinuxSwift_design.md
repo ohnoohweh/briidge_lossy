@@ -528,6 +528,11 @@ unresolved myUDP Linux-Swift integration failures, including process signal
 termination and Python-peer authentication/service timeouts; R003 cannot close
 until the qualified suite is clean.
 
+The shared Python-derived corpus is present for TCP APP framing and CKV1 control
+chunks, including malformed TCP records. It is an initial corpus; it must grow
+to O4/O5, RS2/RS3, myUDP, SecureLink, WebSocket payload-mode, truncation, and
+trailing-byte cases before this package closes.
+
 Definition of Done:
 
 - Core owns one endian-safe binary cursor/writer and one typed JSON value used

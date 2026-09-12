@@ -1014,6 +1014,8 @@ REQ-MUX-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::controlChunksMatchPythonLayoutAndRemainBounded
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
+    - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::channelMuxFramesUseReadySessionAndRejectStaleEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
 

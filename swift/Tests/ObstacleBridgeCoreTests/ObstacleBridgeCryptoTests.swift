@@ -195,6 +195,25 @@ struct ObstacleBridgeCoreCodecTests {
         }
     }
 
+    @Test func sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords() throws {
+        let url = try #require(Bundle.module.url(forResource: "python_wire_codec_corpus", withExtension: "json"))
+        let corpus = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        let tcp = try #require(corpus["tcp_application"] as? [String: Any])
+        let payload = Data.hex(try #require(tcp["payload_hex"] as? String))
+        let wire = Data.hex(try #require(tcp["wire_hex"] as? String))
+        #expect(try ObstacleBridgeOverlayFrameCodec.encodeTCP(.init(kind: .application, payload: payload)) == wire)
+        for value in try #require(tcp["malformed_wire_hex"] as? [String]) {
+            #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) { try ObstacleBridgeOverlayFrameCodec.decodeTCP(.hex(value)) }
+        }
+        let chunk = try #require(corpus["control_chunk"] as? [String: Any])
+        let transactionID = try #require(chunk["transaction_id"] as? Int)
+        let maximumPayload = try #require(chunk["maximum_application_payload"] as? Int)
+        let chunkPayload = Data.hex(try #require(chunk["payload_hex"] as? String))
+        let expectedChunks = try #require(chunk["chunks_hex"] as? [String])
+        let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: UInt32(transactionID), maximumApplicationPayload: maximumPayload, payload: chunkPayload)
+        #expect(chunks.map(\.hex) == expectedChunks)
+    }
+
     private func serviceWithoutMetadata(_ service: ObstacleBridgeServiceSpec) -> ObstacleBridgeServiceSpec {
         .init(serviceID: service.serviceID, name: nil, listenProtocol: service.listenProtocol, listenHost: service.listenHost, listenPort: service.listenPort, targetProtocol: service.targetProtocol, targetHost: service.targetHost, targetPort: service.targetPort)
     }
