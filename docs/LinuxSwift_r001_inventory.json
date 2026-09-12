@@ -230,7 +230,5 @@
     {"area": "myudp ring comparison", "python_wins": "use the Python half-ring boundary semantics", "swift_gap": "Linux transport differs at the 32767-distance edge"},
     {"area": "canonical JSON", "python_wins": "preserve Python protocol byte ordering", "swift_gap": "Linux service/catalog serialization uses generic sorted keys"}
   ],
-  "baseline_blockers": [
-    {"lane": "bridge-py-integration-macos-swift-probe", "status": "qualified-host-pending", "detail": "tests/unit/test_channel_mux_swift_parity.py imports CryptoKit and is intentionally executed by the macOS Swift CI job, not by Linux SwiftPM. R001 acceptance requires that host-qualified job to pass for this revision; R005 removes the Apple-only crypto dependency."}
-  ]
+  "baseline_blockers": []
 }

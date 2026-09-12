@@ -503,7 +503,7 @@ These packages precede or gate the remaining Linux feature packages. A package
 is complete only when every Definition of Done item is met; compiling alone is
 not completion.
 
-### LSW-R001 — Baseline implementation delivered; macOS evidence pending
+### LSW-R001 — Baseline acceptance complete
 
 LSW-R001 establishes the executable baseline before code moves between
 modules. Linux Python is the functional reference. Apple Swift is reusable
@@ -530,16 +530,16 @@ Delivered artifacts:
   ChannelMux/myudp/SecureLink/WebSocket and Admin parity suites remain the
   baseline evidence while later packages add missing behavior and vectors.
 
-The delivered baseline does not make Linux Swift parity green: it intentionally
+The accepted baseline does not make Linux Swift parity green: it intentionally
 reports partial and missing Linux-applicable rows. The full Linux SwiftPM suite
 passes its Python-peer myUDP fixtures with the required stream-record envelope
 and monotonic transport-counter behavior. The raw Apple ChannelMux parity
-runner imports `CryptoKit`; its qualified evidence host is the existing
-`bridge-py-integration-macos-swift-probe` job, rather than Linux SwiftPM, until
-R005 removes the dependency. R001 acceptance remains pending that macOS job for
-this revision. R002 and later packages may start only after their source move
-does not hide the qualified baseline evidence, and may close a row only with a
-common implementation and executable Python-equivalent evidence.
+runner imports `CryptoKit`; its qualified evidence host is the
+`bridge-py-integration-macos-swift-probe` job rather than Linux SwiftPM. That
+host-qualified probe and the macOS Swift-backed suite pass for this baseline
+revision. R002 and later packages preserve this evidence while moving source,
+and may close a row only with a common implementation and executable
+Python-equivalent evidence.
 
 ### LSW-R002 — Establish the canonical package graph and ports
 
@@ -925,10 +925,10 @@ capability and still satisfy this parity gate.
 
 ## Suggested sequence and open decisions
 
-LSW-R001 baseline artifacts are delivered, with its recorded acceptance
-failures still visible. Resolve or qualify those failures before source movement
-starts with LSW-R002 and LSW-R003. LSW-R004 myudp and LSW-R005 SecureLink can
-then proceed in parallel before converging in the common overlay coordinator.
+LSW-R001 baseline acceptance is complete. Source movement starts with LSW-R002
+and LSW-R003 while preserving the qualified baseline evidence. LSW-R004 myudp
+and LSW-R005 SecureLink can then proceed in parallel before converging in the
+common overlay coordinator.
 LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
 myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates
 release qualification. This order prevents LSW-005 and LSW-005A from creating

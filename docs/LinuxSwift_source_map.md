@@ -78,17 +78,16 @@ New observed drift belongs in this table and in a reproducing direct parity test
 before it is fixed. A successful source guard, compilation, or mixed-runtime
 smoke test does not resolve a frozen decision.
 
-## LSW-R001 completion boundary
+## LSW-R001 accepted baseline boundary
 
-The executable baseline is delivered, not functional parity or a completed
-acceptance gate. The Linux SwiftPM myUDP Python-peer fixture suite passes with
+The executable baseline is accepted, not functional parity. The Linux SwiftPM
+myUDP Python-peer fixture suite passes with
 the required stream-record envelopes and independent transport counters. The
 raw Apple ChannelMux parity runner imports `CryptoKit`, so its qualified
 evidence host is the existing `bridge-py-integration-macos-swift-probe` CI job;
 it must not be treated as a Linux pass or a skipped parity claim. R005 removes
 that Apple-only crypto dependency.
 
-LSW-R001 closes only when those baseline lanes have a qualified host and pass
-in one revision. Later packages close feature rows in this inventory; they must
-not relabel a partial or missing row as verified without implementation and
-executable evidence.
+Those baseline lanes pass in one revision on their qualified hosts. Later
+packages close feature rows in this inventory; they must not relabel a partial
+or missing row as verified without implementation and executable evidence.
