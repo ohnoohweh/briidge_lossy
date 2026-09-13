@@ -155,7 +155,7 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(reader.isAtEnd)
         #expect(throws: ObstacleBridgeBinaryCodecError.truncated) { try reader.readUInt8() }
 
-        let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "echo", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7002)
+        let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "echo", listenProtocol: 1, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: 1, targetHost: "127.0.0.1", targetPort: 7002)
         let open = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: 9, connectionSequence: 4, service: service)
         #expect(open.starts(with: Data("O5".utf8)))
         #expect(try ObstacleBridgeServiceCodec.decodeOpen(open) == .init(instanceID: 9, connectionSequence: 4, service: service))
@@ -302,7 +302,7 @@ struct ObstacleBridgeCoreCodecTests {
         let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: UInt32(transactionID), maximumApplicationPayload: maximumPayload, payload: chunkPayload)
         #expect(chunks.map(\.hex) == expectedChunks)
         let serviceRecord = try #require(corpus["service_records"] as? [String: Any])
-        let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "echo", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7002)
+        let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "echo", listenProtocol: 1, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: 1, targetHost: "127.0.0.1", targetPort: 7002)
         let o4 = Data.hex(try #require(serviceRecord["open_o4_hex"] as? String))
         let o5 = Data.hex(try #require(serviceRecord["open_o5_hex"] as? String))
         let rs3 = Data.hex(try #require(serviceRecord["rs3_hex"] as? String))

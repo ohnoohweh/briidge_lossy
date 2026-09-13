@@ -57,7 +57,7 @@ public enum ObstacleBridgeLinuxServiceCatalog {
         do {
             let coreServices = try services.map { service -> ObstacleBridgeServiceSpec in
                 guard (1...Int(UInt16.max)).contains(service.listenPort), (1...Int(UInt16.max)).contains(service.targetPort) else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
-                return .init(serviceID: service.serviceID, name: service.name, listenProtocol: service.listenProtocol, listenHost: service.listenHost, listenPort: UInt16(service.listenPort), targetProtocol: service.targetProtocol, targetHost: service.targetHost, targetPort: UInt16(service.targetPort))
+                return .init(serviceID: service.serviceID, name: service.name, listenProtocol: service.listenProtocol.rawValue, listenHost: service.listenHost, listenPort: UInt16(service.listenPort), targetProtocol: service.targetProtocol.rawValue, targetHost: service.targetHost, targetPort: UInt16(service.targetPort))
             }
             return try ObstacleBridgeServiceCodec.encodeRemoteServices(instanceID: instanceID, connectionSequence: connectionSequence, services: coreServices)
         }
@@ -79,6 +79,7 @@ public enum ObstacleBridgeLinuxServiceCatalog {
 
     private static func linuxSpec(_ value: ObstacleBridgeServiceSpec) throws -> ObstacleBridgeLinuxServiceSpec {
         guard value.listenPort > 0, value.targetPort > 0 else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
-        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: value.targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
+        guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.listenProtocol), let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.targetProtocol) else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
+        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
     }
 }

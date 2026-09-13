@@ -167,11 +167,12 @@ public final class ObstacleBridgeLinuxServiceDataPlane {
 
     private func coreSpec(_ value: ObstacleBridgeLinuxServiceSpec) -> ObstacleBridgeServiceSpec? {
         guard (1...Int(UInt16.max)).contains(value.listenPort), (1...Int(UInt16.max)).contains(value.targetPort) else { return nil }
-        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol, listenHost: value.listenHost, listenPort: UInt16(value.listenPort), targetProtocol: value.targetProtocol, targetHost: value.targetHost, targetPort: UInt16(value.targetPort))
+        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol.rawValue, listenHost: value.listenHost, listenPort: UInt16(value.listenPort), targetProtocol: value.targetProtocol.rawValue, targetHost: value.targetHost, targetPort: UInt16(value.targetPort))
     }
     private func linuxSpec(_ value: ObstacleBridgeServiceSpec) -> ObstacleBridgeLinuxServiceSpec? {
         guard value.listenPort > 0, value.targetPort > 0 else { return nil }
-        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: value.targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
+        guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.listenProtocol), let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.targetProtocol) else { return nil }
+        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
     }
 }
 

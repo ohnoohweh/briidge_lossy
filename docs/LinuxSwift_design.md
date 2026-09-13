@@ -581,8 +581,8 @@ parser.
   and RTT timestamp serialization to those owners. The generated-project patch
   upgrades existing file references in place, and the packet-tunnel compile
   probe uses the same sources. The remaining shared-runtime consumers must
-  import the package product and replace direct ChannelMux, service, SecureLink,
-  myUDP, and TCP codec implementations. Their CKV1 chunk creation, transaction
+  import the package product and replace direct ChannelMux, SecureLink, myUDP,
+  and TCP codec implementations. Their RS3 catalog encoding and CKV1 chunk creation, transaction
   rollover, and reassembly delegate to the Core raw-value bridge. The same corpus
   must run in macOS host and iOS package qualification.
 - **Windows sentinel:** no Windows runtime adapter is required by R003, but the

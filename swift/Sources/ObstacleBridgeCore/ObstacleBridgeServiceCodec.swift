@@ -58,16 +58,16 @@ public indirect enum ObstacleBridgeJSONValue: Equatable, Sendable {
 public struct ObstacleBridgeServiceSpec: Equatable, Sendable {
     public let serviceID: UInt16
     public let name: String?
-    public let listenProtocol: ObstacleBridgeChannelMuxProtocol
+    public let listenProtocol: UInt8
     public let listenHost: String
     public let listenPort: UInt16
-    public let targetProtocol: ObstacleBridgeChannelMuxProtocol
+    public let targetProtocol: UInt8
     public let targetHost: String
     public let targetPort: UInt16
     public let lifecycleHooks: [String: ObstacleBridgeJSONValue]?
     public let options: [String: ObstacleBridgeJSONValue]?
 
-    public init(serviceID: UInt16, name: String?, listenProtocol: ObstacleBridgeChannelMuxProtocol, listenHost: String, listenPort: UInt16, targetProtocol: ObstacleBridgeChannelMuxProtocol, targetHost: String, targetPort: UInt16, lifecycleHooks: [String: ObstacleBridgeJSONValue]? = nil, options: [String: ObstacleBridgeJSONValue]? = nil) {
+    public init(serviceID: UInt16, name: String?, listenProtocol: UInt8, listenHost: String, listenPort: UInt16, targetProtocol: UInt8, targetHost: String, targetPort: UInt16, lifecycleHooks: [String: ObstacleBridgeJSONValue]? = nil, options: [String: ObstacleBridgeJSONValue]? = nil) {
         self.serviceID = serviceID; self.name = name; self.listenProtocol = listenProtocol; self.listenHost = listenHost; self.listenPort = listenPort
         self.targetProtocol = targetProtocol; self.targetHost = targetHost; self.targetPort = targetPort; self.lifecycleHooks = lifecycleHooks; self.options = options
     }
@@ -90,7 +90,8 @@ public enum ObstacleBridgeServiceCodec {
         guard bind.count <= Int(UInt16.max), host.count <= Int(UInt16.max) else { throw ObstacleBridgeServiceCodecError.payloadTooLarge }
         let metadata = ObstacleBridgeJSONValue.object(["name": service.name.map(ObstacleBridgeJSONValue.string) ?? .null, "lifecycle_hooks": service.lifecycleHooks.map(ObstacleBridgeJSONValue.object) ?? .null, "options": service.options.map(ObstacleBridgeJSONValue.object) ?? .null]).canonicalData(preferredKeyOrder: metadataKeyOrder)
         var writer = ObstacleBridgeBinaryWriter(capacity: 25 + bind.count + host.count + metadata.count)
-        writer.appendUTF8("O5"); writer.append(instanceID); writer.append(connectionSequence); writer.append(service.serviceID); writer.append(service.listenProtocol.rawValue); writer.append(UInt16(bind.count)); writer.append(bind); writer.append(service.listenPort); writer.append(service.targetProtocol.rawValue); writer.append(UInt16(host.count)); writer.append(host); writer.append(service.targetPort); writer.append(UInt32(metadata.count)); writer.append(metadata)
+        guard protocolName(service.listenProtocol) != nil, protocolName(service.targetProtocol) != nil else { throw ObstacleBridgeServiceCodecError.invalidPayload }
+        writer.appendUTF8("O5"); writer.append(instanceID); writer.append(connectionSequence); writer.append(service.serviceID); writer.append(service.listenProtocol); writer.append(UInt16(bind.count)); writer.append(bind); writer.append(service.listenPort); writer.append(service.targetProtocol); writer.append(UInt16(host.count)); writer.append(host); writer.append(service.targetPort); writer.append(UInt32(metadata.count)); writer.append(metadata)
         return writer.encoded
     }
 
@@ -153,20 +154,20 @@ public enum ObstacleBridgeServiceCodec {
     private static func validate(_ services: [ObstacleBridgeServiceSpec]) throws {
         guard Set(services.map(\.serviceID)).count == services.count else { throw ObstacleBridgeServiceCodecError.duplicateServiceID }
     }
-    private static func protocolValue(_ raw: UInt8) throws -> ObstacleBridgeChannelMuxProtocol {
-        guard let value = ObstacleBridgeChannelMuxProtocol(rawValue: raw) else { throw ObstacleBridgeServiceCodecError.invalidPayload }; return value
+    private static func protocolValue(_ raw: UInt8) throws -> UInt8 {
+        guard protocolName(raw) != nil else { throw ObstacleBridgeServiceCodecError.invalidPayload }; return raw
     }
-    private static func protocolName(_ value: ObstacleBridgeChannelMuxProtocol) -> String { value == .tcp ? "tcp" : value == .udp ? "udp" : "tun" }
-    private static func serviceJSON(_ service: ObstacleBridgeServiceSpec) -> ObstacleBridgeJSONValue { .object(["svc_id": .integer(Int64(service.serviceID)), "l_proto": .string(protocolName(service.listenProtocol)), "l_bind": .string(service.listenHost), "l_port": .integer(Int64(service.listenPort)), "r_proto": .string(protocolName(service.targetProtocol)), "r_host": .string(service.targetHost), "r_port": .integer(Int64(service.targetPort)), "name": service.name.map(ObstacleBridgeJSONValue.string) ?? .null, "lifecycle_hooks": service.lifecycleHooks.map(ObstacleBridgeJSONValue.object) ?? .null, "options": service.options.map(ObstacleBridgeJSONValue.object) ?? .null]) }
+    private static func protocolName(_ value: UInt8) -> String? { value == 1 ? "tcp" : value == 0 ? "udp" : value == 2 ? "tun" : nil }
+    private static func serviceJSON(_ service: ObstacleBridgeServiceSpec) -> ObstacleBridgeJSONValue { .object(["svc_id": .integer(Int64(service.serviceID)), "l_proto": .string(protocolName(service.listenProtocol) ?? ""), "l_bind": .string(service.listenHost), "l_port": .integer(Int64(service.listenPort)), "r_proto": .string(protocolName(service.targetProtocol) ?? ""), "r_host": .string(service.targetHost), "r_port": .integer(Int64(service.targetPort)), "name": service.name.map(ObstacleBridgeJSONValue.string) ?? .null, "lifecycle_hooks": service.lifecycleHooks.map(ObstacleBridgeJSONValue.object) ?? .null, "options": service.options.map(ObstacleBridgeJSONValue.object) ?? .null]) }
     private static func service(from row: [String: ObstacleBridgeJSONValue]) throws -> ObstacleBridgeServiceSpec {
         guard let serviceID = row["svc_id"]?.uint16Value, let listenProtocol = protocolValue(named: row["l_proto"]?.stringValue), let listenHost = row["l_bind"]?.stringValue, let listenPort = row["l_port"]?.uint16Value, let targetProtocol = protocolValue(named: row["r_proto"]?.stringValue), let targetHost = row["r_host"]?.stringValue, let targetPort = row["r_port"]?.uint16Value else { throw ObstacleBridgeServiceCodecError.invalidPayload }
         return .init(serviceID: serviceID, name: row["name"]?.stringValue, listenProtocol: listenProtocol, listenHost: listenHost, listenPort: listenPort, targetProtocol: targetProtocol, targetHost: targetHost, targetPort: targetPort, lifecycleHooks: row["lifecycle_hooks"]?.objectValue, options: row["options"]?.objectValue)
     }
-    private static func protocolValue(named name: String?) -> ObstacleBridgeChannelMuxProtocol? {
+    private static func protocolValue(named name: String?) -> UInt8? {
         switch name?.lowercased() {
-        case "udp": return .udp
-        case "tcp": return .tcp
-        case "tun": return .tun
+        case "udp": return 0
+        case "tcp": return 1
+        case "tun": return 2
         default: return nil
         }
     }

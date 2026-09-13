@@ -222,17 +222,12 @@ struct ObstacleBridgeChannelMuxCodec {
         connectionSeq: UInt32,
         services: [ServiceSpec]
     ) throws -> Data {
-        let rows = services.map {
-            canonicalJSONString(for: serviceSpecJSON($0), preferredKeyOrder: serviceSpecKeyOrder)
-        }
-        let blob = Data("[\(rows.joined(separator: ","))]".utf8)
-        var payload = Data()
-        payload.append(Data("RS3".utf8))
-        payload.appendUInt64(instanceID)
-        payload.appendUInt32(connectionSeq)
-        payload.appendUInt32(UInt32(blob.count))
-        payload.append(blob)
-        return payload
+        let coreServices = try services.map(coreServiceSpec)
+        return try ObstacleBridgeServiceCodec.encodeRemoteServices(
+            instanceID: instanceID,
+            connectionSequence: connectionSeq,
+            services: coreServices
+        )
     }
 
     static func decodeRemoteServicesSetV2(_ payload: Data) -> (UInt64, UInt32, [ServiceSpec])? {
@@ -294,6 +289,36 @@ struct ObstacleBridgeChannelMuxCodec {
             return .object(converted)
         }
         return nil
+    }
+
+    private static func coreServiceSpec(_ value: ServiceSpec) throws -> ObstacleBridgeServiceSpec {
+        guard
+            (1...Int(UInt16.max)).contains(value.svcID),
+            (1...Int(UInt16.max)).contains(value.lPort),
+            (1...Int(UInt16.max)).contains(value.rPort)
+        else { throw ObstacleBridgeChannelMuxCodecError.invalidPayload }
+        let listenProtocol = protoCode(for: value.lProto)
+        let targetProtocol = protoCode(for: value.rProto)
+        guard listenProtocol != UInt8.max, targetProtocol != UInt8.max else { throw ObstacleBridgeChannelMuxCodecError.invalidPayload }
+        return .init(
+            serviceID: UInt16(value.svcID), name: value.name,
+            listenProtocol: listenProtocol, listenHost: value.lBind, listenPort: UInt16(value.lPort),
+            targetProtocol: targetProtocol, targetHost: value.rHost, targetPort: UInt16(value.rPort),
+            lifecycleHooks: value.lifecycleHooks.map { $0.mapValues(coreJSONValue) },
+            options: value.options.map { $0.mapValues(coreJSONValue) }
+        )
+    }
+
+    private static func coreJSONValue(_ value: JSONValue) -> ObstacleBridgeJSONValue {
+        switch value {
+        case .object(let values): return .object(values.mapValues(coreJSONValue))
+        case .array(let values): return .array(values.map(coreJSONValue))
+        case .string(let value): return .string(value)
+        case .integer(let value): return .integer(value)
+        case .double(let value): return .double(value)
+        case .bool(let value): return .bool(value)
+        case .null: return .null
+        }
     }
 
     static func foundationObject(from value: JSONValue) -> Any {

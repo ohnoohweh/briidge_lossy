@@ -812,6 +812,12 @@ def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
     assert "private var states: [ControlChunkKey: ControlChunkState]" not in codec
 
 
+def test_shared_channelmux_codec_uses_core_service_catalog_owner() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeServiceCodec.encodeRemoteServices(" in codec
+    assert "let rows = services.map" not in codec
+
+
 def test_websocket_overlay_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
 
