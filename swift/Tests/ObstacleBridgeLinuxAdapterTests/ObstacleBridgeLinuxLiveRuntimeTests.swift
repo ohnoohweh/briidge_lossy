@@ -32,6 +32,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let received = [try #require(firstReceived), try #require(secondReceived)]
         #expect(Set(received.map(\.payload)) == Set([Data("first-peer".utf8), Data("second-peer".utf8)]))
         #expect(Set(received.map(\.peerIdentity)).count == 2)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(first)).type == ObstacleBridgeMyUDPCodec.controlType)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(second)).type == ObstacleBridgeMyUDPCodec.controlType)
+        #expect(try listener.serviceTimers() == 2)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(first)).type == ObstacleBridgeMyUDPCodec.idleType)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(second)).type == ObstacleBridgeMyUDPCodec.idleType)
         #expect(listener.activePeerCount == 2)
         #expect(Set(listener.expireIdlePeers(nowNanoseconds: .max, idleTimeoutNanoseconds: 1)) == Set(received.map(\.peerIdentity)))
         #expect(listener.activePeerCount == 0)
@@ -257,6 +262,13 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Glibc.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
         guard result == 0 else { _ = close(fd); throw SocketError.failure }
         return fd
+    }
+
+    private func receiveUDPWire(_ fd: Int32) throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: 1_452)
+        let count = recv(fd, &bytes, bytes.count, 0)
+        guard count > 0 else { throw SocketError.failure }
+        return Data(bytes.prefix(Int(count)))
     }
 
     private enum SocketError: Error { case failure }

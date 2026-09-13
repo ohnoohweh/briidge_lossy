@@ -8,6 +8,11 @@ import Glibc
 /// Socket owner for a shared-datagram myUDP listener. Reliable peer state is
 /// kept exclusively by `ObstacleBridgeMyUDPPeerRegistry` in Core.
 public final class ObstacleBridgeLinuxMyUDPListener {
+    private struct Endpoint {
+        var address: sockaddr_storage
+        let length: socklen_t
+    }
+
     public struct ReceivedRecord: Sendable {
         public let peerIdentity: String
         public let payload: Data
@@ -16,6 +21,7 @@ public final class ObstacleBridgeLinuxMyUDPListener {
     private var descriptor: Int32
     private let descriptorLock = NSLock()
     private let registry = ObstacleBridgeMyUDPPeerRegistry()
+    private var endpoints: [ObstacleBridgeMyUDPPeerRegistry.PeerKey: Endpoint] = [:]
     public let port: Int
 
     public init(port: Int, bindHost: String = "0.0.0.0") throws {
@@ -54,10 +60,30 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         nowNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds,
         idleTimeoutNanoseconds: UInt64
     ) -> [String] {
-        registry.expire(
+        let expired = registry.expire(
             nowNanoseconds: nowNanoseconds,
             idleTimeoutNanoseconds: idleTimeoutNanoseconds
-        ).map(\.identity)
+        )
+        expired.forEach { endpoints.removeValue(forKey: $0) }
+        return expired.map(\.identity)
+    }
+
+    /// Executes Core timer effects for every admitted peer and routes each
+    /// datagram to the endpoint retained by this socket adapter.
+    @discardableResult public func serviceTimers(
+        nowNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds
+    ) throws -> Int {
+        descriptorLock.lock()
+        let fd = descriptor
+        descriptorLock.unlock()
+        guard fd >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
+        var emitted = 0
+        for key in registry.activeKeys {
+            guard let endpoint = endpoints[key], let effect = try registry.tick(key, nowNanoseconds: nowNanoseconds) else { continue }
+            try execute(effect, endpoint: endpoint, descriptor: fd)
+            emitted += effect.outboundDatagrams.count
+        }
+        return emitted
     }
 
     /// Processes one datagram. The caller supplies the epoch selected by its
@@ -77,19 +103,26 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         guard count > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
         let identity = peerIdentity(address, length: length)
         let key = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: identity, epoch: epoch)
+        let endpoint = Endpoint(address: address, length: length)
+        endpoints[key] = endpoint
         let effect: ObstacleBridgeMyUDPPeerEngine.Effect
         do { effect = try registry.receiveWire(Data(bytes.prefix(Int(count))), from: key, nowNanoseconds: DispatchTime.now().uptimeNanoseconds) }
         catch { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+        try execute(effect, endpoint: endpoint, descriptor: fd)
+        guard let payload = registry.admit(key).takeDeliveredRecord() else { return nil }
+        return .init(peerIdentity: identity, payload: payload)
+    }
+
+    private func execute(_ effect: ObstacleBridgeMyUDPPeerEngine.Effect, endpoint: Endpoint, descriptor: Int32) throws {
+        var address = endpoint.address
         for datagram in effect.outboundDatagrams {
             let sent = datagram.withUnsafeBytes { payload in
                 withUnsafePointer(to: &address) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, payload.baseAddress, datagram.count, 0, $0, length) }
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(descriptor, payload.baseAddress, datagram.count, 0, $0, endpoint.length) }
                 }
             }
             guard sent == datagram.count else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
         }
-        guard let payload = registry.admit(key).takeDeliveredRecord() else { return nil }
-        return .init(peerIdentity: identity, payload: payload)
     }
 
     private func peerIdentity(_ address: sockaddr_storage, length: socklen_t) -> String {

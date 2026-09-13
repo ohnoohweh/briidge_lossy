@@ -856,6 +856,10 @@ public final class ObstacleBridgeMyUDPPeerRegistry: @unchecked Sendable {
         touch(key, nowNanoseconds: nowNanoseconds)
         return try peer.receiveWire(wire, nowNanoseconds: nowNanoseconds, transportWritable: transportWritable)
     }
+    public func tick(_ key: PeerKey, nowNanoseconds: UInt64, retransmissionWindowNanoseconds: UInt64 = ObstacleBridgeMyUDPPeerEngine.defaultRetransmissionWindowNanoseconds, idleIntervalNanoseconds: UInt64 = ObstacleBridgeMyUDPPeerEngine.defaultIdleIntervalNanoseconds) throws -> ObstacleBridgeMyUDPPeerEngine.Effect? {
+        guard let peer = peers[key] else { return nil }
+        return try peer.tick(nowNanoseconds: nowNanoseconds, retransmissionWindowNanoseconds: retransmissionWindowNanoseconds, idleIntervalNanoseconds: idleIntervalNanoseconds)
+    }
     public func expire(nowNanoseconds: UInt64, idleTimeoutNanoseconds: UInt64) -> [PeerKey] { let expired = peers.keys.filter { key in guard let last = lastActivityNanoseconds[key], nowNanoseconds >= last else { return false }; return nowNanoseconds - last >= idleTimeoutNanoseconds }; expired.forEach(withdraw); return expired }
     public func withdraw(_ key: PeerKey) { peers.removeValue(forKey: key); lastActivityNanoseconds.removeValue(forKey: key) }
     public func withdraw(identity: String, exceptEpoch: UInt64? = nil) { peers.keys.filter { $0.identity == identity && $0.epoch != exceptEpoch }.forEach(withdraw) }
