@@ -173,11 +173,11 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
                 closeCalls += 1
                 continue
             }
-            let encoded = try payloadCodec.encode(wire)
-            if let data = encoded as? Data {
+            let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(wire, mode: corePayloadMode)
+            if case .binary(let data) = encoded {
                 payloadKinds.append("binary")
                 payloadValues.append(hexFromData(data))
-            } else if let text = encoded as? String {
+            } else if case .text(let text) = encoded {
                 payloadKinds.append("text")
                 payloadValues.append(text)
             }
@@ -195,27 +195,30 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func encodeClientWire(_ wire: Data) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try payloadCodec.encode(buildAppWire(wire))
-        if let data = encoded as? Data {
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(buildAppWire(wire), mode: corePayloadMode)
+        if case .binary(let data) = encoded {
             return .data(data)
         }
-        return .string(encoded as? String ?? "")
+        if case .text(let text) = encoded { return .string(text) }
+        throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket codec did not produce a payload")
     }
 
     func encodeClientPong(echoTxNS: UInt64) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try payloadCodec.encode(buildPongWire(echoTxNS: echoTxNS))
-        if let data = encoded as? Data {
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(buildPongWire(echoTxNS: echoTxNS), mode: corePayloadMode)
+        if case .binary(let data) = encoded {
             return .data(data)
         }
-        return .string(encoded as? String ?? "")
+        if case .text(let text) = encoded { return .string(text) }
+        throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket codec did not produce a payload")
     }
 
     func encodeClientPing(txNS: UInt64, echoNS: UInt64) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try payloadCodec.encode(buildPingWire(txNS: txNS, echoNS: echoNS))
-        if let data = encoded as? Data {
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(buildPingWire(txNS: txNS, echoNS: echoNS), mode: corePayloadMode)
+        if case .binary(let data) = encoded {
             return .data(data)
         }
-        return .string(encoded as? String ?? "")
+        if case .text(let text) = encoded { return .string(text) }
+        throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket codec did not produce a payload")
     }
 
     func decodeClientMessage(_ message: URLSessionWebSocketTask.Message) throws -> Data {

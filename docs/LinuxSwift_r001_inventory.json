@@ -36,7 +36,6 @@
         "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayPeerRuntime.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlaySessionCodec.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift",

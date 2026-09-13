@@ -784,17 +784,13 @@ def test_macos_app_main_source_exists() -> None:
     assert "iOSUsesNetworkExtensionBoundary = true" in tun_helper_contract
 
 
-def test_websocket_payload_codec_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift").read_text(encoding="utf-8")
+def test_websocket_payload_codec_has_one_core_owner() -> None:
+    core = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift").read_text(encoding="utf-8")
 
-    assert "protocol ObstacleBridgeWebSocketPayloadCodec" in runtime
-    assert "enum ObstacleBridgeWebSocketPayloadCodecFactory" in runtime
-    assert "struct ObstacleBridgeWebSocketBinaryPayloadCodec" in runtime
-    assert "struct ObstacleBridgeWebSocketBase64PayloadCodec" in runtime
-    assert "struct ObstacleBridgeWebSocketJsonBase64PayloadCodec" in runtime
-    assert "struct ObstacleBridgeWebSocketSemiTextShapePayloadCodec" in runtime
-    assert "maxEncodedSize(" in runtime
-    assert "invalidSemiTextShapeTrailingPadding" in runtime
+    assert "public enum ObstacleBridgeWebSocketPayloadCodec" in core
+    assert "public enum ObstacleBridgeWebSocketPayloadMode" in core
+    assert "maximumEncodedSize(" in core
+    assert not (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift").exists()
 
 
 def test_shared_websocket_runtime_uses_core_payload_codec() -> None:

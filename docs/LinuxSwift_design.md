@@ -575,12 +575,14 @@ parser.
   remaining codec families in Linux SwiftPM. Core owns
   all WebSocket payload modes, while Linux parses `ws_payload_mode`, negotiates
   it during upgrade, and proves text-frame interoperability with Python.
-- **macOS and iOS:** the macOS flat build consumes the Core WebSocket payload
-  codec and no longer compiles its duplicate payload source. The remaining
-  shared-runtime consumers must import the package product and replace direct
-  ChannelMux, control-chunk, service, SecureLink, myUDP, and TCP codec
-  implementations. The same corpus must run in macOS host and iOS package
-  qualification.
+- **macOS and iOS:** the macOS flat build and generated iOS app/packet-tunnel
+  targets compile the Core WebSocket payload codec and no longer compile the
+  duplicate payload source. The generated-project patch upgrades existing file
+  references in place, and the packet-tunnel compile probe uses that same Core
+  source. The remaining shared-runtime consumers must import the package product
+  and replace direct ChannelMux, control-chunk, service, SecureLink, myUDP, and
+  TCP codec implementations. The same corpus must run in macOS host and iOS
+  package qualification.
 - **Windows sentinel:** no Windows runtime adapter is required by R003, but the
   Core codec suite must remain free of Apple/Linux imports so a future Windows
   build can consume it.

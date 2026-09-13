@@ -157,6 +157,14 @@ APP_GENERATED_SWIFT_SOURCE = (
     "../../../../build/generated/ObstacleBridgeGeneratedBuildStamp.swift",
 )
 
+CORE_WEBSOCKET_PAYLOAD_CODEC_PATH = "../../../../../swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift"
+
+
+def shared_swift_source_path(name: str) -> str:
+    if name == "ObstacleBridgeWebSocketPayloadCodec.swift":
+        return CORE_WEBSOCKET_PAYLOAD_CODEC_PATH
+    return f"../../../../native/ObstacleBridgeShared/{name}"
+
 IPSERVER_GENERATED_SWIFT_SOURCE = (
     "71C200000000000000000008",
     APP_GENERATED_SWIFT_SOURCE[1],
@@ -242,6 +250,12 @@ def add_app_native_crypto_source(text: str) -> str:
 
 
 def add_app_shared_swift_sources(text: str) -> str:
+    # Upgrade projects patched before Core ownership without adding a second
+    # file reference with the same deterministic identifier.
+    text = text.replace(
+        'path = "../../../../native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift";',
+        f'path = "{CORE_WEBSOCKET_PAYLOAD_CODEC_PATH}";',
+    )
     for build_id, file_id, name in APP_SHARED_STALE_DUPLICATE_IDS:
         text = re.sub(
             rf'^\t\t{build_id} /\* {re.escape(name)} in Sources \*/ = \{{isa = PBXBuildFile; fileRef = {file_id} /\* {re.escape(name)} \*/; \}};\n',
@@ -280,7 +294,7 @@ def add_app_shared_swift_sources(text: str) -> str:
         text = insert_before(
             text,
             "/* End PBXFileReference section */\n",
-            f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"../../../../native/ObstacleBridgeShared/{name}\"; sourceTree = SOURCE_ROOT; }};\n",
+            f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"{shared_swift_source_path(name)}\"; sourceTree = SOURCE_ROOT; }};\n",
         )
 
     match = re.search(
@@ -318,7 +332,11 @@ def add_app_shared_swift_sources(text: str) -> str:
         if entry not in body:
             body += entry
 
-    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+    text = text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+    return text.replace(
+        'path = "../../../../native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift";',
+        f'path = "{CORE_WEBSOCKET_PAYLOAD_CODEC_PATH}";',
+    )
 
 
 def add_app_generated_swift_source(text: str) -> str:
@@ -443,6 +461,11 @@ def add_ipserver_packet_flow_bridge_source(text: str) -> str:
 
 
 def add_ipserver_shared_swift_sources(text: str) -> str:
+    # See add_app_shared_swift_sources: generated projects are patched in place.
+    text = text.replace(
+        'path = "../../../../native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift";',
+        f'path = "{CORE_WEBSOCKET_PAYLOAD_CODEC_PATH}";',
+    )
     for build_id, file_id, name in IPSERVER_SHARED_SWIFT_SOURCES:
         text = insert_before(
             text,
@@ -452,7 +475,7 @@ def add_ipserver_shared_swift_sources(text: str) -> str:
         text = insert_before(
             text,
             "/* End PBXFileReference section */\n",
-            f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"../../../../native/ObstacleBridgeShared/{name}\"; sourceTree = SOURCE_ROOT; }};\n",
+            f"\t\t{file_id} /* {name} */ = {{isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = {name}; path = \"{shared_swift_source_path(name)}\"; sourceTree = SOURCE_ROOT; }};\n",
         )
 
     match = re.search(
@@ -476,7 +499,11 @@ def add_ipserver_shared_swift_sources(text: str) -> str:
         if entry not in body:
             body += entry
 
-    return text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+    text = text[:match.start()] + match.group("head") + body + match.group("tail") + text[match.end():]
+    return text.replace(
+        'path = "../../../../native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift";',
+        f'path = "{CORE_WEBSOCKET_PAYLOAD_CODEC_PATH}";',
+    )
 
 
 def patch_python_build_script(text: str) -> str:

@@ -489,17 +489,17 @@ private func overlayStackPlanObject(_ snapshot: ObstacleBridgeOverlayStackPlanne
 
 private func websocketPayloadCodecSummaryObject(
     mode: String,
-    codec: any ObstacleBridgeWebSocketPayloadCodec,
+    codec: ObstacleBridgeWebSocketPayloadMode,
     wire: Data?,
-    encoded: Any?,
+    encoded: ObstacleBridgeWebSocketPayload?,
     decoded: Data?
 ) -> [String: Any] {
     var encodedKind: Any = NSNull()
     var encodedValue: Any = NSNull()
-    if let data = encoded as? Data {
+    if case .binary(let data)? = encoded {
         encodedKind = "binary"
         encodedValue = hexFromData(data)
-    } else if let text = encoded as? String {
+    } else if case .text(let text)? = encoded {
         encodedKind = "text"
         encodedValue = text
     }
@@ -508,8 +508,8 @@ private func websocketPayloadCodecSummaryObject(
         "encoded_kind": encodedKind,
         "encoded_value": encodedValue,
         "decoded_hex": decoded.map(hexFromData) ?? NSNull(),
-        "frame_max_size": codec.maxEncodedSize((wire?.count ?? 65535)) + (mode == "json-base64" && (wire?.count ?? 0) == 0 ? 0 : 0),
-        "max_encoded_size": codec.maxEncodedSize(wire?.count ?? 0),
+        "frame_max_size": ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(wire?.count ?? 65535, mode: codec),
+        "max_encoded_size": ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(wire?.count ?? 0, mode: codec),
     ]
 }
 
@@ -2801,20 +2801,20 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let mode = request["mode"] as? String else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let codec = try ObstacleBridgeWebSocketPayloadCodecFactory.build(mode: mode)
+        let codec = try ObstacleBridgeWebSocketPayloadCodec.mode(mode)
         let wire = (request["wire_hex"] as? String).flatMap(dataFromHex)
-        let encoded = try wire.map { try codec.encode($0) }
-        let decodeMessage: Any?
+        let encoded = try wire.map { try ObstacleBridgeWebSocketPayloadCodec.encode($0, mode: codec) }
+        let decodeMessage: ObstacleBridgeWebSocketPayload?
         if let decodeText = request["decode_text"] as? String {
-            decodeMessage = decodeText
+            decodeMessage = .text(decodeText)
         } else if let decodeHex = request["decode_hex"] as? String, let decodeData = dataFromHex(decodeHex) {
-            decodeMessage = decodeData
+            decodeMessage = .binary(decodeData)
         } else {
             decodeMessage = encoded
         }
         let decoded: Data?
         do {
-            decoded = try decodeMessage.flatMap { try codec.decode($0) }
+            decoded = try decodeMessage.map { try ObstacleBridgeWebSocketPayloadCodec.decode($0, mode: codec) }
         } catch {
             decoded = nil
         }
