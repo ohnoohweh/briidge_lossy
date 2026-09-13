@@ -227,7 +227,9 @@ macOS build-source
 guard and generated-iOS-project patch test ensure each Apple target compiles
 the WebSocket payload, binary, full myUDP, SecureLink envelope, ChannelMux header, and TCP/WebSocket APP/PING/PONG codecs from Core rather than a
 parallel shared-runtime source; the iOS packet-tunnel compile probe uses those
-same sources. Apple CKV1 chunking uses the Core raw-value bridge; O4/O5 OPEN and
+same sources. The macOS parity runner explicitly compiles the ChannelMux,
+SecureLink, and service Core sources, while Apple myUDP peer-runtime budget
+tests require its layout constants to remain Core-backed. Apple CKV1 chunking uses the Core raw-value bridge; O4/O5 OPEN and
 RS2/RS3 service-catalog encoding/decoding use the Core type-neutral codec. The adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove

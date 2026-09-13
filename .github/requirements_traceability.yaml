@@ -1296,6 +1296,8 @@ REQ-MYU-004:
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_splits_final_record_to_use_remaining_batch_space
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
     - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
+    - ios/tests/test_m3_native_sources.py::test_udp_overlay_codec_source_exists
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_udp_overlay_codec_uses_core_layout_constants
 
 REQ-MYU-005:
   integration_tests:

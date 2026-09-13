@@ -521,13 +521,11 @@ Linux overlay adapter uses for its length-prefixed TCP and WebSocket-body paths.
 A requirements-guard ownership check rejects service magic, adapter-side JSON
 serialization, and duplicate integer serializers in those Linux adapter files.
 
-This is partial delivery, not package completion. The Core suite covers bounded
-reads, truncation, O5/RS3 typed round trips, and malformed input, while existing
-Linux catalog/service tests cover the adapter-to-Core path. The Linux SwiftPM
-suite now completes locally without process-signal termination after the
-Python-overlay test fixture bounds simultaneous child peers. R003 remains open
-for the remaining ownership migration and corpus coverage listed below, not for
-test-runner stability.
+R003 is in final cross-platform qualification. The Core suite covers bounded
+reads, truncation, O5/RS3 typed round trips, and malformed input, while Linux
+catalog/service tests cover the adapter-to-Core path. The Apple UDP compatibility
+facade exposes only Core-backed layout constants so peer-runtime queue budgeting
+cannot drift from the shared codec.
 
 The shared Python-derived corpus covers TCP APP framing, raw ChannelMux headers,
 and malformed records,
@@ -538,8 +536,8 @@ modes (`binary`, `base64`, `json-base64`, and `semi-text-shape`), SecureLink PSK
 envelope vectors, CKV1 control chunks and malformed headers, O4/O5 OPEN, and RS2/RS3 catalogs. It
 also pins O4/O5 and RS2/RS3 truncation and trailing-byte rejection in both the
 Python reference parser and Core, plus myUDP CONTROL bytes and malformed
-records. It still needs comparable malformed coverage for the remaining codec
-families before this package closes.
+records. The remaining R003 gate is execution of that corpus through the macOS
+and generated iOS build lanes after every Core source-list change.
 
 Definition of Done:
 
@@ -573,11 +571,10 @@ without owning a second header serializer or parser.
 
 #### R003 residual work by platform
 
-- **Linux:** myUDP reliability-window policy is R004 work; the common
-  Python-derived corpus still needs comparable malformed coverage for the
-  remaining codec families in Linux SwiftPM. Core owns
-  all WebSocket payload modes, while Linux parses `ws_payload_mode`, negotiates
-  it during upgrade, and proves text-frame interoperability with Python.
+- **Linux:** no R003 implementation residual remains. myUDP reliability-window
+  policy is R004 work. Core owns all WebSocket payload modes, while Linux parses
+  `ws_payload_mode`, negotiates it during upgrade, and proves text-frame
+  interoperability with Python.
 - **macOS and iOS:** the macOS flat build and generated iOS app/packet-tunnel
   targets compile the Core binary, full myUDP, SecureLink envelope, WebSocket
   payload, and APP/PING/PONG frame codecs. The shared TCP runtime delegates its
@@ -593,8 +590,9 @@ without owning a second header serializer or parser.
   macOS, allowing the Core corpus to execute there. O4/O5 OPEN and RS2/RS3
   catalog encoding/decoding plus CKV1 chunk creation, transaction rollover, and
   reassembly delegate to the Core raw-value bridge. Apple targets still compile
-  flat Core source lists rather than importing the package product, and the same
-  corpus still needs iOS package qualification.
+  flat Core source lists rather than importing the package product; this is R009
+  migration work. R003 remains gated only on the macOS and generated-iOS
+  compile/corpus lanes consuming each Core source in those lists.
 - **Windows sentinel:** no Windows runtime adapter is required by R003, but the
   Core codec suite must remain free of Apple/Linux imports so a future Windows
   build can consume it.

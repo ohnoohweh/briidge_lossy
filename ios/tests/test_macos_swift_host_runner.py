@@ -1241,6 +1241,14 @@ def _compile_swift_udp_overlay_peer_probe(source_path: Path, binary_path: Path) 
         raise AssertionError(f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}")
 
 
+def test_macos_udp_overlay_codec_uses_core_layout_constants() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
+
+    assert "batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize" in codec
+    assert "batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize" in codec
+    assert "chunkHeaderSize = ObstacleBridgeMyUDPCodec.chunkHeaderSize" in codec
+
+
 def _compile_swift_macos_tun_probe(source_path: Path, binary_path: Path) -> None:
     swiftc = shutil.which("swiftc")
     if not swiftc:

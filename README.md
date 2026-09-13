@@ -12,7 +12,8 @@ The project currently targets six platform families:
   malformed-record, SecureLink PSK transcript/handshake, control-chunk,
   service OPEN and service-catalog bytes, including service-record truncation
   and trailing-byte rejection, plus all WebSocket payload modes; SecureLink client/server envelope
-  and full myUDP/SecureLink/TCP APP/ChannelMux-header framing have Core owners; CONTROL missing-list
+  and full myUDP/SecureLink/TCP APP/ChannelMux-header framing have Core owners; Apple myUDP queue
+  budgeting reads its batch-layout constants from that same Core owner; CONTROL missing-list
   capacity is derived from its wire payload (713 counters) rather than the
   DATA_BATCH record limit. The macOS flat build and generated iOS targets also
   consume the Core WebSocket payload and

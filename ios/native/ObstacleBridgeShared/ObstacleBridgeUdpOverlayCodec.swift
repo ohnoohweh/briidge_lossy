@@ -6,16 +6,20 @@ enum ObstacleBridgeUdpOverlayCodecError: Error {
 }
 
 struct ObstacleBridgeUdpOverlayCodec {
-    static let maxFrameSize = 1500 - 48
-    static let protocolHeaderSize = 19
-    static let streamRecordHeaderSize = 4
-    static let maxStreamRecordBytes = 0xFFFF
-    static let maxBatchRecords = 64
-    static let maxBatchPayloadBytes = 1433
-    static let maxChunkBytes = 1425
-    static let ptypeIdle = 0
-    static let ptypeData = 1
-    static let ptypeControl = 2
+    // Compatibility names for the Apple peer runtime. Values remain owned by
+    // Core so queue budgeting cannot drift from the shared wire codec.
+    static let protocolHeaderSize = ObstacleBridgeMyUDPCodec.protocolHeaderSize
+    static let streamRecordHeaderSize = ObstacleBridgeMyUDPCodec.streamRecordHeaderSize
+    static let maxStreamRecordBytes = ObstacleBridgeMyUDPCodec.maximumStreamRecordSize
+    static let batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize
+    static let batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize
+    static let chunkHeaderSize = ObstacleBridgeMyUDPCodec.chunkHeaderSize
+    static let maxBatchRecords = ObstacleBridgeMyUDPCodec.maximumBatchRecords
+    static let maxBatchPayloadBytes = ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize
+    static let maxChunkBytes = ObstacleBridgeMyUDPCodec.maximumPayloadSize
+    static let ptypeIdle = Int(ObstacleBridgeMyUDPCodec.idleType)
+    static let ptypeData = Int(ObstacleBridgeMyUDPCodec.dataType)
+    static let ptypeControl = Int(ObstacleBridgeMyUDPCodec.controlType)
 
     struct ParsedProtocolFrame: Equatable {
         var ptype: Int
@@ -37,7 +41,7 @@ struct ObstacleBridgeUdpOverlayCodec {
     }
 
     static func maxPayloadLength() -> Int {
-        return max(0, maxFrameSize - protocolHeaderSize)
+        maxBatchPayloadBytes
     }
 
     static func encodeStreamRecord(_ payload: Data) throws -> Data {

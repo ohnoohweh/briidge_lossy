@@ -1042,6 +1042,10 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "ObstacleBridgeMyUDPCodec.decodeDataBatchPayload(" in codec
     assert "ObstacleBridgeMyUDPCodec.encodeWire(" in codec
     assert "ObstacleBridgeMyUDPCodec.decodeWire(" in codec
+    assert "batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize" in codec
+    assert "batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize" in codec
+    assert "chunkHeaderSize = ObstacleBridgeMyUDPCodec.chunkHeaderSize" in codec
+    assert "maxBatchPayloadBytes = ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize" in codec
 
     assert "encodeStreamRecord(" in codec
     assert "encodeDataBatch(" in codec
