@@ -593,9 +593,9 @@ without owning a second header serializer or parser.
   flat Core source lists rather than importing the package product; this is R009
   migration work. R003 remains gated only on the macOS and generated-iOS
   compile/corpus lanes consuming each Core source in those lists.
-- **Windows sentinel:** no Windows runtime adapter is required by R003, but the
-  Core codec suite must remain free of Apple/Linux imports so a future Windows
-  build can consume it.
+- **Windows sentinel:** no Windows runtime adapter is required by R003. The
+  Core codec suite remains free of Apple/Linux imports so a future Windows
+  build can consume it; optional Windows runtime delivery is LSW-R010.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 
@@ -737,7 +737,7 @@ Definition of Done:
 
 Depends on LSW-R003 through LSW-R007.
 
-### LSW-R009 — Migrate builds, enforce uniqueness, and add the Windows sentinel
+### LSW-R009 — Migrate builds, enforce uniqueness, and retain the Windows sentinel
 
 Finish adoption after the vertical slices have moved behavior. This package
 retires the flat Apple source bucket; it does not defer duplicate deletion that
@@ -931,6 +931,28 @@ Depends on LSW-R009 and every Linux-applicable feature package identified by
 the Python inventory. A release selection cannot omit a Python Linux runtime
 capability and still satisfy this parity gate.
 
+### LSW-R010 — Optional Windows runtime adapters
+
+This final, non-gating follow-on package makes the portable Core runtime usable
+as a Windows product. It is intentionally outside the Linux Swift parity gate:
+Windows delivery is a nice-to-have future development step, not a prerequisite
+for closing the Linux/Python feature inventory.
+
+Definition of Done:
+
+- Windows adapters supply WinSock stream/datagram/listener I/O, packet-device,
+  routing, service, clock, credential-storage, and process-lifecycle bindings
+  through the existing Core ports;
+- the Windows product imports Core codecs and runtime policies without a second
+  protocol, serialization, reliability, or lifecycle implementation;
+- Windows-specific capability admission and elevated packet/routing tests
+  qualify the selected backend, while the Core corpus and mixed Python/Swift
+  interoperability vectors remain byte-identical; and
+- requirements, architecture, product traceability, and CI classify Windows as
+  a separately qualified product rather than using a Linux parity waiver.
+
+Depends on LSW-R009. It does not gate LSW-008 or the Linux Swift parity result.
+
 ## Suggested sequence and open decisions
 
 LSW-R003 starts wire/source movement while preserving the current qualified
@@ -940,6 +962,10 @@ LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
 myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates
 release qualification. This order prevents LSW-005 and LSW-005A from creating
 new state that would immediately need to be extracted.
+
+LSW-R010 is intentionally last and optional. It begins only after the Linux
+Swift parity gate is complete, using the already-qualified portable Core rather
+than reopening the Linux work packages.
 
 The complete Python feature inventory records the present partial and missing
 Linux Swift rows. Each remaining work area closes its rows by adding the Swift
