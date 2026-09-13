@@ -831,6 +831,19 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     }
 }
 
+/// Socket-independent owner for listener-side myUDP peer state. Datagram
+/// adapters choose the peer identity and execute effects; this registry keeps
+/// epochs, queues, and receive state isolated from one another.
+public final class ObstacleBridgeMyUDPPeerRegistry: @unchecked Sendable {
+    public struct PeerKey: Hashable, Sendable { public let identity: String; public let epoch: UInt64; public init(identity: String, epoch: UInt64) { self.identity = identity; self.epoch = epoch } }
+    private var peers: [PeerKey: ObstacleBridgeMyUDPPeerEngine] = [:]
+    public init() {}
+    public func admit(_ key: PeerKey, maximumInFlight: Int = 200) -> ObstacleBridgeMyUDPPeerEngine { if let peer = peers[key] { return peer }; let peer = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: maximumInFlight); peers[key] = peer; return peer }
+    public func withdraw(_ key: PeerKey) { peers.removeValue(forKey: key) }
+    public func withdraw(identity: String, exceptEpoch: UInt64? = nil) { peers.keys.filter { $0.identity == identity && $0.epoch != exceptEpoch }.forEach { peers.removeValue(forKey: $0) } }
+    public var activeKeys: Set<PeerKey> { Set(peers.keys) }
+}
+
 /// myudp v2 framing shared with Python. DATA batches carry a reliable byte
 /// stream; upper-layer messages are length-prefixed records in that stream.
 public enum ObstacleBridgeMyUDPCodec {

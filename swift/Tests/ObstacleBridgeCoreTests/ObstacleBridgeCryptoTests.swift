@@ -171,6 +171,15 @@ struct ObstacleBridgeCryptoTests {
         #expect(try engine.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.isEmpty)
         #expect(try engine.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.count == 1)
     }
+    @Test func myudpCorePeerRegistryIsolatesEpochsAndWithdrawals() throws {
+        let registry = ObstacleBridgeMyUDPPeerRegistry()
+        let old = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 1)
+        let fresh = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 2)
+        try registry.admit(old).enqueueApplicationRecord(Data("old".utf8), nowNanoseconds: 1)
+        #expect(try registry.admit(fresh).flush(nowNanoseconds: 2).outboundDatagrams.isEmpty)
+        registry.withdraw(identity: "peer", exceptEpoch: 2)
+        #expect(registry.activeKeys == Set([fresh]))
+    }
     @Test func myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps() throws {
         let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
             outstandingCounters: [1, 2, 3], peerReportedMissing: [3],

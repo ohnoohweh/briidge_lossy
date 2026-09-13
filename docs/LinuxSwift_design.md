@@ -586,6 +586,12 @@ reduced request/reply side path. Its outbound echo timestamp now calls
 `ObstacleBridgeMyUDPEchoPolicy`; there is also no Core peer registry for a
 shared-datagram listener.
 
+`ObstacleBridgeMyUDPPeerRegistry` now provides the first socket-independent
+listener-state seam: it isolates Core peer engines by logical identity and
+epoch and can withdraw stale epochs without clearing the replacement peer.
+R004D still needs timer-driven expiry, listener admission effects, and
+multi-peer Python/Swift interoperability qualification.
+
 The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (3) make the Linux POSIX type execute
 Core effects only; and (4) add
