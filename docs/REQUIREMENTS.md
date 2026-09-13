@@ -289,6 +289,7 @@ Current lifecycle implementation note:
   reassembly policy to the Core raw-value owner.
   Apple RS3 service-catalog encoding delegates its canonical JSON and framing to
   the same type-neutral Core service codec.
+  Apple O5 OPEN encoding uses that Core owner as well.
 - `REQ-MUX-002`: A connected peer shall be able to carry mixed UDP and TCP services at the same time.
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s. Listener-side ChannelMux channel identity shall include both the owning peer and channel identifier, because independent peers may legitimately allocate the same channel number. A process-shared TUN device shall route local replies through the mux that actively owns its reader, using that reader owner's peer/channel bindings rather than creator or attachment history.
 - `REQ-MUX-004`: Remote service publication shall remain scoped to the intended peer. An authenticated inbound peer's published TCP and UDP listeners shall instantiate and accept traffic even when the parent overlay transport remains in listener state.

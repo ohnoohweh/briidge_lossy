@@ -175,36 +175,15 @@ struct ObstacleBridgeChannelMuxCodec {
         connectionSeq: UInt32,
         spec: ServiceSpec
     ) throws -> Data {
-        let bindData = Data(spec.lBind.utf8)
-        let hostData = Data(spec.rHost.utf8)
-        guard bindData.count <= 0xFFFF, hostData.count <= 0xFFFF else {
-            throw ObstacleBridgeChannelMuxCodecError.stringTooLarge
+        do {
+            return try ObstacleBridgeServiceCodec.encodeOpen(
+                instanceID: instanceID,
+                connectionSequence: connectionSeq,
+                service: coreServiceSpec(spec)
+            )
+        } catch {
+            throw ObstacleBridgeChannelMuxCodecError.invalidPayload
         }
-        let metadata = JSONValue.object([
-            "name": spec.name.map(JSONValue.string) ?? .null,
-            "lifecycle_hooks": spec.lifecycleHooks.map(JSONValue.object) ?? .null,
-            "options": spec.options.map(JSONValue.object) ?? .null,
-        ])
-        let metadataData = Data(
-            canonicalJSONString(for: metadata, preferredKeyOrder: openMetaKeyOrder).utf8
-        )
-
-        var payload = Data()
-        payload.append(Data("O5".utf8))
-        payload.appendUInt64(instanceID)
-        payload.appendUInt32(connectionSeq)
-        payload.appendUInt16(UInt16(spec.svcID))
-        payload.appendUInt8(protoCode(for: spec.lProto))
-        payload.appendUInt16(UInt16(bindData.count))
-        payload.append(bindData)
-        payload.appendUInt16(UInt16(spec.lPort))
-        payload.appendUInt8(protoCode(for: spec.rProto))
-        payload.appendUInt16(UInt16(hostData.count))
-        payload.append(hostData)
-        payload.appendUInt16(UInt16(spec.rPort))
-        payload.appendUInt32(UInt32(metadataData.count))
-        payload.append(metadataData)
-        return payload
     }
 
     static func parseOpenPayload(_ payload: Data) -> ParsedOpen? {

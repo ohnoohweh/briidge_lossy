@@ -213,8 +213,8 @@ Core tests cover portable ChannelMux reply admission. The macOS build-source
 guard and generated-iOS-project patch test ensure each Apple target compiles
 the WebSocket payload, binary, and APP/PING/PONG codecs from Core rather than a
 parallel shared-runtime source; the iOS packet-tunnel compile probe uses those
-same sources. Apple CKV1 chunking uses the Core raw-value bridge and RS3
-service-catalog encoding uses the Core type-neutral codec. The adapter suite exercises
+same sources. Apple CKV1 chunking uses the Core raw-value bridge; O5 OPEN and
+RS3 service-catalog encoding use the Core type-neutral codec. The adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove
 that an ephemeral listener publishes the kernel-assigned port in its O5 OPEN
