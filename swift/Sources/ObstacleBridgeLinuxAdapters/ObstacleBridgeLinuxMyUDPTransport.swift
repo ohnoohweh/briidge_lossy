@@ -81,7 +81,12 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             stateLock.lock()
             let counter = nextCounter
             nextCounter = increment(counter)
-            let echo = currentEchoLocked(now: DispatchTime.now().uptimeNanoseconds)
+            let now = DispatchTime.now().uptimeNanoseconds
+            let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(
+                nowNanoseconds: now,
+                lastReceivedTransmitNanoseconds: receiverEngine.heartbeat.lastReceivedTransmitNanoseconds,
+                lastReceivedWallNanoseconds: receiverEngine.heartbeat.lastReceivedWallNanoseconds
+            )
             stateLock.unlock()
             if firstCounter == 0 { firstCounter = counter }
             let chunk = ObstacleBridgeMyUDPStreamChunk(counter: counter, payload: Data(record[offset..<(offset + length)]))
