@@ -49,6 +49,8 @@ The active testing focus on this branch is:
 - WebAdmin peer ownership grouping for connection, protocol, ChannelMux, and TUN diagnostics, including ChannelMux-owned candidate/restart timers and persistent visibility for enabled SecureLink and Compression layers
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
+- the macOS Swift parity runner's WebSocket payload-size assertions call the
+  portable Core codec, alongside its existing Core wire-codec compilation set
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints

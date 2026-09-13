@@ -21,6 +21,8 @@ The project currently targets six platform families:
   service catalog encoding/decoding rather than compiling parallel implementations;
   its macOS parity runner compiles the Core myUDP, ChannelMux, SecureLink, and
   service codecs together with those Apple facades;
+  WebSocket payload frame-size bounds in that parity fixture also call the
+  portable Core codec rather than an Apple-only mode extension;
   serialization has one shared Core owner. Linux TCP/UDP service listeners
   publish kernel-assigned ephemeral ports in their Core OPEN records, and the
   SwiftPM peer-fixture lane bounds child processes for reproducible full-suite

@@ -2820,7 +2820,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         }
         var result = websocketPayloadCodecSummaryObject(mode: mode, codec: codec, wire: wire, encoded: encoded, decoded: decoded)
         let maxSize = (request["max_size"] as? NSNumber)?.intValue ?? 65535
-        result["frame_max_size"] = codec.maxEncodedSize(maxSize)
+        result["frame_max_size"] = ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(maxSize, mode: codec)
         return result
     case "drive_ws_runtime_tx":
         let runtime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: "binary", sendTimeoutS: ((request["timeout"] as? Bool) ?? false) ? 0.01 : 3.0)

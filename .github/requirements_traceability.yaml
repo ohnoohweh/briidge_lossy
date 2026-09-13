@@ -65,6 +65,7 @@ REQ-OVL-004:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_binary_payload_codec_matches_python
 
 REQ-OVL-005:
   integration_tests:
