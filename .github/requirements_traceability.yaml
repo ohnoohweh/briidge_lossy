@@ -174,10 +174,14 @@ REQ-AUT-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlFrameRoundTripsAndRejectsTrailingBytes
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlMissingListUsesPayloadDerivedLimit
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpBatchPayloadAndGenericEnvelopeAreCoreOwned
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkFrameEnvelopePreservesFlagsAndRejectsTruncation
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::channelMuxReplyPolicyAdmitsOneAwaitedFrame
-    # Apple build and generated-project tests pin Core payload, APP/PING/PONG, CKV1, O4/O5, and RS2/RS3 ownership.
+    # Apple build and generated-project tests pin Core payload, full myUDP, APP/PING/PONG, CKV1, O4/O5, and RS2/RS3 ownership.
     - tests/unit/test_macos_core_codec_build.py::test_macos_build_uses_core_websocket_payload_codec_once
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
+    - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
 
 REQ-AUT-002:
   integration_tests:
@@ -1025,6 +1029,7 @@ REQ-MUX-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::boundedBinaryCodecAndServiceWireFormatsRoundTrip
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::controlChunksMatchPythonLayoutAndRemainBounded
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
+    - swift/Tests/ObstacleBridgeApplePackageProbeTests/ObstacleBridgeApplePackageProbeTests.swift::importedCoreWireCodecOwnersExecuteForAppleConsumer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
     # Shared corpus carries Python-derived TCP, CKV1, O4/O5, and RS2/RS3 vectors,

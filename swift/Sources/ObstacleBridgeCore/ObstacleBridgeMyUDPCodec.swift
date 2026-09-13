@@ -39,6 +39,10 @@ public enum ObstacleBridgeMyUDPCodec {
     public static let protocolHeaderSize = 19
     public static let maximumPayloadSize = 1425
     public static let maximumBatchPayloadSize = 1433
+    public static let controlFixedPayloadSize = 6
+    /// CONTROL's missing-counter list is bounded by the myudp wire payload,
+    /// not the DATA_BATCH record-count limit.
+    public static let maximumControlMissingCount = (maximumBatchPayloadSize - controlFixedPayloadSize) / 2
     public static let dataType: UInt8 = 1
     public static let controlType: UInt8 = 2
     public static let idleType: UInt8 = 0
@@ -64,6 +68,10 @@ public enum ObstacleBridgeMyUDPCodec {
     }
 
     public static func encodeData(chunks: [ObstacleBridgeMyUDPStreamChunk], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64 = 0) throws -> Data {
+        try encodeWire(type: dataType, payload: encodeDataBatchPayload(chunks), transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
+    }
+
+    public static func encodeDataBatchPayload(_ chunks: [ObstacleBridgeMyUDPStreamChunk]) throws -> Data {
         guard !chunks.isEmpty, chunks.count <= 64 else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
         var batch = ObstacleBridgeBinaryWriter(capacity: maximumBatchPayloadSize)
         batch.append(UInt8(1)); batch.append(UInt8(chunks.count))
@@ -73,15 +81,15 @@ public enum ObstacleBridgeMyUDPCodec {
             batch.append(UInt16(chunk.payload.count)); batch.append(chunk.payload)
         }
         guard batch.encoded.count <= maximumBatchPayloadSize else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
-        return try encode(type: dataType, payload: batch.encoded, transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
+        return batch.encoded
     }
 
     public static func encodeControl(lastInOrder: UInt16, highestReceived: UInt16, missing: [UInt16] = [], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64 = 0) throws -> Data {
-        guard missing.count <= 64 else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
-        var payload = ObstacleBridgeBinaryWriter(capacity: 6 + missing.count * 2)
+        guard missing.count <= maximumControlMissingCount else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
+        var payload = ObstacleBridgeBinaryWriter(capacity: controlFixedPayloadSize + missing.count * 2)
         payload.append(lastInOrder); payload.append(highestReceived); payload.append(UInt16(missing.count))
         for counter in missing { payload.append(counter) }
-        return try encode(type: controlType, payload: payload.encoded, transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
+        return try encodeWire(type: controlType, payload: payload.encoded, transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
     }
 
     public static func decodeControl(_ wire: Data) throws -> ObstacleBridgeMyUDPControlFrame {
@@ -92,7 +100,7 @@ public enum ObstacleBridgeMyUDPCodec {
             let lastInOrder = try reader.readUInt16()
             let highestReceived = try reader.readUInt16()
             let count = Int(try reader.readUInt16())
-            guard count <= 64 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            guard count <= maximumControlMissingCount else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
             let missing = try (0..<count).map { _ in try reader.readUInt16() }
             guard reader.isAtEnd else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
             return .init(lastInOrder: lastInOrder, highestReceived: highestReceived, missing: missing, transmittedNanoseconds: frame.transmittedNanoseconds, echoedNanoseconds: frame.echoedNanoseconds)
@@ -112,10 +120,15 @@ public enum ObstacleBridgeMyUDPCodec {
 
     public static func decodeDataChunks(_ wire: Data) throws -> (chunks: [ObstacleBridgeMyUDPStreamChunk], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64) {
         let frame = try decodeWire(wire)
-        guard frame.type == dataType, frame.payload.count >= 2, frame.payload[0] == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-        let count = Int(frame.payload[1])
+        guard frame.type == dataType else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        return (try decodeDataBatchPayload(frame.payload), frame.transmittedNanoseconds, frame.echoedNanoseconds)
+    }
+
+    public static func decodeDataBatchPayload(_ payload: Data) throws -> [ObstacleBridgeMyUDPStreamChunk] {
+        guard payload.count >= 2, payload[0] == 1 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+        let count = Int(payload[1])
         guard count > 0, count <= 64 else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-        var reader = ObstacleBridgeBinaryReader(Data(frame.payload.dropFirst(2)))
+        var reader = ObstacleBridgeBinaryReader(Data(payload.dropFirst(2)))
         var chunks: [ObstacleBridgeMyUDPStreamChunk] = []
         for _ in 0..<count {
             do {
@@ -127,7 +140,7 @@ public enum ObstacleBridgeMyUDPCodec {
             } catch { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
         }
         guard reader.isAtEnd else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
-        return (chunks, frame.transmittedNanoseconds, frame.echoedNanoseconds)
+        return chunks
     }
 
     /// Compatibility helper for callers that deliberately use a single DATA
@@ -139,7 +152,7 @@ public enum ObstacleBridgeMyUDPCodec {
         return .init(counter: chunk.counter, payload: chunk.payload, transmittedNanoseconds: decoded.transmittedNanoseconds, echoedNanoseconds: decoded.echoedNanoseconds)
     }
 
-    private static func encode(type: UInt8, payload: Data, transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64) throws -> Data {
+    public static func encodeWire(type: UInt8, payload: Data, transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64) throws -> Data {
         guard payload.count <= maximumBatchPayloadSize else { throw ObstacleBridgeMyUDPCodecError.payloadTooLarge }
         var writer = ObstacleBridgeBinaryWriter(capacity: protocolHeaderSize + payload.count)
         writer.append(type); writer.append(UInt16(payload.count)); writer.append(transmittedNanoseconds); writer.append(echoedNanoseconds); writer.append(payload)

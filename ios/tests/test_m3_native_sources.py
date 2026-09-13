@@ -235,6 +235,11 @@ def test_channel_mux_codec_source_exists() -> None:
     assert "decodeRemoteServicesSetV2(" in codec
     assert "chunkControlPayload(" in codec
     assert "ControlChunkReassembler" in codec
+    assert "ObstacleBridgeChannelMuxFrameCodec.encode(" in codec
+    assert "ObstacleBridgeChannelMuxFrameCodec.decode(" in codec
+    assert "parseOpenV5" not in codec
+    assert "decodeRemoteServicesRS3" not in codec
+    assert "readUInt64(from" not in codec
 
 
 def test_channel_mux_tun_runtime_source_exists() -> None:
@@ -377,6 +382,10 @@ def test_compress_layer_runtime_source_exists() -> None:
     assert "struct StatusSnapshot" in runtime
     assert "struct SendSnapshot" in runtime
     assert "struct ReceiveSnapshot" in runtime
+    assert "ObstacleBridgeChannelMuxFrameCodec.decode(" in runtime
+    assert "ObstacleBridgeChannelMuxFrameCodec.encode(" in runtime
+    assert "readUInt16BE" not in runtime
+    assert "appendUInt16BE" not in runtime
     assert "parseAllowedMTypes(" in runtime
     assert "handleInboundPayload(" in runtime
     assert "handleSendPayload(" in runtime
@@ -876,7 +885,10 @@ def test_tcp_overlay_runtime_source_exists() -> None:
     assert "acceptServerPeer(" in runtime
     assert "closeServerPeer(" in runtime
     assert "backpressureSnapshot(" in runtime
-
+    assert "ObstacleBridgeOverlayFrameCodec.encodeTCP(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.decodeTCPBodyLength(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.decodeTCP(" in runtime
+    assert "readUInt32" not in runtime
 
 def test_tcp_overlay_transport_owner_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
@@ -1024,12 +1036,27 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "parseProtocolFrame(" in codec
     assert "buildControlFrame(" in codec
     assert "parseControlFrame(" in codec
+    assert "ObstacleBridgeMyUDPCodec.encodeControl(" in codec
+    assert "ObstacleBridgeMyUDPCodec.decodeControl(" in codec
+    assert "ObstacleBridgeMyUDPCodec.encodeDataBatchPayload(" in codec
+    assert "ObstacleBridgeMyUDPCodec.decodeDataBatchPayload(" in codec
+    assert "ObstacleBridgeMyUDPCodec.encodeWire(" in codec
+    assert "ObstacleBridgeMyUDPCodec.decodeWire(" in codec
+
     assert "encodeStreamRecord(" in codec
     assert "encodeDataBatch(" in codec
     assert "decodeDataBatch(" in codec
     assert "buildDataFrame(" not in codec
     assert "parseDataFrame(" not in codec
     assert "struct DataPacket" not in codec
+
+
+def test_secure_link_frame_codec_source_delegates_to_core() -> None:
+    secure_link = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeSecureLinkFrameCodec.header(" in secure_link
+    assert "ObstacleBridgeSecureLinkFrameCodec.encode(" in secure_link
+    assert "ObstacleBridgeSecureLinkFrameCodec.decode(" in secure_link
 
 
 def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:

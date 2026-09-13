@@ -13,6 +13,10 @@ struct ObstacleBridgeCryptoTests {
         )
         #expect(wire == Data([0x01, 0x02, 0x01, 0x03, 0x04, 0x00, 0x00, 0x02, 0xaa, 0xbb]))
         #expect(try ObstacleBridgeChannelMuxCodec.decode(wire).body == Data([0xaa, 0xbb]))
+        #expect(try ObstacleBridgeChannelMuxFrameCodec.decode(wire) == .init(channelID: 0x0102, protocolType: 1, counter: 0x0304, messageType: 0, body: Data([0xaa, 0xbb])))
+        #expect(throws: ObstacleBridgeChannelMuxFrameCodecError.invalidFrame) {
+            try ObstacleBridgeChannelMuxFrameCodec.decode(wire + Data([0]))
+        }
         #expect(throws: ObstacleBridgeChannelMuxCodecError.invalidFrame) { try ObstacleBridgeChannelMuxCodec.decode(Data([0])) }
     }
 
@@ -22,10 +26,43 @@ struct ObstacleBridgeCryptoTests {
         #expect(try ObstacleBridgeMyUDPCodec.decodeData(wire) == .init(counter: 7, payload: Data("udp".utf8), transmittedNanoseconds: 0x0102, echoedNanoseconds: 0x0304))
         #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeData(Data([1])) }
     }
+    @Test func myudpBatchPayloadAndGenericEnvelopeAreCoreOwned() throws {
+        let chunks: [ObstacleBridgeMyUDPStreamChunk] = [
+            .init(counter: 7, payload: Data("abc".utf8)),
+            .init(counter: 8, payload: Data("de".utf8)),
+        ]
+        let payload = try ObstacleBridgeMyUDPCodec.encodeDataBatchPayload(chunks)
+        #expect(payload == Data([1, 2, 0, 7, 0, 7, 0, 3, 97, 98, 99, 0, 6, 0, 8, 0, 2, 100, 101]))
+        #expect(try ObstacleBridgeMyUDPCodec.decodeDataBatchPayload(payload) == chunks)
+        let idle = try ObstacleBridgeMyUDPCodec.encodeWire(type: ObstacleBridgeMyUDPCodec.idleType, payload: Data(), transmittedNanoseconds: 1, echoedNanoseconds: 2)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(idle) == .init(type: 0, payload: Data(), transmittedNanoseconds: 1, echoedNanoseconds: 2))
+    }
     @Test func myudpControlFrameRoundTripsAndRejectsTrailingBytes() throws {
         let wire = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9)
         #expect(try ObstacleBridgeMyUDPCodec.decodeControl(wire) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
         #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeControl(wire + Data([0])) }
+    }
+    @Test func myudpControlMissingListUsesPayloadDerivedLimit() throws {
+        #expect(ObstacleBridgeMyUDPCodec.maximumControlMissingCount == 713)
+        let missing = (1...ObstacleBridgeMyUDPCodec.maximumControlMissingCount).map(UInt16.init)
+        let wire = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 0, highestReceived: 713, missing: missing, transmittedNanoseconds: 8)
+        #expect(wire.count == ObstacleBridgeMyUDPCodec.protocolHeaderSize + ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize - 1)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeControl(wire).missing == missing)
+        #expect(throws: ObstacleBridgeMyUDPCodecError.payloadTooLarge) {
+            try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 0, highestReceived: 714, missing: missing + [714], transmittedNanoseconds: 8)
+        }
+    }
+    @Test func secureLinkFrameEnvelopePreservesFlagsAndRejectsTruncation() throws {
+        let wire = ObstacleBridgeSecureLinkFrameCodec.encode(
+            type: 4, sessionID: 0x0102, counter: 3, payload: Data("payload".utf8), flags: 0x7f
+        )
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(wire) == .init(
+            type: 4, sessionID: 0x0102, counter: 3,
+            header: Data(wire.prefix(ObstacleBridgeSecureLinkFrameCodec.headerLength)), payload: Data("payload".utf8)
+        ))
+        #expect(throws: ObstacleBridgeSecureLinkFrameCodecError.invalidFrame) {
+            try ObstacleBridgeSecureLinkFrameCodec.decode(Data(wire.prefix(19)))
+        }
     }
     @Test func hashesAndKeyDerivationMatchKnownAnswerVectors() throws {
         #expect(ObstacleBridgeCrypto.sha256(Data("abc".utf8)).hex == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
@@ -202,6 +239,11 @@ struct ObstacleBridgeCoreCodecTests {
         let wire = try ObstacleBridgeOverlayFrameCodec.encodeTCP(application)
         #expect(wire.hex == "000000060068656c6c6f")
         #expect(try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire) == application)
+        #expect(try ObstacleBridgeOverlayFrameCodec.decodeTCPBodyLength(Data(wire.prefix(4))) == 6)
+        #expect(try ObstacleBridgeOverlayFrameCodec.decodeTCPBodyLength(Data([0, 0, 0, 0])) == 0)
+        #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) {
+            try ObstacleBridgeOverlayFrameCodec.decodeTCPBodyLength(Data([0, 0, 0]))
+        }
         let ping = ObstacleBridgeOverlayFrame(kind: .ping, payload: Data.hex("01020304050607080000000000000000"))
         #expect(try ObstacleBridgeOverlayFrameCodec.pong(forPing: ping) == .init(kind: .pong, payload: Data.hex("0102030405060708")))
         #expect(ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: 0x0102030405060708, echoNS: 0x1112131415161718).hex == "01020304050607081112131415161718")
@@ -237,6 +279,28 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(try ObstacleBridgeOverlayFrameCodec.encodeTCP(.init(kind: .application, payload: payload)) == wire)
         for value in try #require(tcp["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) { try ObstacleBridgeOverlayFrameCodec.decodeTCP(.hex(value)) }
+        }
+        let channelMux = try #require(corpus["channelmux_header"] as? [String: Any])
+        let channelMuxBody = Data.hex(try #require(channelMux["body_hex"] as? String))
+        let channelMuxWire = Data.hex(try #require(channelMux["wire_hex"] as? String))
+        #expect(try ObstacleBridgeChannelMuxFrameCodec.encode(
+            channelID: UInt16(try #require(channelMux["channel_id"] as? Int)),
+            protocolType: UInt8(try #require(channelMux["protocol_type"] as? Int)),
+            counter: UInt16(try #require(channelMux["counter"] as? Int)),
+            messageType: UInt8(try #require(channelMux["message_type"] as? Int)),
+            body: channelMuxBody
+        ) == channelMuxWire)
+        #expect(try ObstacleBridgeChannelMuxFrameCodec.decode(channelMuxWire) == .init(
+            channelID: UInt16(try #require(channelMux["channel_id"] as? Int)),
+            protocolType: UInt8(try #require(channelMux["protocol_type"] as? Int)),
+            counter: UInt16(try #require(channelMux["counter"] as? Int)),
+            messageType: UInt8(try #require(channelMux["message_type"] as? Int)),
+            body: channelMuxBody
+        ))
+        for value in try #require(channelMux["malformed_wire_hex"] as? [String]) {
+            #expect(throws: ObstacleBridgeChannelMuxFrameCodecError.invalidFrame) {
+                try ObstacleBridgeChannelMuxFrameCodec.decode(.hex(value))
+            }
         }
         let myudp = try #require(corpus["myudp_data"] as? [String: Any])
         let myudpPayload = Data.hex(try #require(myudp["payload_hex"] as? String))
@@ -301,6 +365,17 @@ struct ObstacleBridgeCoreCodecTests {
         let expectedChunks = try #require(chunk["chunks_hex"] as? [String])
         let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: UInt32(transactionID), maximumApplicationPayload: maximumPayload, payload: chunkPayload)
         #expect(chunks.map(\.hex) == expectedChunks)
+        let malformedChunkReassembler = ObstacleBridgeControlChunkReassembler()
+        for value in try #require(chunk["malformed_chunks_hex"] as? [String]) {
+            #expect(malformedChunkReassembler.consume(
+                channelID: 1,
+                protocolType: 1,
+                messageType: 7,
+                payload: .hex(value),
+                peerID: nil,
+                now: 1
+            ) == nil)
+        }
         let serviceRecord = try #require(corpus["service_records"] as? [String: Any])
         let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "echo", listenProtocol: 1, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: 1, targetHost: "127.0.0.1", targetPort: 7002)
         let o4 = Data.hex(try #require(serviceRecord["open_o4_hex"] as? String))

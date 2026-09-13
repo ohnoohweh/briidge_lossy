@@ -161,6 +161,18 @@ The build script now supports that split explicitly:
 
 This keeps Swift-backed regression time reasonable as we add more macOS/iOS parity cases.
 
+- `macos-portable-core`
+
+```bash
+swift test --filter 'ObstacleBridgeCoreTests.ObstacleBridgeCoreCodecTests/sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords\(\)'
+swift test --filter ObstacleBridgeApplePackageProbeTests
+```
+
+The package manifest exposes only portable Core targets on macOS; Linux adapter
+and executable targets remain available when the manifest is evaluated on Linux.
+The Apple probe executes every R003 wire-codec owner through its imported Core
+module.
+
 - `linux-swift`
 
 ```bash
@@ -208,10 +220,12 @@ vectors, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for the Core
 suite, including Python/Swift agreement on O4/O5 and RS2/RS3 truncation and
 trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
 all shared text payload modes against a Python peer. The shared corpus also
-pins Python-compatible myUDP CONTROL bytes and malformed rejection, while direct
-Core tests cover portable ChannelMux reply admission. The macOS build-source
+pins Python-compatible myUDP CONTROL bytes and malformed rejection; direct
+Core and Apple-probe tests pin the payload-derived 713-counter missing-list
+boundary. Direct Core tests also cover portable ChannelMux reply admission. The
+macOS build-source
 guard and generated-iOS-project patch test ensure each Apple target compiles
-the WebSocket payload, binary, and APP/PING/PONG codecs from Core rather than a
+the WebSocket payload, binary, full myUDP, SecureLink envelope, ChannelMux header, and TCP/WebSocket APP/PING/PONG codecs from Core rather than a
 parallel shared-runtime source; the iOS packet-tunnel compile probe uses those
 same sources. Apple CKV1 chunking uses the Core raw-value bridge; O4/O5 OPEN and
 RS2/RS3 service-catalog encoding/decoding use the Core type-neutral codec. The adapter suite exercises
@@ -447,8 +461,8 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - myUDP2 upper-layer stream-record budgets through SecureLink, Compression, and
   ChannelMux, plus peer-status diagnostics for batch, stream-byte, queue, retry,
   malformed-batch, and malformed-stream counters
-- shared Swift myUDP2 batch vectors and reordered stream delivery through a
-  compiled probe of the macOS/iOS codec and peer-runtime sources
+- shared Swift myUDP2 batch vectors, payload-derived CONTROL missing-list capacity,
+  and reordered stream delivery through a compiled probe of the macOS/iOS codec and peer-runtime sources
 
 ## Test catalog
 

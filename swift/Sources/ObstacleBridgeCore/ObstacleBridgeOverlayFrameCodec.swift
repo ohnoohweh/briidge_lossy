@@ -58,6 +58,21 @@ public enum ObstacleBridgeOverlayFrameCodec {
         } catch { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
     }
 
+    /// Decodes only a TCP record's length prefix for adapters that retain a
+    /// partial receive buffer. A zero length is a transport keepalive marker;
+    /// callers may consume it without asking `decodeTCP` to decode a frame.
+    public static func decodeTCPBodyLength(_ header: Data) throws -> Int {
+        do {
+            var reader = ObstacleBridgeBinaryReader(header)
+            let length = Int(try reader.readUInt32())
+            guard reader.isAtEnd, length <= maximumBodyLength else {
+                throw ObstacleBridgeOverlayFrameCodecError.invalidFrame
+            }
+            return length
+        } catch let error as ObstacleBridgeOverlayFrameCodecError { throw error
+        } catch { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+    }
+
     public static func pong(forPing ping: ObstacleBridgeOverlayFrame) throws -> ObstacleBridgeOverlayFrame {
         guard ping.kind == .ping, ping.payload.count >= 8 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
         return .init(kind: .pong, payload: Data(ping.payload.prefix(8)))

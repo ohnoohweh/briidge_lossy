@@ -11,10 +11,8 @@ enum ObstacleBridgeChannelMuxCodecError: Error {
 
 struct ObstacleBridgeChannelMuxCodec {
     static let muxHeaderSize = 8
-    static let controlChunkHeaderSize = 12
     static let controlChunkMaxInflight = 512
     static let controlChunkReassemblyTTLS = 20.0
-    private static let controlChunkMagic = Data("CKV1".utf8)
 
     enum Proto: Int {
         case udp = 0
@@ -128,45 +126,30 @@ struct ObstacleBridgeChannelMuxCodec {
         mtype: MType,
         body: Data
     ) throws -> Data {
-        guard (0...0xFFFF).contains(chanID) else {
+        guard let channelID = UInt16(exactly: chanID) else {
             throw ObstacleBridgeChannelMuxCodecError.invalidChannelID
         }
-        guard body.count <= 0xFFFF else {
+        do {
+            return try ObstacleBridgeChannelMuxFrameCodec.encode(
+                channelID: channelID, protocolType: UInt8(proto.rawValue),
+                counter: UInt16(counter & 0xFFFF), messageType: UInt8(mtype.rawValue), body: body
+            )
+        } catch {
             throw ObstacleBridgeChannelMuxCodecError.payloadTooLarge
         }
-        var payload = Data()
-        payload.appendUInt16(UInt16(chanID))
-        payload.appendUInt8(UInt8(proto.rawValue))
-        payload.appendUInt16(UInt16(counter & 0xFFFF))
-        payload.appendUInt8(UInt8(mtype.rawValue))
-        payload.appendUInt16(UInt16(body.count))
-        payload.append(body)
-        return payload
     }
 
     static func unpackMux(_ payload: Data) -> MuxFrame? {
-        guard payload.count >= 8 else {
-            return nil
-        }
-        var offset = 0
-        guard
-            let chanID = readUInt16(from: payload, offset: &offset),
-            let protoRaw = readUInt8(from: payload, offset: &offset),
-            let counter = readUInt16(from: payload, offset: &offset),
-            let mtypeRaw = readUInt8(from: payload, offset: &offset),
-            let declaredLength = readUInt16(from: payload, offset: &offset),
-            payload.count >= offset + Int(declaredLength),
-            let proto = Proto(rawValue: Int(protoRaw)),
-            let mtype = MType(rawValue: Int(mtypeRaw))
-        else {
-            return nil
-        }
+        guard let decoded = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload),
+              let proto = Proto(rawValue: Int(decoded.protocolType)),
+              let mtype = MType(rawValue: Int(decoded.messageType))
+        else { return nil }
         return MuxFrame(
-            chanID: Int(chanID),
+            chanID: Int(decoded.channelID),
             proto: proto,
-            counter: Int(counter),
+            counter: Int(decoded.counter),
             mtype: mtype,
-            body: payload.subdata(in: offset..<(offset + Int(declaredLength)))
+            body: decoded.body
         )
     }
 
@@ -295,9 +278,9 @@ struct ObstacleBridgeChannelMuxCodec {
     }
 
     private static func serviceSpec(_ value: ObstacleBridgeServiceSpec) -> ServiceSpec? {
-        guard let listenProtocol = protoName(for: Int(value.listenProtocol)),
-              let targetProtocol = protoName(for: Int(value.targetProtocol))
-        else { return nil }
+        let listenProtocol = protoName(for: Int(value.listenProtocol))
+        let targetProtocol = protoName(for: Int(value.targetProtocol))
+        guard !listenProtocol.isEmpty, !targetProtocol.isEmpty else { return nil }
         return .init(
             svcID: Int(value.serviceID), lProto: listenProtocol, lBind: value.listenHost,
             lPort: Int(value.listenPort), rProto: targetProtocol, rHost: value.targetHost,
@@ -336,183 +319,6 @@ struct ObstacleBridgeChannelMuxCodec {
         case .null:
             return NSNull()
         }
-    }
-
-    private static func parseOpenV5(_ payload: Data) -> ParsedOpen? {
-        guard payload.count >= 25 else {
-            return nil
-        }
-        var offset = 2
-        guard
-            let instanceID = readUInt64(from: payload, offset: &offset),
-            let connectionSeq = readUInt32(from: payload, offset: &offset),
-            let svcID = readUInt16(from: payload, offset: &offset),
-            let lProto = readUInt8(from: payload, offset: &offset),
-            let bindLength = readUInt16(from: payload, offset: &offset),
-            let lBind = readString(from: payload, offset: &offset, length: Int(bindLength)),
-            let lPort = readUInt16(from: payload, offset: &offset),
-            let rProto = readUInt8(from: payload, offset: &offset),
-            let hostLength = readUInt16(from: payload, offset: &offset),
-            let rHost = readString(from: payload, offset: &offset, length: Int(hostLength)),
-            let rPort = readUInt16(from: payload, offset: &offset),
-            let metadataLength = readUInt32(from: payload, offset: &offset),
-            let metadataData = readData(from: payload, offset: &offset, length: Int(metadataLength)),
-            let metadataValue = parseJSONValue(metadataData)
-        else {
-            return nil
-        }
-        guard offset == payload.count else {
-            return nil
-        }
-        let metadata = metadataValue.objectValue ?? [:]
-        return ParsedOpen(
-            instanceID: instanceID,
-            connectionSeq: connectionSeq,
-            spec: ServiceSpec(
-                svcID: Int(svcID),
-                lProto: protoName(for: Int(lProto)),
-                lBind: lBind,
-                lPort: Int(lPort),
-                rProto: protoName(for: Int(rProto)),
-                rHost: rHost,
-                rPort: Int(rPort),
-                name: metadata["name"]?.stringValue,
-                lifecycleHooks: metadata["lifecycle_hooks"]?.objectValue,
-                options: metadata["options"]?.objectValue
-            )
-        )
-    }
-
-    private static func parseOpenV4(_ payload: Data) -> ParsedOpen? {
-        guard payload.count >= 21 else {
-            return nil
-        }
-        var offset = 2
-        guard
-            let instanceID = readUInt64(from: payload, offset: &offset),
-            let connectionSeq = readUInt32(from: payload, offset: &offset),
-            let svcID = readUInt16(from: payload, offset: &offset),
-            let lProto = readUInt8(from: payload, offset: &offset),
-            let bindLength = readUInt8(from: payload, offset: &offset),
-            let lBind = readString(from: payload, offset: &offset, length: Int(bindLength)),
-            let lPort = readUInt16(from: payload, offset: &offset),
-            let rProto = readUInt8(from: payload, offset: &offset),
-            let hostLength = readUInt8(from: payload, offset: &offset),
-            let rHost = readString(from: payload, offset: &offset, length: Int(hostLength)),
-            let rPort = readUInt16(from: payload, offset: &offset)
-        else {
-            return nil
-        }
-        guard offset == payload.count else {
-            return nil
-        }
-        return ParsedOpen(
-            instanceID: instanceID,
-            connectionSeq: connectionSeq,
-            spec: ServiceSpec(
-                svcID: Int(svcID),
-                lProto: protoName(for: Int(lProto)),
-                lBind: lBind,
-                lPort: Int(lPort),
-                rProto: protoName(for: Int(rProto)),
-                rHost: rHost,
-                rPort: Int(rPort),
-                name: nil,
-                lifecycleHooks: nil,
-                options: nil
-            )
-        )
-    }
-
-    private static func decodeRemoteServicesRS3(_ payload: Data) -> (UInt64, UInt32, [ServiceSpec])? {
-        guard payload.count >= 19 else {
-            return nil
-        }
-        var offset = 3
-        guard
-            let instanceID = readUInt64(from: payload, offset: &offset),
-            let connectionSeq = readUInt32(from: payload, offset: &offset),
-            let blobLength = readUInt32(from: payload, offset: &offset),
-            let blob = readData(from: payload, offset: &offset, length: Int(blobLength)),
-            let jsonValue = parseJSONValue(blob),
-            let rows = jsonValue.arrayValue
-        else {
-            return nil
-        }
-        guard offset == payload.count else {
-            return nil
-        }
-        var services: [ServiceSpec] = []
-        for row in rows {
-            guard let service = serviceSpec(from: row.objectValue ?? [:]) else {
-                return nil
-            }
-            services.append(service)
-        }
-        return (instanceID, connectionSeq, services)
-    }
-
-    private static func decodeRemoteServicesRS2(_ payload: Data) -> (UInt64, UInt32, [ServiceSpec])? {
-        guard payload.count >= 17 else {
-            return nil
-        }
-        var offset = 3
-        guard
-            let instanceID = readUInt64(from: payload, offset: &offset),
-            let connectionSeq = readUInt32(from: payload, offset: &offset),
-            let count = readUInt16(from: payload, offset: &offset)
-        else {
-            return nil
-        }
-        var services: [ServiceSpec] = []
-        for _ in 0..<count {
-            guard
-                let svcID = readUInt16(from: payload, offset: &offset),
-                let lProto = readUInt8(from: payload, offset: &offset),
-                let bindLength = readUInt8(from: payload, offset: &offset),
-                let lBind = readString(from: payload, offset: &offset, length: Int(bindLength)),
-                let lPort = readUInt16(from: payload, offset: &offset),
-                let rProto = readUInt8(from: payload, offset: &offset),
-                let hostLength = readUInt8(from: payload, offset: &offset),
-                let rHost = readString(from: payload, offset: &offset, length: Int(hostLength)),
-                let rPort = readUInt16(from: payload, offset: &offset)
-            else {
-                return nil
-            }
-            services.append(
-                ServiceSpec(
-                    svcID: Int(svcID),
-                    lProto: protoName(for: Int(lProto)),
-                    lBind: lBind,
-                    lPort: Int(lPort),
-                    rProto: protoName(for: Int(rProto)),
-                    rHost: rHost,
-                    rPort: Int(rPort),
-                    name: nil,
-                    lifecycleHooks: nil,
-                    options: nil
-                )
-            )
-        }
-        guard offset == payload.count else {
-            return nil
-        }
-        return (instanceID, connectionSeq, services)
-    }
-
-    private static func serviceSpecJSON(_ spec: ServiceSpec) -> JSONValue {
-        return .object([
-            "svc_id": .integer(Int64(spec.svcID)),
-            "l_proto": .string(spec.lProto),
-            "l_bind": .string(spec.lBind),
-            "l_port": .integer(Int64(spec.lPort)),
-            "r_proto": .string(spec.rProto),
-            "r_host": .string(spec.rHost),
-            "r_port": .integer(Int64(spec.rPort)),
-            "name": spec.name.map(JSONValue.string) ?? .null,
-            "lifecycle_hooks": spec.lifecycleHooks.map(JSONValue.object) ?? .null,
-            "options": spec.options.map(JSONValue.object) ?? .null,
-        ])
     }
 
     static func sharedTunOwnershipSnapshot(for spec: ServiceSpec) -> JSONValue? {
@@ -589,57 +395,6 @@ struct ObstacleBridgeChannelMuxCodec {
         }
     }
 
-    private static func serviceSpec(from object: [String: JSONValue]) -> ServiceSpec? {
-        guard
-            let svcID = object["svc_id"]?.intValue,
-            let lProto = object["l_proto"]?.stringValue,
-            let lBind = object["l_bind"]?.stringValue,
-            let lPort = object["l_port"]?.intValue,
-            let rProto = object["r_proto"]?.stringValue,
-            let rHost = object["r_host"]?.stringValue,
-            let rPort = object["r_port"]?.intValue
-        else {
-            return nil
-        }
-        return ServiceSpec(
-            svcID: svcID,
-            lProto: lProto,
-            lBind: lBind,
-            lPort: lPort,
-            rProto: rProto,
-            rHost: rHost,
-            rPort: rPort,
-            name: object["name"]?.stringValue,
-            lifecycleHooks: object["lifecycle_hooks"]?.objectValue,
-            options: object["options"]?.objectValue
-        )
-    }
-
-    private static func parseJSONValue(_ data: Data) -> JSONValue? {
-        guard let object = try? JSONSerialization.jsonObject(with: data, options: []) else {
-            return nil
-        }
-        return jsonValue(from: object)
-    }
-
-    private static func parseControlChunkHeader(
-        _ payload: Data
-    ) -> (magic: Data, txID: UInt32, chunkIndex: Int, chunkTotal: Int)? {
-        guard payload.count >= controlChunkHeaderSize else {
-            return nil
-        }
-        var offset = 0
-        guard
-            let magic = readData(from: payload, offset: &offset, length: 4),
-            let txID = readUInt32(from: payload, offset: &offset),
-            let chunkIndex = readUInt16(from: payload, offset: &offset),
-            let chunkTotal = readUInt16(from: payload, offset: &offset)
-        else {
-            return nil
-        }
-        return (magic, txID, Int(chunkIndex), Int(chunkTotal))
-    }
-
     private static func protoCode(for name: String) -> UInt8 {
         switch name.lowercased() {
         case "udp":
@@ -666,103 +421,6 @@ struct ObstacleBridgeChannelMuxCodec {
         }
     }
 
-    private static func canonicalJSONString(
-        for value: JSONValue,
-        preferredKeyOrder: [String] = []
-    ) -> String {
-        switch value {
-        case .object(let dict):
-            let preferred = preferredKeyOrder.filter { dict[$0] != nil }
-            let remaining = dict.keys.filter { !preferred.contains($0) }.sorted()
-            let keys = preferred + remaining
-            let parts = keys.map { key in
-                let encodedKey = encodeJSONString(key)
-                let encodedValue = canonicalJSONString(for: dict[key] ?? .null)
-                return "\(encodedKey):\(encodedValue)"
-            }
-            return "{\(parts.joined(separator: ","))}"
-        case .array(let items):
-            return "[\(items.map { canonicalJSONString(for: $0) }.joined(separator: ","))]"
-        case .string(let string):
-            return encodeJSONString(string)
-        case .integer(let value):
-            return String(value)
-        case .double(let value):
-            if value.rounded(.towardZero) == value {
-                return String(Int64(value))
-            }
-            return String(value)
-        case .bool(let value):
-            return value ? "true" : "false"
-        case .null:
-            return "null"
-        }
-    }
-
-    private static func encodeJSONString(_ value: String) -> String {
-        let payload = [value]
-        let data = try? JSONSerialization.data(withJSONObject: payload, options: [])
-        let text = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
-        return String(text.dropFirst().dropLast())
-    }
-
-    private static func readUInt8(from data: Data, offset: inout Int) -> UInt8? {
-        guard offset + 1 <= data.count else {
-            return nil
-        }
-        let value = data[offset]
-        offset += 1
-        return value
-    }
-
-    private static func readUInt16(from data: Data, offset: inout Int) -> UInt16? {
-        guard offset + 2 <= data.count else {
-            return nil
-        }
-        let value = (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
-        offset += 2
-        return value
-    }
-
-    private static func readUInt32(from data: Data, offset: inout Int) -> UInt32? {
-        guard offset + 4 <= data.count else {
-            return nil
-        }
-        let value = (UInt32(data[offset]) << 24)
-            | (UInt32(data[offset + 1]) << 16)
-            | (UInt32(data[offset + 2]) << 8)
-            | UInt32(data[offset + 3])
-        offset += 4
-        return value
-    }
-
-    private static func readUInt64(from data: Data, offset: inout Int) -> UInt64? {
-        guard offset + 8 <= data.count else {
-            return nil
-        }
-        var value: UInt64 = 0
-        for index in 0..<8 {
-            value = (value << 8) | UInt64(data[offset + index])
-        }
-        offset += 8
-        return value
-    }
-
-    private static func readData(from data: Data, offset: inout Int, length: Int) -> Data? {
-        guard offset + length <= data.count else {
-            return nil
-        }
-        let payload = data.subdata(in: offset..<(offset + length))
-        offset += length
-        return payload
-    }
-
-    private static func readString(from data: Data, offset: inout Int, length: Int) -> String? {
-        guard let payload = readData(from: data, offset: &offset, length: length) else {
-            return nil
-        }
-        return String(data: payload, encoding: .utf8)
-    }
 }
 
 extension Data {

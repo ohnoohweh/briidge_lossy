@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import struct
 from pathlib import Path
 
@@ -21,6 +22,17 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     tcp = corpus["tcp_application"]
     payload = bytes.fromhex(tcp["payload_hex"])
     assert struct.pack(">I", len(payload) + 1) + b"\x00" + payload == bytes.fromhex(tcp["wire_hex"])
+
+    channelmux = corpus["channelmux_header"]
+    channelmux_wire = bytes.fromhex(channelmux["wire_hex"])
+    channelmux_body = bytes.fromhex(channelmux["body_hex"])
+    assert ChannelMux.MUX_HDR.pack(
+        int(channelmux["channel_id"]),
+        int(channelmux["protocol_type"]),
+        int(channelmux["counter"]),
+        int(channelmux["message_type"]),
+        len(channelmux_body),
+    ) + channelmux_body == channelmux_wire
 
     myudp_data = corpus["myudp_data"]
     data_payload = bytes.fromhex(myudp_data["payload_hex"])
@@ -104,6 +116,27 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     assert rs3.hex() == service["rs3_hex"]
 
     service_codec = object.__new__(ServiceChannelMux)
+    service_codec.log = logging.getLogger(__name__)
+    decoded_mux = service_codec._unpack_mux(channelmux_wire)
+    assert decoded_mux is not None
+    assert tuple(decoded_mux[:4]) == (
+        int(channelmux["channel_id"]),
+        ServiceChannelMux.Proto(int(channelmux["protocol_type"])),
+        int(channelmux["counter"]),
+        ServiceChannelMux.MType(int(channelmux["message_type"])),
+    )
+    assert bytes(decoded_mux[4]) == channelmux_body
+    assert all(service_codec._unpack_mux(bytes.fromhex(value)) is None for value in channelmux["malformed_wire_hex"])
+    assert all(
+        service_codec._consume_control_chunk(
+            chan_id=1,
+            proto=ServiceChannelMux.Proto.UDP,
+            mtype=ServiceChannelMux.MType.OPEN_CHUNK,
+            payload=bytes.fromhex(value),
+            peer_id=None,
+        ) is None
+        for value in chunk["malformed_chunks_hex"]
+    )
     assert service_codec._parse_open_with_meta(o4) is not None
     assert service_codec._parse_open_with_meta(o5) is not None
     assert service_codec._decode_remote_services_set_v2(rs2) is not None

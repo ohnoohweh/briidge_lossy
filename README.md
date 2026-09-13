@@ -8,12 +8,14 @@ The project currently targets six platform families:
   command-line product. It provides a Linux build and selected interoperable
   overlay/service paths. Its shared Core package owns bounded binary and typed
   JSON codecs for the O4/O5 service OPEN and RS2/RS3 service-catalog records;
-  its Python-derived Core corpus also pins TCP, myUDP, and WebSocket binary
+  its Python-derived Core corpus also pins TCP, raw ChannelMux headers, myUDP, and WebSocket binary
   malformed-record, SecureLink PSK transcript/handshake, control-chunk,
   service OPEN and service-catalog bytes, including service-record truncation
   and trailing-byte rejection, plus all WebSocket payload modes; SecureLink client/server envelope
-  and myUDP CONTROL/stream-record framing have Core owners; the macOS flat
-  build and generated iOS targets also consume the Core WebSocket payload and
+  and full myUDP/SecureLink/TCP APP/ChannelMux-header framing have Core owners; CONTROL missing-list
+  capacity is derived from its wire payload (713 counters) rather than the
+  DATA_BATCH record limit. The macOS flat build and generated iOS targets also
+  consume the Core WebSocket payload and
   APP/PING/PONG frame codecs, CKV1 control-chunk policy, O4/O5 OPEN and RS2/RS3
   service catalog encoding/decoding rather than compiling parallel implementations;
   serialization has one shared Core owner. Linux TCP/UDP service listeners

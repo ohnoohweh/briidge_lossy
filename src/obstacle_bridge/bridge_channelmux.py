@@ -1945,8 +1945,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return None
         mv = memoryview(buf)
         chan_id, proto, counter, mtype, dlen = ChannelMux.MUX_HDR.unpack(mv[:ChannelMux.MUX_HDR.size])
-        if mv.nbytes < ChannelMux.MUX_HDR.size + dlen:
-            self.log.warning("[MUX] unpack mux failed : too little data %i < %i", mv.nbytes, ChannelMux.MUX_HDR.size + dlen)
+        if mv.nbytes != ChannelMux.MUX_HDR.size + dlen:
+            self.log.warning("[MUX] unpack mux failed : size mismatch %i != %i", mv.nbytes, ChannelMux.MUX_HDR.size + dlen)
             return None
         try:
             return chan_id, ChannelMux.Proto(proto), counter, ChannelMux.MType(mtype), mv[ChannelMux.MUX_HDR.size:ChannelMux.MUX_HDR.size + dlen]

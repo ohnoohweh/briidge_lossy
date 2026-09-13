@@ -529,10 +529,13 @@ Python-overlay test fixture bounds simultaneous child peers. R003 remains open
 for the remaining ownership migration and corpus coverage listed below, not for
 test-runner stability.
 
-The shared Python-derived corpus covers TCP APP framing and malformed records,
-the myUDP DATA_BATCH envelope and malformed records, all WebSocket payload
+The shared Python-derived corpus covers TCP APP framing, raw ChannelMux headers,
+and malformed records,
+the myUDP DATA_BATCH envelope and malformed records, and malformed CONTROL
+records. Direct Core and Apple probes also pin CONTROL's payload-derived
+missing-list capacity. The corpus covers all WebSocket payload
 modes (`binary`, `base64`, `json-base64`, and `semi-text-shape`), SecureLink PSK transcript/key/proof and handshake
-envelope vectors, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3 catalogs. It
+envelope vectors, CKV1 control chunks and malformed headers, O4/O5 OPEN, and RS2/RS3 catalogs. It
 also pins O4/O5 and RS2/RS3 truncation and trailing-byte rejection in both the
 Python reference parser and Core, plus myUDP CONTROL bytes and malformed
 records. It still needs comparable malformed coverage for the remaining codec
@@ -563,10 +566,10 @@ richer codec and remaining overlay codecs remain direct consumers until their fu
 R007 consume those Core owners; R009 expands the final cross-platform migration
 and build qualification.
 
-The SecureLink PSK client and server both consume the same Core frame codec for
-the versioned envelope and authenticated-data header. Linux transport adapters
-therefore carry SecureLink bytes without owning a second header serializer or
-parser.
+The SecureLink PSK client and server and the Apple SecureLink adapter consume
+the same Core frame codec for the versioned envelope and authenticated-data
+header. Linux and Apple transport adapters therefore carry SecureLink bytes
+without owning a second header serializer or parser.
 
 #### R003 residual work by platform
 
@@ -576,15 +579,22 @@ parser.
   all WebSocket payload modes, while Linux parses `ws_payload_mode`, negotiates
   it during upgrade, and proves text-frame interoperability with Python.
 - **macOS and iOS:** the macOS flat build and generated iOS app/packet-tunnel
-  targets compile the Core binary, WebSocket payload, and APP/PING/PONG frame
-  codecs; the shared WebSocket runtime delegates its payload mode, frame bytes,
+  targets compile the Core binary, full myUDP, SecureLink envelope, WebSocket
+  payload, and APP/PING/PONG frame codecs. The shared TCP runtime delegates its
+  APP record encoding, stream-prefix length validation, and complete-record
+  parsing to Core while retaining partial-buffer and socket lifecycle state.
+  The shared UDP overlay runtime delegates DATA,
+  IDLE, CONTROL, stream-record, and DATA_BATCH framing plus the payload-derived
+  CONTROL missing-list capacity to Core, while the
+  shared WebSocket runtime delegates its payload mode, frame bytes,
   and RTT timestamp serialization to those owners. The generated-project patch
   upgrades existing file references in place, and the packet-tunnel compile
-  probe uses the same sources. The remaining shared-runtime consumers must
-  import the package product and replace direct ChannelMux, SecureLink, myUDP,
-  and TCP codec implementations. Their O4/O5 OPEN and RS2/RS3 catalog encoding/decoding plus CKV1 chunk creation, transaction
-  rollover, and reassembly delegate to the Core raw-value bridge. The same corpus
-  must run in macOS host and iOS package qualification.
+  probe uses the same sources. The portable manifest omits Linux-only targets on
+  macOS, allowing the Core corpus to execute there. O4/O5 OPEN and RS2/RS3
+  catalog encoding/decoding plus CKV1 chunk creation, transaction rollover, and
+  reassembly delegate to the Core raw-value bridge. Apple targets still compile
+  flat Core source lists rather than importing the package product, and the same
+  corpus still needs iOS package qualification.
 - **Windows sentinel:** no Windows runtime adapter is required by R003, but the
   Core codec suite must remain free of Apple/Linux imports so a future Windows
   build can consume it.

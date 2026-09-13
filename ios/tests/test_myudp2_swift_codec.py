@@ -39,6 +39,15 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
                         throw ProbeError.failed("batch vector mismatch")
                     }
 
+                    let controlMissing = Array(1...ObstacleBridgeUdpOverlayCodec.controlMaxMissed())
+                    let control = try ObstacleBridgeUdpOverlayCodec.buildControlFrame(
+                        lastInOrderRX: 0, highestRX: controlMissing.count, missed: controlMissing, txNS: 1, echoNS: 2
+                    )
+                    guard ObstacleBridgeUdpOverlayCodec.controlMaxMissed() == 713,
+                          ObstacleBridgeUdpOverlayCodec.parseControlFrame(control)?.missed == controlMissing else {
+                        throw ProbeError.failed("payload-derived control limit mismatch")
+                    }
+
                     let record = try ObstacleBridgeUdpOverlayCodec.encodeStreamRecord(Data("hello".utf8))
                     let receiver = ObstacleBridgeUdpOverlaySessionCodec.StreamReceiveState()
                     guard receiver.process(.init(counter: 2, data: record.suffix(from: 3)))?.1.isEmpty == true,
@@ -143,6 +152,11 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
         "-o",
         str(binary),
         str(SHARED / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(SHARED / "ObstacleBridgeUdpOverlayCodec.swift"),
         str(SHARED / "ObstacleBridgeUdpOverlaySessionCodec.swift"),
         str(SHARED / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),

@@ -2,7 +2,6 @@ import Foundation
 
 final class ObstacleBridgeTcpOverlayRuntime {
     private static let lenFieldSize = 4
-    private static let kindApp: UInt8 = 0x00
     struct SendSnapshot {
         var txBytes: Int
         var peerTxNotifications: [Int]
@@ -100,7 +99,17 @@ final class ObstacleBridgeTcpOverlayRuntime {
             )
         }
 
-        let wire = buildAppWire(payload)
+        guard let wire = buildAppWire(payload) else {
+            return SendSnapshot(
+                txBytes: txBytes,
+                peerTxNotifications: [],
+                writtenHex: [],
+                writtenBuffers: [],
+                earlyBufBytes: earlyBuf.count,
+                earlyBufHex: earlyBuf.isEmpty ? nil : hexFromData(earlyBuf),
+                connectRequested: false
+            )
+        }
         if !writerPresent {
             bufferEarly(wireFrame: wire, now: now)
             return SendSnapshot(
@@ -145,10 +154,13 @@ final class ObstacleBridgeTcpOverlayRuntime {
 
     func handleInboundBytes(_ buffer: Data) -> ReceiveSnapshot {
         var completedPayloads: [Data] = []
-        let bytes = Array(buffer)
         var cursor = 0
-        while (bytes.count - cursor) >= Self.lenFieldSize {
-            let length = Self.readUInt32(bytes, offset: cursor)
+        while (buffer.count - cursor) >= Self.lenFieldSize {
+            let header = Data(buffer[cursor..<(cursor + Self.lenFieldSize)])
+            guard let length = try? ObstacleBridgeOverlayFrameCodec.decodeTCPBodyLength(header) else {
+                cursor += Self.lenFieldSize
+                continue
+            }
             if length == 0 {
                 cursor += Self.lenFieldSize
                 continue
@@ -158,14 +170,12 @@ final class ObstacleBridgeTcpOverlayRuntime {
                 cursor += Self.lenFieldSize
                 continue
             }
-            guard (bytes.count - cursor) >= totalLength else {
+            guard (buffer.count - cursor) >= totalLength else {
                 break
             }
-            let marker = bytes[cursor + Self.lenFieldSize]
-            if marker == Self.kindApp {
-                let payloadStart = cursor + Self.lenFieldSize + 1
-                let payloadEnd = cursor + totalLength
-                completedPayloads.append(Data(bytes[payloadStart..<payloadEnd]))
+            let wire = Data(buffer[cursor..<(cursor + totalLength)])
+            if let frame = try? ObstacleBridgeOverlayFrameCodec.decodeTCP(wire), frame.kind == .application {
+                completedPayloads.append(frame.payload)
             }
             cursor += totalLength
         }
@@ -267,15 +277,8 @@ final class ObstacleBridgeTcpOverlayRuntime {
         return [hexFromData(pending)]
     }
 
-    private func buildAppWire(_ payload: Data) -> Data {
-        var data = Data()
-        var bodyLength = UInt32(payload.count + 1).bigEndian
-        withUnsafeBytes(of: &bodyLength) { rawBuffer in
-            data.append(contentsOf: rawBuffer)
-        }
-        data.append(0x00)
-        data.append(payload)
-        return data
+    private func buildAppWire(_ payload: Data) -> Data? {
+        try? ObstacleBridgeOverlayFrameCodec.encodeTCP(.init(kind: .application, payload: payload))
     }
 
     private func hexFromData(_ data: Data) -> String {
@@ -299,13 +302,4 @@ final class ObstacleBridgeTcpOverlayRuntime {
         return data
     }
 
-    private static func readUInt32(_ bytes: [UInt8], offset: Int) -> UInt32 {
-        guard offset >= 0, (bytes.count - offset) >= lenFieldSize else {
-            return 0
-        }
-        return (UInt32(bytes[offset]) << 24)
-            | (UInt32(bytes[offset + 1]) << 16)
-            | (UInt32(bytes[offset + 2]) << 8)
-            | UInt32(bytes[offset + 3])
-    }
 }

@@ -4,6 +4,15 @@
     "wire_hex": "000000060068656c6c6f",
     "malformed_wire_hex": ["00000000", "0000000101", "000000060068656c6c6f00"]
   },
+  "channelmux_header": {
+    "channel_id": 258,
+    "protocol_type": 1,
+    "counter": 772,
+    "message_type": 0,
+    "body_hex": "aabb",
+    "wire_hex": "0102010304000002aabb",
+    "malformed_wire_hex": ["01", "0102010304000001", "0102010304000002aabb00"]
+  },
   "myudp_data": {
     "counter": 7,
     "payload_hex": "756470",
@@ -47,7 +56,8 @@
       "434b56310000000900000003000102030405060708090a0b",
       "434b563100000009000100030c0d0e0f1011121314151617",
       "434b5631000000090002000318"
-    ]
+    ],
+    "malformed_chunks_hex": ["434b5631", "424144210000000900000003", "434b56310000000900030003"]
   },
   "service_records": {
     "instance_id": 9,
