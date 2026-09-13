@@ -837,10 +837,13 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
 public final class ObstacleBridgeMyUDPPeerRegistry: @unchecked Sendable {
     public struct PeerKey: Hashable, Sendable { public let identity: String; public let epoch: UInt64; public init(identity: String, epoch: UInt64) { self.identity = identity; self.epoch = epoch } }
     private var peers: [PeerKey: ObstacleBridgeMyUDPPeerEngine] = [:]
+    private var lastActivityNanoseconds: [PeerKey: UInt64] = [:]
     public init() {}
     public func admit(_ key: PeerKey, maximumInFlight: Int = 200) -> ObstacleBridgeMyUDPPeerEngine { if let peer = peers[key] { return peer }; let peer = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: maximumInFlight); peers[key] = peer; return peer }
-    public func withdraw(_ key: PeerKey) { peers.removeValue(forKey: key) }
-    public func withdraw(identity: String, exceptEpoch: UInt64? = nil) { peers.keys.filter { $0.identity == identity && $0.epoch != exceptEpoch }.forEach { peers.removeValue(forKey: $0) } }
+    public func touch(_ key: PeerKey, nowNanoseconds: UInt64) { guard peers[key] != nil else { return }; lastActivityNanoseconds[key] = nowNanoseconds }
+    public func expire(nowNanoseconds: UInt64, idleTimeoutNanoseconds: UInt64) -> [PeerKey] { let expired = peers.keys.filter { key in guard let last = lastActivityNanoseconds[key], nowNanoseconds >= last else { return false }; return nowNanoseconds - last >= idleTimeoutNanoseconds }; expired.forEach(withdraw); return expired }
+    public func withdraw(_ key: PeerKey) { peers.removeValue(forKey: key); lastActivityNanoseconds.removeValue(forKey: key) }
+    public func withdraw(identity: String, exceptEpoch: UInt64? = nil) { peers.keys.filter { $0.identity == identity && $0.epoch != exceptEpoch }.forEach(withdraw) }
     public var activeKeys: Set<PeerKey> { Set(peers.keys) }
 }
 

@@ -177,6 +177,9 @@ struct ObstacleBridgeCryptoTests {
         let fresh = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 2)
         try registry.admit(old).enqueueApplicationRecord(Data("old".utf8), nowNanoseconds: 1)
         #expect(try registry.admit(fresh).flush(nowNanoseconds: 2).outboundDatagrams.isEmpty)
+        registry.touch(old, nowNanoseconds: 10)
+        registry.touch(fresh, nowNanoseconds: 20)
+        #expect(registry.expire(nowNanoseconds: 25, idleTimeoutNanoseconds: 10) == [old])
         registry.withdraw(identity: "peer", exceptEpoch: 2)
         #expect(registry.activeKeys == Set([fresh]))
     }

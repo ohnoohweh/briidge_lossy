@@ -589,8 +589,9 @@ shared-datagram listener.
 `ObstacleBridgeMyUDPPeerRegistry` now provides the first socket-independent
 listener-state seam: it isolates Core peer engines by logical identity and
 epoch and can withdraw stale epochs without clearing the replacement peer.
-R004D still needs timer-driven expiry, listener admission effects, and
-multi-peer Python/Swift interoperability qualification.
+It now also owns activity timestamps and timer-driven expiry. R004D still
+needs listener admission effects and multi-peer Python/Swift interoperability
+qualification.
 
 The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (3) make the Linux POSIX type execute
