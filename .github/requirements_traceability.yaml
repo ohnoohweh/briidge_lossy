@@ -571,6 +571,8 @@ REQ-WSP-010:
     - tests/unit/test_ws_payload_mode.py::test_invalid_text_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_invalid_semi_text_shape_frames_are_rejected
     - tests/unit/test_ws_payload_mode.py::test_listener_peer_uses_advertised_payload_mode_for_rx_and_tx
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
+    - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
 
 REQ-WSP-011:
   integration_tests:

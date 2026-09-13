@@ -6,6 +6,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
     }
 
     final class StreamReceiveState {
+        private let core = ObstacleBridgeMyUDPStreamReceiveState()
         private(set) var expected = 1
         private(set) var pending: [Int: ObstacleBridgeUdpOverlayCodec.StreamChunk] = [:]
         private(set) var missing: Set<Int> = []
@@ -14,6 +15,7 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         private var expectedRecordLength: Int?
 
         func reset() {
+            core.reset()
             expected = 1
             pending.removeAll()
             missing.removeAll()
@@ -23,37 +25,14 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         }
 
         func process(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) -> (Bool, [Data])? {
-            guard (1...0xFFFF).contains(chunk.counter) else {
-                return nil
-            }
-            let comparison = ringCmp(chunk.counter, expected)
-            if comparison < 0 {
-                return (false, [])
-            }
-            if comparison > 0 {
-                enqueue(chunk)
-                return (false, [])
-            }
-
-            var completed: [Data] = []
-            guard appendContiguous(chunk.data, completed: &completed) else {
-                return nil
-            }
-            expected = c16Inc(expected)
-            while let next = pending.removeValue(forKey: expected) {
-                missing.remove(expected)
-                guard appendContiguous(next.data, completed: &completed) else {
-                    return nil
-                }
-                expected = c16Inc(expected)
-            }
-            if pending.isEmpty {
-                pendingHighest = nil
-                missing.removeAll()
-            } else {
-                identifyMissing()
-            }
-            return (true, completed)
+            guard (1...Int(UInt16.max)).contains(chunk.counter) else { return nil }
+            guard let result = core.process(.init(counter: UInt16(chunk.counter), payload: chunk.data)) else { return nil }
+            expected = Int(core.expected)
+            pending = Dictionary(uniqueKeysWithValues: core.pending.map {
+                (Int($0.key), .init(counter: Int($0.value.counter), data: $0.value.payload))
+            })
+            missing = Set(core.missing.map(Int.init))
+            return (result.accepted, result.completedRecords)
         }
 
         private func enqueue(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) {

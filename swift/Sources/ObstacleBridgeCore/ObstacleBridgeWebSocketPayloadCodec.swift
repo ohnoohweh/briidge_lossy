@@ -16,8 +16,7 @@ public enum ObstacleBridgeWebSocketPayloadCodec {
         case .binary: return .binary(wire)
         case .base64: return .text(wire.base64EncodedString())
         case .jsonBase64:
-            let value = try JSONSerialization.data(withJSONObject: ["data": wire.base64EncodedString()])
-            return .text(String(decoding: value, as: UTF8.self))
+            return .text(String(decoding: ObstacleBridgeJSONValue.object(["data": .string(wire.base64EncodedString())]).canonicalData(), as: UTF8.self))
         case .semiTextShape: return .text(semiEncode(wire))
         }
     }
@@ -26,9 +25,9 @@ public enum ObstacleBridgeWebSocketPayloadCodec {
         guard case .text(let text) = payload else { throw ObstacleBridgeWebSocketPayloadCodecError.invalidPayload }
         switch mode {
         case .binary: throw ObstacleBridgeWebSocketPayloadCodecError.invalidPayload
-        case .base64: guard let data = Data(base64Encoded: text, options: [.ignoreUnknownCharacters]) else { throw ObstacleBridgeWebSocketPayloadCodecError.invalidPayload }; return data
+        case .base64: guard let data = Data(base64Encoded: text) else { throw ObstacleBridgeWebSocketPayloadCodecError.invalidPayload }; return data
         case .jsonBase64:
-            guard let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)), let encoded = (object as? [String: Any])?["data"] as? String, let data = Data(base64Encoded: encoded, options: [.ignoreUnknownCharacters]) else { throw ObstacleBridgeWebSocketPayloadCodecError.invalidPayload }; return data
+            guard case .object(let object) = try? ObstacleBridgeJSONValue.parse(Data(text.utf8)), case .string(let encoded) = object["data"], let data = Data(base64Encoded: encoded) else { throw ObstacleBridgeWebSocketPayloadCodecError.invalidPayload }; return data
         case .semiTextShape: return try semiDecode(text)
         }
     }

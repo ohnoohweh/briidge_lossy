@@ -172,8 +172,9 @@ swift test --filter ObstacleBridgeApplePackageProbeTests
 
 The package manifest exposes only portable Core targets on macOS; Linux adapter
 and executable targets remain available when the manifest is evaluated on Linux.
-The Apple probe executes every R003 wire-codec owner through its imported Core
-module.
+The shared corpus verifies Python and Core agree on exact binary and text
+WebSocket payload forms, including strict malformed text rejection. The Apple
+probe executes every shared wire-codec owner through its imported Core module.
 
 - `linux-swift`
 

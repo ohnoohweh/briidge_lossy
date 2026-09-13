@@ -7,11 +7,18 @@ import logging
 import struct
 from pathlib import Path
 
+import pytest
+
 from obstacle_bridge.bridge import ChannelMux
 from obstacle_bridge.bridge_channelmux import ChannelMux as ServiceChannelMux
 from obstacle_bridge.bridge_securelink import SecureLinkPskSession
 import obstacle_bridge.bridge_transport_udp as myudp
-from obstacle_bridge.bridge_transport_ws import WebSocketBinaryPayloadCodec
+from obstacle_bridge.bridge import (
+    WebSocketBase64PayloadCodec,
+    WebSocketBinaryPayloadCodec,
+    WebSocketJsonBase64PayloadCodec,
+    WebSocketSemiTextShapePayloadCodec,
+)
 
 
 CORPUS = Path(__file__).resolve().parents[2] / "swift/Tests/ObstacleBridgeCoreTests/Fixtures/python_wire_codec_corpus.json"
@@ -75,6 +82,19 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     websocket_wire = WebSocketBinaryPayloadCodec().encode(b"\x00" + websocket_payload)
     assert websocket_wire.hex() == websocket["wire_hex"]
     assert WebSocketBinaryPayloadCodec().decode(websocket_wire) == websocket_wire
+
+    websocket_text = corpus["websocket_text_modes"]
+    websocket_text_wire = bytes.fromhex(websocket_text["wire_hex"])
+    text_codecs = (
+        (WebSocketBase64PayloadCodec(), "base64", "malformed_base64"),
+        (WebSocketJsonBase64PayloadCodec(), "json_base64", "malformed_json_base64"),
+        (WebSocketSemiTextShapePayloadCodec(), "semi_text_shape", "malformed_semi_text_shape"),
+    )
+    for codec, encoded_key, malformed_key in text_codecs:
+        assert codec.encode(websocket_text_wire) == websocket_text[encoded_key]
+        assert codec.decode(websocket_text[encoded_key]) == websocket_text_wire
+        with pytest.raises(ValueError):
+            codec.decode(websocket_text[malformed_key])
 
     securelink = corpus["securelink_psk"]
     psk = bytes.fromhex(securelink["psk_hex"])

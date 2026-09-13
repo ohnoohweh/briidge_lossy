@@ -1079,6 +1079,7 @@ def test_udp_overlay_session_codec_source_exists() -> None:
 
     assert "struct ObstacleBridgeUdpOverlaySessionCodec" in codec
     assert "final class StreamReceiveState" in codec
+    assert "ObstacleBridgeMyUDPStreamReceiveState" in codec
     assert "segmentApplicationPayload(" not in codec
     assert "final class ReceiveState" not in codec
     assert "struct Reassembly" not in codec

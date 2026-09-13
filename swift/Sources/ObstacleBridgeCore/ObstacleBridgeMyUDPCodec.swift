@@ -33,6 +33,96 @@ public struct ObstacleBridgeMyUDPControlFrame: Equatable, Sendable {
     public let echoedNanoseconds: UInt64
 }
 
+/// Ordered myUDP stream reassembly shared by datagram runtime owners. It owns
+/// counter-ring ordering, duplicate suppression, missing-counter discovery,
+/// and four-byte application-record buffering; adapters only submit chunks and
+/// deliver completed records.
+public final class ObstacleBridgeMyUDPStreamReceiveState: @unchecked Sendable {
+    public private(set) var expected: UInt16 = 1
+    public private(set) var pending: [UInt16: ObstacleBridgeMyUDPStreamChunk] = [:]
+    public private(set) var missing: Set<UInt16> = []
+    private var pendingHighest: UInt16?
+    private var streamBuffer = Data()
+    private var expectedRecordLength: Int?
+
+    public init() {}
+
+    public func reset() {
+        expected = 1; pending.removeAll(); missing.removeAll(); pendingHighest = nil
+        streamBuffer.removeAll(); expectedRecordLength = nil
+    }
+
+    public func process(_ chunk: ObstacleBridgeMyUDPStreamChunk) -> (accepted: Bool, completedRecords: [Data])? {
+        guard chunk.counter != 0 else { return nil }
+        let comparison = ringCompare(chunk.counter, expected)
+        if comparison < 0 { return (false, []) }
+        if comparison > 0 { enqueue(chunk); return (false, []) }
+
+        var completed: [Data] = []
+        guard appendContiguous(chunk.payload, completed: &completed) else { return nil }
+        expected = increment(expected)
+        while let next = pending.removeValue(forKey: expected) {
+            missing.remove(expected)
+            guard appendContiguous(next.payload, completed: &completed) else { return nil }
+            expected = increment(expected)
+        }
+        if pending.isEmpty { pendingHighest = nil; missing.removeAll() } else { identifyMissing() }
+        return (true, completed)
+    }
+
+    private func enqueue(_ chunk: ObstacleBridgeMyUDPStreamChunk) {
+        guard pending[chunk.counter] == nil else { return }
+        pending[chunk.counter] = chunk
+        if pendingHighest == nil || ringCompare(chunk.counter, pendingHighest ?? chunk.counter) > 0 {
+            let gapStart = pendingHighest.map(increment) ?? expected
+            for value in counterRange(gapStart, chunk.counter) where pending[value] == nil { missing.insert(value) }
+            pendingHighest = chunk.counter
+        }
+        missing.remove(chunk.counter)
+    }
+
+    private func appendContiguous(_ bytes: Data, completed: inout [Data]) -> Bool {
+        streamBuffer.append(bytes)
+        while true {
+            if expectedRecordLength == nil {
+                guard streamBuffer.count >= ObstacleBridgeMyUDPCodec.streamRecordHeaderSize else { return true }
+                let header = Data(streamBuffer.prefix(ObstacleBridgeMyUDPCodec.streamRecordHeaderSize))
+                guard let length = try? ObstacleBridgeMyUDPCodec.decodeStreamRecordLength(header) else {
+                    streamBuffer.removeAll(); return false
+                }
+                streamBuffer.removeFirst(ObstacleBridgeMyUDPCodec.streamRecordHeaderSize)
+                expectedRecordLength = length
+            }
+            guard let length = expectedRecordLength, streamBuffer.count >= length else { return true }
+            completed.append(Data(streamBuffer.prefix(length)))
+            streamBuffer.removeFirst(length); expectedRecordLength = nil
+        }
+    }
+
+    private func identifyMissing() {
+        missing.removeAll(); pendingHighest = nil
+        guard let highest = highestRing(Array(pending.keys), reference: expected) else { return }
+        pendingHighest = highest
+        for value in counterRange(expected, highest) where pending[value] == nil { missing.insert(value) }
+    }
+
+    private func ringCompare(_ lhs: UInt16, _ rhs: UInt16) -> Int {
+        if lhs == rhs { return 0 }
+        let distance = (Int(lhs) - Int(rhs) + 65_536) & 0xffff
+        return distance < 32_768 ? 1 : -1
+    }
+    private func increment(_ value: UInt16) -> UInt16 { value == .max ? 1 : value &+ 1 }
+    private func counterRange(_ start: UInt16, _ end: UInt16) -> [UInt16] {
+        guard start != end else { return [] }
+        var result: [UInt16] = [], cursor = start
+        while cursor != end { result.append(cursor); cursor = increment(cursor) }
+        return result
+    }
+    private func highestRing(_ values: [UInt16], reference: UInt16) -> UInt16? {
+        values.max { (Int($0) - Int(reference) + 65_536) & 0xffff < (Int($1) - Int(reference) + 65_536) & 0xffff }
+    }
+}
+
 /// myudp v2 framing shared with Python. DATA batches carry a reliable byte
 /// stream; upper-layer messages are length-prefixed records in that stream.
 public enum ObstacleBridgeMyUDPCodec {

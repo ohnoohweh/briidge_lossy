@@ -52,6 +52,25 @@ struct ObstacleBridgeCryptoTests {
             try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 0, highestReceived: 714, missing: missing + [714], transmittedNanoseconds: 8)
         }
     }
+
+    @Test func myudpCoreStreamReceiveStateReordersSuppressesDuplicatesAndResets() throws {
+        let state = ObstacleBridgeMyUDPStreamReceiveState()
+        let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("ordered".utf8))
+        let first = Data(record.prefix(3))
+        let second = Data(record.dropFirst(3))
+
+        #expect(try #require(state.process(.init(counter: 2, payload: second))).accepted == false)
+        let delivered = try #require(state.process(.init(counter: 1, payload: first)))
+        #expect(delivered.accepted)
+        #expect(delivered.completedRecords == [Data("ordered".utf8)])
+        #expect(state.expected == 3)
+        #expect(state.missing.isEmpty)
+        #expect(try #require(state.process(.init(counter: 1, payload: first))).accepted == false)
+
+        state.reset()
+        #expect(state.expected == 1)
+        #expect(state.pending.isEmpty && state.missing.isEmpty)
+    }
     @Test func secureLinkFrameEnvelopePreservesFlagsAndRejectsTruncation() throws {
         let wire = ObstacleBridgeSecureLinkFrameCodec.encode(
             type: 4, sessionID: 0x0102, counter: 3, payload: Data("payload".utf8), flags: 0x7f
@@ -333,6 +352,21 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(try ObstacleBridgeOverlayFrameCodec.decodeBody(websocketWire) == .init(kind: .application, payload: websocketPayload))
         for value in try #require(websocket["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) { try ObstacleBridgeOverlayFrameCodec.decodeBody(.hex(value)) }
+        }
+        let websocketText = try #require(corpus["websocket_text_modes"] as? [String: Any])
+        let websocketTextWire = Data.hex(try #require(websocketText["wire_hex"] as? String))
+        let textModes: [(ObstacleBridgeWebSocketPayloadMode, String, String)] = [
+            (.base64, "base64", "malformed_base64"),
+            (.jsonBase64, "json_base64", "malformed_json_base64"),
+            (.semiTextShape, "semi_text_shape", "malformed_semi_text_shape"),
+        ]
+        for (mode, encodedKey, malformedKey) in textModes {
+            let encoded = try #require(websocketText[encodedKey] as? String)
+            #expect(try ObstacleBridgeWebSocketPayloadCodec.encode(websocketTextWire, mode: mode) == .text(encoded))
+            #expect(try ObstacleBridgeWebSocketPayloadCodec.decode(.text(encoded), mode: mode) == websocketTextWire)
+            #expect(throws: ObstacleBridgeWebSocketPayloadCodecError.invalidPayload) {
+                try ObstacleBridgeWebSocketPayloadCodec.decode(.text(try #require(websocketText[malformedKey] as? String)), mode: mode)
+            }
         }
         let secureLink = try #require(corpus["securelink_psk"] as? [String: Any])
         let psk = Data.hex(try #require(secureLink["psk_hex"] as? String))

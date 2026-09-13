@@ -51,7 +51,9 @@ public indirect enum ObstacleBridgeJSONValue: Equatable, Sendable {
     private static func quote(_ value: String) -> String {
         let data = try? JSONSerialization.data(withJSONObject: [value])
         let array = data.flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
-        return String(array.dropFirst().dropLast())
+        // Python's compact json encoder leaves solidus unescaped.  Both forms
+        // are valid JSON, but wire codecs need byte-for-byte parity.
+        return String(array.dropFirst().dropLast()).replacingOccurrences(of: "\\/", with: "/")
     }
 }
 

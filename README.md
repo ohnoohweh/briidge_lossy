@@ -11,7 +11,9 @@ The project currently targets six platform families:
   its Python-derived Core corpus also pins TCP, raw ChannelMux headers, myUDP, and WebSocket binary
   malformed-record, SecureLink PSK transcript/handshake, control-chunk,
   service OPEN and service-catalog bytes, including service-record truncation
-  and trailing-byte rejection, plus all WebSocket payload modes; SecureLink client/server envelope
+  and trailing-byte rejection, plus exact and malformed vectors for all WebSocket payload modes;
+  Base64 and JSON+Base64 decoding reject invalid characters rather than silently discarding them;
+  SecureLink client/server envelope
   and full myUDP/SecureLink/TCP APP/ChannelMux-header framing have Core owners; Apple myUDP queue
   budgeting reads its batch-layout constants from that same Core owner; CONTROL missing-list
   capacity is derived from its wire payload (713 counters) rather than the

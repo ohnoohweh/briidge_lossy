@@ -35,6 +35,15 @@
     "wire_hex": "0068656c6c6f",
     "malformed_wire_hex": ["", "03", "0101020304050607"]
   },
+  "websocket_text_modes": {
+    "wire_hex": "0068656c6c6fff",
+    "base64": "AGhlbGxv/w==",
+    "json_base64": "{\"data\":\"AGhlbGxv/w==\"}",
+    "semi_text_shape": "AGhlbGxv +w",
+    "malformed_base64": "!",
+    "malformed_json_base64": "{\"data\":1}",
+    "malformed_semi_text_shape": "!"
+  },
   "securelink_psk": {
     "psk_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
     "client_nonce_hex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",

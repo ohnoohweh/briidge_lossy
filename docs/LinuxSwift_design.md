@@ -503,99 +503,31 @@ changing a dashboard label or adding a waiver.
 - No new common behavior may be added under an adapter target while convergence
   is in progress. If two platforms need it, introduce it in core first.
 
+## Current shared codec status
+
+`ObstacleBridgeCore` owns the bounded big-endian reader/writer, typed canonical
+JSON value, ChannelMux header and control-chunk codecs, O4/O5 OPEN, RS2/RS3
+catalogs, myUDP envelope/batch/stream-record framing, SecureLink envelopes,
+and TCP/WebSocket APP, PING, PONG, and payload-mode records. Linux and Apple
+adapters use these owners rather than maintaining alternate wire serializers.
+
+The shared Python-derived corpus pins exact bytes and malformed, truncated, and
+trailing-record rejection for those formats, including all WebSocket text
+modes and the payload-derived myUDP CONTROL missing-list bound. It runs in the
+portable macOS Core test target. The Apple probe executes each owner through
+the package module and compiles for the iOS simulator. Source guards prevent
+adapter-side service magic, JSON wire serialization, and duplicate integer
+serializers in the covered adapter paths.
+
+The Core codec layer remains portable for a future Windows consumer. Windows
+runtime delivery is separate optional work; it does not require a second codec
+implementation.
+
 ## Remaining common-runtime work
 
-These work areas precede or gate the remaining Linux feature work. A package
-is complete only when every Definition of Done item is met; compiling alone is
-not completion.
-
-### LSW-R003 — Consolidate binary utilities, codecs, and service models
-
-Core owns the bounded big-endian reader/writer, typed canonical JSON value,
-ChannelMux header codec, O4/O5 OPEN codec, and RS2/RS3 service-catalog codec.
-The core myUDP framing codec uses the same reader/writer. Linux service catalog
-and service-data-plane adapters delegate RS3/O5 serialization and parsing to
-Core; their local endian helpers and `JSONSerialization` wire logic are removed.
-Core also owns the TCP/WebSocket APP, PING, and PONG record codec, which the
-Linux overlay adapter uses for its length-prefixed TCP and WebSocket-body paths.
-A requirements-guard ownership check rejects service magic, adapter-side JSON
-serialization, and duplicate integer serializers in those Linux adapter files.
-
-R003 is in final cross-platform qualification. The Core suite covers bounded
-reads, truncation, O5/RS3 typed round trips, and malformed input, while Linux
-catalog/service tests cover the adapter-to-Core path. The Apple UDP compatibility
-facade exposes only Core-backed layout constants so peer-runtime queue budgeting
-cannot drift from the shared codec.
-
-The shared Python-derived corpus covers TCP APP framing, raw ChannelMux headers,
-and malformed records,
-the myUDP DATA_BATCH envelope and malformed records, and malformed CONTROL
-records. Direct Core and Apple probes also pin CONTROL's payload-derived
-missing-list capacity. The corpus covers all WebSocket payload
-modes (`binary`, `base64`, `json-base64`, and `semi-text-shape`), SecureLink PSK transcript/key/proof and handshake
-envelope vectors, CKV1 control chunks and malformed headers, O4/O5 OPEN, and RS2/RS3 catalogs. It
-also pins O4/O5 and RS2/RS3 truncation and trailing-byte rejection in both the
-Python reference parser and Core, plus myUDP CONTROL bytes and malformed
-records. The remaining R003 gate is execution of that corpus through the macOS
-and generated iOS build lanes after every Core source-list change.
-
-Definition of Done:
-
-- Core owns one endian-safe binary cursor/writer and one typed JSON value used
-  by every codec;
-- the full ChannelMux codec and service model preserve O4/O5 OPEN, RS2/RS3
-  catalogs, `name`/`lifecycle_hooks`/`options`, control chunks, and strict
-  bounded reassembly;
-- myUDP envelope/batch/stream-record, SecureLink envelope, TCP APP/PING/PONG,
-  and ObstacleBridge WebSocket payload-mode codecs each have one Core owner;
-- Apple and Linux consumers import those types, and the portable header codec,
-  Linux RS3 catalog codec, Linux O5 encoder/parser, and duplicate endian helpers
-  are removed;
-- exact-byte vectors and a shared malformed/truncated/trailing-byte corpus pass
-  on Linux and macOS; and
-- adapter directories contain no allowlisted ObstacleBridge wire magic or
-  alternate serializer, enforced by a source-ownership guard.
-
-Core also owns control-chunk encoding and bounded reassembly. Linux ChannelMux
-normalizes completed `OPEN_CHUNK` and `REMOTE_SERVICES_SET_V2_CHUNK` records
-through that owner before delivery. Core also owns one-in-flight admission and
-reply matching; the Linux adapter owns only waits and lower-session I/O. Apple’s
-richer codec and remaining overlay codecs remain direct consumers until their functions move to Core. R004 through
-R007 consume those Core owners; R009 expands the final cross-platform migration
-and build qualification.
-
-The SecureLink PSK client and server and the Apple SecureLink adapter consume
-the same Core frame codec for the versioned envelope and authenticated-data
-header. Linux and Apple transport adapters therefore carry SecureLink bytes
-without owning a second header serializer or parser.
-
-#### R003 residual work by platform
-
-- **Linux:** no R003 implementation residual remains. myUDP reliability-window
-  policy is R004 work. Core owns all WebSocket payload modes, while Linux parses
-  `ws_payload_mode`, negotiates it during upgrade, and proves text-frame
-  interoperability with Python.
-- **macOS and iOS:** the macOS flat build and generated iOS app/packet-tunnel
-  targets compile the Core binary, full myUDP, SecureLink envelope, WebSocket
-  payload, and APP/PING/PONG frame codecs. The shared TCP runtime delegates its
-  APP record encoding, stream-prefix length validation, and complete-record
-  parsing to Core while retaining partial-buffer and socket lifecycle state.
-  The shared UDP overlay runtime delegates DATA,
-  IDLE, CONTROL, stream-record, and DATA_BATCH framing plus the payload-derived
-  CONTROL missing-list capacity to Core, while the
-  shared WebSocket runtime delegates its payload mode, frame bytes,
-  and RTT timestamp serialization to those owners. The generated-project patch
-  upgrades existing file references in place, and the packet-tunnel compile
-  probe uses the same sources. The portable manifest omits Linux-only targets on
-  macOS, allowing the Core corpus to execute there. O4/O5 OPEN and RS2/RS3
-  catalog encoding/decoding plus CKV1 chunk creation, transaction rollover, and
-  reassembly delegate to the Core raw-value bridge. Apple targets still compile
-  flat Core source lists rather than importing the package product; this is R009
-  migration work. R003 remains gated only on the macOS and generated-iOS
-  compile/corpus lanes consuming each Core source in those lists.
-- **Windows sentinel:** no Windows runtime adapter is required by R003. The
-  Core codec suite remains free of Apple/Linux imports so a future Windows
-  build can consume it; optional Windows runtime delivery is LSW-R010.
+The following work packages describe only behavior that remains to be moved or
+implemented. A package is complete only when every Definition of Done item is
+met; compiling alone is not completion.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 
@@ -623,8 +555,15 @@ Definition of Done:
 - the reduced portable myudp codec and Linux reliability implementation are
   deleted in the same slice.
 
-Depends on LSW-R003. LSW-005A must use this engine rather than add listener
-protocol state to `ObstacleBridgeLinuxAdapters`.
+LSW-005A must use this engine rather than add listener protocol state to
+`ObstacleBridgeLinuxAdapters`.
+
+Current R004 delivery has moved ordered myUDP stream reassembly into Core:
+counter-ring ordering, duplicate suppression, missing-counter discovery,
+split-record buffering, completed-record delivery, and reset are owned by
+`ObstacleBridgeMyUDPStreamReceiveState`. The Apple session codec delegates each
+inbound chunk to that state. Send-window, retransmission, timer, liveness, and
+Linux socket-owner migration remain required before R004 can close.
 
 ### LSW-R005 — Consolidate SecureLink and crypto
 
@@ -649,7 +588,7 @@ Definition of Done:
 - direct `CryptoKit`/`CommonCrypto` SecureLink logic and the reduced portable
   client/server implementation are removed.
 
-Depends on LSW-R003 and may proceed in parallel with LSW-R004.
+May proceed in parallel with LSW-R004.
 
 ### LSW-R006 — Consolidate overlay layers and lifecycle
 
@@ -678,7 +617,7 @@ Definition of Done:
 - Linux configured/live runtime, receive-worker, and reconnect-policy logic is
   removed from the adapter target or reduced to composition-only wrappers.
 
-Depends on LSW-R003 through LSW-R005.
+Depends on LSW-R004 and LSW-R005.
 
 ### LSW-R007 — Consolidate ChannelMux, services, and TUN state
 
@@ -705,7 +644,7 @@ Definition of Done:
 - `ObstacleBridgeLinuxServiceCatalog` and common parts of the Linux service data
   plane are deleted after both consumers switch.
 
-Depends on LSW-R003 and LSW-R006. LSW-005 supplies only the Linux packet-device
+Depends on LSW-R006. LSW-005 supplies only the Linux packet-device
 implementation against this core contract; LSW-006 supplies Linux hook and
 host-network lifecycle integration.
 
@@ -735,7 +674,7 @@ Definition of Done:
   payload tests pass, after which the Linux subset parser and hard-coded Admin
   payload builders are removed.
 
-Depends on LSW-R003 through LSW-R007.
+Depends on LSW-R004 through LSW-R007.
 
 ### LSW-R009 — Migrate builds, enforce uniqueness, and retain the Windows sentinel
 
@@ -775,7 +714,7 @@ Definition of Done:
 - behavior-bearing compatibility facades, obsolete source lists, and all
   migrated duplicate implementations are removed.
 
-Depends on LSW-R003 through LSW-R008 and gates the non-refactor LSW-008 release
+Depends on LSW-R004 through LSW-R008 and gates the non-refactor LSW-008 release
 qualification package below.
 
 ## Remaining Linux feature work
@@ -955,9 +894,9 @@ Depends on LSW-R009. It does not gate LSW-008 or the Linux Swift parity result.
 
 ## Suggested sequence and open decisions
 
-LSW-R003 starts wire/source movement while preserving the current qualified
-evidence. LSW-R004 myudp and LSW-R005 SecureLink can then proceed in parallel
-before converging in the common overlay coordinator.
+The shared codec foundation is established. LSW-R004 myudp and LSW-R005
+SecureLink can proceed in parallel before converging in the common overlay
+coordinator.
 LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
 myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates
 release qualification. This order prevents LSW-005 and LSW-005A from creating
