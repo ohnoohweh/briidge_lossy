@@ -562,6 +562,26 @@ outbound record splitting, counter allocation, and a reduced request/reply
 socket lifecycle; it does not yet run the full reliable sender policy. No
 common multi-peer listener state exists yet.
 
+#### R004 iteration status and residual work
+
+The current source audit confirms that R004 remains open. The Core module has
+the reusable primitives (`ObstacleBridgeMyUDPSendQueue`, acknowledgement,
+retransmission, heartbeat, echo, idle, and receiver policies), but it does not
+yet expose the single peer-scoped event/effect engine required by R004A.
+`ObstacleBridgeUdpOverlayPeerRuntime` still owns Apple sender and scheduling
+state, while `ObstacleBridgeLinuxMyUDPTransportSession` still allocates
+counters, splits records, constructs DATA frames, and treats CONTROL/IDLE as a
+reduced request/reply side path. There is also no Core peer registry for a
+shared-datagram listener.
+
+The next implementation order is therefore: (1) compose the Core primitives
+into one deterministic peer engine with application-input, wire-input, timer,
+and epoch-reset events; (2) replace the Apple sender/runtime ledger with that
+engine; (3) make the Linux POSIX type execute Core effects only; and (4) add
+the socket-independent registry and both-direction Python/Swift multi-peer
+parity qualification. R004 cannot be closed before those four changes and the
+corresponding Apple/Linux source-ownership guards are green.
+
 #### LSW-R004A — Complete the role-neutral Core peer engine
 
 Compose the existing Core myudp components into one peer-scoped state machine.
