@@ -749,6 +749,9 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
 /// wire frames, timer ticks, and epoch resets; they only execute emitted wire
 /// effects and deliver completed records.
 public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
+    /// Default portable cadence used when an adapter services timer effects.
+    public static let defaultRetransmissionWindowNanoseconds: UInt64 = 250_000_000
+    public static let defaultIdleIntervalNanoseconds: UInt64 = 1_000_000_000
     public struct Metrics: Equatable, Sendable {
         public let outstandingCount: Int
         public let queuedRecordCount: Int
@@ -796,7 +799,7 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
         return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: batch.chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], outboundDataCounters: batch.chunks.map(\.counter), deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
     }
 
-    public func tick(nowNanoseconds: UInt64, retransmissionWindowNanoseconds: UInt64, idleIntervalNanoseconds: UInt64 = 1_000_000_000) throws -> Effect {
+    public func tick(nowNanoseconds: UInt64, retransmissionWindowNanoseconds: UInt64 = defaultRetransmissionWindowNanoseconds, idleIntervalNanoseconds: UInt64 = defaultIdleIntervalNanoseconds) throws -> Effect {
         let idleDeadline = nowNanoseconds.addingReportingOverflow(idleIntervalNanoseconds).overflow ? UInt64.max : nowNanoseconds + idleIntervalNanoseconds
         let plan = ObstacleBridgeMyUDPRetransmissionPolicy.plan(nowNanoseconds: nowNanoseconds, candidateCounters: peerMissing, availableCounters: Set(outstanding.keys), firstTransmitNanoseconds: firstTransmitNanoseconds, lastRetransmissionNanoseconds: lastRetransmissionNanoseconds, sendAttempts: sendAttempts, peerReportedMissing: peerMissing, peerMissedCount: peerMissing.count, lastSendNanoseconds: 0, windowNanoseconds: retransmissionWindowNanoseconds, useFirstTransmitWhenNoRetransmission: true)
         lastRetransmissionNanoseconds = plan.lastRetransmissionNanoseconds; sendAttempts = plan.sendAttempts; peerMissing = plan.peerReportedMissing

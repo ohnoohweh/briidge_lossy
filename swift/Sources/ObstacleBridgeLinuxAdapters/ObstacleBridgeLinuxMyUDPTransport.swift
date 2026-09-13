@@ -74,6 +74,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         stateLock.lock()
         defer { stateLock.unlock() }
         let now = DispatchTime.now().uptimeNanoseconds
+        try execute(peerEngine.tick(nowNanoseconds: now))
         try peerEngine.enqueueApplicationRecord(payload, nowNanoseconds: now)
         var firstCounter: UInt16?
         while true {
@@ -99,7 +100,13 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             stateLock.unlock()
             var buffer = [UInt8](repeating: 0, count: 1_452)
             let received = recv(descriptor, &buffer, buffer.count, 0)
-            guard received > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+            guard received > 0 else {
+                let error = errno
+                if error == EAGAIN || error == EWOULDBLOCK {
+                    try serviceTimers()
+                }
+                throw ObstacleBridgeLinuxMyUDPError.ioFailure(error)
+            }
             let wire = Data(buffer.prefix(Int(received)))
             stateLock.lock()
             let now = DispatchTime.now().uptimeNanoseconds
@@ -120,6 +127,15 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 }
     }
     deinit { close() }
+
+    /// Executes due Core retransmission, CONTROL, and IDLE effects. A caller
+    /// with its own event loop may call this at its selected timer cadence.
+    public func serviceTimers() throws {
+        guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        try execute(peerEngine.tick(nowNanoseconds: DispatchTime.now().uptimeNanoseconds))
+    }
 
     private func sendWire(_ wire: Data) throws {
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }

@@ -584,9 +584,10 @@ state. The connected Linux POSIX client now owns only its socket and executes
 `ObstacleBridgeMyUDPPeerEngine` effects: Core owns its counter allocation,
 stream framing/batching, DATA envelope construction, CONTROL/IDLE input and
 response, echo timing, and completed-record queue. The Linux client still
-needs to schedule Core timer effects and qualify its duplex behavior against
-the Python reference; the shared-datagram listener still needs adapter wiring
-to the Core registry.
+executes due Core timer effects before sends, after receive timeouts, and via
+an event-loop-callable `serviceTimers()` entry point. The Linux client still
+needs timed loss/retransmission qualification against the Python reference;
+the shared-datagram listener still needs adapter wiring to the Core registry.
 
 `ObstacleBridgeMyUDPPeerRegistry` now provides the first socket-independent
 listener-state seam: it isolates Core peer engines by logical identity and
@@ -598,8 +599,8 @@ work is multi-peer Python/Swift interoperability qualification and wiring the
 Linux listener mechanism to this Core seam.
 
 The next implementation order is therefore: (1) replace the Apple
-sender/runtime ledger with that engine; (2) schedule Core timer effects from
-the Linux POSIX owner; and (3) add
+sender/runtime ledger with that engine; (2) qualify Linux Core timer effects
+under loss and reordering; and (3) add
 the socket-independent registry and both-direction Python/Swift multi-peer
 parity qualification. R004 cannot be closed before those four changes and the
 corresponding Apple/Linux source-ownership guards are green.
@@ -607,9 +608,9 @@ corresponding Apple/Linux source-ownership guards are green.
 The current adapter migration checklist is explicit: Linux has deleted
 `nextCounter`, local stream-record splitting, DATA envelope construction,
 `completedPayloads`, and direct receiver-engine handling from
-`ObstacleBridgeLinuxMyUDPTransportSession`; its remaining R004C work is clock
-driven execution of Core retransmit/CONTROL/IDLE effects plus the required
-POSIX/Python integration qualification. Apple must still delete its
+`ObstacleBridgeLinuxMyUDPTransportSession`; it executes Core timer effects but
+still needs the required timed POSIX/Python integration qualification. Apple
+must still delete its
 `sendBuffer`, `sendMeta`, counter/retransmit maps, and
 `ObstacleBridgeUdpOverlaySessionCodec` sweeps from
 `ObstacleBridgeUdpOverlayPeerRuntime`. Both adapters must execute every
