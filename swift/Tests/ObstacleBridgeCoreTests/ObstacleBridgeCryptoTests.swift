@@ -204,6 +204,9 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(try ObstacleBridgeOverlayFrameCodec.decodeTCP(wire) == application)
         let ping = ObstacleBridgeOverlayFrame(kind: .ping, payload: Data.hex("01020304050607080000000000000000"))
         #expect(try ObstacleBridgeOverlayFrameCodec.pong(forPing: ping) == .init(kind: .pong, payload: Data.hex("0102030405060708")))
+        #expect(ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: 0x0102030405060708, echoNS: 0x1112131415161718).hex == "01020304050607081112131415161718")
+        #expect(try ObstacleBridgeOverlayFrameCodec.pingTimestamps(ping).txNS == 0x0102030405060708)
+        #expect(try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(.init(kind: .pong, payload: Data.hex("0102030405060708"))) == 0x0102030405060708)
         #expect(throws: ObstacleBridgeOverlayFrameCodecError.invalidFrame) {
             try ObstacleBridgeOverlayFrameCodec.decodeTCP(Data.hex("0000000101"))
         }

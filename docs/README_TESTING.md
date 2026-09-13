@@ -211,9 +211,9 @@ all shared text payload modes against a Python peer. The shared corpus also
 pins Python-compatible myUDP CONTROL bytes and malformed rejection, while direct
 Core tests cover portable ChannelMux reply admission. The macOS build-source
 guard and generated-iOS-project patch test ensure each Apple target compiles
-the WebSocket payload codec from Core rather than a parallel shared-runtime
-source; the iOS packet-tunnel compile probe uses that same source. The adapter
-suite exercises
+the WebSocket payload, binary, and APP/PING/PONG codecs from Core rather than a
+parallel shared-runtime source; the iOS packet-tunnel compile probe uses those
+same sources. The adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove
 that an ephemeral listener publishes the kernel-assigned port in its O5 OPEN

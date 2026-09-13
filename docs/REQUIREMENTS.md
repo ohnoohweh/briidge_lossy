@@ -282,9 +282,9 @@ Current lifecycle implementation note:
   Core also owns myUDP CONTROL and stream-record framing plus ChannelMux
   one-in-flight reply admission; Linux adapters supply only I/O and waits.
   The macOS flat build and generated iOS app/packet-tunnel targets consume the
-  same Core WebSocket payload codec rather than compiling the former parallel
-  Apple payload implementation; the generated-project patch updates existing
-  source references in place.
+  same Core binary, WebSocket payload, and APP/PING/PONG frame codecs rather
+  than compiling a parallel Apple payload implementation; the generated-project
+  patch updates existing source references in place.
 - `REQ-MUX-002`: A connected peer shall be able to carry mixed UDP and TCP services at the same time.
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s. Listener-side ChannelMux channel identity shall include both the owning peer and channel identifier, because independent peers may legitimately allocate the same channel number. A process-shared TUN device shall route local replies through the mux that actively owns its reader, using that reader owner's peer/channel bindings rather than creator or attachment history.
 - `REQ-MUX-004`: Remote service publication shall remain scoped to the intended peer. An authenticated inbound peer's published TCP and UDP listeners shall instantiate and accept traffic even when the parent overlay transport remains in listener state.

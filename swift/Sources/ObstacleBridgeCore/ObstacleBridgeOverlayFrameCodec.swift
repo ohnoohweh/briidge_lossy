@@ -62,4 +62,44 @@ public enum ObstacleBridgeOverlayFrameCodec {
         guard ping.kind == .ping, ping.payload.count >= 8 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
         return .init(kind: .pong, payload: Data(ping.payload.prefix(8)))
     }
+
+    /// The overlay RTT ping carries its local transmit timestamp followed by
+    /// the peer timestamp it is echoing. RFC 6455 transport framing remains an
+    /// adapter concern, but these common payload bytes must not be rebuilt by
+    /// each platform runtime.
+    public static func pingPayload(txNS: UInt64, echoNS: UInt64) -> Data {
+        var writer = ObstacleBridgeBinaryWriter(capacity: 16)
+        writer.append(txNS)
+        writer.append(echoNS)
+        return writer.encoded
+    }
+
+    public static func pingTimestamps(_ frame: ObstacleBridgeOverlayFrame) throws -> (txNS: UInt64, echoNS: UInt64) {
+        guard frame.kind == .ping, frame.payload.count == 16 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+        do {
+            var reader = ObstacleBridgeBinaryReader(frame.payload)
+            let txNS = try reader.readUInt64()
+            let echoNS = try reader.readUInt64()
+            guard reader.isAtEnd else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+            return (txNS, echoNS)
+        } catch let error as ObstacleBridgeOverlayFrameCodecError { throw error }
+        catch { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+    }
+
+    public static func pongPayload(echoTxNS: UInt64) -> Data {
+        var writer = ObstacleBridgeBinaryWriter(capacity: 8)
+        writer.append(echoTxNS)
+        return writer.encoded
+    }
+
+    public static func pongEchoTimestamp(_ frame: ObstacleBridgeOverlayFrame) throws -> UInt64 {
+        guard frame.kind == .pong, frame.payload.count == 8 else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+        do {
+            var reader = ObstacleBridgeBinaryReader(frame.payload)
+            let echoTxNS = try reader.readUInt64()
+            guard reader.isAtEnd else { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+            return echoTxNS
+        } catch let error as ObstacleBridgeOverlayFrameCodecError { throw error }
+        catch { throw ObstacleBridgeOverlayFrameCodecError.invalidFrame }
+    }
 }

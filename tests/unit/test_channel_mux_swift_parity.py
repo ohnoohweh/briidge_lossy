@@ -33,6 +33,8 @@ SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeS
 SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeCompressLayerRuntime.swift"
 SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeOverlayStackPlanner.swift"
 SWIFT_WS_PAYLOAD_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"
+SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
+SWIFT_OVERLAY_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"
 SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
 SWIFT_TCP_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeTcpOverlayRuntime.swift"
 SWIFT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "channelmux_codec_runner.swift"
@@ -146,6 +148,8 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE),
         str(SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE),
         str(SWIFT_OVERLAY_STACK_PLANNER_SOURCE),
+        str(SWIFT_BINARY_CODEC_SOURCE),
+        str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
         str(SWIFT_WS_PAYLOAD_CODEC_SOURCE),
         str(SWIFT_WS_OVERLAY_RUNTIME_SOURCE),
         str(SWIFT_TCP_OVERLAY_RUNTIME_SOURCE),

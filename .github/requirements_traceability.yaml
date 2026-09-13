@@ -175,6 +175,7 @@ REQ-AUT-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlFrameRoundTripsAndRejectsTrailingBytes
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::channelMuxReplyPolicyAdmitsOneAwaitedFrame
+    # Apple build and generated-project tests pin Core payload plus APP/PING/PONG frame ownership.
     - tests/unit/test_macos_core_codec_build.py::test_macos_build_uses_core_websocket_payload_codec_once
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
 

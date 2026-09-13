@@ -797,7 +797,11 @@ def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeWebSocketPayloadCodec.decode(" in runtime
     assert "ObstacleBridgeWebSocketPayloadCodec.encode(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.decodeBody(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.pingPayload(" in runtime
     assert "ObstacleBridgeWebSocketPayloadCodecFactory" not in runtime
+    assert "private static let appKind" not in runtime
+    assert "private func appendUInt64BE" not in runtime
 
 
 def test_websocket_overlay_runtime_source_exists() -> None:

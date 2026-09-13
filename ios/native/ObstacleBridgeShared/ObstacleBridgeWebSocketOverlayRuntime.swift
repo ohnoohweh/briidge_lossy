@@ -15,10 +15,6 @@ enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
 }
 
 final class ObstacleBridgeWebSocketOverlayRuntime {
-    private static let appKind: UInt8 = 0x00
-    private static let pingKind: UInt8 = 0x01
-    private static let pongKind: UInt8 = 0x02
-
     enum InboundFrame {
         case app(Data)
         case ping(txNS: UInt64, echoNS: UInt64)
@@ -195,7 +191,8 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func encodeClientWire(_ wire: Data) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(buildAppWire(wire), mode: corePayloadMode)
+        let overlayWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: wire))
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(overlayWire, mode: corePayloadMode)
         if case .binary(let data) = encoded {
             return .data(data)
         }
@@ -204,7 +201,8 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func encodeClientPong(echoTxNS: UInt64) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(buildPongWire(echoTxNS: echoTxNS), mode: corePayloadMode)
+        let overlayWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .pong, payload: ObstacleBridgeOverlayFrameCodec.pongPayload(echoTxNS: echoTxNS)))
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(overlayWire, mode: corePayloadMode)
         if case .binary(let data) = encoded {
             return .data(data)
         }
@@ -213,7 +211,8 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func encodeClientPing(txNS: UInt64, echoNS: UInt64) throws -> URLSessionWebSocketTask.Message {
-        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(buildPingWire(txNS: txNS, echoNS: echoNS), mode: corePayloadMode)
+        let overlayWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: txNS, echoNS: echoNS)))
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(overlayWire, mode: corePayloadMode)
         if case .binary(let data) = encoded {
             return .data(data)
         }
@@ -388,28 +387,6 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         }
     }
 
-    private func buildAppWire(_ payload: Data) -> Data {
-        var wire = Data(capacity: payload.count + 1)
-        wire.append(Self.appKind)
-        wire.append(payload)
-        return wire
-    }
-
-    private func buildPongWire(echoTxNS: UInt64) -> Data {
-        var wire = Data(capacity: 9)
-        wire.append(Self.pongKind)
-        appendUInt64BE(echoTxNS, to: &wire)
-        return wire
-    }
-
-    private func buildPingWire(txNS: UInt64, echoNS: UInt64) -> Data {
-        var wire = Data(capacity: 17)
-        wire.append(Self.pingKind)
-        appendUInt64BE(txNS, to: &wire)
-        appendUInt64BE(echoNS, to: &wire)
-        return wire
-    }
-
     private func decodeAppWire(_ wire: Data) throws -> Data {
         switch try decodeWireFrame(wire) {
         case .app(let payload):
@@ -422,28 +399,19 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     private func decodeWireFrame(_ wire: Data) throws -> InboundFrame {
-        guard let kind = wire.first else {
-            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("empty websocket overlay wire")
-        }
-        let payload = Data(wire.dropFirst())
-        switch kind {
-        case Self.appKind:
-            return .app(payload)
-        case Self.pingKind:
-            guard payload.count >= 16 else {
-                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("malformed websocket ping len \(payload.count)")
+        do {
+            let frame = try ObstacleBridgeOverlayFrameCodec.decodeBody(wire)
+            switch frame.kind {
+            case .application:
+                return .app(frame.payload)
+            case .ping:
+                let timestamps = try ObstacleBridgeOverlayFrameCodec.pingTimestamps(frame)
+                return .ping(txNS: timestamps.txNS, echoNS: timestamps.echoNS)
+            case .pong:
+                return .pong(echoTxNS: try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame))
             }
-            return .ping(
-                txNS: readUInt64BE(payload, offset: 0),
-                echoNS: readUInt64BE(payload, offset: 8)
-            )
-        case Self.pongKind:
-            guard payload.count >= 8 else {
-                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("malformed websocket pong len \(payload.count)")
-            }
-            return .pong(echoTxNS: readUInt64BE(payload, offset: 0))
-        default:
-            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unsupported websocket overlay kind \(kind)")
+        } catch {
+            throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("invalid websocket overlay frame")
         }
     }
 
@@ -497,22 +465,4 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         data.map { String(format: "%02x", $0) }.joined()
     }
 
-    private func appendUInt64BE(_ value: UInt64, to data: inout Data) {
-        var bigEndian = value.bigEndian
-        withUnsafeBytes(of: &bigEndian) { rawBuffer in
-            data.append(contentsOf: rawBuffer)
-        }
-    }
-
-    private func readUInt64BE(_ data: Data, offset: Int) -> UInt64 {
-        let bytes = Array(data)
-        guard offset >= 0, bytes.count >= offset + 8 else {
-            return 0
-        }
-        var value: UInt64 = 0
-        for index in 0..<8 {
-            value = (value << 8) | UInt64(bytes[offset + index])
-        }
-        return value
-    }
 }
