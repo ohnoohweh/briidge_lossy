@@ -745,12 +745,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 return
             }
             if !snapshot.controlReasons.isEmpty {
-                do {
-                    let control = try overlayRuntime.buildOutboundControl(nowNS: nowNS, echoNS: currentEchoNS(nowNS))
-                    sendDatagram(control.frame)
-                } catch {
-                    eventSink?("udp_overlay_data_control_emit_failed", ["error": error.localizedDescription])
-                }
+                snapshot.emittedFrames.forEach(sendDatagram)
             }
             routeOverlayPayloads(snapshot.completedPayloads)
         case ObstacleBridgeUdpOverlayCodec.ptypeControl:
@@ -1397,13 +1392,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func currentEchoNS(_ nowNS: UInt64) -> UInt64 {
-        guard overlayRuntime.lastRxTxNS != 0,
-              overlayRuntime.lastRxWallNS != 0,
-              nowNS >= overlayRuntime.lastRxWallNS
-        else {
-            return 0
-        }
-        return overlayRuntime.lastRxTxNS + (nowNS - overlayRuntime.lastRxWallNS)
+        ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(
+            nowNanoseconds: nowNS,
+            lastReceivedTransmitNanoseconds: overlayRuntime.lastRxTxNS,
+            lastReceivedWallNanoseconds: overlayRuntime.lastRxWallNS
+        )
     }
 
     private func monotonicNowNS() -> UInt64 {

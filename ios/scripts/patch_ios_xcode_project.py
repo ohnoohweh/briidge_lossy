@@ -77,7 +77,6 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000028", "71C500000000000000000128", "ObstacleBridgeTunPing.swift"),
     ("71C500000000000000000029", "71C500000000000000000129", "ObstacleBridgeTunProbeDiagnosticsSupport.swift"),
     ("71C500000000000000000009", "71C500000000000000000109", "ObstacleBridgeUdpOverlayCodec.swift"),
-    ("71C50000000000000000000A", "71C50000000000000000010A", "ObstacleBridgeUdpOverlaySessionCodec.swift"),
     ("71C50000000000000000000B", "71C50000000000000000010B", "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
     ("71C500000000000000000021", "71C500000000000000000121", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
     ("71C50000000000000000000C", "71C50000000000000000010C", "ObstacleBridgeChannelMuxTcpRuntime.swift"),
@@ -134,7 +133,6 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000006", "71C610000000000000000106", "ObstacleBridgeChannelMuxTcpRuntime.swift"),
     ("71C610000000000000000007", "71C610000000000000000107", "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
     ("71C610000000000000000008", "71C610000000000000000108", "ObstacleBridgeUdpOverlayCodec.swift"),
-    ("71C610000000000000000009", "71C610000000000000000109", "ObstacleBridgeUdpOverlaySessionCodec.swift"),
     ("71C61000000000000000000A", "71C61000000000000000010A", "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
     ("71C61000000000000000000B", "71C61000000000000000010B", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
     ("71C61000000000000000000C", "71C61000000000000000010C", "ObstacleBridgeCompressLayerRuntime.swift"),
@@ -903,7 +901,6 @@ def patch_ipserver_target(text: str) -> str:
             "\t\t\t\t71C500000000000000000007 /* ObstacleBridgeRuntimeConfig.swift in Sources */,\n"
             "\t\t\t\t71C500000000000000000008 /* ObstacleBridgeChannelMuxTunRuntime.swift in Sources */,\n"
             "\t\t\t\t71C500000000000000000009 /* ObstacleBridgeUdpOverlayCodec.swift in Sources */,\n"
-            "\t\t\t\t71C50000000000000000000A /* ObstacleBridgeUdpOverlaySessionCodec.swift in Sources */,\n"
             "\t\t\t\t71C50000000000000000000B /* ObstacleBridgeUdpOverlayPeerRuntime.swift in Sources */,\n"
             "\t\t\t\t71C50000000000000000000C /* ObstacleBridgeChannelMuxTcpRuntime.swift in Sources */,\n"
             "\t\t\t\t71C50000000000000000000D /* ObstacleBridgeChannelMuxTCPTransportOwner.swift in Sources */,\n"

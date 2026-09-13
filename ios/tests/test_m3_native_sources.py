@@ -1066,6 +1066,7 @@ def test_secure_link_frame_codec_source_delegates_to_core() -> None:
 
 def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(" in owner
 
     assert "private func rebuildSocketForPeerRotation() -> Bool" in owner
     assert "Darwin.close(socketFD)" in owner
@@ -1075,11 +1076,11 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
 
 
 def test_udp_overlay_session_codec_source_exists() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
+    codec = (ROOT / "tests" / "fixtures" / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeUdpOverlaySessionCodec" in codec
-    assert "final class StreamReceiveState" in codec
-    assert "ObstacleBridgeMyUDPStreamReceiveState" in codec
+    assert not (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").exists()
+    assert "final class StreamReceiveState" not in codec
     assert "ObstacleBridgeMyUDPRetransmissionPolicy.plan(" in codec
     assert "ObstacleBridgeMyUDPAcknowledgementPolicy.plan(" in codec
     assert "private static func retransmitCounters(" in codec
@@ -1093,18 +1094,20 @@ def test_udp_overlay_peer_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeUdpOverlayPeerRuntime" in runtime
-    assert "ObstacleBridgeMyUDPConfirmationMetricsPolicy.finalize(" in runtime
-    assert "ObstacleBridgeMyUDPConfirmationMetricsPolicy.rebaseTransmitDelayEstimate(" in runtime
-    assert "receiverEngine.processIdle(" in runtime
-    assert "receiverEngine.processData(" in runtime
-    assert "ObstacleBridgeUdpOverlaySessionCodec.StreamReceiveState()" not in runtime
+    assert "private let peerEngine: ObstacleBridgeMyUDPPeerEngine" in runtime
+    assert "peerEngine.receiveWire(" in runtime
+    assert "private let receiverEngine" not in runtime
+    assert "ObstacleBridgeUdpOverlaySessionCodec" not in runtime
+    assert "ObstacleBridgeMyUDPConfirmationMetricsPolicy" not in runtime
     assert "recordTransmitDelaySample(" not in runtime
     assert "tallyConfirmedCounter(" not in runtime
     assert "struct InboundControlSnapshot" in runtime
     assert "struct InboundIdleSnapshot" in runtime
     assert "struct InboundDataSnapshot" in runtime
     assert "struct ControlTimerSnapshot" in runtime
-    assert "ObstacleBridgeMyUDPSendQueue" in runtime
+    assert "private var sendMeta" not in runtime
+    assert "private var sendTXNS" not in runtime
+    assert "private var sendBuffer" not in runtime
     assert "waitQueue" not in runtime
     assert "waitQueueStartNS" not in runtime
     assert "struct RetransmitTimerSnapshot" in runtime

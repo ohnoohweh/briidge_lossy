@@ -49,9 +49,9 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
                     }
 
                     let record = try ObstacleBridgeUdpOverlayCodec.encodeStreamRecord(Data("hello".utf8))
-                    let receiver = ObstacleBridgeUdpOverlaySessionCodec.StreamReceiveState()
-                    guard receiver.process(.init(counter: 2, data: record.suffix(from: 3)))?.1.isEmpty == true,
-                          let delivered = receiver.process(.init(counter: 1, data: record.prefix(3)))?.1,
+                        let receiver = ObstacleBridgeMyUDPStreamReceiveState()
+                        guard receiver.process(.init(counter: 2, payload: record.suffix(from: 3)))?.completedRecords.isEmpty == true,
+                              let delivered = receiver.process(.init(counter: 1, payload: record.prefix(3)))?.completedRecords,
                           delivered == [Data("hello".utf8)] else {
                         throw ProbeError.failed("stream reorder delivery mismatch")
                     }
@@ -158,7 +158,6 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(SHARED / "ObstacleBridgeUdpOverlayCodec.swift"),
-        str(SHARED / "ObstacleBridgeUdpOverlaySessionCodec.swift"),
         str(SHARED / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(source),
     ]

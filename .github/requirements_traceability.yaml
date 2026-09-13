@@ -1285,6 +1285,7 @@ REQ-MYU-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
     - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineUsesImmediateMissingAndTimedUnconfirmedRetransmission
 
 REQ-MYU-003:
   integration_tests:
@@ -1296,6 +1297,7 @@ REQ-MYU-003:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreControlPolicyDistinguishesNewGapsAndTimerPacing
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineUsesImmediateMissingAndTimedUnconfirmedRetransmission
 
 REQ-MYU-004:
   integration_tests:

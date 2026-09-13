@@ -351,7 +351,7 @@ The duplicated areas and their required disposition are:
 
 | Area | Current evidence | Target disposition |
 | --- | --- | --- |
-| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` and `ObstacleBridgeLinuxMyUDPTransport.swift` duplicate framing, counters, reordering, record assembly, and ACK logic from `ObstacleBridgeUdpOverlayCodec.swift`, `ObstacleBridgeUdpOverlaySessionCodec.swift`, and `ObstacleBridgeUdpOverlayPeerRuntime.swift`. The Linux path currently ignores inbound CONTROL/IDLE and has no retained retransmit window or batch coalescing. | Use the richer Apple Swift codec/session/peer engine as extraction material, close every gap against Python, and make the resulting core engine the sole Swift owner. Apple `Network` and Linux POSIX owners execute its datagram/timer effects; a future WinSock owner does the same. |
+| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the Apple compatibility codec is test-only. Linux-host loss/reordering and mixed-runtime listener evidence remain incomplete. | Finish adapter-stat projection and the R004C/R004D qualification matrix, then remove the test-only compatibility facade once parity commands invoke Core directly. |
 | ChannelMux and services | The portable target implements only the eight-byte mux header. Linux separately encodes O5 OPEN and RS3 catalogs, while the Apple codec also owns O4/O5, RS2/RS3, metadata, control chunks, and reassembly. | One core frame/service model and codec owns all wire formats. Core service/TCP/UDP/TUN state emits socket or packet effects; adapters never serialize ChannelMux themselves. |
 | SecureLink | `ObstacleBridgeCore.swift` contains a reduced PSK client/server implementation. Apple has a separate codec and a fuller runtime with rekey, timeout, retry, readiness, replay, and diagnostic state. | Move the full role-neutral state machine to core and use the pinned `Crypto` implementation. Keep the Objective-C Apple crypto class only as a compatibility facade. |
 | Stream and WebSocket overlays | Linux implements ObstacleBridge APP/PING/PONG framing in its POSIX owner. Apple TCP and QUIC logical runtime files are effectively identical, while the nominally logical WebSocket runtime exposes `URLSessionWebSocketTask.Message`. | Core owns ObstacleBridge stream/WebSocket envelopes, buffering, liveness, and lifecycle decisions. Adapters own TCP, RFC 6455/backend integration, TLS/trust, and QUIC I/O. |
@@ -532,131 +532,61 @@ met; compiling alone is not completion.
 ### LSW-R004 — Consolidate the full myudp runtime
 
 R004 is the umbrella for the remaining myudp consolidation packages below. It
-closes only when R004A through R004D are complete.
+closes only when R004B through R004D are complete.
 
 Current status: `ObstacleBridgeCore` owns ordered stream reassembly,
 counter-ring ordering, duplicate suppression, missing-counter discovery,
 split-record buffering, completed-record delivery, bounded CONTROL
-acknowledgement derivation, CONTROL emission policy, retransmission
-eligibility/pacing, queued-record packing, send-window admission, counter
-rollover, DATA_BATCH selection, peer-acknowledgement range cleanup, and
-heartbeat/RTT/liveness policy. Core also owns per-counter acknowledgement
-classification and Python-compatible transmit-delay sampling, max/EWMA
-estimation, empty-pipeline rebasing, outbound echo timestamps, and IDLE probe
-reflection decisions. These behaviors have deterministic Core tests, including
-the payload-derived 713-counter missing-list limit.
+acknowledgement derivation and pacing, heartbeat/RTT/liveness, echo timestamps,
+and IDLE reflection. `ObstacleBridgeMyUDPSenderLedger` owns record packing,
+send-window admission, counter rollover, outstanding payloads, cumulative
+CONTROL cleanup, acknowledgement metrics, and retransmission attempts.
+`ObstacleBridgeMyUDPPeerEngine` composes those owners into socket-independent
+effects for queueing, DATA/CONTROL/IDLE input, epoch reset, immediate
+CONTROL-reported retransmission, RTT-paced persistent-missing retransmission,
+and RTT-paced unconfirmed timeout retransmission. Every retransmission uses a
+fresh DATA envelope. Its read-only snapshot and CONTROL helpers let adapters
+project compatibility/admin state and execute effects without retaining mutable
+counter or acknowledgement tables. The retransmission-only effect is separate
+from periodic CONTROL/IDLE effects so adapters with distinct timer cadences can
+delegate loss policy without duplicate control traffic. Deterministic Core
+tests cover these paths, including the payload-derived 713-counter missing-list
+limit.
 
-`ObstacleBridgeMyUDPReceiverEngine` now composes Core reassembly, heartbeat,
-CONTROL pacing, reset, and CONTROL datagram construction for one peer. The
-Apple peer runtime uses it for inbound DATA and IDLE, CONTROL timer pacing, and
-outbound CONTROL construction; its sender ledger and inbound peer-CONTROL path
-remain separate. The Linux client uses it for inbound DATA reassembly,
-heartbeat, acknowledgement, echo, and CONTROL construction, but still has a
-reduced outbound request/reply sender.
+The connected Linux POSIX client executes peer-engine effects and retains socket
+I/O, endpoint resolution, cancellation, and timer invocation. Its Linux-host
+loss/reordering qualification remains outstanding; macOS conditionally excludes
+the adapter tests, so a zero-test selection is not evidence. The shared-datagram
+listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
+which isolates peer queues, receive state, activity, expiry, and withdrawal.
+LiveRuntime admission wiring and authenticated epoch selection remain open.
 
-The Apple peer runtime delegates the receive-side aggregate engine but still
-owns the sender ledger, inbound peer-CONTROL coordination, reset sequencing,
-protocol-statistic presentation, and scheduling coordination. The Linux client
-delegates decoding and the aggregate receive engine to Core, but still owns
-outbound record splitting, counter allocation, and a reduced request/reply
-socket lifecycle; it does not yet run the full reliable sender policy. No
-common multi-peer listener state exists yet.
+The Apple peer runtime uses the Core receive/control/IDLE path and Core echo
+policy. Its application queue, DATA batch emission, CONTROL feedback cleanup,
+immediate retry path, and periodic retransmission sweeps now use the Core peer
+engine and derive their compatibility snapshots from its read-only state. Apple
+executes Core inbound-DATA CONTROL effects directly and adapts completed
+records to its transport callback; its periodic CONTROL timer reads the same
+Core peer state. Its queue, in-flight, retry-classification, and confirmation
+statistics also read that state, and the mutable Apple sender maps are gone.
+The peer runtime no longer references `ObstacleBridgeUdpOverlaySessionCodec` or
+contains inactive copies of its sender/control implementations. The remaining
+Apple work is to migrate the Swift parity fixture off that compatibility codec,
+remove the codec from Apple build/source inventories, and simplify snapshot
+fields that only mirror Core values. The generated Apple project already
+compiles the Core source, so this is fixture and adapter-surface cleanup, not
+another protocol implementation.
 
-#### R004 iteration status and residual work
-
-The current source audit confirms that R004 remains open. The Core module has
-the reusable primitives (`ObstacleBridgeMyUDPSendQueue`, acknowledgement,
-retransmission, heartbeat, echo, idle, and receiver policies) and now exposes
-the first `ObstacleBridgeMyUDPPeerEngine` event/effect slice for application
-queueing, DATA batching, DATA/CONTROL/IDLE input, delivery, and epoch reset.
-It now also owns paced, fresh-envelope retransmission for peer-reported missing
-counters, timer-paced CONTROL emission, and a portable queue/flight/missing/RTT
-metrics snapshot. IDLE reflection is Core-owned on inbound input; the larger
-remaining work is adapter adoption and the listener registry.
-
-The periodic-IDLE deadline/effect is now exposed by the Core peer engine. Its
-deadline arithmetic is overflow-safe, and `UInt64.max` is reserved as a
-deterministic-test sentinel that suppresses periodic IDLE emission. R004A's
-remaining work is therefore adapter adoption of this complete Core event/effect
-surface and any metrics parity details discovered by that migration.
-`ObstacleBridgeUdpOverlayPeerRuntime` still owns Apple sender and scheduling
-state. The connected Linux POSIX client now owns only its socket and executes
-`ObstacleBridgeMyUDPPeerEngine` effects: Core owns its counter allocation,
-stream framing/batching, DATA envelope construction, CONTROL/IDLE input and
-response, echo timing, and completed-record queue. The Linux client still
-exposes due Core timer effects through an event-loop-callable `serviceTimers()`
-entry point without changing the connected socket's receive-timeout semantics.
-The Linux client still
-needs timed loss/retransmission qualification against the Python reference.
-The standalone Linux shared-datagram listener now maps remote endpoint plus
-admission epoch to the Core registry and executes emitted effects; it still
-needs LiveRuntime wiring and authenticated epoch selection.
-
-`ObstacleBridgeMyUDPPeerRegistry` now provides the first socket-independent
-listener-state seam: it isolates Core peer engines by logical identity and
-epoch and can withdraw stale epochs without clearing the replacement peer.
-It now also owns activity timestamps and timer-driven expiry. R004D still
-owns registry-level wire admission effects; listener adapters supply only the
-peer identity, wire bytes, time, and socket execution. A deterministic Linux
-socket test now proves that two endpoint identities can each use counter `1`
-and deliver independent records through the shared listener without cross-peer
-state leakage. The listener exposes Core-decided idle withdrawals, an
-idempotent socket-cancellation operation, and per-peer routing of Core timer
-effects through its retained endpoint table. The remaining R004D work is
-LiveRuntime admission wiring,
-authenticated epoch selection, mixed Python/Swift multi-peer qualification,
-and periodic invocation of timer service plus expiry from LiveRuntime's event
-loop.
-
-The next implementation order is therefore: (1) replace the Apple
-sender/runtime ledger with that engine; (2) qualify Linux Core timer effects
-under loss and reordering; and (3) add
-the socket-independent registry and both-direction Python/Swift multi-peer
-parity qualification. R004 cannot be closed before those four changes and the
-corresponding Apple/Linux source-ownership guards are green.
-
-The current adapter migration checklist is explicit: Linux has deleted
-`nextCounter`, local stream-record splitting, DATA envelope construction,
-`completedPayloads`, and direct receiver-engine handling from
-`ObstacleBridgeLinuxMyUDPTransportSession`; it executes Core timer effects but
-still needs the required timed POSIX/Python integration qualification. Apple
-must still delete its
-`sendBuffer`, `sendMeta`, counter/retransmit maps, and
-`ObstacleBridgeUdpOverlaySessionCodec` sweeps from
-`ObstacleBridgeUdpOverlayPeerRuntime`. Both adapters must execute every
-`ObstacleBridgeMyUDPPeerEngine` effect. These remain open R004B/R004C work.
-
-R004B also has a concrete build-boundary prerequisite: the checked-in Apple
-`ObstacleBridgeShared` sources do not import the Swift package's
-`ObstacleBridgeCore` module, while `ObstacleBridgeUdpOverlayPeerRuntime` still
-carries its own sender ledger. The Apple project/package integration must make
-Core available to that target before reducing the runtime; copying the engine
-into Apple sources would recreate the duplicate implementation this package
-eliminates.
-
-#### LSW-R004A — Complete the role-neutral Core peer engine
-
-Compose the existing Core myudp components into one peer-scoped state machine.
-Its API accepts application stream data, received datagrams, timer ticks, and
-transport-epoch resets, then returns delivered records, outbound datagrams,
-scheduling needs, status changes, and a protocol metrics snapshot.
-
-Definition of Done:
-
-- Core owns the sender ledger and payload metadata, acknowledgement cleanup,
-  fresh-envelope retransmission, CONTROL and IDLE behavior, echo timestamps,
-  timer deadlines, and all epoch-reset transitions;
-- callers supply time and protocol events and execute returned effects without
-  reaching into counters, queues, missing sets, or retransmission bookkeeping;
-  and
-- deterministic state-machine tests cover loss, duplication, reordering,
-  coalescing, backpressure, counter rollover, the maximum missing list,
-  malformed input, idle/liveness expiry, and reconnect reset.
+R004 remains open because the following active packages have not met their
+definitions of done: Apple sender adoption (R004B), Linux host qualification
+(R004C), and LiveRuntime/mixed-runtime listener qualification (R004D).
 
 #### LSW-R004B — Reduce the Apple myudp owner to an adapter
 
-Replace the behavior in `ObstacleBridgeUdpOverlaySessionCodec` and
-`ObstacleBridgeUdpOverlayPeerRuntime` with one R004A engine instance per peer.
+Reduce `ObstacleBridgeUdpOverlayPeerRuntime` to effect execution and snapshot
+projection around one Core peer engine instance per peer. Migrate the remaining
+test-only SessionCodec parity commands directly to Core before deleting that
+fixture.
 
 Definition of Done:
 
@@ -668,12 +598,10 @@ Definition of Done:
 - Apple client tests and source-ownership guards exercise the Core engine and
   prevent protocol behavior from returning to the adapter.
 
-Depends on LSW-R004A.
-
 #### LSW-R004C — Replace the reduced Linux myudp client
 
-Run the R004A engine behind the connected POSIX datagram client and remove the
-adapter-local request/reply reliability subset.
+Run the Core peer engine behind the connected POSIX datagram client and remove
+the adapter-local request/reply reliability subset.
 
 Definition of Done:
 
@@ -686,7 +614,7 @@ Definition of Done:
 - focused Linux tests cover independent send/receive progress, timeout,
   cancellation, malformed datagrams, and reconnect cleanup.
 
-Depends on LSW-R004A and may proceed in parallel with LSW-R004B.
+May proceed in parallel with LSW-R004B.
 
 #### LSW-R004D — Qualify common peer and listener state
 

@@ -151,11 +151,16 @@ struct ObstacleBridgeCryptoTests {
     @Test func myudpCorePeerEngineOwnsQueueReceiveControlAndEpochReset() throws {
         let sender = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: 2)
         try sender.enqueueApplicationRecord(Data("core-peer".utf8), nowNanoseconds: 1)
+        #expect(sender.snapshot().waitingRecordCount == 1)
         let outbound = try sender.flush(nowNanoseconds: 2)
         #expect(outbound.outboundDatagrams.count == 1)
+        #expect(sender.snapshot().outstandingCounters == outbound.outboundDataCounters)
+        #expect(sender.snapshot().sendAttempts[outbound.outboundDataCounters[0]] == 1)
         let receiver = ObstacleBridgeMyUDPPeerEngine()
         let delivered = try receiver.receiveWire(outbound.outboundDatagrams[0], nowNanoseconds: 3)
         #expect(delivered.deliveredRecords == [Data("core-peer".utf8)])
+        #expect(receiver.snapshot().expectedCounter == 2)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeControl(receiver.buildControlDatagram(nowNanoseconds: 4)).lastInOrder == 1)
         #expect(receiver.takeDeliveredRecord() == Data("core-peer".utf8))
         #expect(receiver.takeDeliveredRecord() == nil)
         #expect(delivered.outboundDatagrams.count == 1)
@@ -163,15 +168,23 @@ struct ObstacleBridgeCryptoTests {
         sender.resetEpoch()
         #expect(try sender.flush(nowNanoseconds: 5).outboundDatagrams.isEmpty)
     }
-    @Test func myudpCorePeerEngineRetransmitsOnlyPeerReportedMissingChunks() throws {
+    @Test func myudpCorePeerEngineUsesImmediateMissingAndTimedUnconfirmedRetransmission() throws {
         let engine = ObstacleBridgeMyUDPPeerEngine()
         try engine.enqueueApplicationRecord(Data("retry".utf8), nowNanoseconds: 1)
         let original = try engine.flush(nowNanoseconds: 10).outboundDatagrams[0]
         let sent = try ObstacleBridgeMyUDPCodec.decodeDataChunks(original)
         let control = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 0, highestReceived: sent.chunks[0].counter, missing: [sent.chunks[0].counter], transmittedNanoseconds: 20)
-        _ = try engine.receiveWire(control, nowNanoseconds: 20)
+        // Python retransmits a newly reported missing counter immediately;
+        // timer sweeps then remain paced from that fresh envelope.
+        #expect(try engine.receiveWire(control, nowNanoseconds: 20).outboundDatagrams.count == 1)
         #expect(try engine.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.isEmpty)
-        #expect(try engine.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.count == 1)
+        #expect(try engine.tick(nowNanoseconds: 41, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.count == 1)
+
+        let unconfirmed = ObstacleBridgeMyUDPPeerEngine()
+        try unconfirmed.enqueueApplicationRecord(Data("timeout".utf8), nowNanoseconds: 1)
+        _ = try unconfirmed.flush(nowNanoseconds: 10)
+        #expect(try unconfirmed.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.isEmpty)
+        #expect(try unconfirmed.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.count == 1)
     }
     @Test func myudpCorePeerRegistryIsolatesEpochsAndWithdrawals() throws {
         let registry = ObstacleBridgeMyUDPPeerRegistry()
@@ -261,6 +274,16 @@ struct ObstacleBridgeCryptoTests {
         #expect(ObstacleBridgeMyUDPConfirmationMetricsPolicy.rebaseTransmitDelayEstimate(
             outstandingCount: 0, rttEstimateMilliseconds: 80, priorEstimateMilliseconds: finalized.transmitDelayEstimateMilliseconds
         ) == 40)
+    }
+    @Test func myudpCoreSenderLedgerCleansAcknowledgedChunksAndMetrics() throws {
+        let ledger = ObstacleBridgeMyUDPSenderLedger(maximumInFlight: 2)
+        try ledger.enqueue(Data("one".utf8), at: 10)
+        try ledger.enqueue(Data("two".utf8), at: 20)
+        #expect(try #require(ledger.dequeueBatch(nowNanoseconds: 100)).chunks.map(\.counter) == [1, 2])
+        let feedback = ledger.applyControl(lastInOrder: 1, highestReceived: 2, missing: [2], nowNanoseconds: 200_000_000, rttEstimateMilliseconds: 100)
+        #expect(feedback.retainedCounters == [2])
+        #expect(feedback.metrics.confirmedTotal == 1 && feedback.metrics.firstPassTotal == 1)
+        #expect(ledger.outstandingCounters == [2])
     }
     @Test func secureLinkFrameEnvelopePreservesFlagsAndRejectsTruncation() throws {
         let wire = ObstacleBridgeSecureLinkFrameCodec.encode(

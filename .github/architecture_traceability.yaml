@@ -121,6 +121,9 @@ ARC-CMP-002:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreControlPolicyDistinguishesNewGapsAndTimerPacing
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineOwnsQueueReceiveControlAndEpochReset
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineUsesImmediateMissingAndTimedUnconfirmedRetransmission
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreSenderLedgerCleansAcknowledgedChunksAndMetrics
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreHeartbeatPolicyTracksRttIdleDelayAndLiveness
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreConfirmationMetricsMatchPythonDelayAndAttemptBuckets
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreEchoAndIdlePoliciesPinOutboundTimingEffects

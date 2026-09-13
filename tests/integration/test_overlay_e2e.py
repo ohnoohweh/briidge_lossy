@@ -2177,7 +2177,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTunRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTCPTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlaySessionCodec.swift'),
+        str(ROOT / 'tests' / 'fixtures' / 'ObstacleBridgeUdpOverlaySessionCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeCompressLayerRuntime.swift'),

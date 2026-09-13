@@ -1,33 +1,11 @@
 import Foundation
 
+// Test-only compatibility facade for parity-runner commands that have not yet
+// been expressed directly in terms of ObstacleBridgeCore peer effects.
+
 struct ObstacleBridgeUdpOverlaySessionCodec {
     struct OutgoingChunk {
         var data: Data
-    }
-
-    final class StreamReceiveState {
-        private let core = ObstacleBridgeMyUDPStreamReceiveState()
-        private(set) var expected = 1
-        private(set) var pending: [Int: ObstacleBridgeUdpOverlayCodec.StreamChunk] = [:]
-        private(set) var missing: Set<Int> = []
-
-        func reset() {
-            core.reset()
-            expected = 1
-            pending.removeAll()
-            missing.removeAll()
-        }
-
-        func process(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) -> (Bool, [Data])? {
-            guard (1...Int(UInt16.max)).contains(chunk.counter) else { return nil }
-            guard let result = core.process(.init(counter: UInt16(chunk.counter), payload: chunk.data)) else { return nil }
-            expected = Int(core.expected)
-            pending = Dictionary(uniqueKeysWithValues: core.pending.map {
-                (Int($0.key), .init(counter: Int($0.value.counter), data: $0.value.payload))
-            })
-            missing = Set(core.missing.map(Int.init))
-            return (result.accepted, result.completedRecords)
-        }
     }
 
     struct RetransmitSnapshot {
@@ -47,31 +25,6 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         var controlDecision: ControlPolicyDecision
     }
 
-    struct InboundIdleHandlingSnapshot {
-        var reflectedFrame: Data?
-        var reflected: Bool
-        var establishedNS: UInt64
-        var lastRxTxNS: UInt64
-        var lastRxWallNS: UInt64
-        var rttSampleMS: Double
-        var rttEstMS: Double
-        var transmitDelayEstMS: Double
-    }
-
-    struct InboundDataHandlingSnapshot {
-        var controlReasons: [String]
-        var completedPayloads: [Data]
-        var expected: Int
-        var pending: [Int]
-        var missing: [Int]
-        var establishedNS: UInt64
-        var lastRxTxNS: UInt64
-        var lastRxWallNS: UInt64
-        var rttSampleMS: Double
-        var rttEstMS: Double
-        var transmitDelayEstMS: Double
-    }
-
     struct ControlPolicyDecision {
         var shouldEmit: Bool
         var reason: String?
@@ -81,37 +34,6 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         var sendBufferKeys: [Int]
         var peerReportedMissing: [Int]
         var lastAckPeer: Int
-    }
-
-    static func buildControl(
-        expected: Int,
-        pendingKeys: [Int],
-        missing: [Int],
-        txNS: UInt64,
-        echoNS: UInt64 = 0
-    ) throws -> ObstacleBridgeUdpOverlayCodec.ControlPacket {
-        let lastInOrder = lastInOrderFromExpected(expected)
-        let highestRX = computeHighestRX(lastInOrder: lastInOrder, pendingKeys: pendingKeys)
-        let filteredMissed: [Int]
-        if highestRX == 0 {
-            filteredMissed = []
-        } else {
-            filteredMissed = missing.filter { value in
-                value != 0 && ringCmp(highestRX, value) >= 0
-            }
-        }
-        let missedSorted = sortMissedForControl(Set(filteredMissed), ref: lastInOrder)
-        let raw = try ObstacleBridgeUdpOverlayCodec.buildControlFrame(
-            lastInOrderRX: lastInOrder,
-            highestRX: highestRX,
-            missed: missedSorted,
-            txNS: txNS,
-            echoNS: echoNS
-        )
-        guard let parsed = ObstacleBridgeUdpOverlayCodec.parseControlFrame(raw) else {
-            throw ObstacleBridgeUdpOverlayCodecError.invalidField
-        }
-        return parsed
     }
 
     static func confirmFeedback(
@@ -358,99 +280,19 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         )
     }
 
-    static func handleInboundIdleFrame(
-        nowNS: UInt64,
-        txNS: UInt64,
-        echoNS: UInt64,
-        sendPortPresent: Bool,
-        establishedNS: UInt64,
-        priorRTTEstMS: Double,
-        priorTransmitDelayEstMS: Double
-    ) throws -> InboundIdleHandlingSnapshot {
-        let lastRxTxNS = txNS
-        let lastRxWallNS = nowNS
-
-        var rttSampleMS: Double = 0
-        var rttEstMS = priorRTTEstMS
-        var transmitDelayEstMS = priorTransmitDelayEstMS
-        var nextEstablishedNS = establishedNS
-
-        if echoNS != 0 {
-            let sample = Double(nowNS - echoNS) / 1_000_000.0
-            rttSampleMS = sample
-            if rttEstMS < sample {
-                rttEstMS = sample
-            } else {
-                rttEstMS = (1.0 - 0.125) * rttEstMS + (0.125 * sample)
-            }
-            if rttEstMS > 0 {
-                transmitDelayEstMS = 0.5 * rttEstMS
-            }
-            if nextEstablishedNS == 0 {
-                nextEstablishedNS = nowNS
-            }
-        }
-
-        let reflected = ObstacleBridgeMyUDPIdlePolicy.shouldReflect(
-            echoedNanoseconds: echoNS,
-            transportWritable: sendPortPresent
-        )
-        let reflectedFrame: Data?
-        if reflected {
-            reflectedFrame = try ObstacleBridgeUdpOverlayCodec.buildProtocolFrame(
-                ptype: ObstacleBridgeUdpOverlayCodec.ptypeIdle,
-                payload: Data(),
-                txNS: nowNS,
-                echoNS: txNS
-            )
-        } else {
-            reflectedFrame = nil
-        }
-
-        return InboundIdleHandlingSnapshot(
-            reflectedFrame: reflectedFrame,
-            reflected: reflected,
-            establishedNS: nextEstablishedNS,
-            lastRxTxNS: lastRxTxNS,
-            lastRxWallNS: lastRxWallNS,
-            rttSampleMS: rttSampleMS,
-            rttEstMS: rttEstMS,
-            transmitDelayEstMS: transmitDelayEstMS
-        )
-    }
-
-    private static func ringCmp(_ a: Int, _ b: Int) -> Int {
-        if a == b {
-            return 0
-        }
-        let ar = a - 1
-        let br = b - 1
-        var delta = (ar - br) % 65535
-        if delta < 0 {
-            delta += 65535
-        }
-        if delta >= 32768 {
-            delta -= 65535
-        }
-        return delta
-    }
-
-    private static func c16Inc(_ value: Int) -> Int {
-        return value == 65535 ? 1 : value + 1
-    }
-
-    private static func c16Dec(_ value: Int) -> Int {
-        return value == 1 ? 65535 : value - 1
-    }
-
-    private static func lastInOrderFromExpected(_ expected: Int) -> Int {
-        return expected == 1 ? 0 : c16Dec(expected)
-    }
-
     private static func retransWindowNS(rttEstMS: Double, multiplier: Double) -> UInt64 {
         let window = rttEstMS * 1_000_000.0 * multiplier
         return max(1, UInt64(window))
     }
+
+    private static func ringCmp(_ a: Int, _ b: Int) -> Int {
+        if a == b { return 0 }
+        var delta = ((a - 1) - (b - 1)) % 65535
+        if delta < 0 { delta += 65535 }
+        return delta >= 32768 ? delta - 65535 : delta
+    }
+
+    private static func c16Inc(_ value: Int) -> Int { value == 65535 ? 1 : value + 1 }
 
     private static func retransmitCounters(
         nowNS: UInt64,
