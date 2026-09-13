@@ -168,6 +168,7 @@ ARC-CMP-003:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlFrameRoundTripsAndRejectsTrailingBytes
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::channelMuxReplyPolicyAdmitsOneAwaitedFrame
+    - tests/unit/test_macos_core_codec_build.py::test_macos_build_uses_core_websocket_payload_codec_once
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::udpListenerPublishesOpenAndDataFrames
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords

@@ -40,6 +40,12 @@ from swift_test_support import build_macos_swift_artifact
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_macos_build_uses_core_websocket_payload_source() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in build_script
+    assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 

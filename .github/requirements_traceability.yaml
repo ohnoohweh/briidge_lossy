@@ -175,6 +175,7 @@ REQ-AUT-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlFrameRoundTripsAndRejectsTrailingBytes
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::channelMuxReplyPolicyAdmitsOneAwaitedFrame
+    - tests/unit/test_macos_core_codec_build.py::test_macos_build_uses_core_websocket_payload_codec_once
 
 REQ-AUT-002:
   integration_tests:

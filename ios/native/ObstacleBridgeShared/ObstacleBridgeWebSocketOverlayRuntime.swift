@@ -71,7 +71,7 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     private let payloadMode: String
-    private let payloadCodec: any ObstacleBridgeWebSocketPayloadCodec
+    private let corePayloadMode: ObstacleBridgeWebSocketPayloadMode
     private let frameMaxSize: Int
     private let sendTimeoutS: Double
     private let tcpUserTimeoutMS: Int
@@ -92,8 +92,8 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         reconnectGraceS: Double = 3.0
     ) throws {
         self.payloadMode = payloadMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self.payloadCodec = try ObstacleBridgeWebSocketPayloadCodecFactory.build(mode: self.payloadMode)
-        self.frameMaxSize = self.payloadCodec.maxEncodedSize(wsMaxSize)
+        self.corePayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(self.payloadMode)
+        self.frameMaxSize = ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(wsMaxSize, mode: self.corePayloadMode)
         self.sendTimeoutS = max(0.0, sendTimeoutS)
         self.tcpUserTimeoutMS = max(0, tcpUserTimeoutMS)
         self.reconnectGraceS = max(0.0, reconnectGraceS)
@@ -233,15 +233,9 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         let decodedWire: Data
         switch message {
         case .data(let data):
-            guard let decoded = try payloadCodec.decode(data) else {
-                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unable to decode websocket binary payload")
-            }
-            decodedWire = decoded
+            decodedWire = try ObstacleBridgeWebSocketPayloadCodec.decode(.binary(data), mode: corePayloadMode)
         case .string(let text):
-            guard let decoded = try payloadCodec.decode(text) else {
-                throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("unable to decode websocket text payload")
-            }
-            decodedWire = decoded
+            decodedWire = try ObstacleBridgeWebSocketPayloadCodec.decode(.text(text), mode: corePayloadMode)
         @unknown default:
             return .app(Data())
         }
@@ -312,19 +306,17 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
 
     func listenerPeerSnapshot(advertisedPayloadMode: String?, inboundMessage: Any, outgoingWire: Data) throws -> ListenerPeerSnapshot {
         let resolvedMode = resolveInboundPayloadMode(advertisedPayloadMode)
-        let codec = try ObstacleBridgeWebSocketPayloadCodecFactory.build(mode: resolvedMode)
+        let codec = try ObstacleBridgeWebSocketPayloadCodec.mode(resolvedMode)
         let decoded: Data?
         do {
-            if let wire = try codec.decode(inboundMessage) {
-                decoded = wire
-            } else {
-                decoded = nil
-            }
+            if let data = inboundMessage as? Data { decoded = try ObstacleBridgeWebSocketPayloadCodec.decode(.binary(data), mode: codec) }
+            else if let text = inboundMessage as? String { decoded = try ObstacleBridgeWebSocketPayloadCodec.decode(.text(text), mode: codec) }
+            else { decoded = nil }
         } catch {
             decoded = nil
         }
-        let encoded = try codec.encode(outgoingWire)
-        if let data = encoded as? Data {
+        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(outgoingWire, mode: codec)
+        if case .binary(let data) = encoded {
             return ListenerPeerSnapshot(
                 payloadMode: resolvedMode,
                 decodedHex: decoded.map(hexFromData),
@@ -336,7 +328,7 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
             payloadMode: resolvedMode,
             decodedHex: decoded.map(hexFromData),
             sentPayloadKind: "text",
-            sentPayloadValue: encoded as? String ?? ""
+            sentPayloadValue: { if case .text(let text) = encoded { return text }; return "" }()
         )
     }
 

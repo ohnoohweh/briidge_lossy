@@ -210,6 +210,8 @@ trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
 all shared text payload modes against a Python peer. The macOS Swift probe runs that Core codec suite
 The shared corpus also pins Python-compatible myUDP CONTROL bytes and malformed
 rejection, while direct Core tests cover portable ChannelMux reply admission.
+The macOS build-source guard ensures its WebSocket payload codec comes from
+Core rather than a parallel shared-runtime source.
 as well, while the adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove

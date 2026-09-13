@@ -218,6 +218,8 @@ struct ObstacleBridgeCoreCodecTests {
             let payload = try ObstacleBridgeWebSocketPayloadCodec.encode(wire, mode: mode)
             #expect(try ObstacleBridgeWebSocketPayloadCodec.decode(payload, mode: mode) == wire)
         }
+        #expect(ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(4, mode: .base64) == 8)
+        #expect(ObstacleBridgeWebSocketPayloadCodec.maximumEncodedSize(4, mode: .jsonBase64) == 19)
         #expect(throws: ObstacleBridgeWebSocketPayloadCodecError.invalidPayload) {
             try ObstacleBridgeWebSocketPayloadCodec.decode(.text("!"), mode: .semiTextShape)
         }

@@ -32,6 +32,17 @@ public enum ObstacleBridgeWebSocketPayloadCodec {
         case .semiTextShape: return try semiDecode(text)
         }
     }
+    public static func maximumEncodedSize(_ wireSize: Int, mode: ObstacleBridgeWebSocketPayloadMode) -> Int {
+        let size = max(0, wireSize)
+        switch mode {
+        case .binary: return size
+        case .base64: return size == 0 ? 0 : 4 * ((size + 2) / 3)
+        case .jsonBase64: return 11 + (size == 0 ? 0 : 4 * ((size + 2) / 3))
+        case .semiTextShape:
+            let symbols = (size * 8 + 5) / 6
+            return symbols + (symbols == 0 ? 0 : (symbols - 1) / 8)
+        }
+    }
     private static let alphabet = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+")
     private static func semiEncode(_ data: Data) -> String {
         guard !data.isEmpty else { return "" }; var bits = data.map { String($0, radix: 2).leftPad(8) }.joined(); let remainder = bits.count % 6; if remainder != 0 { bits += String(repeating: "0", count: 6 - remainder) }

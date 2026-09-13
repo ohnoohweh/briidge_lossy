@@ -797,6 +797,13 @@ def test_websocket_payload_codec_source_exists() -> None:
     assert "invalidSemiTextShapeTrailingPadding" in runtime
 
 
+def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeWebSocketPayloadCodec.decode(" in runtime
+    assert "ObstacleBridgeWebSocketPayloadCodec.encode(" in runtime
+    assert "ObstacleBridgeWebSocketPayloadCodecFactory" not in runtime
+
+
 def test_websocket_overlay_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
 
