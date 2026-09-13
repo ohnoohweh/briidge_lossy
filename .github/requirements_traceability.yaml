@@ -990,6 +990,7 @@ REQ-LST-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_listener_myudp_two_clients_server_restart_reoffers_remote_tcp
   unit_tests:
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerRegistryIsolatesEpochsAndWithdrawals
     - tests/unit/test_requirements_unit_gaps.py::test_listener_peer_snapshot_preserves_distinct_peers_across_listener_transports
 
 REQ-LST-003:

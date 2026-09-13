@@ -190,15 +190,26 @@ struct ObstacleBridgeCryptoTests {
         let registry = ObstacleBridgeMyUDPPeerRegistry()
         let old = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 1)
         let fresh = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 2)
-        let inbound = try ObstacleBridgeMyUDPCodec.encodeData(payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("inbound".utf8)), counter: 1, transmittedNanoseconds: 1)
-        #expect(try registry.receiveWire(inbound, from: fresh, nowNanoseconds: 2).deliveredRecords == [Data("inbound".utf8)])
-        try registry.admit(old).enqueueApplicationRecord(Data("old".utf8), nowNanoseconds: 1)
-        #expect(try registry.admit(fresh).flush(nowNanoseconds: 2).outboundDatagrams.isEmpty)
+        let reconnect = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 3)
+        func inbound(_ payload: String, counter: UInt16, at time: UInt64) throws -> Data {
+            try ObstacleBridgeMyUDPCodec.encodeData(
+                payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data(payload.utf8)),
+                counter: counter,
+                transmittedNanoseconds: time
+            )
+        }
+        #expect(try registry.receiveWire(inbound("old", counter: 1, at: 1), from: old, nowNanoseconds: 1).deliveredRecords == [Data("old".utf8)])
+        #expect(try registry.receiveWire(inbound("fresh", counter: 1, at: 2), from: fresh, nowNanoseconds: 2).deliveredRecords == [Data("fresh".utf8)])
+        #expect(registry.activeKeys == Set([old, fresh]))
         registry.touch(old, nowNanoseconds: 10)
         registry.touch(fresh, nowNanoseconds: 20)
         #expect(registry.expire(nowNanoseconds: 25, idleTimeoutNanoseconds: 10) == [old])
+        #expect(try registry.receiveWire(inbound("fresh-again", counter: 2, at: 26), from: fresh, nowNanoseconds: 26).deliveredRecords == [Data("fresh-again".utf8)])
         registry.withdraw(identity: "peer", exceptEpoch: 2)
         #expect(registry.activeKeys == Set([fresh]))
+        registry.withdraw(identity: "peer", exceptEpoch: reconnect.epoch)
+        #expect(try registry.receiveWire(inbound("reconnected", counter: 1, at: 30), from: reconnect, nowNanoseconds: 30).deliveredRecords == [Data("reconnected".utf8)])
+        #expect(registry.activeKeys == Set([reconnect]))
     }
     @Test func myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps() throws {
         let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
