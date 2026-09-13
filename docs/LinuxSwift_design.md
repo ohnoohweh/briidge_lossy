@@ -587,8 +587,10 @@ response, echo timing, and completed-record queue. The Linux client still
 exposes due Core timer effects through an event-loop-callable `serviceTimers()`
 entry point without changing the connected socket's receive-timeout semantics.
 The Linux client still
-needs timed loss/retransmission qualification against the Python reference;
-the shared-datagram listener still needs adapter wiring to the Core registry.
+needs timed loss/retransmission qualification against the Python reference.
+The standalone Linux shared-datagram listener now maps remote endpoint plus
+admission epoch to the Core registry and executes emitted effects; it still
+needs LiveRuntime wiring and authenticated epoch selection.
 
 `ObstacleBridgeMyUDPPeerRegistry` now provides the first socket-independent
 listener-state seam: it isolates Core peer engines by logical identity and
@@ -596,8 +598,9 @@ epoch and can withdraw stale epochs without clearing the replacement peer.
 It now also owns activity timestamps and timer-driven expiry. R004D still
 owns registry-level wire admission effects; listener adapters supply only the
 peer identity, wire bytes, time, and socket execution. The remaining R004D
-work is multi-peer Python/Swift interoperability qualification and wiring the
-Linux listener mechanism to this Core seam.
+work is LiveRuntime admission wiring, multi-peer Python/Swift interoperability
+qualification, and peer expiry/cancellation integration with the listener's
+event loop.
 
 The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (2) qualify Linux Core timer effects
