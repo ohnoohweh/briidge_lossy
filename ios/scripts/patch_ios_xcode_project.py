@@ -87,6 +87,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000010", "71C500000000000000000110", "ObstacleBridgePacketTunnelConfiguration.swift"),
     ("71C500000000000000000030", "71C500000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
     ("71C500000000000000000031", "71C500000000000000000131", "ObstacleBridgeOverlayFrameCodec.swift"),
+    ("71C500000000000000000032", "71C500000000000000000132", "ObstacleBridgeControlChunkCodec.swift"),
     ("71C500000000000000000011", "71C500000000000000000111", "ObstacleBridgeWebSocketPayloadCodec.swift"),
     ("71C500000000000000000012", "71C500000000000000000112", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C500000000000000000025", "71C500000000000000000125", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
@@ -137,6 +138,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C61000000000000000000D", "71C61000000000000000010D", "ObstacleBridgeWebSocketPayloadCodec.swift"),
     ("71C610000000000000000030", "71C610000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
     ("71C610000000000000000031", "71C610000000000000000131", "ObstacleBridgeOverlayFrameCodec.swift"),
+    ("71C610000000000000000032", "71C610000000000000000132", "ObstacleBridgeControlChunkCodec.swift"),
     ("71C61000000000000000000E", "71C61000000000000000010E", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C610000000000000000020", "71C610000000000000000120", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
     ("71C61000000000000000000F", "71C61000000000000000010F", "ObstacleBridgeTcpOverlayRuntime.swift"),
@@ -166,7 +168,7 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name in {"ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift"}:
+    if name in {"ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     return f"../../../../native/ObstacleBridgeShared/{name}"
 

@@ -804,6 +804,14 @@ def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
     assert "private func appendUInt64BE" not in runtime
 
 
+def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeControlChunkCodec.chunk(" in codec
+    assert "ObstacleBridgeControlChunkCodec.nextTransactionID(" in codec
+    assert "ObstacleBridgeControlChunkReassembler" in codec
+    assert "private var states: [ControlChunkKey: ControlChunkState]" not in codec
+
+
 def test_websocket_overlay_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
 

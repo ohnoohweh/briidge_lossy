@@ -2190,6 +2190,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressResolver.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeBinaryCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayFrameCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeControlChunkCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeWebSocketPayloadCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayTransportOwner.swift'),

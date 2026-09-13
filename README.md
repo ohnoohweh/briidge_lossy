@@ -14,7 +14,8 @@ The project currently targets six platform families:
   and trailing-byte rejection, plus all WebSocket payload modes; SecureLink client/server envelope
   and myUDP CONTROL/stream-record framing have Core owners; the macOS flat
   build and generated iOS targets also consume the Core WebSocket payload and
-  APP/PING/PONG frame codecs rather than compiling parallel implementations;
+  APP/PING/PONG frame codecs and CKV1 control-chunk policy rather than compiling
+  parallel implementations;
   serialization has one shared Core owner. Linux TCP/UDP service listeners
   publish kernel-assigned ephemeral ports in their Core OPEN records, and the
   SwiftPM peer-fixture lane bounds child processes for reproducible full-suite

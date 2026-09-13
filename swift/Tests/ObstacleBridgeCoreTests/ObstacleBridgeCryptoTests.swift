@@ -185,16 +185,16 @@ struct ObstacleBridgeCoreCodecTests {
         }
 
         let reassembler = ObstacleBridgeControlChunkReassembler(maximumInflight: 1, maximumReassembledBytes: 25, ttl: 1)
-        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[1], peerID: 3, now: 10) == nil)
-        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[1], peerID: 3, now: 11) == nil)
-        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[0], peerID: 3, now: 11) == nil)
-        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[2], peerID: 3, now: 11) == payload)
-        #expect(reassembler.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: Data("CKV1".utf8), peerID: 3, now: 12) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: 1, messageType: 7, payload: chunks[1], peerID: 3, now: 10) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: 1, messageType: 7, payload: chunks[1], peerID: 3, now: 11) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: 1, messageType: 7, payload: chunks[0], peerID: 3, now: 11) == nil)
+        #expect(reassembler.consume(channelID: 2, protocolType: 1, messageType: 7, payload: chunks[2], peerID: 3, now: 11) == payload)
+        #expect(reassembler.consume(channelID: 2, protocolType: 1, messageType: 7, payload: Data("CKV1".utf8), peerID: 3, now: 12) == nil)
 
         let expired = ObstacleBridgeControlChunkReassembler(ttl: 1)
-        #expect(expired.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[0], peerID: 3, now: 10) == nil)
+        #expect(expired.consume(channelID: 2, protocolType: 1, messageType: 7, payload: chunks[0], peerID: 3, now: 10) == nil)
         expired.prune(now: 11)
-        #expect(expired.consume(channelID: 2, protocolType: .tcp, messageType: .openChunk, payload: chunks[1], peerID: 3, now: 11) == nil)
+        #expect(expired.consume(channelID: 2, protocolType: 1, messageType: 7, payload: chunks[1], peerID: 3, now: 11) == nil)
     }
 
     @Test func overlayAppPingPongFramesMatchPythonLayout() throws {

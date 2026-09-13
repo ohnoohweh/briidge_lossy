@@ -10,6 +10,7 @@ public enum ObstacleBridgeControlChunkCodecError: Error, Equatable, Sendable {
 /// and reassembly state shared by ChannelMux OPEN and service-catalog chunks.
 public enum ObstacleBridgeControlChunkCodec {
     public static let headerSize = 12
+    public static let channelMuxHeaderSize = 8
     public static let defaultMaximumInflight = 512
     public static let defaultMaximumReassembledBytes = 16 * 1024 * 1024
     private static let magic = Data("CKV1".utf8)
@@ -20,7 +21,13 @@ public enum ObstacleBridgeControlChunkCodec {
     }
 
     public static func chunk(transactionID: UInt32, maximumApplicationPayload: Int, payload: Data) throws -> [Data] {
-        let chunkCapacity = maximumApplicationPayload - ObstacleBridgeChannelMuxCodec.headerSize - headerSize
+        try chunk(transactionID: transactionID, maximumApplicationPayload: maximumApplicationPayload, muxHeaderSize: channelMuxHeaderSize, payload: payload)
+    }
+
+    /// Raw-value entry point for platform adapters that retain their own
+    /// ChannelMux model while sharing the exact CKV1 representation.
+    public static func chunk(transactionID: UInt32, maximumApplicationPayload: Int, muxHeaderSize: Int, payload: Data) throws -> [Data] {
+        let chunkCapacity = maximumApplicationPayload - muxHeaderSize - headerSize
         guard chunkCapacity > 0 else { throw ObstacleBridgeControlChunkCodecError.invalidMaximumPayload }
         let count = max(1, (payload.count + chunkCapacity - 1) / chunkCapacity)
         guard count <= Int(UInt16.max) else { throw ObstacleBridgeControlChunkCodecError.payloadTooLarge }
@@ -78,9 +85,9 @@ public final class ObstacleBridgeControlChunkReassembler {
         self.ttl = max(0, ttl)
     }
 
-    public func consume(channelID: UInt16, protocolType: ObstacleBridgeChannelMuxProtocol, messageType: ObstacleBridgeChannelMuxMessageType, payload: Data, peerID: Int?, now: TimeInterval = Date().timeIntervalSince1970) -> Data? {
+    public func consume(channelID: UInt16, protocolType: UInt8, messageType: UInt8, payload: Data, peerID: Int?, now: TimeInterval = Date().timeIntervalSince1970) -> Data? {
         guard let header = ObstacleBridgeControlChunkCodec.decodeHeader(payload) else { return nil }
-        let key = Key(peerID: peerID ?? 0, channelID: channelID, protocolType: protocolType.rawValue, messageType: messageType.rawValue, transactionID: header.transactionID)
+        let key = Key(peerID: peerID ?? 0, channelID: channelID, protocolType: protocolType, messageType: messageType, transactionID: header.transactionID)
         let part = Data(payload.dropFirst(ObstacleBridgeControlChunkCodec.headerSize))
         var state = states[key]
 

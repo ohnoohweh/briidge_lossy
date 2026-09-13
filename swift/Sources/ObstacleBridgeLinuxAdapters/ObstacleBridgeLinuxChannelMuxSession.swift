@@ -97,8 +97,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         }
         guard let body = controlChunkReassembler.consume(
             channelID: frame.channelID,
-            protocolType: frame.protocolType,
-            messageType: frame.messageType,
+            protocolType: frame.protocolType.rawValue,
+            messageType: frame.messageType.rawValue,
             payload: frame.body,
             peerID: nil
         ) else { return nil }

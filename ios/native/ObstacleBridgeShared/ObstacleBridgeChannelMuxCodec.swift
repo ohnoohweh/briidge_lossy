@@ -70,32 +70,17 @@ struct ObstacleBridgeChannelMuxCodec {
         var spec: ServiceSpec
     }
 
-    struct ControlChunkKey: Hashable {
-        var peerID: Int
-        var chanID: Int
-        var proto: Proto
-        var mtype: MType
-        var txID: UInt32
-    }
-
-    struct ControlChunkState {
-        var total: Int
-        var parts: [Int: Data]
-        var received: Int
-        var updated: TimeInterval
-    }
-
     final class ControlChunkReassembler {
-        private let maxInflight: Int
-        private let ttlSeconds: TimeInterval
-        private var states: [ControlChunkKey: ControlChunkState] = [:]
+        private let core: ObstacleBridgeControlChunkReassembler
 
         init(
             maxInflight: Int = ObstacleBridgeChannelMuxCodec.controlChunkMaxInflight,
             ttlSeconds: TimeInterval = ObstacleBridgeChannelMuxCodec.controlChunkReassemblyTTLS
         ) {
-            self.maxInflight = maxInflight
-            self.ttlSeconds = ttlSeconds
+            self.core = ObstacleBridgeControlChunkReassembler(
+                maximumInflight: maxInflight,
+                ttl: ttlSeconds
+            )
         }
 
         func consume(
@@ -106,79 +91,19 @@ struct ObstacleBridgeChannelMuxCodec {
             peerID: Int?,
             now: TimeInterval = Date().timeIntervalSince1970
         ) -> Data? {
-            guard
-                let header = ObstacleBridgeChannelMuxCodec.parseControlChunkHeader(payload),
-                header.magic == ObstacleBridgeChannelMuxCodec.controlChunkMagic,
-                header.chunkTotal > 0,
-                header.chunkTotal <= 0xFFFF,
-                header.chunkIndex < header.chunkTotal
-            else {
-                return nil
-            }
-
-            let key = ControlChunkKey(
-                peerID: peerID ?? 0,
-                chanID: chanID,
-                proto: proto,
-                mtype: mtype,
-                txID: header.txID
+            guard let channelID = UInt16(exactly: chanID) else { return nil }
+            return core.consume(
+                channelID: channelID,
+                protocolType: UInt8(proto.rawValue),
+                messageType: UInt8(mtype.rawValue),
+                payload: payload,
+                peerID: peerID,
+                now: now
             )
-            let chunk = payload.dropFirst(ObstacleBridgeChannelMuxCodec.controlChunkHeaderSize)
-            var state = states[key]
-
-            if state == nil {
-                if states.count >= maxInflight {
-                    prune(now: now)
-                    if states.count >= maxInflight {
-                        return nil
-                    }
-                }
-                state = ControlChunkState(
-                    total: header.chunkTotal,
-                    parts: [:],
-                    received: 0,
-                    updated: now
-                )
-            } else if state?.total != header.chunkTotal {
-                states.removeValue(forKey: key)
-                return nil
-            }
-
-            guard var nextState = state else {
-                return nil
-            }
-            if nextState.parts[header.chunkIndex] == nil {
-                nextState.parts[header.chunkIndex] = Data(chunk)
-                nextState.received += chunk.count
-            }
-            nextState.updated = now
-            states[key] = nextState
-
-            if nextState.parts.count < header.chunkTotal {
-                return nil
-            }
-
-            var assembled = Data()
-            for index in 0..<header.chunkTotal {
-                guard let part = nextState.parts[index] else {
-                    return nil
-                }
-                assembled.append(part)
-            }
-            states.removeValue(forKey: key)
-            return assembled
         }
 
         func prune(now: TimeInterval = Date().timeIntervalSince1970) {
-            let expired = states.keys.filter { key in
-                guard let state = states[key] else {
-                    return false
-                }
-                return (now - state.updated) >= ttlSeconds
-            }
-            for key in expired {
-                states.removeValue(forKey: key)
-            }
+            core.prune(now: now)
         }
     }
 
@@ -321,12 +246,8 @@ struct ObstacleBridgeChannelMuxCodec {
     }
 
     static func nextControlChunkTxID(current: UInt32) -> (txID: UInt32, next: UInt32) {
-        var txID = current & 0xFFFFFFFF
-        if txID == 0 {
-            txID = 1
-        }
-        let next = txID == 0xFFFFFFFF ? UInt32(1) : txID &+ 1
-        return (txID, next)
+        let transaction = ObstacleBridgeControlChunkCodec.nextTransactionID(current: current)
+        return (transaction.transactionID, transaction.next)
     }
 
     static func chunkControlPayload(
@@ -334,31 +255,12 @@ struct ObstacleBridgeChannelMuxCodec {
         maxAppPayload: Int,
         payload: Data
     ) -> [Data] {
-        let maxDataLength = max(0, maxAppPayload - muxHeaderSize)
-        let chunkPayloadCap = maxDataLength - controlChunkHeaderSize
-        guard chunkPayloadCap > 0 else {
-            return []
-        }
-        let totalChunks = max(1, (payload.count + chunkPayloadCap - 1) / chunkPayloadCap)
-        guard totalChunks <= 0xFFFF else {
-            return []
-        }
-
-        var frames: [Data] = []
-        frames.reserveCapacity(totalChunks)
-        for index in 0..<totalChunks {
-            let start = index * chunkPayloadCap
-            let end = min(start + chunkPayloadCap, payload.count)
-            let part = payload.subdata(in: start..<end)
-            var frame = Data()
-            frame.append(controlChunkMagic)
-            frame.appendUInt32(txID)
-            frame.appendUInt16(UInt16(index))
-            frame.appendUInt16(UInt16(totalChunks))
-            frame.append(part)
-            frames.append(frame)
-        }
-        return frames
+        (try? ObstacleBridgeControlChunkCodec.chunk(
+            transactionID: txID,
+            maximumApplicationPayload: maxAppPayload,
+            muxHeaderSize: muxHeaderSize,
+            payload: payload
+        )) ?? []
     }
 
     static func jsonValue(from object: Any) -> JSONValue? {
