@@ -520,6 +520,8 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     secure_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "guard lastRttOkNS > 0 else" in peer_runtime
+    assert "rttEstimateMilliseconds: rttEstMS" in peer_runtime
+    assert "lastControlSentNanoseconds: lastControlSentNS" in peer_runtime
     assert "max(lastRttOkNS, lastRxWallNS)" not in peer_runtime
     assert "func resetTransportEpoch()" in peer_runtime
     assert "receiveState.reset()" in peer_runtime

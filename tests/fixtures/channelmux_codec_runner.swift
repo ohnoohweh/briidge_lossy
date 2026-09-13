@@ -78,6 +78,27 @@ private func parseSendMeta(_ raw: Any?) throws -> [Int: ObstacleBridgeUdpOverlay
     return result
 }
 
+/// Recreate runner seed state through the public application-payload path.
+/// The Python fixture supplies complete serialized stream records for these
+/// commands; stripping their four-byte record header prevents a second layer
+/// of framing while keeping counter and retry ownership in Core.
+private func seedPeerRuntime(
+    _ runtime: ObstacleBridgeUdpOverlayPeerRuntime,
+    counters: [Int],
+    sendMeta: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk],
+    sendTXNS: [Int: UInt64]
+) throws {
+    for counter in counters.sorted() {
+        guard let record = sendMeta[counter]?.data, record.count >= 4 else {
+            throw ChannelMuxCodecRunnerError.invalidRequest
+        }
+        _ = try runtime.sendApplicationPayload(
+            Data(record.dropFirst(4)),
+            nowNS: sendTXNS[counter] ?? 0
+        )
+    }
+}
+
 private func intKeyedStringMap<T>(_ values: [Int: T], convert: (T) -> String) -> [String: String] {
     var result: [String: String] = [:]
     for key in values.keys.sorted() {
@@ -1088,13 +1109,18 @@ private func handle(_ request: [String: Any]) throws -> Any {
             return value.intValue
         }
         let echoNS = (request["echo_ns"] as? NSNumber)?.uint64Value ?? 0
-        let controlPacket = try ObstacleBridgeUdpOverlaySessionCodec.buildControl(
-            expected: expected.intValue,
-            pendingKeys: pending,
-            missing: missing,
+        let lastInOrder = max(0, expected.intValue - 1)
+        let highestRX = max(lastInOrder, pending.max() ?? 0)
+        let controlRaw = try ObstacleBridgeUdpOverlayCodec.buildControlFrame(
+            lastInOrderRX: lastInOrder,
+            highestRX: highestRX,
+            missed: missing.filter { $0 > 0 && $0 <= highestRX }.sorted(),
             txNS: txNS.uint64Value,
             echoNS: echoNS
         )
+        guard let controlPacket = ObstacleBridgeUdpOverlayCodec.parseControlFrame(controlRaw) else {
+            throw ChannelMuxCodecRunnerError.codecFailure
+        }
         return [
             "hex": hexFromData(controlPacket.raw),
             "packet": [
@@ -1430,14 +1456,16 @@ private func handle(_ request: [String: Any]) throws -> Any {
         else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.handleInboundIdleFrame(
+        let runtime = ObstacleBridgeUdpOverlayPeerRuntime(
+            establishedNS: establishedNS.uint64Value,
+            rttEstMS: priorRTTEstMS.doubleValue,
+            transmitDelayEstMS: priorTransmitDelayEstMS.doubleValue
+        )
+        let snapshot = try runtime.handleInboundIdleFrame(
             nowNS: nowNS.uint64Value,
             txNS: txNS.uint64Value,
             echoNS: echoNS.uint64Value,
-            sendPortPresent: sendPortPresent,
-            establishedNS: establishedNS.uint64Value,
-            priorRTTEstMS: priorRTTEstMS.doubleValue,
-            priorTransmitDelayEstMS: priorTransmitDelayEstMS.doubleValue
+            sendPortPresent: sendPortPresent
         )
         let reflectedFrame: Any = snapshot.reflectedFrame.map(hexFromData) ?? NSNull()
         return [
@@ -1601,28 +1629,14 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return value.intValue
         }
-        let peerReportedMissing = try jsonArray(request["peer_reported_missing"] ?? []).map { item -> Int in
-            guard let value = item as? NSNumber else {
-                throw ChannelMuxCodecRunnerError.invalidRequest
-            }
-            return value.intValue
-        }
         let runtime = ObstacleBridgeUdpOverlayPeerRuntime(
             establishedNS: establishedNS.uint64Value,
             lastSentLastInOrder: lastSentLastInOrder.intValue,
             lastControlSentNS: lastControlSentNS.uint64Value,
             rttEstMS: priorRTTEstMS.doubleValue,
-            transmitDelayEstMS: priorTransmitDelayEstMS.doubleValue,
-            sendBuffer: sendBuffer,
-            sendMeta: try parseSendMeta(request["send_meta"]),
-            sendTXNS: try parseIntKeyedUInt64Map(request["send_tx_ns"]),
-            lastRetxNS: try parseIntKeyedUInt64Map(request["last_retx_ns"]),
-            sendAttempts: try parseIntKeyedIntMap(request["send_attempts"]),
-            peerReportedMissing: peerReportedMissing,
-            lastAckPeer: (request["last_ack_peer"] as? NSNumber)?.intValue ?? 0,
-            peerMissedCount: (request["peer_missed_count"] as? NSNumber)?.intValue ?? 0,
-            lastSendNS: (request["last_send_ns"] as? NSNumber)?.uint64Value ?? 0
+            transmitDelayEstMS: priorTransmitDelayEstMS.doubleValue
         )
+        try seedPeerRuntime(runtime, counters: sendBuffer, sendMeta: try parseSendMeta(request["send_meta"]), sendTXNS: try parseIntKeyedUInt64Map(request["send_tx_ns"]))
         let snapshots = try jsonArray(eventsRaw).map { item -> [String: Any] in
             let object = try jsonObject(item)
             guard
@@ -1721,17 +1735,12 @@ private func handle(_ request: [String: Any]) throws -> Any {
         }
         let runtime = ObstacleBridgeUdpOverlayPeerRuntime(
             rttEstMS: priorRTTEstMS.doubleValue,
-            transmitDelayEstMS: priorTransmitDelayEstMS.doubleValue,
-            sendBuffer: sendBuffer,
-            sendMeta: try parseSendMeta(request["send_meta"]),
-            sendTXNS: try parseIntKeyedUInt64Map(request["send_tx_ns"]),
-            lastRetxNS: try parseIntKeyedUInt64Map(request["last_retx_ns"]),
-            sendAttempts: try parseIntKeyedIntMap(request["send_attempts"]),
-            peerReportedMissing: peerReportedMissing,
-            lastAckPeer: (request["last_ack_peer"] as? NSNumber)?.intValue ?? 0,
-            peerMissedCount: (request["peer_missed_count"] as? NSNumber)?.intValue ?? 0,
-            lastSendNS: (request["last_send_ns"] as? NSNumber)?.uint64Value ?? 0
+            transmitDelayEstMS: priorTransmitDelayEstMS.doubleValue
         )
+        try seedPeerRuntime(runtime, counters: sendBuffer, sendMeta: try parseSendMeta(request["send_meta"]), sendTXNS: try parseIntKeyedUInt64Map(request["send_tx_ns"]))
+        if !peerReportedMissing.isEmpty {
+            _ = try runtime.handleInboundControlPacket(nowNS: 0, txNS: 0, echoNS: 0, packetLastInOrder: 0, packetHighest: 0, packetMissed: peerReportedMissing, sendPortPresent: false)
+        }
         let snapshot = try runtime.handleRetransmitTimerTick(nowNS: nowNS.uint64Value, sendPortPresent: sendPortPresent)
         return ["snapshot": retransmitTimerSnapshotObject(snapshot)]
     case "drive_udp_peer_runtime_send_payload":

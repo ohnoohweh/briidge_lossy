@@ -1095,6 +1095,8 @@ def test_udp_overlay_peer_runtime_source_exists() -> None:
 
     assert "final class ObstacleBridgeUdpOverlayPeerRuntime" in runtime
     assert "private let peerEngine: ObstacleBridgeMyUDPPeerEngine" in runtime
+    assert "heartbeat: .init(" in runtime
+    assert "lastSentLastInOrder: UInt16(exactly: lastSentLastInOrder) ?? 0" in runtime
     assert "peerEngine.receiveWire(" in runtime
     assert "private let receiverEngine" not in runtime
     assert "ObstacleBridgeUdpOverlaySessionCodec" not in runtime

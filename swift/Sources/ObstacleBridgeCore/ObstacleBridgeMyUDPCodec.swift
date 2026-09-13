@@ -878,12 +878,30 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     }
 
     private let sender: ObstacleBridgeMyUDPSenderLedger
-    private let receiver = ObstacleBridgeMyUDPReceiverEngine()
+    private let receiver: ObstacleBridgeMyUDPReceiverEngine
     private var lastIdleSentNanoseconds: UInt64 = 0
     private var pendingDeliveredRecords: [Data] = []
     private var lastAcknowledgedByPeer: UInt16 = 0
 
-    public init(nextCounter: UInt16 = 1, maximumInFlight: Int = 200) { sender = .init(nextCounter: nextCounter, maximumInFlight: maximumInFlight) }
+    public init(
+        nextCounter: UInt16 = 1,
+        maximumInFlight: Int = 200,
+        heartbeat: ObstacleBridgeMyUDPHeartbeatSnapshot = .init(
+            establishedNanoseconds: 0, lastReceivedTransmitNanoseconds: 0,
+            lastReceivedWallNanoseconds: 0, lastRTTOkNanoseconds: 0,
+            rttSampleMilliseconds: 0, rttEstimateMilliseconds: 0,
+            transmitDelayEstimateMilliseconds: 0
+        ),
+        lastSentLastInOrder: UInt16 = 0,
+        lastControlSentNanoseconds: UInt64 = 0
+    ) {
+        sender = .init(nextCounter: nextCounter, maximumInFlight: maximumInFlight)
+        receiver = .init(
+            heartbeat: heartbeat,
+            lastSentLastInOrder: lastSentLastInOrder,
+            lastControlSentNanoseconds: lastControlSentNanoseconds
+        )
+    }
 
     public func resetEpoch() { sender.reset(); receiver.reset(); lastIdleSentNanoseconds = 0; pendingDeliveredRecords.removeAll(); lastAcknowledgedByPeer = 0 }
     public func takeDeliveredRecord() -> Data? { pendingDeliveredRecords.isEmpty ? nil : pendingDeliveredRecords.removeFirst() }

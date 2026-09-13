@@ -117,7 +117,21 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
         nextCounter: Int = 1,
         maxInFlight: Int = 200
     ) {
-        self.peerEngine = .init(nextCounter: UInt16(exactly: nextCounter) ?? 1, maximumInFlight: maxInFlight)
+        self.peerEngine = .init(
+            nextCounter: UInt16(exactly: nextCounter) ?? 1,
+            maximumInFlight: maxInFlight,
+            heartbeat: .init(
+                establishedNanoseconds: establishedNS,
+                lastReceivedTransmitNanoseconds: 0,
+                lastReceivedWallNanoseconds: 0,
+                lastRTTOkNanoseconds: 0,
+                rttSampleMilliseconds: 0,
+                rttEstimateMilliseconds: rttEstMS,
+                transmitDelayEstimateMilliseconds: transmitDelayEstMS
+            ),
+            lastSentLastInOrder: UInt16(exactly: lastSentLastInOrder) ?? 0,
+            lastControlSentNanoseconds: lastControlSentNS
+        )
         self.establishedNS = establishedNS
         self.lastRxTxNS = 0
         self.lastRxWallNS = 0

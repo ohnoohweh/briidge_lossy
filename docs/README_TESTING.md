@@ -51,6 +51,9 @@ The active testing focus on this branch is:
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
 - the macOS Swift parity runner's WebSocket payload-size assertions call the
   portable Core codec, alongside its existing Core wire-codec compilation set
+- the macOS Swift myUDP parity fixture replays seeded payloads through the
+  Core-backed peer runtime and covers heartbeat/control initialization, idle,
+  acknowledgement, and retransmission transitions without Apple-only sender state
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints
