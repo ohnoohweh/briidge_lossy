@@ -617,6 +617,14 @@ must still delete its
 `ObstacleBridgeUdpOverlayPeerRuntime`. Both adapters must execute every
 `ObstacleBridgeMyUDPPeerEngine` effect. These remain open R004B/R004C work.
 
+R004B also has a concrete build-boundary prerequisite: the checked-in Apple
+`ObstacleBridgeShared` sources do not import the Swift package's
+`ObstacleBridgeCore` module, while `ObstacleBridgeUdpOverlayPeerRuntime` still
+carries its own sender ledger. The Apple project/package integration must make
+Core available to that target before reducing the runtime; copying the engine
+into Apple sources would recreate the duplicate implementation this package
+eliminates.
+
 #### LSW-R004A — Complete the role-neutral Core peer engine
 
 Compose the existing Core myudp components into one peer-scoped state machine.
