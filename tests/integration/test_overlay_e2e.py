@@ -152,6 +152,7 @@ class LinuxSwiftSecureLinkPeer:
         mux_echo: bool = False,
         drop_myudp_application_data_count: int = 0,
         reorder_myudp_application_reply: bool = False,
+        delay_myudp_application_reply_seconds: float = 0.0,
     ) -> None:
         self.transport = transport
         self.psk = bytes(psk)
@@ -159,6 +160,7 @@ class LinuxSwiftSecureLinkPeer:
         self.mux_echo = mux_echo
         self.drop_myudp_application_data_count = max(0, drop_myudp_application_data_count)
         self.reorder_myudp_application_reply = reorder_myudp_application_reply
+        self.delay_myudp_application_reply_seconds = max(0.0, delay_myudp_application_reply_seconds)
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
@@ -361,6 +363,8 @@ class LinuxSwiftSecureLinkPeer:
             nonlocal next_send_counter, drop_next_application_data
             assert peer is not None
             record = struct.pack('!I', len(payload)) + payload
+            if payload[1] == 4 and int.from_bytes(payload[12:20], 'big') == 2:
+                time.sleep(self.delay_myudp_application_reply_seconds)
             datagrams: list[bytes] = []
             for offset in range(0, len(record), 1425):
                 chunk = record[offset:offset + 1425]
@@ -7313,6 +7317,30 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reo
     peer = LinuxSwiftSecureLinkPeer('myudp', psk, reorder_myudp_application_reply=True)
     try:
         config_path = tmp_path / 'linux_swift_myudp_reorder_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        completed = subprocess.run([str(binary_path), '--runtime-config', str(config_path), '--runtime-probe', base64.b64encode(payload).decode('ascii')], cwd=str(ROOT), capture_output=True, text=True, timeout=15.0, check=False)
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply(tmp_path: Path) -> None:
+    """The foreground Linux executable accepts delayed Core myUDP delivery."""
+    if not sys.platform.startswith('linux') or not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-delay-psk'
+    payload = b'linux-swift-myudp-delayed-reply'
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, delay_myudp_application_reply_seconds=0.25)
+    try:
+        config_path = tmp_path / 'linux_swift_myudp_delay_runtime.json'
         config_path.write_text(json.dumps({
             'runner': {'overlay_transport': 'myudp'},
             'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},

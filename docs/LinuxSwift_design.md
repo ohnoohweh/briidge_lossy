@@ -561,7 +561,9 @@ exact-once reassembly after duplicated, out-of-order inbound chunks. The built
 foreground client also recovers when an independent Python peer drops its first
 two post-handshake protected DATA datagrams. The foreground client also
 reassembles a multi-chunk protected response sent in reverse datagram order.
-Broader process-level delay qualification remains outstanding; macOS conditionally
+The foreground client also completes a protected exchange after independent
+delayed reply delivery. The remaining Linux process qualification is mixed
+fault composition rather than isolated delay, loss, or reordering; macOS conditionally
 excludes the adapter tests, so a zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
 The Core registry selects monotonically newer epochs, withdraws superseded peer
