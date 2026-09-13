@@ -53,7 +53,8 @@ The active testing focus on this branch is:
   portable Core codec, alongside its existing Core wire-codec compilation set
 - the macOS Swift myUDP parity fixture replays seeded payloads through the
   Core-backed peer runtime and covers heartbeat/control initialization, idle,
-  acknowledgement, and retransmission transitions without Apple-only sender state
+  acknowledgement, and retransmission transitions without Apple-only sender
+  state; its retired SessionCodec companion is absent from all compile lists
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints

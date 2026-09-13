@@ -24,6 +24,7 @@ The project currently targets six platform families:
   its macOS parity runner compiles the Core myUDP, ChannelMux, SecureLink, and
   service codecs together with those Apple facades and exercises Core-owned
   myUDP heartbeat, CONTROL, idle, acknowledgement, and retransmission state;
+  the retired SessionCodec fixture is not part of that compile graph;
   WebSocket payload frame-size bounds in that parity fixture also call the
   portable Core codec rather than an Apple-only mode extension;
   serialization has one shared Core owner. Linux TCP/UDP service listeners

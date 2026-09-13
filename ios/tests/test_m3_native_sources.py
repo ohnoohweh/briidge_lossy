@@ -1075,19 +1075,9 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     assert "guard rebuildSocketForPeerRotation() else" in owner
 
 
-def test_udp_overlay_session_codec_source_exists() -> None:
-    codec = (ROOT / "tests" / "fixtures" / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
-
-    assert "struct ObstacleBridgeUdpOverlaySessionCodec" in codec
+def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:
+    assert not (ROOT / "tests" / "fixtures" / "ObstacleBridgeUdpOverlaySessionCodec.swift").exists()
     assert not (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").exists()
-    assert "final class StreamReceiveState" not in codec
-    assert "ObstacleBridgeMyUDPRetransmissionPolicy.plan(" in codec
-    assert "ObstacleBridgeMyUDPAcknowledgementPolicy.plan(" in codec
-    assert "private static func retransmitCounters(" in codec
-    assert "var seen: Set<Int> = []" not in codec
-    assert "segmentApplicationPayload(" not in codec
-    assert "final class ReceiveState" not in codec
-    assert "struct Reassembly" not in codec
 
 
 def test_udp_overlay_peer_runtime_source_exists() -> None:

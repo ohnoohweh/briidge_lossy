@@ -25,7 +25,6 @@ ROOT = Path(__file__).resolve().parents[2]
 SWIFT_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxCodec.swift"
 SWIFT_SECURELINK_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeSecureLinkPskCodec.swift"
 SWIFT_UDP_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayCodec.swift"
-SWIFT_UDP_SESSION_CODEC_SOURCE = ROOT / "tests" / "fixtures" / "ObstacleBridgeUdpOverlaySessionCodec.swift"
 SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
 SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTunRuntime.swift"
 SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxUdpRuntime.swift"
@@ -146,7 +145,6 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_CODEC_SOURCE),
         str(SWIFT_SECURELINK_SOURCE),
         str(SWIFT_UDP_CODEC_SOURCE),
-        str(SWIFT_UDP_SESSION_CODEC_SOURCE),
         str(SWIFT_UDP_PEER_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE),

@@ -569,34 +569,19 @@ executes Core inbound-DATA CONTROL effects directly and adapts completed
 records to its transport callback; its periodic CONTROL timer reads the same
 Core peer state. Its queue, in-flight, retry-classification, and confirmation
 statistics also read that state, and the mutable Apple sender maps are gone.
-The peer runtime no longer references `ObstacleBridgeUdpOverlaySessionCodec` or
-contains inactive copies of its sender/control implementations. The remaining
-Apple work is to migrate the Swift parity fixture off that compatibility codec,
-remove the codec from Apple build/source inventories, and simplify snapshot
-fields that only mirror Core values. The generated Apple project already
-compiles the Core source, so this is fixture and adapter-surface cleanup, not
+The peer runtime and parity runner no longer reference
+`ObstacleBridgeUdpOverlaySessionCodec`; the test-only compatibility facade has
+been deleted from all source inventories. The runner seeds Core through its
+application-payload boundary and executes Core control, idle, acknowledgement,
+and retransmission effects. Remaining Apple work is limited to simplifying
+snapshot fields that only mirror Core values. The generated Apple project
+already compiles the Core source, so this is adapter-surface cleanup, not
 another protocol implementation.
 
-R004 remains open because the following active packages have not met their
-definitions of done: Apple sender adoption (R004B), Linux host qualification
-(R004C), and LiveRuntime/mixed-runtime listener qualification (R004D).
-
-#### LSW-R004B — Reduce the Apple myudp owner to an adapter
-
-Reduce `ObstacleBridgeUdpOverlayPeerRuntime` to effect execution and snapshot
-projection around one Core peer engine instance per peer. Migrate the remaining
-test-only SessionCodec parity commands directly to Core before deleting that
-fixture.
-
-Definition of Done:
-
-- the Apple owner retains only Network.framework endpoint/socket ownership,
-  cancellation, clock/timer execution, and delivery of Core effects;
-- no counter arithmetic, ACK construction, stream buffer, retransmit decision,
-  protocol metric mutation, or myudp timing constant remains in the Apple
-  adapter; and
-- Apple client tests and source-ownership guards exercise the Core engine and
-  prevent protocol behavior from returning to the adapter.
+R004 remains open because Linux host qualification (R004C) and
+LiveRuntime/mixed-runtime listener qualification (R004D) have not met their
+definitions of done. The completed Apple-adapter boundary is continuously
+guarded by the macOS parity runner and Apple source-ownership tests.
 
 #### LSW-R004C — Replace the reduced Linux myudp client
 

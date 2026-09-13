@@ -79,6 +79,8 @@ ARC-CMP-001:
 ARC-CMP-002:
   # The myUDP E2E entrypoint exercises DATA_BATCH loss, reorder, and duplicate
   # recovery in all-Python and mixed Swift/Python runtime directions.
+  # Swift parity compiles Core directly; no SessionCodec compatibility fixture
+  # participates in this component boundary.
   unit_tests:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_control_sequence_matches_python
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_retransmit_timer_matches_python

@@ -63,9 +63,13 @@ private func parseIntKeyedIntMap(_ raw: Any?) throws -> [Int: Int] {
     return result
 }
 
-private func parseSendMeta(_ raw: Any?) throws -> [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk] {
+private struct RunnerOutgoingChunk {
+    var data: Data
+}
+
+private func parseSendMeta(_ raw: Any?) throws -> [Int: RunnerOutgoingChunk] {
     let items = try jsonArray(raw as Any)
-    var result: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk] = [:]
+    var result: [Int: RunnerOutgoingChunk] = [:]
     for item in items {
         let object = try jsonObject(item)
         guard let counter = object["counter"] as? NSNumber,
@@ -73,7 +77,7 @@ private func parseSendMeta(_ raw: Any?) throws -> [Int: ObstacleBridgeUdpOverlay
               let data = dataFromHex(dataHex) else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        result[counter.intValue] = ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk(data: data)
+        result[counter.intValue] = RunnerOutgoingChunk(data: data)
     }
     return result
 }
@@ -85,7 +89,7 @@ private func parseSendMeta(_ raw: Any?) throws -> [Int: ObstacleBridgeUdpOverlay
 private func seedPeerRuntime(
     _ runtime: ObstacleBridgeUdpOverlayPeerRuntime,
     counters: [Int],
-    sendMeta: [Int: ObstacleBridgeUdpOverlaySessionCodec.OutgoingChunk],
+    sendMeta: [Int: RunnerOutgoingChunk],
     sendTXNS: [Int: UInt64]
 ) throws {
     for counter in counters.sorted() {
@@ -1051,7 +1055,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         }
         let echoNS = (request["echo_ns"] as? NSNumber)?.uint64Value ?? 0
         let startingCounter = (request["starting_counter"] as? NSNumber)?.intValue ?? 1
-        let frames = try ObstacleBridgeUdpOverlaySessionCodec.segmentApplicationPayload(
+        let frames = try RetiredPreMyUDP2SessionFixture.segmentApplicationPayload(
             payload,
             txNS: txNS.uint64Value,
             echoNS: echoNS,
@@ -1062,7 +1066,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let framesRaw = request["frames_hex"] else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let state = ObstacleBridgeUdpOverlaySessionCodec.ReceiveState()
+        let state = RetiredPreMyUDP2SessionFixture.ReceiveState()
         let frameHexes = try jsonArray(framesRaw).map { item -> String in
             guard let hex = item as? String else {
                 throw ChannelMuxCodecRunnerError.invalidRequest
@@ -1129,6 +1133,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
                 "missed": controlPacket.missed,
             ],
         ]
+    #if false // Retired pre-myUDP2 parity commands; Core-backed commands follow.
     case "confirm_udp_feedback":
         guard
             let sendBufferRaw = request["send_buffer"],
@@ -1157,7 +1162,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return value.intValue
         }
-        let snapshot = ObstacleBridgeUdpOverlaySessionCodec.confirmFeedback(
+        let snapshot = RetiredPreMyUDP2SessionFixture.confirmFeedback(
             sendBufferKeys: sendBuffer,
             peerReportedMissing: peerReportedMissing,
             lastInOrder: lastInOrder.intValue,
@@ -1182,7 +1187,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let decision = ObstacleBridgeUdpOverlaySessionCodec.evaluateInboundControlPolicy(
+        let decision = RetiredPreMyUDP2SessionFixture.evaluateInboundControlPolicy(
             nowNS: nowNS.uint64Value,
             expected: expected.intValue,
             missingCount: missingCount.intValue,
@@ -1209,7 +1214,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let decision = ObstacleBridgeUdpOverlaySessionCodec.evaluateTimerControlPolicy(
+        let decision = RetiredPreMyUDP2SessionFixture.evaluateTimerControlPolicy(
             nowNS: nowNS.uint64Value,
             expected: expected.intValue,
             missingCount: missingCount.intValue,
@@ -1247,7 +1252,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return value.intValue
         }
-        let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.scheduleRetransmitDueToControl(
+        let snapshot = try RetiredPreMyUDP2SessionFixture.scheduleRetransmitDueToControl(
             nowNS: nowNS.uint64Value,
             missed: missed,
             rttEstMS: rttEstMS.doubleValue,
@@ -1299,7 +1304,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return value.intValue
         }
-        let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.sweepReportedMissingRetransmit(
+        let snapshot = try RetiredPreMyUDP2SessionFixture.sweepReportedMissingRetransmit(
             nowNS: nowNS.uint64Value,
             rttEstMS: rttEstMS.doubleValue,
             sendBufferKeys: sendBuffer,
@@ -1346,7 +1351,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return value.intValue
         }
-        let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.sweepUnconfirmedRetransmit(
+        let snapshot = try RetiredPreMyUDP2SessionFixture.sweepUnconfirmedRetransmit(
             nowNS: nowNS.uint64Value,
             rttEstMS: rttEstMS.doubleValue,
             sendBufferKeys: sendBuffer,
@@ -1407,7 +1412,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return value.intValue
         }
-        let snapshot = try ObstacleBridgeUdpOverlaySessionCodec.handleInboundControlPacket(
+        let snapshot = try RetiredPreMyUDP2SessionFixture.handleInboundControlPacket(
             nowNS: nowNS.uint64Value,
             packetLastInOrder: packetLastInOrder.intValue,
             packetHighest: packetHighest.intValue,
@@ -1444,6 +1449,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             "control_should_emit": snapshot.controlDecision.shouldEmit,
             "control_reason": controlReason,
         ]
+    #endif
     case "handle_udp_inbound_idle":
         guard
             let nowNS = request["now_ns"] as? NSNumber,
@@ -1502,7 +1508,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             }
             return data
         }
-        guard let snapshot = ObstacleBridgeUdpOverlaySessionCodec.handleInboundDataFrames(
+        guard let snapshot = RetiredPreMyUDP2SessionFixture.handleInboundDataFrames(
             preFrames: preFrames,
             frame: frame,
             nowNS: nowNS.uint64Value,
