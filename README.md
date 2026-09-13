@@ -469,6 +469,9 @@ Interpretation:
 
 The listener/server snippet stays transport-focused because listener mode does not use local `own_servers` editing the same way a peer client does. The client snippet above carries both the local TUN service and the remote TUN request in one importable JSON document.
 
+The internal local-TUN ChannelMux service uses reserved service ID `0`; Core codec
+facades preserve that valid identifier when emitting its `OPEN` record.
+
 Linux (native) notes
 
 - Linux uses `/dev/net/tun` and the standard Python library.

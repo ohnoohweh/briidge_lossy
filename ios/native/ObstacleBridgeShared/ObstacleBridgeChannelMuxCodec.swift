@@ -249,7 +249,7 @@ struct ObstacleBridgeChannelMuxCodec {
 
     private static func coreServiceSpec(_ value: ServiceSpec) throws -> ObstacleBridgeServiceSpec {
         guard
-            (1...Int(UInt16.max)).contains(value.svcID),
+            (0...Int(UInt16.max)).contains(value.svcID),
             (1...Int(UInt16.max)).contains(value.lPort),
             (1...Int(UInt16.max)).contains(value.rPort)
         else { throw ObstacleBridgeChannelMuxCodecError.invalidPayload }

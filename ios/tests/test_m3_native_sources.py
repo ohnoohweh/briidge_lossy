@@ -827,6 +827,7 @@ def test_shared_channelmux_codec_uses_core_service_catalog_owner() -> None:
     assert "ObstacleBridgeServiceCodec.encodeOpen(" in codec
     assert "ObstacleBridgeServiceCodec.decodeRemoteServices(" in codec
     assert "ObstacleBridgeServiceCodec.decodeOpen(" in codec
+    assert "(0...Int(UInt16.max)).contains(value.svcID)" in codec
     assert "let rows = services.map" not in codec
 
 
