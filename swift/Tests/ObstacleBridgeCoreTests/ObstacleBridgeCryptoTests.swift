@@ -200,10 +200,12 @@ struct ObstacleBridgeCryptoTests {
         }
         #expect(try registry.receiveWire(inbound("old", counter: 1, at: 1), from: old, nowNanoseconds: 1).deliveredRecords == [Data("old".utf8)])
         #expect(try registry.receiveWire(inbound("fresh", counter: 1, at: 2), from: fresh, nowNanoseconds: 2).deliveredRecords == [Data("fresh".utf8)])
-        #expect(registry.activeKeys == Set([old, fresh]))
-        registry.touch(old, nowNanoseconds: 10)
+        #expect(registry.activeKeys == Set([fresh]))
+        #expect(throws: ObstacleBridgeMyUDPPeerRegistryError.staleEpoch) {
+            _ = try registry.receiveWire(inbound("stale", counter: 2, at: 3), from: old, nowNanoseconds: 3)
+        }
         registry.touch(fresh, nowNanoseconds: 20)
-        #expect(registry.expire(nowNanoseconds: 25, idleTimeoutNanoseconds: 10) == [old])
+        #expect(registry.expire(nowNanoseconds: 25, idleTimeoutNanoseconds: 10).isEmpty)
         #expect(try registry.receiveWire(inbound("fresh-again", counter: 2, at: 26), from: fresh, nowNanoseconds: 26).deliveredRecords == [Data("fresh-again".utf8)])
         registry.withdraw(identity: "peer", exceptEpoch: 2)
         #expect(registry.activeKeys == Set([fresh]))

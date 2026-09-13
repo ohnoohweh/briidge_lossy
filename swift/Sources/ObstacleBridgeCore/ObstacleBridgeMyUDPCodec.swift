@@ -1023,14 +1023,30 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
 /// Socket-independent owner for listener-side myUDP peer state. Datagram
 /// adapters choose the peer identity and execute effects; this registry keeps
 /// epochs, queues, and receive state isolated from one another.
+public enum ObstacleBridgeMyUDPPeerRegistryError: Error, Equatable, Sendable {
+    case staleEpoch
+}
+
 public final class ObstacleBridgeMyUDPPeerRegistry: @unchecked Sendable {
     public struct PeerKey: Hashable, Sendable { public let identity: String; public let epoch: UInt64; public init(identity: String, epoch: UInt64) { self.identity = identity; self.epoch = epoch } }
     private var peers: [PeerKey: ObstacleBridgeMyUDPPeerEngine] = [:]
     private var lastActivityNanoseconds: [PeerKey: UInt64] = [:]
+    private var selectedEpochs: [String: UInt64] = [:]
     public init() {}
     public func admit(_ key: PeerKey, maximumInFlight: Int = 200) -> ObstacleBridgeMyUDPPeerEngine { if let peer = peers[key] { return peer }; let peer = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: maximumInFlight); peers[key] = peer; return peer }
     public func touch(_ key: PeerKey, nowNanoseconds: UInt64) { guard peers[key] != nil else { return }; lastActivityNanoseconds[key] = nowNanoseconds }
+    /// Installs a monotonically newer admission epoch. Delayed datagrams from
+    /// an older epoch are rejected and cannot resurrect its peer engine.
+    @discardableResult public func selectEpoch(identity: String, epoch: UInt64) -> Bool {
+        if let selected = selectedEpochs[identity] {
+            guard epoch >= selected else { return false }
+            if epoch > selected { withdraw(identity: identity, exceptEpoch: epoch) }
+        }
+        selectedEpochs[identity] = epoch
+        return true
+    }
     public func receiveWire(_ wire: Data, from key: PeerKey, nowNanoseconds: UInt64, maximumInFlight: Int = 200, transportWritable: Bool = true) throws -> ObstacleBridgeMyUDPPeerEngine.Effect {
+        guard selectEpoch(identity: key.identity, epoch: key.epoch) else { throw ObstacleBridgeMyUDPPeerRegistryError.staleEpoch }
         let peer = admit(key, maximumInFlight: maximumInFlight)
         touch(key, nowNanoseconds: nowNanoseconds)
         return try peer.receiveWire(wire, nowNanoseconds: nowNanoseconds, transportWritable: transportWritable)
@@ -1040,8 +1056,16 @@ public final class ObstacleBridgeMyUDPPeerRegistry: @unchecked Sendable {
         return try peer.tick(nowNanoseconds: nowNanoseconds, retransmissionWindowNanoseconds: retransmissionWindowNanoseconds, idleIntervalNanoseconds: idleIntervalNanoseconds)
     }
     public func expire(nowNanoseconds: UInt64, idleTimeoutNanoseconds: UInt64) -> [PeerKey] { let expired = peers.keys.filter { key in guard let last = lastActivityNanoseconds[key], nowNanoseconds >= last else { return false }; return nowNanoseconds - last >= idleTimeoutNanoseconds }; expired.forEach(withdraw); return expired }
-    public func withdraw(_ key: PeerKey) { peers.removeValue(forKey: key); lastActivityNanoseconds.removeValue(forKey: key) }
-    public func withdraw(identity: String, exceptEpoch: UInt64? = nil) { peers.keys.filter { $0.identity == identity && $0.epoch != exceptEpoch }.forEach(withdraw) }
+    public func withdraw(_ key: PeerKey) {
+        peers.removeValue(forKey: key)
+        lastActivityNanoseconds.removeValue(forKey: key)
+        if selectedEpochs[key.identity] == key.epoch { selectedEpochs.removeValue(forKey: key.identity) }
+    }
+    public func withdraw(identity: String, exceptEpoch: UInt64? = nil) {
+        peers.keys.filter { $0.identity == identity && $0.epoch != exceptEpoch }.forEach(withdraw)
+        if let exceptEpoch { selectedEpochs[identity] = exceptEpoch }
+        else { selectedEpochs.removeValue(forKey: identity) }
+    }
     public var activeKeys: Set<PeerKey> { Set(peers.keys) }
 }
 

@@ -561,10 +561,11 @@ process-level delayed/lossy Linux Swift qualification remains outstanding;
 macOS conditionally excludes the adapter tests, so a zero-test selection is not
 evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
-The Core registry test proves concurrent old/fresh epoch delivery, old-epoch
-expiry, explicit epoch supersession, and a clean reconnect epoch without
-cross-epoch stream leakage. LiveRuntime admission wiring and authenticated epoch
-selection remain open.
+The Core registry selects monotonically newer epochs, withdraws superseded peer
+state, and rejects delayed stale-epoch traffic before it can recreate an engine.
+Its test proves old/fresh delivery, expiry, explicit supersession, and a clean
+reconnect epoch without cross-epoch stream leakage. LiveRuntime wiring to an
+authenticated admission-epoch source remains open.
 
 The Apple peer runtime uses the Core receive/control/IDLE path and Core echo
 policy. Its application queue, DATA batch emission, CONTROL feedback cleanup,

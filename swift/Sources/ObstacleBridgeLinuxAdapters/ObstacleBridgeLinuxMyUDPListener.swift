@@ -103,6 +103,12 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         guard count > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
         let identity = peerIdentity(address, length: length)
         let key = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: identity, epoch: epoch)
+        guard registry.selectEpoch(identity: identity, epoch: epoch) else {
+            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+        }
+        endpoints = endpoints.filter { existing, _ in
+            existing.identity != identity || existing.epoch == epoch
+        }
         let endpoint = Endpoint(address: address, length: length)
         endpoints[key] = endpoint
         let effect: ObstacleBridgeMyUDPPeerEngine.Effect
