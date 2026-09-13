@@ -13,7 +13,8 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         public let payload: Data
     }
 
-    private let descriptor: Int32
+    private var descriptor: Int32
+    private let descriptorLock = NSLock()
     private let registry = ObstacleBridgeMyUDPPeerRegistry()
     public let port: Int
 
@@ -35,7 +36,15 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         self.port = Int(UInt16(bigEndian: actual.sin_port))
     }
 
-    deinit { _ = Glibc.close(descriptor) }
+    deinit { close() }
+
+    public func close() {
+        descriptorLock.lock()
+        let fd = descriptor
+        descriptor = -1
+        descriptorLock.unlock()
+        if fd >= 0 { _ = Glibc.close(fd) }
+    }
 
     public var activePeerCount: Int { registry.activeKeys.count }
 
@@ -55,11 +64,15 @@ public final class ObstacleBridgeLinuxMyUDPListener {
     /// admission/authentication layer; endpoint identity alone never resets
     /// an established reliable peer.
     public func receive(epoch: UInt64 = 1) throws -> ReceivedRecord? {
+        descriptorLock.lock()
+        let fd = descriptor
+        descriptorLock.unlock()
+        guard fd >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         var bytes = [UInt8](repeating: 0, count: 1_452)
         var address = sockaddr_storage()
         var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
         let count = withUnsafeMutablePointer(to: &address) { pointer in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(descriptor, &bytes, bytes.count, 0, $0, &length) }
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { recvfrom(fd, &bytes, bytes.count, 0, $0, &length) }
         }
         guard count > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
         let identity = peerIdentity(address, length: length)
@@ -70,7 +83,7 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         for datagram in effect.outboundDatagrams {
             let sent = datagram.withUnsafeBytes { payload in
                 withUnsafePointer(to: &address) { pointer in
-                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(descriptor, payload.baseAddress, datagram.count, 0, $0, length) }
+                    pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, payload.baseAddress, datagram.count, 0, $0, length) }
                 }
             }
             guard sent == datagram.count else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }

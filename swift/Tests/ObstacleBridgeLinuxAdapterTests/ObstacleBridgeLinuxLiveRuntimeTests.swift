@@ -35,6 +35,9 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(listener.activePeerCount == 2)
         #expect(Set(listener.expireIdlePeers(nowNanoseconds: .max, idleTimeoutNanoseconds: 1)) == Set(received.map(\.peerIdentity)))
         #expect(listener.activePeerCount == 0)
+        listener.close()
+        listener.close()
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try listener.receive() }
     }
 
     @Test func protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
