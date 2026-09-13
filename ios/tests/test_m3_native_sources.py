@@ -816,6 +816,8 @@ def test_shared_channelmux_codec_uses_core_service_catalog_owner() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeServiceCodec.encodeRemoteServices(" in codec
     assert "ObstacleBridgeServiceCodec.encodeOpen(" in codec
+    assert "ObstacleBridgeServiceCodec.decodeRemoteServices(" in codec
+    assert "ObstacleBridgeServiceCodec.decodeOpen(" in codec
     assert "let rows = services.map" not in codec
 
 

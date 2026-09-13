@@ -187,13 +187,10 @@ struct ObstacleBridgeChannelMuxCodec {
     }
 
     static func parseOpenPayload(_ payload: Data) -> ParsedOpen? {
-        if payload.starts(with: Data("O5".utf8)) {
-            return parseOpenV5(payload)
-        }
-        if payload.starts(with: Data("O4".utf8)) {
-            return parseOpenV4(payload)
-        }
-        return nil
+        guard let decoded = try? ObstacleBridgeServiceCodec.decodeOpen(payload),
+              let spec = serviceSpec(decoded.service)
+        else { return nil }
+        return .init(instanceID: decoded.instanceID, connectionSeq: decoded.connectionSequence, spec: spec)
     }
 
     static func encodeRemoteServicesSetV2(
@@ -210,13 +207,10 @@ struct ObstacleBridgeChannelMuxCodec {
     }
 
     static func decodeRemoteServicesSetV2(_ payload: Data) -> (UInt64, UInt32, [ServiceSpec])? {
-        if payload.starts(with: Data("RS3".utf8)) {
-            return decodeRemoteServicesRS3(payload)
-        }
-        if payload.starts(with: Data("RS2".utf8)) {
-            return decodeRemoteServicesRS2(payload)
-        }
-        return nil
+        guard let decoded = try? ObstacleBridgeServiceCodec.decodeRemoteServices(payload) else { return nil }
+        let services = decoded.services.compactMap(serviceSpec)
+        guard services.count == decoded.services.count else { return nil }
+        return (decoded.instanceID, decoded.connectionSequence, services)
     }
 
     static func nextControlChunkTxID(current: UInt32) -> (txID: UInt32, next: UInt32) {
@@ -292,6 +286,31 @@ struct ObstacleBridgeChannelMuxCodec {
         switch value {
         case .object(let values): return .object(values.mapValues(coreJSONValue))
         case .array(let values): return .array(values.map(coreJSONValue))
+        case .string(let value): return .string(value)
+        case .integer(let value): return .integer(value)
+        case .double(let value): return .double(value)
+        case .bool(let value): return .bool(value)
+        case .null: return .null
+        }
+    }
+
+    private static func serviceSpec(_ value: ObstacleBridgeServiceSpec) -> ServiceSpec? {
+        guard let listenProtocol = protoName(for: Int(value.listenProtocol)),
+              let targetProtocol = protoName(for: Int(value.targetProtocol))
+        else { return nil }
+        return .init(
+            svcID: Int(value.serviceID), lProto: listenProtocol, lBind: value.listenHost,
+            lPort: Int(value.listenPort), rProto: targetProtocol, rHost: value.targetHost,
+            rPort: Int(value.targetPort), name: value.name,
+            lifecycleHooks: value.lifecycleHooks.map { $0.mapValues(localJSONValue) },
+            options: value.options.map { $0.mapValues(localJSONValue) }
+        )
+    }
+
+    private static func localJSONValue(_ value: ObstacleBridgeJSONValue) -> JSONValue {
+        switch value {
+        case .object(let values): return .object(values.mapValues(localJSONValue))
+        case .array(let values): return .array(values.map(localJSONValue))
         case .string(let value): return .string(value)
         case .integer(let value): return .integer(value)
         case .double(let value): return .double(value)
