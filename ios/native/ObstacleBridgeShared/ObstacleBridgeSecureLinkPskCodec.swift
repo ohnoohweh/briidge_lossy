@@ -6,8 +6,6 @@ enum ObstacleBridgeSecureLinkPskCodecError: Error {
 }
 
 struct ObstacleBridgeSecureLinkPskCodec {
-    static let version = 1
-    static let headerSize = 20
     private static let transcriptPrefix = Data("obstaclebridge-securelink-psk-v1|".utf8)
     private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
     private static let clientRekeyCommitProofPrefix = Data("obstaclebridge-securelink-client-rekey-commit-v1|".utf8)
@@ -25,14 +23,9 @@ struct ObstacleBridgeSecureLinkPskCodec {
         counter: UInt64,
         flags: UInt8 = 0
     ) -> Data {
-        var header = Data()
-        header.appendUInt8(UInt8(version))
-        header.appendUInt8(UInt8(slType & 0xFF))
-        header.appendUInt8(flags)
-        header.appendUInt8(0)
-        header.appendUInt64(sessionID)
-        header.appendUInt64(counter)
-        return header
+        ObstacleBridgeSecureLinkFrameCodec.header(
+            type: UInt8(slType & 0xFF), sessionID: sessionID, counter: counter, flags: flags
+        )
     }
 
     static func buildFrame(
@@ -42,30 +35,16 @@ struct ObstacleBridgeSecureLinkPskCodec {
         payload: Data,
         flags: UInt8 = 0
     ) -> Data {
-        return headerBytes(slType: slType, sessionID: sessionID, counter: counter, flags: flags) + payload
+        ObstacleBridgeSecureLinkFrameCodec.encode(
+            type: UInt8(slType & 0xFF), sessionID: sessionID, counter: counter, payload: payload, flags: flags
+        )
     }
 
     static func parseFrame(_ payload: Data) -> ParsedFrame? {
-        guard payload.count >= headerSize else {
-            return nil
-        }
-        var offset = 0
-        guard
-            let frameVersion = readUInt8(from: payload, offset: &offset),
-            let slType = readUInt8(from: payload, offset: &offset),
-            readUInt8(from: payload, offset: &offset) != nil,
-            readUInt8(from: payload, offset: &offset) != nil,
-            let sessionID = readUInt64(from: payload, offset: &offset),
-            let counter = readUInt64(from: payload, offset: &offset),
-            Int(frameVersion) == version
-        else {
-            return nil
-        }
+        guard let frame = try? ObstacleBridgeSecureLinkFrameCodec.decode(payload) else { return nil }
         return ParsedFrame(
-            slType: Int(slType),
-            sessionID: sessionID,
-            counter: counter,
-            payload: Data(payload.dropFirst(headerSize))
+            slType: Int(frame.type), sessionID: frame.sessionID,
+            counter: frame.counter, payload: frame.payload
         )
     }
 
@@ -167,26 +146,6 @@ struct ObstacleBridgeSecureLinkPskCodec {
         return Data(authenticationCode)
     }
 
-    private static func readUInt8(from data: Data, offset: inout Int) -> UInt8? {
-        guard offset + 1 <= data.count else {
-            return nil
-        }
-        let value = data[offset]
-        offset += 1
-        return value
-    }
-
-    private static func readUInt64(from data: Data, offset: inout Int) -> UInt64? {
-        guard offset + 8 <= data.count else {
-            return nil
-        }
-        var value: UInt64 = 0
-        for index in 0..<8 {
-            value = (value << 8) | UInt64(data[offset + index])
-        }
-        offset += 8
-        return value
-    }
 }
 
 private extension UInt64 {

@@ -161,9 +161,24 @@ The build script now supports that split explicitly:
 
 This keeps Swift-backed regression time reasonable as we add more macOS/iOS parity cases.
 
+- `macos-portable-core`
+
+```bash
+swift test --filter 'ObstacleBridgeCoreTests.ObstacleBridgeCoreCodecTests/sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords\(\)'
+swift test --filter ObstacleBridgeApplePackageProbeTests
+```
+
+The package manifest exposes only portable Core targets on macOS; Linux adapter
+and executable targets remain available when the manifest is evaluated on Linux.
+The Apple probe executes every R003 wire-codec owner through its imported Core
+module.
+
 - `linux-swift`
 
 ```bash
+swift build --target ObstacleBridgeCore
+swift build --target ObstacleBridgeApplePackageProbe
+swift test --filter ObstacleBridgeCoreTests
 swift test --filter ObstacleBridgeCryptoTests
 swift test --filter ObstacleBridgeLinuxReceiveWorkerTests
 swift test --filter ObstacleBridgeLinuxOverlayTransportTests
@@ -189,9 +204,38 @@ peers implemented in local Python fixtures. The myudp fixture consumes the
 length-prefixed reliable byte stream, orders/deduplicates DATA_BATCH chunks,
 and emits cumulative CONTROL acknowledgements. Coverage includes candidate
 rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
-The portable suite also pairs the Swift PSK client and server state machines in
-one deterministic protected-data exchange, while the adapter suite exercises
-the one-connection loopback TCP listener over real Linux framing. The built
+The fixture additionally proves the independent myUDP transport-counter sequence
+through the SecureLink handshake, peer-first payload delivery, and a protected
+ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
+`CryptoKit`; it runs on macOS through the
+`bridge-py-integration-macos-swift-probe` CI job and is not a Linux SwiftPM
+parity result.
+The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state machines in
+one deterministic protected-data exchange and the bounded binary, CKV1
+control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
+contracts. A shared Python-derived fixture pins TCP malformed records, myUDP
+DATA_BATCH envelope and malformed records, WebSocket binary payload-mode and
+malformed records, SecureLink PSK transcript/key/proof and handshake-envelope
+vectors, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for the Core
+suite, including Python/Swift agreement on O4/O5 and RS2/RS3 truncation and
+trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
+all shared text payload modes against a Python peer. The shared corpus also
+pins Python-compatible myUDP CONTROL bytes and malformed rejection; direct
+Core and Apple-probe tests pin the payload-derived 713-counter missing-list
+boundary. Direct Core tests also cover portable ChannelMux reply admission. The
+macOS build-source
+guard and generated-iOS-project patch test ensure each Apple target compiles
+the WebSocket payload, binary, full myUDP, SecureLink envelope, ChannelMux header, and TCP/WebSocket APP/PING/PONG codecs from Core rather than a
+parallel shared-runtime source; the iOS packet-tunnel compile probe uses those
+same sources. The macOS parity runner explicitly compiles the myUDP, ChannelMux,
+SecureLink, and service Core sources, while Apple myUDP peer-runtime budget
+tests require its layout constants to remain Core-backed. Apple CKV1 chunking uses the Core raw-value bridge; O4/O5 OPEN and
+RS2/RS3 service-catalog encoding/decoding use the Core type-neutral codec. The adapter suite exercises
+the one-connection loopback TCP listener and Linux Core control-chunk delivery
+over real Linux framing. The Linux TCP and UDP service-socket tests also prove
+that an ephemeral listener publishes the kernel-assigned port in its O5 OPEN
+record; their Python-overlay peer harness bounds concurrent child processes so
+the complete SwiftPM lane remains reproducible. The built
 Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to
@@ -419,8 +463,8 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
 - myUDP2 upper-layer stream-record budgets through SecureLink, Compression, and
   ChannelMux, plus peer-status diagnostics for batch, stream-byte, queue, retry,
   malformed-batch, and malformed-stream counters
-- shared Swift myUDP2 batch vectors and reordered stream delivery through a
-  compiled probe of the macOS/iOS codec and peer-runtime sources
+- shared Swift myUDP2 batch vectors, payload-derived CONTROL missing-list capacity,
+  and reordered stream delivery through a compiled probe of the macOS/iOS codec and peer-runtime sources
 
 ## Test catalog
 

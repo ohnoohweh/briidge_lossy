@@ -1,0 +1,243 @@
+{
+  "schema_version": 1,
+  "reference_product": "python",
+  "source_roots": [
+    "swift/Sources/ObstacleBridgeCore",
+    "swift/Sources/ObstacleBridgeLinuxAdapters",
+    "swift/Probes/ObstacleBridgeApplePackageProbe",
+    "ios/native/ObstacleBridgeShared"
+  ],
+  "source_ownership": [
+    {
+      "owner": "ObstacleBridgeCore",
+      "disposition": "extract",
+      "files": [
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeControlChunkCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigSupport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminSnapshotSupport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminWebSupport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTcpRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayLayerTransportAdapter.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskTransportAdapter.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayCodec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayPeerRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlaySessionCodec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxReceiveWorker.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxReconnectSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxRuntimeConfiguration.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceCatalog.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift"
+      ]
+    },
+    {
+      "owner": "ObstacleBridgeCore",
+      "disposition": "split-contract",
+      "files": [
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxReplyPolicy.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCorePorts.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeCompressLayerRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressProtocolRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskCodec.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskRuntime.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift"
+      ]
+    },
+    {
+      "owner": "ObstacleBridgeAppleAdapters",
+      "disposition": "retain-or-split",
+      "files": [
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
+        "swift/Probes/ObstacleBridgeApplePackageProbe/ObstacleBridgeApplePackageProbe.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"
+      ]
+    },
+    {
+      "owner": "ObstacleBridgeLinuxAdapters",
+      "disposition": "retain-or-thin",
+      "files": [
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdapters.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceSocketOwner.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTCPListener.swift"
+      ]
+    },
+    {
+      "owner": "ObstacleBridgeCore",
+      "disposition": "delete-after-migration",
+      "files": [
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift"
+      ]
+    }
+  ],
+  "feature_groups": [
+    {
+      "id": "runtime-packaging",
+      "requirements": ["REQ-RUN-001", "REQ-RUN-002"],
+      "python_implementations": ["pyproject.toml", "scripts/build_synology_spk.py", "src/obstacle_bridge/launcher.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/main.swift"],
+      "python_tests": ["tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive"],
+      "swift_tests": [],
+      "parity_tests": [],
+      "linux_swift": {"applicability": "not-applicable", "status": "not-applicable", "reason": "Python-version and Synology-SPK requirements define the Python package product, not the foreground Swift executable."}
+    },
+    {
+      "id": "overlay-client-transports",
+      "requirements": ["REQ-OVL-001", "REQ-OVL-002", "REQ-OVL-003", "REQ-OVL-004", "REQ-OVL-006", "REQ-OVL-007"],
+      "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py", "src/obstacle_bridge/bridge_transport_tcp.py", "src/obstacle_bridge/bridge_transport_ws.py", "src/obstacle_bridge/bridge_runner.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
+      "python_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpFramingRoundTripsAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
+      "parity_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Only the admitted TCP, cleartext WebSocket, and myudp client paths have focused Linux evidence; listener and full Python feature coverage are incomplete."}
+    },
+    {
+      "id": "overlay-quic",
+      "requirements": ["REQ-OVL-005"],
+      "python_implementations": ["src/obstacle_bridge/bridge_transport_quic.py", "src/obstacle_bridge/bridge_runner.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift"],
+      "python_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::unqualifiedTransportsAreRejectedBeforeSocketCreation"],
+      "parity_tests": [],
+      "linux_swift": {"applicability": "required", "status": "missing", "reason": "Linux Swift deliberately rejects QUIC until a maintained backend is selected and qualified."}
+    },
+    {
+      "id": "websocket-posix",
+      "requirements": ["REQ-WSP-001", "REQ-WSP-002", "REQ-WSP-003", "REQ-WSP-004", "REQ-WSP-005", "REQ-WSP-007", "REQ-WSP-008", "REQ-WSP-010", "REQ-WSP-011", "REQ-WSP-012", "REQ-WSP-013"],
+      "python_implementations": ["src/obstacle_bridge/bridge_transport_ws.py", "src/obstacle_bridge/bridge_proxy_common.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift"],
+      "python_tests": ["tests/unit/test_ws_payload_mode.py::test_connect_disables_websocket_compression"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer"],
+      "parity_tests": ["tests/unit/test_channel_mux_swift_parity.py::test_swift_ws_binary_payload_codec_matches_python"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "The Linux adapter covers cleartext upgrade and binary frames, not the full Python proxy, text-mode, preflight, TLS, and address-override contract."}
+    },
+    {
+      "id": "websocket-windows",
+      "requirements": ["REQ-WSP-006", "REQ-WSP-009"],
+      "python_implementations": ["src/obstacle_bridge/bridge_transport_ws.py"],
+      "swift_implementations": [],
+      "python_tests": ["tests/unit/test_ws_payload_mode.py::test_connect_disables_websocket_compression"],
+      "swift_tests": [],
+      "parity_tests": [],
+      "linux_swift": {"applicability": "not-applicable", "status": "not-applicable", "reason": "These requirements explicitly define Windows proxy behavior."}
+    },
+    {
+      "id": "proxy-provider-ios",
+      "requirements": ["REQ-PRX-001"],
+      "python_implementations": ["src/obstacle_bridge/bridge_proxy_server.py"],
+      "swift_implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift"],
+      "python_tests": ["tests/unit/test_proxy_server.py::test_python_proxy_server_default_egress_mode_is_system"],
+      "swift_tests": [],
+      "parity_tests": ["ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite"],
+      "linux_swift": {"applicability": "not-applicable", "status": "not-applicable", "reason": "The requirement scopes the first-party Swift provider to iOS packet-tunnel products."}
+    },
+    {
+      "id": "securelink-and-crypto",
+      "requirements": ["REQ-AUT-001", "REQ-AUT-002", "REQ-AUT-003", "REQ-AUT-004", "REQ-AUT-005", "REQ-AUT-006", "REQ-AUT-007", "REQ-AUT-008", "REQ-AUT-009", "REQ-AUT-010", "REQ-AUT-011", "REQ-AUT-012", "REQ-AUT-013", "REQ-AUT-014", "REQ-AUT-015", "REQ-AUT-016", "REQ-AUT-017", "REQ-AUT-018", "REQ-AUT-019", "REQ-AUT-020"],
+      "python_implementations": ["src/obstacle_bridge/bridge_securelink.py", "src/obstacle_bridge/bridge_runner.py", "src/obstacle_bridge/bridge_webadmin.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCorePorts.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
+      "python_tests": ["tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer"],
+      "parity_tests": ["tests/unit/test_channel_mux_swift_parity.py::test_swift_securelink_derive_keys_parity"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "PSK vectors and basic mixed sessions are covered; certificate, operational reload, rekey, diagnostics, and complete lifecycle parity are not."}
+    },
+    {
+      "id": "lifecycle-and-listeners",
+      "requirements": ["REQ-LIFE-001", "REQ-LIFE-002", "REQ-LIFE-003", "REQ-LIFE-004", "REQ-LIFE-005", "REQ-LIFE-006", "REQ-LIFE-007", "REQ-LIFE-008", "REQ-LIFE-009", "REQ-LIFE-010", "REQ-LIFE-011", "REQ-LIFE-012", "REQ-LST-001", "REQ-LST-002", "REQ-LST-003", "REQ-LST-004", "REQ-LST-005", "REQ-LST-006", "REQ-LST-007"],
+      "python_implementations": ["src/obstacle_bridge/bridge_connection_lifecycle.py", "src/obstacle_bridge/bridge_runner.py", "src/obstacle_bridge/bridge_transport_common.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxReconnectSupervisor.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTCPListener.swift"],
+      "python_tests": ["tests/integration/test_reconnect_regression.py::test_reconnect_loop_restarts_after_second_disconnect"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeReportsRetryExhaustionAndCancelsItOnStop", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::reconnectSupervisorRecoversAndStopsPendingTimers"],
+      "parity_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Epoch, receive-owner, and bounded retry probes exist, but the Linux listener and lifecycle contract do not cover every Python transport and service state."}
+    },
+    {
+      "id": "channelmux-and-tun",
+      "requirements": ["REQ-MUX-001", "REQ-MUX-002", "REQ-MUX-003", "REQ-MUX-004", "REQ-MUX-005", "REQ-MUX-006", "REQ-MUX-007", "REQ-MUX-008", "REQ-MUX-009", "REQ-MUX-011"],
+      "python_implementations": ["src/obstacle_bridge/bridge_channelmux.py", "src/obstacle_bridge/bridge_channelmux_shared_tun.py", "src/obstacle_bridge/bridge_tun_linux.py", "src/obstacle_bridge/bridge_tun_routing.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeControlChunkCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxReplyPolicy.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift"],
+      "python_tests": ["tests/unit/test_channel_mux_listener_mode.py::test_shared_tun_same_channel_id_routes_to_its_destination_peer"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::boundedBinaryCodecAndServiceWireFormatsRoundTrip", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::controlChunksMatchPythonLayoutAndRemainBounded", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceDataPlaneTests.swift::localTcpConnectionProducesOpenDataAndClose"],
+      "parity_tests": ["tests/unit/test_channel_mux_swift_parity.py::test_swift_control_chunk_reassembly_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_tun_packet_matches_python"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Frame and selected service parity probes exist, but no Linux packet device, route/DNS hook integration, or full shared-TUN parity exists."}
+    },
+    {
+      "id": "channelmux-ios-packet-flow",
+      "requirements": ["REQ-MUX-010"],
+      "python_implementations": ["src/obstacle_bridge/bridge_tun_ios.py"],
+      "swift_implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift"],
+      "python_tests": ["tests/unit/test_bridge_tun_ios.py::test_open_tun_device_uses_active_bridge"],
+      "swift_tests": [],
+      "parity_tests": [],
+      "linux_swift": {"applicability": "not-applicable", "status": "not-applicable", "reason": "The requirement is scoped to an iOS packet-tunnel provider."}
+    },
+    {
+      "id": "myudp-reliability",
+      "requirements": ["REQ-MYU-001", "REQ-MYU-002", "REQ-MYU-003", "REQ-MYU-004", "REQ-MYU-005", "REQ-MYU-006", "REQ-MYU-007"],
+      "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py", "src/obstacle_bridge/bridge_stats.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"],
+      "python_tests": ["tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpDataFrameMatchesPythonV2Layout", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
+      "parity_tests": ["ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state", "tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_retransmit_timer_matches_python"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "The reduced Linux transport lacks the Python reliability, CONTROL/IDLE, retransmission, coalescing, and diagnostics contract."}
+    },
+    {
+      "id": "admin-config-and-onboarding",
+      "requirements": ["REQ-ADM-001", "REQ-ADM-002", "REQ-ADM-003", "REQ-ADM-004", "REQ-ADM-005", "REQ-ADM-006", "REQ-ADM-007", "REQ-ADM-008", "REQ-ADM-009", "REQ-ADM-010", "REQ-ADM-011", "REQ-ADM-012"],
+      "python_implementations": ["src/obstacle_bridge/bridge_webadmin.py", "src/obstacle_bridge/bridge_runner.py", "src/obstacle_bridge/onboarding.py"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxRuntimeConfiguration.swift"],
+      "python_tests": ["tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesSectionedMyudpConfiguration"],
+      "parity_tests": ["tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python"],
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Linux Swift serves a redacted status/peer subset; Python config persistence, Admin authentication, full routes, onboarding, and secret handling remain unmapped or incomplete."}
+    }
+  ],
+  "known_differences": [
+    {"area": "myudp trailing bytes", "python_wins": "accept the declared frame and leave outer trailing bytes to the caller", "swift_gap": "portable Linux decoder requires exact length"},
+    {"area": "myudp CONTROL missing list", "python_wins": "derive the bounded capacity from the wire payload budget", "swift_gap": "portable Linux codec caps entries at 64"},
+    {"area": "myudp ring comparison", "python_wins": "use the Python half-ring boundary semantics", "swift_gap": "Linux transport differs at the 32767-distance edge"},
+    {"area": "canonical JSON", "python_wins": "preserve Python protocol byte ordering", "swift_gap": "Core service/catalog serialization uses explicit protocol key order; Linux Admin serialization remains generic until its Core migration."}
+  ]
+}

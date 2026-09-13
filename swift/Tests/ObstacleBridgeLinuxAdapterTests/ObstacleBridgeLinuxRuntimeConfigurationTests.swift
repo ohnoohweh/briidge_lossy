@@ -50,6 +50,14 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.secureLinkPSK == nil)
     }
 
+    @Test func parsesWebSocketTextPayloadMode() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "ws"],
+            "ws_session": ["ws_peer": "peer.example", "ws_peer_port": 8080, "ws_payload_mode": "json-base64"],
+        ]))
+        #expect(config.webSocketPayloadMode == "json-base64")
+    }
+
     @Test func parsesSectionedMyudpConfiguration() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "myudp"],

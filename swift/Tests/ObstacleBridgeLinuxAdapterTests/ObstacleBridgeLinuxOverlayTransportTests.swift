@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
-@testable import ObstacleBridgePortable
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxOverlayTransportTests {
     @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() throws {
@@ -75,6 +75,15 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
+    @Test func webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer() throws {
+        for mode in ["base64", "json-base64", "semi-text-shape"] {
+            let peer = try PythonOverlayPeer(mode: "ws-text-\(mode)")
+            defer { peer.stop() }
+            let client = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .ws, wsPath: "/overlay", wsPayloadMode: mode)
+            #expect(try client.roundTrip(Data("swift-text".utf8)) == Data("swift-text".utf8))
+        }
+    }
+
     @Test func unqualifiedTransportsAreRejectedBeforeSocketCreation() {
         #expect(throws: ObstacleBridgeLinuxOverlayTransportError.unavailableTransport("Linux QUIC is unavailable: the Network.framework owner has no qualified Linux backend")) {
             try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: 1, transport: .quic)
@@ -139,6 +148,25 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             #expect(received == .init(channelID: 7, protocolType: .udp, counter: 1, messageType: .data, body: Data("hello".utf8)))
             worker.stop()
         }
+    }
+
+    @Test func linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: peer.port))
+        let session = try runtime.connect(sessionID: 68, clientNonce: Data(repeating: 8, count: 32))
+        defer { runtime.disconnect() }
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
+        let payload = Data(repeating: 0x42, count: 40)
+        let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: 5, maximumApplicationPayload: 32, payload: payload)
+        let delivered = DispatchSemaphore(value: 0)
+        var received: ObstacleBridgeChannelMuxFrame?
+        mux.onUnsolicitedFrame = { frame in received = frame; delivered.signal() }
+        for chunk in chunks.reversed() {
+            mux.receive(.init(channelID: 3, protocolType: .tcp, counter: 2, messageType: .openChunk, body: chunk))
+        }
+        #expect(delivered.wait(timeout: .now() + 1) == .success)
+        #expect(received == .init(channelID: 3, protocolType: .tcp, counter: 2, messageType: .open, body: payload))
     }
 
     @Test func myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer() throws {
@@ -372,10 +400,18 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
 }
 
 final class PythonOverlayPeer {
+    // One test keeps two peers alive while it exercises transport routing;
+    // restricting all test fixtures to that maximum avoids Foundation pipe
+    // resource exhaustion when Swift Testing schedules the suite concurrently.
+    private static let launchSlots = DispatchSemaphore(value: 2)
     let process: Process
     let port: Int
+    private var stopped = false
 
     init(mode: String) throws {
+        Self.launchSlots.wait()
+        var started = false
+        defer { if !started { Self.launchSlots.signal() } }
         let script = Self.script(for: mode)
         let process = Process()
         let stdout = Pipe()
@@ -387,15 +423,20 @@ final class PythonOverlayPeer {
         let line = String(data: stdout.fileHandleForReading.availableData, encoding: .utf8) ?? ""
         guard let port = Int(line.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else {
             process.terminate()
+            process.waitUntilExit()
             throw OverlayTestError.peerDidNotStart
         }
         self.process = process
         self.port = port
+        started = true
     }
 
     func stop() {
+        guard !stopped else { return }
+        stopped = true
         if process.isRunning { process.terminate() }
         process.waitUntilExit()
+        Self.launchSlots.signal()
     }
 
     private static func script(for mode: String) -> String {
@@ -415,8 +456,11 @@ final class PythonOverlayPeer {
             return """
             import socket, struct
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
-            _,peer=s.recvfrom(1452); p=b'python-first'; batch=b'\\x01\\x01'+struct.pack('!H',4+len(p))+struct.pack('!HH',77,len(p))+p
-            s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer); s.close()
+            _,peer=s.recvfrom(1452); p=b'python-first'; record=struct.pack('!I',len(p))+p; batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',1,len(record))+record
+            s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
+            try: s.settimeout(1); s.recvfrom(1452)
+            except OSError: pass
+            s.close()
             """
         }
         if mode == "tcp-duplex" {
@@ -453,10 +497,13 @@ final class PythonOverlayPeer {
             PREFIX = \(mode == "myudp-secure-mux" ? "b''" : "b'python:'")
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             def recv():
-                wire,peer=s.recvfrom(1452); assert wire[0]==1 and wire[19:21]==b'\\x01\\x01'
-                return wire[27:],int.from_bytes(wire[23:25],'big'),peer
+                while True:
+                    wire,peer=s.recvfrom(1452)
+                    if not (wire[0]==1 and wire[19:21]==b'\\x01\\x01'): continue
+                    stream=wire[27:]; size=int.from_bytes(stream[:4],'big'); assert len(stream)==4+size
+                    return stream[4:],int.from_bytes(wire[23:25],'big'),peer
             def send(payload,counter,peer):
-                batch=b'\\x01\\x01'+struct.pack('!H',4+len(payload))+struct.pack('!HH',counter,len(payload))+payload
+                record=struct.pack('!I',len(payload))+payload; batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',counter,len(record))+record
                 s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
             def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')
             def expand(prk,info,length):
@@ -470,13 +517,16 @@ final class PythonOverlayPeer {
             if MODE == 'myudp-securelink-close-after-ack':
                 s.close()
             elif MODE == 'myudp-securelink-mux-duplex':
-                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello',first),77,peer)
+                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello',first),3,peer)
             elif MODE == 'myudp-securelink-duplex':
                 first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
-                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),77,peer)
-                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),counter,peer)
+                first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first),3,peer)
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),4,peer)
             else:
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer)
+            if MODE != 'myudp-securelink-close-after-ack':
+                try: s.settimeout(1); s.recvfrom(1452)
+                except OSError: pass
             s.close()
             """
         }
@@ -527,22 +577,35 @@ final class PythonOverlayPeer {
         if MODE.startswith('ws'):
             r=b''
             while b'\\r\\n\\r\\n' not in r: r+=c.recv(4096)
+            if MODE.startswith('ws-text-'): assert ('x-obstaclebridge-ws-payload-mode: '+MODE[8:]).encode() in r.lower()
             key=[x.split(b':',1)[1].strip() for x in r.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]
             accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
             c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
         def read_payload():
             if MODE.startswith('tcp'):
                 h=nread(4); n=struct.unpack('!I',h)[0]; b=nread(n); assert b[:1]==b'\\x00'; return b[1:]
-            a,b=nread(2); assert a==130 and b&128; n=b&127
+            a,b=nread(2); assert a==(129 if MODE.startswith('ws-text-') else 130) and b&128; n=b&127
             if n==126: n=int.from_bytes(nread(2),'big')
             elif n==127: n=int.from_bytes(nread(8),'big')
-            m=nread(4); p=bytes(x^m[i%4] for i,x in enumerate(nread(n))); assert p[:1]==b'\\0'; return p[1:]
+            m=nread(4); p=bytes(x^m[i%4] for i,x in enumerate(nread(n)))
+            if MODE == 'ws-text-base64': return base64.b64decode(p)
+            if MODE == 'ws-text-json-base64': return base64.b64decode(__import__('json').loads(p)['data'])
+            if MODE == 'ws-text-semi-text-shape':
+                a='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+'; bits=''.join(f'{a.index(chr(x)):06b}' for x in p if chr(x)!=' '); return bytes(int(bits[i:i+8],2) for i in range(0,len(bits)//8*8,8))
+            assert p[:1]==b'\\0'; return p[1:]
         def write_payload(p):
             if MODE.startswith('tcp'):
                 c.sendall(struct.pack('!I',len(p)+1)+b'\\x00'+p); return
-            p=b'\\0'+p
-            if len(p)<126: c.sendall(bytes([130,len(p)])+p)
-            else: c.sendall(bytes([130,126])+len(p).to_bytes(2,'big')+p)
+            if MODE == 'ws-text-base64':
+                p=base64.b64encode(p); opcode=129
+            elif MODE == 'ws-text-json-base64':
+                p=__import__('json').dumps({'data':base64.b64encode(p).decode()},separators=(',',':')).encode(); opcode=129
+            elif MODE == 'ws-text-semi-text-shape':
+                a='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-+'; bits=''.join(f'{x:08b}' for x in p); bits += '0'*((-len(bits))%6); p=' '.join(''.join(a[int(bits[i+j:i+j+6],2)] for j in range(0,min(48,len(bits)-i),6)) for i in range(0,len(bits),48)).encode(); opcode=129
+            else:
+                p=b'\\0'+p; opcode=130
+            if len(p)<126: c.sendall(bytes([opcode,len(p)])+p)
+            else: c.sendall(bytes([opcode,126])+len(p).to_bytes(2,'big')+p)
         def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')
         def expand(prk,info,length):
             out=b''; prior=b''

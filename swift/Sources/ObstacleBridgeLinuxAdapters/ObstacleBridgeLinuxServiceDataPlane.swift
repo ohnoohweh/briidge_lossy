@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxServiceDataPlaneError: Error, Equatable {
     case unsupportedProtocol
@@ -152,46 +152,28 @@ public final class ObstacleBridgeLinuxServiceDataPlane {
     }
 
     private func openPayload(_ spec: ObstacleBridgeLinuxServiceSpec) throws -> Data {
-        let bind = Data(spec.listenHost.utf8)
-        let host = Data(spec.targetHost.utf8)
-        guard bind.count <= Int(UInt16.max), host.count <= Int(UInt16.max) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        let metadata: [String: Any] = ["name": spec.name ?? NSNull(), "lifecycle_hooks": NSNull(), "options": NSNull()]
-        let metadataData = try JSONSerialization.data(withJSONObject: metadata, options: [.sortedKeys])
-        var value = Data("O5".utf8)
-        append(instanceID, to: &value); append(connectionSequence, to: &value); append(spec.serviceID, to: &value)
-        value.append(spec.listenProtocol.rawValue); append(UInt16(bind.count), to: &value); value.append(bind)
-        append(UInt16(spec.listenPort), to: &value); value.append(spec.targetProtocol.rawValue); append(UInt16(host.count), to: &value); value.append(host)
-        append(UInt16(spec.targetPort), to: &value); append(UInt32(metadataData.count), to: &value); value.append(metadataData)
-        return value
+        guard let core = coreSpec(spec) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
+        do { return try ObstacleBridgeServiceCodec.encodeOpen(instanceID: instanceID, connectionSequence: connectionSequence, service: core) }
+        catch { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
     }
 
     private func decodeOpenPayload(_ data: Data) throws -> ObstacleBridgeLinuxServiceSpec {
-        guard data.count >= 25, data.prefix(2) == Data("O5".utf8) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        var offset = 2 + 8 + 4
-        let serviceID = readUInt16(data, &offset)
-        guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: readByte(data, &offset)) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        let bind = try readString(data, &offset, count: Int(readUInt16(data, &offset)))
-        let listenPort = Int(readUInt16(data, &offset))
-        guard let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: readByte(data, &offset)) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        let host = try readString(data, &offset, count: Int(readUInt16(data, &offset)))
-        let targetPort = Int(readUInt16(data, &offset))
-        let metadataLength = Int(readUInt32(data, &offset))
-        guard offset + metadataLength == data.count,
-              let metadata = try JSONSerialization.jsonObject(with: data[offset..<(offset + metadataLength)]) as? [String: Any] else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        return .init(serviceID: serviceID, name: metadata["name"] as? String, listenProtocol: listenProtocol, listenHost: bind, listenPort: listenPort, targetProtocol: targetProtocol, targetHost: host, targetPort: targetPort)
+        do {
+            let service = try ObstacleBridgeServiceCodec.decodeOpen(data).service
+            guard let result = linuxSpec(service) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
+            return result
+        } catch { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
     }
 
-    private func readByte(_ data: Data, _ offset: inout Int) -> UInt8 { defer { offset += 1 }; return data[offset] }
-    private func readUInt16(_ data: Data, _ offset: inout Int) -> UInt16 { defer { offset += 2 }; return (UInt16(data[offset]) << 8) | UInt16(data[offset + 1]) }
-    private func readUInt32(_ data: Data, _ offset: inout Int) -> UInt32 { defer { offset += 4 }; return data[offset..<(offset + 4)].reduce(0) { ($0 << 8) | UInt32($1) } }
-    private func readString(_ data: Data, _ offset: inout Int, count: Int) throws -> String {
-        guard count >= 0, offset + count <= data.count, let value = String(data: data[offset..<(offset + count)], encoding: .utf8) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        offset += count
-        return value
+    private func coreSpec(_ value: ObstacleBridgeLinuxServiceSpec) -> ObstacleBridgeServiceSpec? {
+        guard (1...Int(UInt16.max)).contains(value.listenPort), (1...Int(UInt16.max)).contains(value.targetPort) else { return nil }
+        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol.rawValue, listenHost: value.listenHost, listenPort: UInt16(value.listenPort), targetProtocol: value.targetProtocol.rawValue, targetHost: value.targetHost, targetPort: UInt16(value.targetPort))
     }
-    private func append(_ value: UInt16, to data: inout Data) { data.append(UInt8(value >> 8)); data.append(UInt8(value & 0xff)) }
-    private func append(_ value: UInt32, to data: inout Data) { var encoded = value.bigEndian; data.append(Data(bytes: &encoded, count: 4)) }
-    private func append(_ value: UInt64, to data: inout Data) { var encoded = value.bigEndian; data.append(Data(bytes: &encoded, count: 8)) }
+    private func linuxSpec(_ value: ObstacleBridgeServiceSpec) -> ObstacleBridgeLinuxServiceSpec? {
+        guard value.listenPort > 0, value.targetPort > 0 else { return nil }
+        guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.listenProtocol), let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.targetProtocol) else { return nil }
+        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
+    }
 }
 
 public enum ObstacleBridgeLinuxServiceDataPlaneEvent: Equatable, Sendable {

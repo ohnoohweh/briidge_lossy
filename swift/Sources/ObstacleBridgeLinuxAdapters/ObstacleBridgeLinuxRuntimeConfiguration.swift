@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, LocalizedError {
     case unreadableFile(String)
@@ -44,17 +44,19 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let peerCandidates: [String]
     public let port: Int
     public let webSocketPath: String
+    public let webSocketPayloadMode: String
     public let secureLinkPSK: Data?
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", secureLinkPSK: Data? = nil, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", secureLinkPSK: Data? = nil, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         self.host = self.peerCandidates.first ?? host
         self.port = port
         self.webSocketPath = webSocketPath
+        self.webSocketPayloadMode = webSocketPayloadMode
         self.secureLinkPSK = secureLinkPSK
         self.ownServices = ownServices
         self.remoteServices = remoteServices
@@ -118,6 +120,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         if transport == .ws, boolean(session["ws_tls"]) == true {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedWebSocketTLS
         }
+        if transport == .ws { _ = try ObstacleBridgeWebSocketPayloadCodec.mode(string(session["ws_payload_mode"]) ?? "binary") }
         let secure = root["secure_link"] as? [String: Any] ?? [:]
         let secureMode = (string(secure["secure_link_mode"]) ?? "off").lowercased()
         let psk: Data?
@@ -136,6 +139,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             port: port,
             listenerMode: listenerMode,
             webSocketPath: string(session["ws_path"]) ?? "/",
+            webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
             secureLinkPSK: psk,
             ownServices: try serviceSpecs(root, key: "own_servers"),
             remoteServices: try serviceSpecs(root, key: "remote_servers")

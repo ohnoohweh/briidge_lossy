@@ -1,168 +1,94 @@
 # Linux Swift Source Map
 
-## Scope and method
+## Purpose and authority
 
-This is the LSW-001 portability inventory for the Swift files selected by the
-macOS build script on 2026-09-05. It is a design inventory, not evidence that
-any listed file compiles for Linux. Files are grouped by the action required to
-deliver a Linux target. The Swift toolchain available to this workspace is
-Swift 6.3.2 for `x86_64-unknown-linux-gnu`.
+This document defines source ownership and the Linux Swift parity matrix for
+the common Swift migration. The machine-readable authority is
+[LinuxSwift_r001_inventory.json](./LinuxSwift_r001_inventory.json). It assigns
+every checked-in Swift file under these source roots exactly once:
 
-The initial Linux v1 target is a foreground `ObstacleBridgeLinux` client with
-`myudp`, TCP, and WebSocket only after their Linux implementations qualify;
-SecureLink; compression; ChannelMux TCP, UDP, and client TUN services; config,
-onboarding, and the supported Admin API. Linux QUIC, macOS helper/XPC, iOS
-packet-flow, GUI/app-bundle controls, and packaged service/daemon support are
-explicitly out of scope. Configurations selecting an unqualified transport or
-platform-only connector must fail validation before opening a socket or TUN
-device.
+- `swift/Sources/ObstacleBridgeCore`;
+- `swift/Sources/ObstacleBridgeLinuxAdapters`;
+- `swift/Probes/ObstacleBridgeApplePackageProbe`; and
+- `ios/native/ObstacleBridgeShared`.
 
-## Target classification
+Run the verifier from the repository root:
 
-### Portable candidates
-
-These files use Foundation only, already have a Glibc branch, or contain pure
-runtime/codecs. They require Linux compilation and behavior tests before being
-admitted, but do not require an Apple framework replacement by their current
-imports.
-
-```text
-ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigSupport.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeAdminSnapshotSupport.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeAdminWebSupport.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTcpRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayLayerTransportAdapter.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskTransportAdapter.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayCodec.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayPeerRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlaySessionCodec.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift
+```bash
+./.venv/bin/python scripts/check_linux_swift_r001_inventory.py
+./.venv/bin/python scripts/check_linux_swift_r001_inventory.py --report
 ```
 
-`ObstacleBridgeHostRunnerMain.swift` is portable only as a thin entrypoint; its
-current dependency, `ObstacleBridgeHostRunner`, is not. The Linux product needs
-a distinct Linux runtime owner. `ObstacleBridgeQuicOverlayRuntime.swift` is a
-pure logical runtime and may remain portable, but its use is deferred until a
-Linux transport owner is qualified. `ObstacleBridgeChannelMuxCodec.swift`
-imports CoreFoundation; verify the Linux Foundation toolchain exposes the
-required API, otherwise replace that narrow use with Foundation-only code.
+The first command fails when a source is unassigned, assigned more than once,
+or removed without updating the inventory. The report expands the feature
+matrix to one Linux Swift status row for every active requirement. It is the
+authoritative answer to whether a feature is `verified`, `partial`, `missing`,
+or product-scoped `not-applicable`; it is not a claim that current Linux Swift
+behavior is in parity.
 
-### Split contract from implementation
+## Source ownership
 
-These files are behaviorally shared but currently import Apple-only frameworks,
-Darwin unconditionally, zlib without a Linux system-library target, or mix
-portable semantics with macOS-specific behavior. Extract the stable contract
-and implement the Linux side in a platform target.
+| Target owner | Disposition | Files | Meaning |
+| --- | --- | ---: | --- |
+| `ObstacleBridgeCore` | `extract` | 32 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
+| `ObstacleBridgeCore` | `split-contract` | 19 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
+| `ObstacleBridgeAppleAdapters` | `retain-or-split` | 12 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, Objective-C bridge mechanisms, and the package import probe Apple-specific. |
+| `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 6 | Keep POSIX descriptors, listener/server I/O, timers, and Linux HTTP serving; remove common protocol policy as its core owner lands. |
+| `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |
 
-```text
-ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeCompressLayerRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressProtocolRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskCodec.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeSecureLinkPskRuntime.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift
-```
+The checked inventory currently contains 70 Swift files. Its file-level entries
+are intentionally exact rather than glob-based, so a new source file is a
+failing ownership decision instead of silently becoming portable or Linux-only.
 
-LSW-003 resolves the crypto portion of this split with the pinned
-`apple/swift-crypto` 4.5.1 `Crypto` product, recorded in `Package.resolved`.
-The portable `ObstacleBridgeCrypto` contract supplies SHA-256, HMAC-SHA-256,
-HKDF-SHA-256, PBKDF2-HMAC-SHA-256, AES-256-GCM, ChaCha20-Poly1305, Ed25519,
-and X25519. Its SecureLink PSK transcript functions have Python-derived fixed
-vectors. Existing Apple targets are unchanged; their subsequent adoption of
-the portable contract remains a parity-preserving refactor rather than a Linux
-runtime dependency.
+## Python-led feature matrix
 
-Remaining split decisions:
+The inventory contains feature groups for every active
+`REQ-*` identifier is assigned once to a group with:
 
-- `Network` transport/listener/proxy owners need POSIX/Linux implementations
-  behind their existing runtime contracts. This includes TCP, UDP, WebSocket,
-  Admin HTTP, and proxy connection ownership.
-- `Security` used by the WebSocket owner needs a Linux TLS policy/backend.
-- unguarded Darwin imports in peer resolution, UDP ownership, diagnostics, and
-  secret handling need Glibc/POSIX replacements or separation.
-- compression needs an SPM system-library target for zlib, with its C module
-  map and deployment dependency stated by the build.
+- Python implementation and test references;
+- current Swift implementation and test references when any exist;
+- direct Python-versus-Swift evidence where it exists; and
+- an explicit Linux Swift applicability, status, and gap reason.
 
-### Linux implementation required
+The Linux Python runtime is the normative behavior reference. Apple Swift may
+be extraction material, and current Linux Swift probes are evidence for their
+named scenarios, but neither can override Python behavior or fill an unmapped
+row.
 
-No selected macOS source provides a Linux `/dev/net/tun` implementation. Add a
-Linux packet adapter conforming to the existing ChannelMux TUN runtime's
-raw-packet contract. It creates an `IFF_TUN | IFF_NO_PI` descriptor, integrates
-nonblocking file-descriptor reads with the Linux event loop, reports counters,
-and delegates address/route/DNS lifecycle to `scripts/client-tun-hook.sh`.
+The matrix records Linux Swift as partial or missing for most
+Linux-applicable feature groups. In particular, it exposes the missing Linux
+QUIC backend and the incomplete myUDP reliability, WebSocket, SecureLink,
+ChannelMux/TUN, lifecycle/listener, and Admin/configuration surfaces. The four
+`not-applicable` groups are scoped by their requirements to Python packaging,
+Windows proxy behavior, iOS proxy-provider behavior, or iOS packet flow; they
+are not generic Linux feature waivers.
 
-The Linux target also needs its own executable runtime owner. It orchestrates
-configuration, portable runtime, Linux transport owners, lifecycle hooks,
-signals, shutdown, and Admin server. It is not a conditional branch inside the
-macOS host runner.
+## Frozen Python decisions
 
-### Excluded from Linux v1
+Before a duplicated Swift implementation is removed, its behavior must match
+the Python result for the following already-observed differences:
 
-These sources are macOS/iOS application, privilege, or packet-flow surfaces and
-must not be selected by the Linux package.
-
-```text
-ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift
-ios/native/ObstacleBridgeApp/ObstacleBridgeMacAppMain.swift
-ios/native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift
-ios/native/ObstacleBridgePrivilegedHelper/ObstacleBridgeTunPrivilegedHelperMain.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift
-ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift
-```
-
-The helper contract is excluded because its current concrete service and XPC
-transport are macOS-specific. A future Linux privileged helper, if needed,
-requires its own authentication and security design. The QUIC transport owner
-is excluded because it uses Network.framework; Linux must reject QUIC until a
-new backend has passed qualification.
-
-## Shared contracts and parity evidence
-
-| Behavior | Linux implementation owner | Required parity evidence |
+| Area | Python decision | Current Swift gap |
 | --- | --- | --- |
-| Config and service schema | portable runtime + Linux validation | Python/Swift config acceptance and rejection tests |
-| SecureLink/crypto bytes | portable protocol + Linux crypto backend | known-answer, codec, and mixed-runtime handshake vectors |
-| ChannelMux TCP/UDP/TUN frames | portable ChannelMux + Linux adapters | component runner and mixed-runtime frame/packet tests |
-| Transport readiness/reconnect | Linux owners | Python/Swift lifecycle and reconnect integration tests |
-| Admin status and routing fields | portable Admin contract + Linux server | Admin component payload comparison |
-| TUN packet, hook, and cleanup lifecycle | Linux TUN/hook adapter | elevated `/dev/net/tun`, route, DNS, and teardown tests |
+| myUDP trailing bytes | Accept a declared frame and let the caller retain outer trailing bytes. | The portable Linux decoder requires exact outer length. |
+| myUDP CONTROL missing list | Derive the bounded list capacity from the wire payload budget. | The portable Linux codec hard-caps the list at 64 entries. |
+| myUDP ring boundary | Use Python half-ring comparison semantics. | The Linux transport differs at distance 32767. |
+| Canonical JSON | Preserve Python protocol byte ordering. | Core service/catalog serialization uses the protocol key order; Linux Admin serialization remains generic until its Core migration. |
 
-Existing Python/Swift drift and shared-source parity guards remain mandatory for
-changes to shared semantics. Platform sources may diverge only below the
-adapter contract, with the differing platform behavior named in tests.
+New observed drift belongs in this table and in a reproducing direct parity test
+before it is fixed. A successful source guard, compilation, or mixed-runtime
+smoke test does not resolve a frozen decision.
 
-## Completion record
+## Evidence scope
 
-LSW-001 is complete: every source selected by the macOS build script is
-classified above; the Linux v1 feature matrix and exclusion behavior are
-defined; Apple-only dependencies have a replacement, split, or exclusion; and
-the parity evidence is mapped by behavior. LSW-002 may begin using this map.
+The qualified evidence does not establish functional parity. The Linux SwiftPM
+myUDP Python-peer fixture suite passes with
+the required stream-record envelopes and independent transport counters. The
+raw Apple ChannelMux parity runner imports `CryptoKit`, so its qualified
+evidence host is the `bridge-py-integration-macos-swift-probe` CI job; it must
+not be treated as a Linux pass or a skipped parity claim. The SecureLink/crypto
+consolidation removes that Apple-only crypto dependency.
+
+These lanes pass on their qualified hosts. Remaining work closes feature rows
+in this inventory; a partial or missing row requires implementation and
+executable evidence before it becomes verified.

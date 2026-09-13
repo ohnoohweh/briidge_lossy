@@ -3,7 +3,7 @@ import Crypto
 #if os(Linux)
 import Glibc
 #endif
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 /// Sequential TCP or cleartext WebSocket SecureLink server used by the Linux
 /// listener admission path. ChannelMux/runtime ownership remains above this

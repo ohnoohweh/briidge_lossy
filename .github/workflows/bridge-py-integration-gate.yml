@@ -158,10 +158,16 @@ jobs:
     if: needs.detect-bridge-change.outputs.swift_changed == 'true'
     runs-on: macos-latest
     steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Verify Swift toolchain
         run: |
           swift --version
           swiftc --version
+          swift build --target ObstacleBridgeCore
+          swift build --target ObstacleBridgeApplePackageProbe
+          swift test --filter ObstacleBridgeCoreCodecTests
 
       - name: Probe required Swift modules
         shell: bash

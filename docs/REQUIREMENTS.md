@@ -38,6 +38,11 @@ Implementation note: the current Synology service runner keeps shell `errexit` e
 - `REQ-OVL-002`: A peer client shall be able to establish a native UDP (`myudp`) overlay session to a listener and carry TCP application traffic across it.
 - `REQ-OVL-003`: A peer client shall be able to establish a TCP overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-004`: A peer client shall be able to establish a WebSocket overlay session to a listener and carry UDP application traffic across it.
+
+Implementation and verification note: the shared Core wire corpus derives the
+binary WebSocket application body from Python's `WebSocketBinaryPayloadCodec`,
+then requires the Swift Core codec to encode/decode the same bytes and reject
+empty, unknown-kind, and truncated-control records.
 - `REQ-OVL-005`: A peer client shall be able to establish a QUIC overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family. For WebSocket listener mode, binding to the IPv6 wildcard address `::` shall create a dual-stack listener that accepts both IPv6 and IPv4-mapped incoming connections where the operating system supports dual-stack IPv6 sockets; this wildcard bind is an intentional operator-selected all-interface overlay listener, and operators who need narrower exposure shall bind a specific local address instead. Binding to `0.0.0.0` remains IPv4-only.
 - `REQ-OVL-007`: Overlay peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6. The runtime configuration surface shall scope peer-family preference per transport (`udp_peer_resolve_family`, `tcp_peer_resolve_family`, `ws_peer_resolve_family`, `quic_peer_resolve_family`), and peer endpoint fields shall accept either one host/FQDN or an ordered comma-separated list of IPv4/IPv6 alternatives. When multiple alternatives are configured, the runtime shall prefer addresses that match the selected transport-local family policy, but if the preferred family cannot be used and a usable alternative family is available, connection bootstrap shall fall back to that alternative instead of failing solely because the first family choice was unavailable.
@@ -139,8 +144,12 @@ Current implementation note:
 - Implementation note (testability): The delivered integration harness now generates localhost TLS fixture material at runtime and allocates loopback port blocks by probing host availability before selecting a case slot. This keeps localhost private keys out of version control and preserves stable Linux shared integration coverage even when unrelated host daemons already bind uncommon local ports.
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.
-  Implementation note: the Linux Swift portable-crypto target pins the PSK
-  transcript derivation and proof bytes to Python-derived vectors. Linux Swift
+  Implementation note: the Linux Swift core-crypto target pins the PSK
+  transcript derivation, proof, and handshake-envelope bytes to the shared
+  Python-derived corpus. One Core SecureLink frame codec owns the versioned
+  envelope and authenticated-data header for both portable client and server
+  state machines.
+  Linux Swift
   TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
   protected-data tests. The overlay E2E suite runs the built Linux Swift
   executable against a Python reference peer for each admitted transport and
@@ -259,6 +268,30 @@ Current lifecycle implementation note:
 ## Mixed traffic and channel requirements
 
 - `REQ-MUX-001`: A connected peer shall be able to carry multiple simultaneous TCP channels over one overlay connection. Python per-channel TCP backpressure workers shall be created only while a local writer has buffered bytes and shall be detached and cancelled on local EOF, remote `CLOSE`, peer reset, and shutdown. Swift shall serialize Network.framework sends through a demand-driven per-channel drain and discard its pending drain state on the same lifecycle transitions.
+  Implementation note: common Swift ChannelMux service bytes use the Core bounded binary and typed JSON codecs for O4/O5 OPEN and RS2/RS3 catalogs. Linux socket owners consume the Core values and do not serialize those records independently.
+  A Linux socket owner configured with an ephemeral listener port replaces port
+  zero with the kernel-assigned `getsockname` port before emitting its Core O5
+  OPEN record, so a peer never receives an invalid service endpoint.
+  Verification note: the shared Python/Swift Core corpus pins TCP APP
+  malformed-record rejection, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3
+  catalog bytes, including O4/O5 and RS2/RS3 truncation and trailing-byte
+  rejection; it expands with each migrated codec.
+  Linux WebSocket clients parse and advertise all shared payload modes and use
+  the matching RFC 6455 text or binary opcode; Python-peer tests prove each
+  text-mode negotiation and round trip.
+  Core also owns myUDP CONTROL and stream-record framing plus ChannelMux
+  one-in-flight reply admission; Linux adapters supply only I/O and waits.
+  The macOS flat build and generated iOS app/packet-tunnel targets consume the
+  same Core binary, WebSocket payload, and APP/PING/PONG frame codecs rather
+  than compiling a parallel Apple payload implementation; the generated-project
+  patch updates existing source references in place. The macOS parity runner
+  compiles the Core myUDP, ChannelMux, SecureLink, and service codecs together
+  with those Apple facades.
+  Apple ChannelMux facades also delegate CKV1 transaction, chunk, and bounded
+  reassembly policy to the Core raw-value owner.
+  Apple RS3 service-catalog encoding delegates its canonical JSON and framing to
+  the same type-neutral Core service codec.
+  Apple O4/O5 OPEN and RS2/RS3 catalog decoding use that Core owner as well.
 - `REQ-MUX-002`: A connected peer shall be able to carry mixed UDP and TCP services at the same time.
 - `REQ-MUX-003`: Multi-client listener scenarios shall preserve peer isolation so one peer’s channels and services do not conflict with another peer’s. Listener-side ChannelMux channel identity shall include both the owning peer and channel identifier, because independent peers may legitimately allocate the same channel number. A process-shared TUN device shall route local replies through the mux that actively owns its reader, using that reader owner's peer/channel bindings rather than creator or attachment history.
 - `REQ-MUX-004`: Remote service publication shall remain scoped to the intended peer. An authenticated inbound peer's published TCP and UDP listeners shall instantiate and accept traffic even when the parent overlay transport remains in listener state.
@@ -293,12 +326,22 @@ Implementation note: the live-config derivation for `REQ-MUX-010` now also inclu
 - `REQ-MYU-004`: The myudp transport shall correctly transfer large payloads under delayed and lossy conditions.
 - `REQ-MYU-005`: Bidirectional myudp traffic shall remain functional when both directions are active concurrently.
 - `REQ-MYU-006`: The myudp transport shall tolerate heavy early loss patterns without silently corrupting delivered payloads.
+
+Implementation and verification note: the shared Core wire corpus derives a
+myUDP DATA_BATCH envelope from the Python reference `Protocol` and
+`MyUDP2BatchCodec`, then requires the Swift Core codec to encode and decode the
+same bytes while rejecting malformed, truncated, and trailing records. This is
+byte-contract evidence for the transport framing; loss recovery and control
+policy remain covered by the myUDP integration and unit suites.
 - `REQ-MYU-007`: The myudp transport shall expose an averaged transmit-delay metric for acknowledged `DATA` frames, derived from first-send time minus half of the current RTT estimate, so operators can distinguish payload delivery delay from raw RTT. When an idle RTT refresh updates the active session RTT estimate without a new acknowledged `DATA` frame, the runtime shall re-base `transmit_delay_est_ms` to half of the refreshed RTT estimate so stale delay spikes do not persist indefinitely during idle periods.
 
 Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
 Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, clear stale receiver/control state across full transport-epoch reset, keep log-based repro analysis aligned to the same observed session epoch, keep a frame that was reported missing on a persistent RTT-paced retry path until cumulative ACK progress actually clears that gap, verify that acknowledged `DATA` frames publish an EWMA transmit-delay estimate through the runtime status/dashboard path, and verify that idle RTT refresh rebases the live transmit-delay estimate back to half-RTT when no fresh `DATA` ACK has arrived yet. Python and Swift default the `myudp` send window to `max_inflight=200` unless runtime config explicitly overrides it, while still clamping configured values to the supported session range.
 
 Implementation note: the myUDP2 codec boundary is defined by a bounded `u32` stream-record serializer/deserializer and a strict DATA_BATCH parser/encoder that consumes the frozen wire vectors, rejects invalid record lengths and trailing bytes, and enforces the IPv6-safe batch budget. The Python and shared Swift myudp runtimes carry those stream bytes in DATA_BATCH datagrams, schedule complete chunks within the batch budget, and retransmit each missing chunk in a freshly built batch envelope. The Python E2E harness records sanitized DATA_BATCH framing metadata and qualifies concurrent small-record coalescing plus exact-once recovery after a dropped multi-record batch. `get_stream_record_limit()` is the upper-layer budget contract: ChannelMux uses it for read and fragment sizing, Compression forwards it, and SecureLink reserves protected-frame overhead. The `myudp.budget` peer-status object and transport metrics report stream bytes, chunks, batches, queue bytes/age, retransmitted chunks, malformed batches, and malformed stream records. Swift macOS/iOS device and mixed-runtime qualification remains required before this wire format is eligible for a distributed-network release; there is no runtime wire-format fallback.
+Apple myUDP peer-runtime queue budgeting consumes Core-owned batch-header,
+record-length, and chunk-header constants through a compatibility facade, so
+that scheduling boundary cannot retain a divergent platform-local layout.
 Implementation note: stream-style transports that do not maintain a separate ACK-derived payload-delay estimator (`tcp`, `quic`, and `ws`) shall publish `transmit_delay_est_ms` as `rtt_est_ms / 2` on their session metric surface so operator dashboards and ChannelMux policy can consume one consistent delay field across transports.
 Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) now also defines the overload/freshness policy that future transport work is expected to follow: bounded queues, admission-side shedding for freshness-sensitive datagram traffic, ingress-side backpressure for TCP streams, and observability of queue pressure/drop state rather than unbounded stale backlog growth.
 

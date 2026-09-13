@@ -1,5 +1,5 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public enum ObstacleBridgeLinuxChannelMuxError: Error, Equatable {
     case notReady
@@ -15,11 +15,11 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     private let session: ObstacleBridgeLinuxConfiguredSession
     private let epoch: UInt64
     private let lock = NSLock()
-    private var inFlight = false
-    private var receiveOwnerActive = false
+    private let replyPolicy = ObstacleBridgeChannelMuxReplyPolicy()
     private var awaited: ObstacleBridgeChannelMuxFrame?
     private var reply: ObstacleBridgeChannelMuxFrame?
     private var replySignal: DispatchSemaphore?
+    private let controlChunkReassembler = ObstacleBridgeControlChunkReassembler()
     public var onUnsolicitedFrame: ((ObstacleBridgeChannelMuxFrame) -> Void)?
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, session: ObstacleBridgeLinuxConfiguredSession, startupFrames: [ObstacleBridgeChannelMuxFrame] = []) throws {
@@ -34,15 +34,16 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
 
     public func exchange(_ frame: ObstacleBridgeChannelMuxFrame) throws -> ObstacleBridgeChannelMuxFrame {
         guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
-        lock.lock()
-        guard !inFlight else { throw ObstacleBridgeLinuxChannelMuxError.tooManyInFlightFrames }
-        inFlight = true
-        let duplex = receiveOwnerActive
+        let duplex: Bool
+        do { duplex = try replyPolicy.beginExchange(frame) }
+        catch { throw ObstacleBridgeLinuxChannelMuxError.tooManyInFlightFrames }
         let signal = duplex ? DispatchSemaphore(value: 0) : nil
+        lock.lock()
         if duplex { awaited = frame; reply = nil; replySignal = signal }
         lock.unlock()
         defer {
-            lock.lock(); inFlight = false; awaited = nil; replySignal = nil; lock.unlock()
+            replyPolicy.finishExchange()
+            lock.lock(); awaited = nil; replySignal = nil; lock.unlock()
         }
         let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
         if !duplex { return try ObstacleBridgeChannelMuxCodec.decode(session.send(wire)) }
@@ -67,14 +68,15 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// request/reply compatibility waits on that owner instead of reading the
     /// lower descriptor a second time.
     public func activateReceiveOwner() {
-        lock.lock(); receiveOwnerActive = true; lock.unlock()
+        replyPolicy.activateReceiveOwner()
     }
 
     /// Called only by the configured session's receive worker after it has
     /// authenticated and decoded a complete ChannelMux record.
-    public func receive(_ frame: ObstacleBridgeChannelMuxFrame) {
+    public func receive(_ inbound: ObstacleBridgeChannelMuxFrame) {
+        guard let frame = reassembledControlFrame(from: inbound) else { return }
         lock.lock()
-        if let awaited, framesMatchReply(frame, awaited) {
+        if replyPolicy.matchesAwaitedReply(frame) {
             reply = frame
             let signal = replySignal
             lock.unlock()
@@ -86,7 +88,26 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         handler?(frame)
     }
 
-    private func framesMatchReply(_ inbound: ObstacleBridgeChannelMuxFrame, _ outbound: ObstacleBridgeChannelMuxFrame) -> Bool {
-        inbound.channelID == outbound.channelID && inbound.protocolType == outbound.protocolType && inbound.counter == outbound.counter
+    private func reassembledControlFrame(from frame: ObstacleBridgeChannelMuxFrame) -> ObstacleBridgeChannelMuxFrame? {
+        let completedType: ObstacleBridgeChannelMuxMessageType
+        switch frame.messageType {
+        case .openChunk: completedType = .open
+        case .remoteServicesSetV2Chunk: completedType = .remoteServicesSetV2
+        default: return frame
+        }
+        guard let body = controlChunkReassembler.consume(
+            channelID: frame.channelID,
+            protocolType: frame.protocolType.rawValue,
+            messageType: frame.messageType.rawValue,
+            payload: frame.body,
+            peerID: nil
+        ) else { return nil }
+        return .init(
+            channelID: frame.channelID,
+            protocolType: frame.protocolType,
+            counter: frame.counter,
+            messageType: completedType,
+            body: body
+        )
     }
 }
