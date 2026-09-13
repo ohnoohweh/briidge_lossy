@@ -600,9 +600,10 @@ owns registry-level wire admission effects; listener adapters supply only the
 peer identity, wire bytes, time, and socket execution. A deterministic Linux
 socket test now proves that two endpoint identities can each use counter `1`
 and deliver independent records through the shared listener without cross-peer
-state leakage. The remaining R004D work is LiveRuntime admission wiring,
+state leakage, and the listener exposes Core-decided idle withdrawals for
+event-loop bookkeeping. The remaining R004D work is LiveRuntime admission wiring,
 authenticated epoch selection, mixed Python/Swift multi-peer qualification,
-and peer expiry/cancellation integration with the listener's event loop.
+and cancellation plus periodic invocation of expiry from the event loop.
 
 The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (2) qualify Linux Core timer effects

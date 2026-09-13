@@ -32,6 +32,9 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let received = [try #require(firstReceived), try #require(secondReceived)]
         #expect(Set(received.map(\.payload)) == Set([Data("first-peer".utf8), Data("second-peer".utf8)]))
         #expect(Set(received.map(\.peerIdentity)).count == 2)
+        #expect(listener.activePeerCount == 2)
+        #expect(Set(listener.expireIdlePeers(nowNanoseconds: .max, idleTimeoutNanoseconds: 1)) == Set(received.map(\.peerIdentity)))
+        #expect(listener.activePeerCount == 0)
     }
 
     @Test func protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {

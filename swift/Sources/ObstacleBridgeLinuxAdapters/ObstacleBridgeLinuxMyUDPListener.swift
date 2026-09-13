@@ -37,6 +37,20 @@ public final class ObstacleBridgeLinuxMyUDPListener {
 
     deinit { _ = Glibc.close(descriptor) }
 
+    public var activePeerCount: Int { registry.activeKeys.count }
+
+    /// Applies Core's idle-expiry policy and returns endpoint identities that
+    /// the adapter/event loop should withdraw from external bookkeeping.
+    @discardableResult public func expireIdlePeers(
+        nowNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds,
+        idleTimeoutNanoseconds: UInt64
+    ) -> [String] {
+        registry.expire(
+            nowNanoseconds: nowNanoseconds,
+            idleTimeoutNanoseconds: idleTimeoutNanoseconds
+        ).map(\.identity)
+    }
+
     /// Processes one datagram. The caller supplies the epoch selected by its
     /// admission/authentication layer; endpoint identity alone never resets
     /// an established reliable peer.
