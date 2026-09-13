@@ -284,7 +284,9 @@ Current lifecycle implementation note:
   The macOS flat build and generated iOS app/packet-tunnel targets consume the
   same Core binary, WebSocket payload, and APP/PING/PONG frame codecs rather
   than compiling a parallel Apple payload implementation; the generated-project
-  patch updates existing source references in place.
+  patch updates existing source references in place. The macOS parity runner
+  compiles the Core myUDP, ChannelMux, SecureLink, and service codecs together
+  with those Apple facades.
   Apple ChannelMux facades also delegate CKV1 transaction, chunk, and bounded
   reassembly policy to the Core raw-value owner.
   Apple RS3 service-catalog encoding delegates its canonical JSON and framing to

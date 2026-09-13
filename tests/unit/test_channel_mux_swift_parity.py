@@ -35,6 +35,7 @@ SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeSh
 SWIFT_WS_PAYLOAD_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"
 SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
 SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
+SWIFT_MYUDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"
 SWIFT_SECURELINK_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"
 SWIFT_OVERLAY_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"
 SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
@@ -154,6 +155,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_OVERLAY_STACK_PLANNER_SOURCE),
         str(SWIFT_BINARY_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
+        str(SWIFT_MYUDP_CODEC_SOURCE),
         str(SWIFT_SECURELINK_FRAME_CODEC_SOURCE),
         str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
         str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
