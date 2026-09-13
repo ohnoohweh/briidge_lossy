@@ -98,6 +98,25 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
+    @Test func myudpTransportRecoversDroppedDataThroughCoreTimerEffect() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-drop-first-data")
+        defer { peer.stop() }
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "127.0.0.1", port: peer.port)
+        defer { session.close() }
+        _ = try session.send(Data("retransmit-me".utf8))
+        try session.serviceTimers()
+        #expect(try session.receive().payload == Data("retransmit-me".utf8))
+    }
+
+    @Test func myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-reordered-inbound")
+        defer { peer.stop() }
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "127.0.0.1", port: peer.port)
+        defer { session.close() }
+        _ = try session.send(Data("register".utf8))
+        #expect(try session.receive().payload == Data("python-reordered".utf8))
+    }
+
     @Test func configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-securelink")
         defer { peer.stop() }
@@ -454,7 +473,7 @@ final class PythonOverlayPeer {
         }
         if mode == "myudp-duplex" {
             return """
-            import socket, struct
+            import socket, struct, time
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             _,peer=s.recvfrom(1452); p=b'python-first'; record=struct.pack('!I',len(p))+p; batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',1,len(record))+record
             s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
@@ -487,6 +506,37 @@ final class PythonOverlayPeer {
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             s.recvfrom(1452)
             data,peer=s.recvfrom(1452); s.sendto(data,peer); s.close()
+            """
+        }
+        if mode == "myudp-drop-first-data" {
+            return """
+            import socket
+            s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
+            def data():
+                while True:
+                    wire,peer=s.recvfrom(1452)
+                    if len(wire)>=21 and wire[0]==1 and wire[19:21]==b'\\x01\\x01': return wire,peer
+            data()  # Deliberately drop the initial DATA datagram.
+            wire,peer=data(); s.sendto(wire,peer)
+            s.close()
+            """
+        }
+        if mode == "myudp-reordered-inbound" {
+            return """
+            import socket, struct
+            s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
+            _,peer=s.recvfrom(1452)
+            payload=b'python-reordered'; record=struct.pack('!I',len(payload))+payload
+            def wire(counter, chunk):
+                batch=b'\\x01\\x01'+struct.pack('!H',4+len(chunk))+struct.pack('!HH',counter,len(chunk))+chunk
+                return b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch
+            later=wire(2,record[5:]); s.sendto(later,peer); s.sendto(later,peer); s.sendto(wire(1,record[:5]),peer)
+            deadline=time.monotonic()+1
+            s.settimeout(0.05)
+            while time.monotonic()<deadline:
+                try: s.recvfrom(1452)
+                except OSError: pass
+            s.close()
             """
         }
         if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" {

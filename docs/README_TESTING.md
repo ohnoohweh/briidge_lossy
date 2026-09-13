@@ -55,6 +55,8 @@ The active testing focus on this branch is:
   Core-backed peer runtime and covers heartbeat/control initialization, idle,
   acknowledgement, and retransmission transitions without Apple-only sender
   state; its retired SessionCodec companion is absent from all compile lists
+- Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
+  after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints
