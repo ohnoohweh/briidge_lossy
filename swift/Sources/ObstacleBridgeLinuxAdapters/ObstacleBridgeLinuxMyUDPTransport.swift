@@ -63,7 +63,20 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
 
     public func exchange(_ payload: Data) throws -> Data {
         _ = try send(payload)
-        return try receive().payload
+        // A synchronous caller has no event loop to drive Core timer effects.
+        // Retry a bounded number of receive timeouts after ticking the shared
+        // peer engine, so a dropped DATA datagram exercises the same recovery
+        // policy as a long-lived adapter instead of failing the transaction.
+        var timeoutTicks = 0
+        while true {
+            do { return try receive().payload }
+            catch ObstacleBridgeLinuxMyUDPError.ioFailure(let code)
+                where (code == EAGAIN || code == EWOULDBLOCK) && timeoutTicks < 2 {
+                timeoutTicks += 1
+                try serviceTimers()
+            }
+            catch { throw error }
+        }
     }
 
     /// Emits one DATA batch and returns its transport counter. A duplex owner

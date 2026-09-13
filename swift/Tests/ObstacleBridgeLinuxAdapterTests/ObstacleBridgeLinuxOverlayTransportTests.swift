@@ -98,14 +98,12 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
-    @Test func myudpTransportRecoversDroppedDataThroughCoreTimerEffect() throws {
+    @Test func myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first-data")
         defer { peer.stop() }
         let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "127.0.0.1", port: peer.port)
         defer { session.close() }
-        _ = try session.send(Data("retransmit-me".utf8))
-        try session.serviceTimers()
-        #expect(try session.receive().payload == Data("retransmit-me".utf8))
+        #expect(try session.exchange(Data("retransmit-me".utf8)) == Data("retransmit-me".utf8))
     }
 
     @Test func myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks() throws {

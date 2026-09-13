@@ -1543,17 +1543,17 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `60` | `962` |
-| macOS Swift app | `1` | `57` |
-| iOS app/extension | `27` | `178` |
+| Python CLI/runtime, including macOS Python | `62` | `965` |
+| macOS Swift app | `1` | `60` |
+| iOS app/extension | `27` | `182` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
-| macOS Swift app | `3/92 = 3.3%` | `7/92 = 7.6%` | `10/92 = 10.9%` |
-| iOS app/extension | `10/92 = 10.9%` | `21/92 = 22.8%` | `24/92 = 26.1%` |
+| macOS Swift app | `3/92 = 3.3%` | `8/92 = 8.7%` | `11/92 = 12.0%` |
+| iOS app/extension | `10/92 = 10.9%` | `23/92 = 25.0%` | `25/92 = 27.2%` |
 
 #### Architecture traceability
 
