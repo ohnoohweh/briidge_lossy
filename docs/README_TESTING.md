@@ -246,8 +246,10 @@ check the next Admin-visible epoch; two simultaneous TCP/UDP local service
 channels are also carried before replacement. Its Swift and Python process
 ports are partitioned per `xdist` worker, including the Python Admin listener,
 so the matrix remains valid under the 16-worker Linux gate. TCP and cleartext
-WebSocket use the same process lane; myudp listener admission is deferred to LSW-005A after
-the Linux TUN adapter milestone.
+WebSocket use the same process lane. The Linux myudp shared-socket seam has a
+two-client endpoint-isolation test backed by the Core peer registry; full
+LiveRuntime admission and authenticated mixed-runtime listener qualification
+remain gated by R004D and LSW-005A.
 Runtime-configuration tests also require unsupported QUIC, TLS WebSocket, TUN,
 proxy-provider, and package/service-manager modes to fail before networking.
 The lower-transport tests require a Python peer to send TCP, cleartext

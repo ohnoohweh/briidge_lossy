@@ -4,9 +4,36 @@ import Testing
 #if os(Linux)
 import Glibc
 #endif
+import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func myudpRegistryListenerKeepsTwoUdpPeersIsolated() throws {
+        let listener = try ObstacleBridgeLinuxMyUDPListener(port: 0, bindHost: "127.0.0.1")
+        let first = try connectUDP(port: listener.port)
+        let second = try connectUDP(port: listener.port)
+        defer { _ = close(first); _ = close(second) }
+
+        let firstWire = try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("first-peer".utf8)),
+            counter: 1,
+            transmittedNanoseconds: 1
+        )
+        let secondWire = try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("second-peer".utf8)),
+            counter: 1,
+            transmittedNanoseconds: 2
+        )
+        #expect(firstWire.withUnsafeBytes { send(first, $0.baseAddress, firstWire.count, 0) } == firstWire.count)
+        #expect(secondWire.withUnsafeBytes { send(second, $0.baseAddress, secondWire.count, 0) } == secondWire.count)
+
+        let firstReceived = try listener.receive()
+        let secondReceived = try listener.receive()
+        let received = [try #require(firstReceived), try #require(secondReceived)]
+        #expect(Set(received.map(\.payload)) == Set([Data("first-peer".utf8), Data("second-peer".utf8)]))
+        #expect(Set(received.map(\.peerIdentity)).count == 2)
+    }
+
     @Test func protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
         try assertProtectedReceiveFailureReconnects(mode: "tcp-securelink-close-after-ack", transport: .tcp)
     }

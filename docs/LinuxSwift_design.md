@@ -597,10 +597,12 @@ listener-state seam: it isolates Core peer engines by logical identity and
 epoch and can withdraw stale epochs without clearing the replacement peer.
 It now also owns activity timestamps and timer-driven expiry. R004D still
 owns registry-level wire admission effects; listener adapters supply only the
-peer identity, wire bytes, time, and socket execution. The remaining R004D
-work is LiveRuntime admission wiring, multi-peer Python/Swift interoperability
-qualification, and peer expiry/cancellation integration with the listener's
-event loop.
+peer identity, wire bytes, time, and socket execution. A deterministic Linux
+socket test now proves that two endpoint identities can each use counter `1`
+and deliver independent records through the shared listener without cross-peer
+state leakage. The remaining R004D work is LiveRuntime admission wiring,
+authenticated epoch selection, mixed Python/Swift multi-peer qualification,
+and peer expiry/cancellation integration with the listener's event loop.
 
 The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (2) qualify Linux Core timer effects

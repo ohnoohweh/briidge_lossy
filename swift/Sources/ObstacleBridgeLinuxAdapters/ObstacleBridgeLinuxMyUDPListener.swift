@@ -15,9 +15,10 @@ public final class ObstacleBridgeLinuxMyUDPListener {
 
     private let descriptor: Int32
     private let registry = ObstacleBridgeMyUDPPeerRegistry()
+    public let port: Int
 
     public init(port: Int, bindHost: String = "0.0.0.0") throws {
-        guard (1...65_535).contains(port) else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
+        guard (0...65_535).contains(port) else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
         let fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), Int32(IPPROTO_UDP))
         guard fd >= 0 else { throw ObstacleBridgeLinuxMyUDPError.socketFailure(errno) }
         var address = sockaddr_in()
@@ -29,6 +30,9 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         }
         guard bound == 0 else { let code = errno; _ = Glibc.close(fd); throw ObstacleBridgeLinuxMyUDPError.socketFailure(code) }
         descriptor = fd
+        var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        guard withUnsafeMutablePointer(to: &actual, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }) == 0 else { _ = Glibc.close(fd); throw ObstacleBridgeLinuxMyUDPError.socketFailure(errno) }
+        self.port = Int(UInt16(bigEndian: actual.sin_port))
     }
 
     deinit { _ = Glibc.close(descriptor) }
@@ -68,6 +72,9 @@ public final class ObstacleBridgeLinuxMyUDPListener {
         let status = withUnsafePointer(to: &copy) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getnameinfo($0, length, &host, socklen_t(host.count), &service, socklen_t(service.count), NI_NUMERICHOST | NI_NUMERICSERV) }
         }
-        return status == 0 ? "\(String(cString: host)):\(String(cString: service))" : "unknown"
+        guard status == 0 else { return "unknown" }
+        let hostText = String(decoding: host.prefix { $0 != 0 }.map(UInt8.init(bitPattern:)), as: UTF8.self)
+        let serviceText = String(decoding: service.prefix { $0 != 0 }.map(UInt8.init(bitPattern:)), as: UTF8.self)
+        return "\(hostText):\(serviceText)"
     }
 }

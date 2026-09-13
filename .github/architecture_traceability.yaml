@@ -68,6 +68,7 @@ ARC-CMP-001:
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpFramingRoundTripsAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpRegistryListenerKeepsTwoUdpPeersIsolated
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade

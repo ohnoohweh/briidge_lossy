@@ -220,7 +220,7 @@
       "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py", "src/obstacle_bridge/bridge_stats.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPListener.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"],
       "python_tests": ["tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder"],
-      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpDataFrameMatchesPythonV2Layout", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpDataFrameMatchesPythonV2Layout", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpRegistryListenerKeepsTwoUdpPeersIsolated", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
       "parity_tests": ["ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state", "tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_retransmit_timer_matches_python"],
       "linux_swift": {"applicability": "required", "status": "partial", "reason": "The reduced Linux transport lacks the Python reliability, CONTROL/IDLE, retransmission, coalescing, and diagnostics contract."}
     },
