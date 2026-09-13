@@ -602,6 +602,14 @@ the socket-independent registry and both-direction Python/Swift multi-peer
 parity qualification. R004 cannot be closed before those four changes and the
 corresponding Apple/Linux source-ownership guards are green.
 
+The current adapter migration checklist is explicit: Linux must delete
+`nextCounter`, local stream-record splitting, DATA envelope construction,
+`completedPayloads`, and direct receiver-engine handling from
+`ObstacleBridgeLinuxMyUDPTransportSession`. Apple must delete its `sendBuffer`,
+`sendMeta`, counter/retransmit maps, and `ObstacleBridgeUdpOverlaySessionCodec`
+sweeps from `ObstacleBridgeUdpOverlayPeerRuntime`. Both must instead execute
+`ObstacleBridgeMyUDPPeerEngine` effects. These remain open R004B/R004C work.
+
 #### LSW-R004A — Complete the role-neutral Core peer engine
 
 Compose the existing Core myudp components into one peer-scoped state machine.
