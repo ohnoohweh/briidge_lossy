@@ -571,7 +571,8 @@ yet expose the single peer-scoped event/effect engine required by R004A.
 `ObstacleBridgeUdpOverlayPeerRuntime` still owns Apple sender and scheduling
 state, while `ObstacleBridgeLinuxMyUDPTransportSession` still allocates
 counters, splits records, constructs DATA frames, and treats CONTROL/IDLE as a
-reduced request/reply side path. There is also no Core peer registry for a
+reduced request/reply side path. Its outbound echo timestamp now calls
+`ObstacleBridgeMyUDPEchoPolicy`; there is also no Core peer registry for a
 shared-datagram listener.
 
 The next implementation order is therefore: (1) compose the Core primitives
