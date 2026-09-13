@@ -346,8 +346,8 @@ adapters rebuild the fresh wire envelope and perform I/O. Core queues stream
 records, applies the in-flight window, rolls counters, and selects bounded
 DATA_BATCH chunks. Loss recovery and timer behavior remain covered by the
 myUDP integration and unit suites. The built Linux Swift foreground runtime is
-qualified against an independent Python peer that drops its first post-SecureLink
-application DATA datagram; its bounded synchronous exchange drives the Core
+qualified against an independent Python peer that drops its first two
+post-SecureLink application DATA datagrams; its bounded synchronous exchange drives the Core
 retransmission timer and completes the protected round trip.
 - `REQ-MYU-007`: The myudp transport shall expose an averaged transmit-delay metric for acknowledged `DATA` frames, derived from first-send time minus half of the current RTT estimate, so operators can distinguish payload delivery delay from raw RTT. When an idle RTT refresh updates the active session RTT estimate without a new acknowledged `DATA` frame, the runtime shall re-base `transmit_delay_est_ms` to half of the refreshed RTT estimate so stale delay spikes do not persist indefinitely during idle periods.
 

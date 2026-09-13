@@ -150,13 +150,13 @@ class LinuxSwiftSecureLinkPeer:
         *,
         keep_open: bool = False,
         mux_echo: bool = False,
-        drop_first_myudp_application_data: bool = False,
+        drop_myudp_application_data_count: int = 0,
     ) -> None:
         self.transport = transport
         self.psk = bytes(psk)
         self.keep_open = keep_open
         self.mux_echo = mux_echo
-        self.drop_first_myudp_application_data = drop_first_myudp_application_data
+        self.drop_myudp_application_data_count = max(0, drop_myudp_application_data_count)
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
@@ -318,8 +318,8 @@ class LinuxSwiftSecureLinkPeer:
                     continue
                 if wire[0] != PTYPE_DATA or len(wire) < 27 or wire[19] != 1:
                     raise RuntimeError('Linux Swift myudp framing mismatch')
-                if drop_next_application_data:
-                    drop_next_application_data = False
+                if drop_next_application_data > 0:
+                    drop_next_application_data -= 1
                     continue
                 chunk_count = wire[20]
                 offset = 21
@@ -365,12 +365,12 @@ class LinuxSwiftSecureLinkPeer:
                 listener.sendto(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch, peer)
                 next_send_counter = increment(next_send_counter)
             if (
-                self.drop_first_myudp_application_data
+                self.drop_myudp_application_data_count > 0
                 and len(payload) == 36
                 and payload[1] == 4
                 and int.from_bytes(payload[12:20], 'big') == 1
             ):
-                drop_next_application_data = True
+                drop_next_application_data = self.drop_myudp_application_data_count
 
         self._secure_link_transaction(receive, send)
 
@@ -7249,8 +7249,8 @@ def test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip(
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_dropped_application_data(tmp_path: Path) -> None:
-    """The foreground Linux executable drives Core retransmission after loss."""
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data(tmp_path: Path) -> None:
+    """The foreground Linux executable drives Core retransmission after repeated loss."""
     if not sys.platform.startswith('linux'):
         pytest.skip('Linux Swift process E2E coverage requires Linux')
     if not shutil.which('swift'):
@@ -7258,7 +7258,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_droppe
     binary_path = _linux_swift_runner_binary()
     psk = b'linux-swift-myudp-loss-psk'
     payload = b'linux-swift-myudp-runtime-loss-recovery'
-    peer = LinuxSwiftSecureLinkPeer('myudp', psk, drop_first_myudp_application_data=True)
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, drop_myudp_application_data_count=2)
     try:
         runtime_config = {
             'runner': {'overlay_transport': 'myudp'},
