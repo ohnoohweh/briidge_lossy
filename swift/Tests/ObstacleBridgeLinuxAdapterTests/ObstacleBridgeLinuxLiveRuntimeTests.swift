@@ -45,6 +45,33 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try listener.receive() }
     }
 
+    @Test func myudpListenerRejectsDelayedStaleEpochForSameEndpoint() throws {
+        let listener = try ObstacleBridgeLinuxMyUDPListener(port: 0, bindHost: "127.0.0.1")
+        let peer = try connectUDP(port: listener.port)
+        defer { _ = close(peer); listener.close() }
+        func sendRecord(_ payload: String, counter: UInt16, epoch: UInt64) throws -> ObstacleBridgeLinuxMyUDPListener.ReceivedRecord? {
+            let wire = try ObstacleBridgeMyUDPCodec.encodeData(
+                payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data(payload.utf8)),
+                counter: counter,
+                transmittedNanoseconds: epoch
+            )
+            #expect(wire.withUnsafeBytes { send(peer, $0.baseAddress, wire.count, 0) } == wire.count)
+            return try listener.receive(epoch: epoch)
+        }
+        #expect(try sendRecord("old", counter: 1, epoch: 1)?.payload == Data("old".utf8))
+        _ = try receiveUDPWire(peer)
+        #expect(try sendRecord("fresh", counter: 1, epoch: 2)?.payload == Data("fresh".utf8))
+        _ = try receiveUDPWire(peer)
+        let staleWire = try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("stale".utf8)),
+            counter: 2,
+            transmittedNanoseconds: 1
+        )
+        #expect(staleWire.withUnsafeBytes { send(peer, $0.baseAddress, staleWire.count, 0) } == staleWire.count)
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try listener.receive(epoch: 1) }
+        #expect(listener.activePeerCount == 1)
+    }
+
     @Test func protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
         try assertProtectedReceiveFailureReconnects(mode: "tcp-securelink-close-after-ack", transport: .tcp)
     }

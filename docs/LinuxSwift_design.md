@@ -563,9 +563,10 @@ evidence. The shared-datagram listener maps endpoint plus admission epoch to `Ob
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
 The Core registry selects monotonically newer epochs, withdraws superseded peer
 state, and rejects delayed stale-epoch traffic before it can recreate an engine.
-Its test proves old/fresh delivery, expiry, explicit supersession, and a clean
-reconnect epoch without cross-epoch stream leakage. LiveRuntime wiring to an
-authenticated admission-epoch source remains open.
+Its tests prove old/fresh delivery, expiry, explicit supersession, a clean
+reconnect epoch without cross-epoch stream leakage, and stale-epoch rejection
+through the Linux shared-UDP socket. LiveRuntime wiring to an authenticated
+admission-epoch source remains open.
 
 The Apple peer runtime uses the Core receive/control/IDLE path and Core echo
 policy. Its application queue, DATA batch emission, CONTROL feedback cleanup,
