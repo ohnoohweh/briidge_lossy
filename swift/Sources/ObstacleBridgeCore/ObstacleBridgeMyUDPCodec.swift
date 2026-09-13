@@ -758,6 +758,10 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     }
     public struct Effect: Equatable, Sendable {
         public let outboundDatagrams: [Data]
+        /// Counters assigned to DATA chunks emitted by this transition, in
+        /// wire order. Adapters use this only for compatibility-facing
+        /// reporting and never allocate or interpret counters themselves.
+        public let outboundDataCounters: [UInt16]
         public let deliveredRecords: [Data]
         public let nextControlDeadlineNanoseconds: UInt64?
     }
@@ -770,10 +774,12 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     private var lastRetransmissionNanoseconds: [UInt16: UInt64] = [:]
     private var sendAttempts: [UInt16: Int] = [:]
     private var lastIdleSentNanoseconds: UInt64 = 0
+    private var pendingDeliveredRecords: [Data] = []
 
     public init(maximumInFlight: Int = 200) { sender = .init(maximumInFlight: maximumInFlight) }
 
-    public func resetEpoch() { sender.reset(); receiver.reset(); outstanding.removeAll(); peerMissing.removeAll(); firstTransmitNanoseconds.removeAll(); lastRetransmissionNanoseconds.removeAll(); sendAttempts.removeAll(); lastIdleSentNanoseconds = 0 }
+    public func resetEpoch() { sender.reset(); receiver.reset(); outstanding.removeAll(); peerMissing.removeAll(); firstTransmitNanoseconds.removeAll(); lastRetransmissionNanoseconds.removeAll(); sendAttempts.removeAll(); lastIdleSentNanoseconds = 0; pendingDeliveredRecords.removeAll() }
+    public func takeDeliveredRecord() -> Data? { pendingDeliveredRecords.isEmpty ? nil : pendingDeliveredRecords.removeFirst() }
 
     public func enqueueApplicationRecord(_ record: Data, nowNanoseconds: UInt64) throws {
         try sender.enqueue(record, queuedAtNanoseconds: nowNanoseconds)
@@ -784,10 +790,10 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     }
 
     public func flush(nowNanoseconds: UInt64) throws -> Effect {
-        guard let batch = sender.dequeueBatch(inFlightCount: outstanding.count) else { return .init(outboundDatagrams: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }
+        guard let batch = sender.dequeueBatch(inFlightCount: outstanding.count) else { return .init(outboundDatagrams: [], outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }
         for chunk in batch.chunks { outstanding[chunk.counter] = chunk; firstTransmitNanoseconds[chunk.counter] = nowNanoseconds; sendAttempts[chunk.counter] = 1 }
         let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
-        return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: batch.chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+        return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: batch.chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], outboundDataCounters: batch.chunks.map(\.counter), deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
     }
 
     public func tick(nowNanoseconds: UInt64, retransmissionWindowNanoseconds: UInt64, idleIntervalNanoseconds: UInt64 = 1_000_000_000) throws -> Effect {
@@ -802,9 +808,9 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
             datagrams.append(try ObstacleBridgeMyUDPCodec.encodeWire(type: ObstacleBridgeMyUDPCodec.idleType, payload: Data(), transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo))
             lastIdleSentNanoseconds = nowNanoseconds
         }
-        guard !chunks.isEmpty else { return .init(outboundDatagrams: datagrams, deliveredRecords: [], nextControlDeadlineNanoseconds: idleDeadline) }
+        guard !chunks.isEmpty else { return .init(outboundDatagrams: datagrams, outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: idleDeadline) }
         datagrams.append(try ObstacleBridgeMyUDPCodec.encodeData(chunks: chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo))
-        return .init(outboundDatagrams: datagrams, deliveredRecords: [], nextControlDeadlineNanoseconds: idleDeadline)
+        return .init(outboundDatagrams: datagrams, outboundDataCounters: plan.emittedCounters, deliveredRecords: [], nextControlDeadlineNanoseconds: idleDeadline)
     }
 
     public func receiveWire(_ wire: Data, nowNanoseconds: UInt64, transportWritable: Bool = true) throws -> Effect {
@@ -813,19 +819,20 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
         case ObstacleBridgeMyUDPCodec.dataType:
             let data = try ObstacleBridgeMyUDPCodec.decodeDataChunks(wire)
             guard let inbound = receiver.processData(chunks: data.chunks, nowNanoseconds: nowNanoseconds, transmittedNanoseconds: data.transmittedNanoseconds, echoedNanoseconds: data.echoedNanoseconds, transportWritable: transportWritable) else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            pendingDeliveredRecords.append(contentsOf: inbound.completedRecords)
             let control = inbound.controlReasons.isEmpty ? [] : [try receiver.buildControlDatagram(nowNanoseconds: nowNanoseconds)]
-            return .init(outboundDatagrams: control, deliveredRecords: inbound.completedRecords, nextControlDeadlineNanoseconds: nil)
+            return .init(outboundDatagrams: control, outboundDataCounters: [], deliveredRecords: inbound.completedRecords, nextControlDeadlineNanoseconds: nil)
         case ObstacleBridgeMyUDPCodec.controlType:
             let control = try ObstacleBridgeMyUDPCodec.decodeControl(wire)
             peerMissing = control.missing
             let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(outstandingCounters: Array(outstanding.keys), peerReportedMissing: peerMissing, lastInOrder: control.lastInOrder, highestReceived: control.highestReceived, missing: control.missing)
             outstanding = outstanding.filter { plan.retainedCounters.contains($0.key) }
             peerMissing = plan.peerReportedMissing
-            return .init(outboundDatagrams: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+            return .init(outboundDatagrams: [], outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
         case ObstacleBridgeMyUDPCodec.idleType:
             let idle = receiver.processIdle(nowNanoseconds: nowNanoseconds, transmittedNanoseconds: frame.transmittedNanoseconds, echoedNanoseconds: frame.echoedNanoseconds, transportWritable: transportWritable)
             let reply = idle.shouldReflect ? [try ObstacleBridgeMyUDPCodec.encodeWire(type: ObstacleBridgeMyUDPCodec.idleType, payload: Data(), transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: frame.transmittedNanoseconds)] : []
-            return .init(outboundDatagrams: reply, deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+            return .init(outboundDatagrams: reply, outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
         default: throw ObstacleBridgeMyUDPCodecError.invalidFrame
         }
     }

@@ -26,9 +26,7 @@ public enum ObstacleBridgeLinuxMyUDPError: Error, Equatable, LocalizedError {
 /// traffic, never application replies.
 public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var descriptor: Int32
-    private var nextCounter: UInt16 = 1
-    private let receiverEngine = ObstacleBridgeMyUDPReceiverEngine()
-    private var completedPayloads: [Data] = []
+    private let peerEngine = ObstacleBridgeMyUDPPeerEngine()
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
 
@@ -73,27 +71,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     @discardableResult public func send(_ payload: Data) throws -> UInt16 {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         guard payload.count <= 65_535 else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-        let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(payload)
-        var offset = 0
-        var firstCounter: UInt16 = 0
-        while offset < record.count {
-            let length = min(ObstacleBridgeMyUDPCodec.maximumPayloadSize, record.count - offset)
-            stateLock.lock()
-            let counter = nextCounter
-            nextCounter = increment(counter)
-            let now = DispatchTime.now().uptimeNanoseconds
-            let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(
-                nowNanoseconds: now,
-                lastReceivedTransmitNanoseconds: receiverEngine.heartbeat.lastReceivedTransmitNanoseconds,
-                lastReceivedWallNanoseconds: receiverEngine.heartbeat.lastReceivedWallNanoseconds
-            )
-            stateLock.unlock()
-            if firstCounter == 0 { firstCounter = counter }
-            let chunk = ObstacleBridgeMyUDPStreamChunk(counter: counter, payload: Data(record[offset..<(offset + length)]))
-            let wire = try ObstacleBridgeMyUDPCodec.encodeData(chunks: [chunk], transmittedNanoseconds: DispatchTime.now().uptimeNanoseconds, echoedNanoseconds: echo)
-            try sendWire(wire)
-            offset += length
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        let now = DispatchTime.now().uptimeNanoseconds
+        try peerEngine.enqueueApplicationRecord(payload, nowNanoseconds: now)
+        var firstCounter: UInt16?
+        while true {
+            let effect = try peerEngine.flush(nowNanoseconds: now)
+            guard !effect.outboundDatagrams.isEmpty else { break }
+            if firstCounter == nil { firstCounter = effect.outboundDataCounters.first }
+            try execute(effect)
         }
+        guard let firstCounter else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
         return firstCounter
     }
 
@@ -103,8 +92,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         defer { receiveLock.unlock() }
         while true {
             stateLock.lock()
-            if !completedPayloads.isEmpty {
-                let payload = completedPayloads.removeFirst()
+            if let payload = peerEngine.takeDeliveredRecord() {
                 stateLock.unlock()
                 return (0, payload)
             }
@@ -113,35 +101,18 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             let received = recv(descriptor, &buffer, buffer.count, 0)
             guard received > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
             let wire = Data(buffer.prefix(Int(received)))
-            let frame: ObstacleBridgeMyUDPWireFrame
-            do { frame = try ObstacleBridgeMyUDPCodec.decodeWire(wire) }
-            catch { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-            guard frame.type == ObstacleBridgeMyUDPCodec.dataType else {
-                if frame.type == ObstacleBridgeMyUDPCodec.controlType {
-                    guard (try? ObstacleBridgeMyUDPCodec.decodeControl(wire)) != nil else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-                    continue
-                }
-                if frame.type == ObstacleBridgeMyUDPCodec.idleType { continue }
-                throw ObstacleBridgeLinuxMyUDPError.invalidReply
-            }
-            let decoded: (chunks: [ObstacleBridgeMyUDPStreamChunk], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64)
-            do { decoded = try ObstacleBridgeMyUDPCodec.decodeDataChunks(wire) }
-            catch { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
             stateLock.lock()
             let now = DispatchTime.now().uptimeNanoseconds
-            guard let inbound = receiverEngine.processData(
-                chunks: decoded.chunks, nowNanoseconds: now,
-                transmittedNanoseconds: decoded.transmittedNanoseconds,
-                echoedNanoseconds: decoded.echoedNanoseconds,
-                transportWritable: true
-            ) else {
+            let effect: ObstacleBridgeMyUDPPeerEngine.Effect
+            do { effect = try peerEngine.receiveWire(wire, nowNanoseconds: now) }
+            catch {
                 stateLock.unlock()
                 throw ObstacleBridgeLinuxMyUDPError.invalidReply
             }
-            completedPayloads.append(contentsOf: inbound.completedRecords)
+            let payload = peerEngine.takeDeliveredRecord()
             stateLock.unlock()
-            let control = try receiverEngine.buildControlDatagram(nowNanoseconds: now)
-            try sendWire(control)
+            try execute(effect)
+            if let payload { return (0, payload) }
         }
     }
 
@@ -154,5 +125,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
         guard sent == wire.count else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
     }
-    private func increment(_ counter: UInt16) -> UInt16 { counter == UInt16.max ? 1 : counter &+ 1 }
+    private func execute(_ effect: ObstacleBridgeMyUDPPeerEngine.Effect) throws {
+        for datagram in effect.outboundDatagrams { try sendWire(datagram) }
+    }
 }

@@ -156,6 +156,8 @@ struct ObstacleBridgeCryptoTests {
         let receiver = ObstacleBridgeMyUDPPeerEngine()
         let delivered = try receiver.receiveWire(outbound.outboundDatagrams[0], nowNanoseconds: 3)
         #expect(delivered.deliveredRecords == [Data("core-peer".utf8)])
+        #expect(receiver.takeDeliveredRecord() == Data("core-peer".utf8))
+        #expect(receiver.takeDeliveredRecord() == nil)
         #expect(delivered.outboundDatagrams.count == 1)
         _ = try sender.receiveWire(delivered.outboundDatagrams[0], nowNanoseconds: 4)
         sender.resetEpoch()
