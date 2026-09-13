@@ -175,6 +175,8 @@ struct ObstacleBridgeCryptoTests {
         let registry = ObstacleBridgeMyUDPPeerRegistry()
         let old = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 1)
         let fresh = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 2)
+        let inbound = try ObstacleBridgeMyUDPCodec.encodeData(payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("inbound".utf8)), counter: 1, transmittedNanoseconds: 1)
+        #expect(try registry.receiveWire(inbound, from: fresh, nowNanoseconds: 2).deliveredRecords == [Data("inbound".utf8)])
         try registry.admit(old).enqueueApplicationRecord(Data("old".utf8), nowNanoseconds: 1)
         #expect(try registry.admit(fresh).flush(nowNanoseconds: 2).outboundDatagrams.isEmpty)
         registry.touch(old, nowNanoseconds: 10)

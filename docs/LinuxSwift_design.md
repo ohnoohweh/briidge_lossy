@@ -590,8 +590,10 @@ shared-datagram listener.
 listener-state seam: it isolates Core peer engines by logical identity and
 epoch and can withdraw stale epochs without clearing the replacement peer.
 It now also owns activity timestamps and timer-driven expiry. R004D still
-needs listener admission effects and multi-peer Python/Swift interoperability
-qualification.
+owns registry-level wire admission effects; listener adapters supply only the
+peer identity, wire bytes, time, and socket execution. The remaining R004D
+work is multi-peer Python/Swift interoperability qualification and wiring the
+Linux listener mechanism to this Core seam.
 
 The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (3) make the Linux POSIX type execute
