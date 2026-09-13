@@ -569,8 +569,9 @@ the reusable primitives (`ObstacleBridgeMyUDPSendQueue`, acknowledgement,
 retransmission, heartbeat, echo, idle, and receiver policies) and now exposes
 the first `ObstacleBridgeMyUDPPeerEngine` event/effect slice for application
 queueing, DATA batching, DATA/CONTROL/IDLE input, delivery, and epoch reset.
-It still needs Core-owned retransmission/timer effects and metrics before it
-meets R004A's full role-neutral contract.
+It now also owns paced, fresh-envelope retransmission for peer-reported missing
+counters. It still needs Core-owned periodic CONTROL/IDLE deadlines and the
+full metrics snapshot before it meets R004A's role-neutral contract.
 `ObstacleBridgeUdpOverlayPeerRuntime` still owns Apple sender and scheduling
 state, while `ObstacleBridgeLinuxMyUDPTransportSession` still allocates
 counters, splits records, constructs DATA frames, and treats CONTROL/IDLE as a
@@ -579,7 +580,7 @@ reduced request/reply side path. Its outbound echo timestamp now calls
 shared-datagram listener.
 
 The next implementation order is therefore: (1) extend the Core peer engine
-with retransmission, timer, and metric effects; (2) replace the Apple
+with periodic CONTROL/IDLE deadline and metric effects; (2) replace the Apple
 sender/runtime ledger with that engine; (3) make the Linux POSIX type execute
 Core effects only; and (4) add
 the socket-independent registry and both-direction Python/Swift multi-peer

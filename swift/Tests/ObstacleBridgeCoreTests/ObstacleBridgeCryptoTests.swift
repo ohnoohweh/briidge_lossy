@@ -161,6 +161,16 @@ struct ObstacleBridgeCryptoTests {
         sender.resetEpoch()
         #expect(try sender.flush(nowNanoseconds: 5).outboundDatagrams.isEmpty)
     }
+    @Test func myudpCorePeerEngineRetransmitsOnlyPeerReportedMissingChunks() throws {
+        let engine = ObstacleBridgeMyUDPPeerEngine()
+        try engine.enqueueApplicationRecord(Data("retry".utf8), nowNanoseconds: 1)
+        let original = try engine.flush(nowNanoseconds: 10).outboundDatagrams[0]
+        let sent = try ObstacleBridgeMyUDPCodec.decodeDataChunks(original)
+        let control = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 0, highestReceived: sent.chunks[0].counter, missing: [sent.chunks[0].counter], transmittedNanoseconds: 20)
+        _ = try engine.receiveWire(control, nowNanoseconds: 20)
+        #expect(try engine.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21).outboundDatagrams.isEmpty)
+        #expect(try engine.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21).outboundDatagrams.count == 1)
+    }
     @Test func myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps() throws {
         let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
             outstandingCounters: [1, 2, 3], peerReportedMissing: [3],

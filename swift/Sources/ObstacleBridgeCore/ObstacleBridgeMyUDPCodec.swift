@@ -759,10 +759,13 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
     private let receiver = ObstacleBridgeMyUDPReceiverEngine()
     private var outstanding: [UInt16: ObstacleBridgeMyUDPStreamChunk] = [:]
     private var peerMissing: [UInt16] = []
+    private var firstTransmitNanoseconds: [UInt16: UInt64] = [:]
+    private var lastRetransmissionNanoseconds: [UInt16: UInt64] = [:]
+    private var sendAttempts: [UInt16: Int] = [:]
 
     public init(maximumInFlight: Int = 200) { sender = .init(maximumInFlight: maximumInFlight) }
 
-    public func resetEpoch() { sender.reset(); receiver.reset(); outstanding.removeAll(); peerMissing.removeAll() }
+    public func resetEpoch() { sender.reset(); receiver.reset(); outstanding.removeAll(); peerMissing.removeAll(); firstTransmitNanoseconds.removeAll(); lastRetransmissionNanoseconds.removeAll(); sendAttempts.removeAll() }
 
     public func enqueueApplicationRecord(_ record: Data, nowNanoseconds: UInt64) throws {
         try sender.enqueue(record, queuedAtNanoseconds: nowNanoseconds)
@@ -770,9 +773,18 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
 
     public func flush(nowNanoseconds: UInt64) throws -> Effect {
         guard let batch = sender.dequeueBatch(inFlightCount: outstanding.count) else { return .init(outboundDatagrams: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }
-        for chunk in batch.chunks { outstanding[chunk.counter] = chunk }
+        for chunk in batch.chunks { outstanding[chunk.counter] = chunk; firstTransmitNanoseconds[chunk.counter] = nowNanoseconds; sendAttempts[chunk.counter] = 1 }
         let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
         return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: batch.chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+    }
+
+    public func tick(nowNanoseconds: UInt64, retransmissionWindowNanoseconds: UInt64) throws -> Effect {
+        let plan = ObstacleBridgeMyUDPRetransmissionPolicy.plan(nowNanoseconds: nowNanoseconds, candidateCounters: peerMissing, availableCounters: Set(outstanding.keys), firstTransmitNanoseconds: firstTransmitNanoseconds, lastRetransmissionNanoseconds: lastRetransmissionNanoseconds, sendAttempts: sendAttempts, peerReportedMissing: peerMissing, peerMissedCount: peerMissing.count, lastSendNanoseconds: 0, windowNanoseconds: retransmissionWindowNanoseconds, useFirstTransmitWhenNoRetransmission: true)
+        lastRetransmissionNanoseconds = plan.lastRetransmissionNanoseconds; sendAttempts = plan.sendAttempts; peerMissing = plan.peerReportedMissing
+        let chunks = plan.emittedCounters.compactMap { outstanding[$0] }
+        guard !chunks.isEmpty else { return .init(outboundDatagrams: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }
+        let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
+        return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
     }
 
     public func receiveWire(_ wire: Data, nowNanoseconds: UInt64, transportWritable: Bool = true) throws -> Effect {
