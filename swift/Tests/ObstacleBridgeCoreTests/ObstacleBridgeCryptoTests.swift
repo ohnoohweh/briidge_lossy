@@ -71,6 +71,158 @@ struct ObstacleBridgeCryptoTests {
         #expect(state.expected == 1)
         #expect(state.pending.isEmpty && state.missing.isEmpty)
     }
+    @Test func myudpCoreStreamReceiveStateDerivesBoundedControlAcknowledgements() throws {
+        let state = ObstacleBridgeMyUDPStreamReceiveState()
+        let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("ack".utf8))
+        let split = Data(record.prefix(2))
+        let rest = Data(record.dropFirst(2))
+
+        #expect(try #require(state.process(.init(counter: 2, payload: rest))).accepted == false)
+        #expect(state.acknowledgement == .init(lastInOrder: 0, highestReceived: 2, missing: [1]))
+        #expect(try #require(state.process(.init(counter: 1, payload: split))).completedRecords == [Data("ack".utf8)])
+        #expect(state.acknowledgement == .init(lastInOrder: 2, highestReceived: 2, missing: []))
+    }
+    @Test func myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit() throws {
+        let state = ObstacleBridgeMyUDPStreamReceiveState()
+        #expect(try #require(state.process(.init(counter: 714, payload: Data([0])))).accepted == false)
+        let acknowledgement = state.acknowledgement
+        #expect(acknowledgement.lastInOrder == 0)
+        #expect(acknowledgement.highestReceived == 714)
+        #expect(acknowledgement.missing == (1...713).map(UInt16.init))
+        #expect(try ObstacleBridgeMyUDPCodec.encodeControl(
+            lastInOrder: acknowledgement.lastInOrder,
+            highestReceived: acknowledgement.highestReceived,
+            missing: acknowledgement.missing,
+            transmittedNanoseconds: 1
+        ).count == ObstacleBridgeMyUDPCodec.protocolHeaderSize + ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize - 1)
+    }
+    @Test func myudpCoreControlPolicyDistinguishesNewGapsAndTimerPacing() throws {
+        #expect(ObstacleBridgeMyUDPControlPolicy.inbound(
+            nowNanoseconds: 10, expectedCounter: 2, missingCount: 1, grewMissing: true,
+            lastSentLastInOrder: 0, lastControlSentNanoseconds: 10, establishedNanoseconds: 1,
+            rttEstimateMilliseconds: 100
+        ) == .init(shouldEmit: true, reason: "inbound_grew_missing"))
+        #expect(ObstacleBridgeMyUDPControlPolicy.timer(
+            nowNanoseconds: 49_999_999, expectedCounter: 2, missingCount: 1,
+            lastSentLastInOrder: 0, lastControlSentNanoseconds: 1, establishedNanoseconds: 1,
+            rttEstimateMilliseconds: 100
+        ) == .init(shouldEmit: false, reason: nil))
+        #expect(ObstacleBridgeMyUDPControlPolicy.timer(
+            nowNanoseconds: 50_000_001, expectedCounter: 2, missingCount: 1,
+            lastSentLastInOrder: 0, lastControlSentNanoseconds: 1, establishedNanoseconds: 1,
+            rttEstimateMilliseconds: 100
+        ) == .init(shouldEmit: true, reason: "timer_paced_with_missing"))
+    }
+    @Test func myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates() throws {
+        let first = ObstacleBridgeMyUDPRetransmissionPolicy.plan(
+            nowNanoseconds: 100, candidateCounters: [7, 7, 8], availableCounters: [7],
+            firstTransmitNanoseconds: [7: 1], lastRetransmissionNanoseconds: [:],
+            sendAttempts: [7: 1], peerReportedMissing: [7, 7], peerMissedCount: 2,
+            lastSendNanoseconds: 1, windowNanoseconds: 50,
+            useFirstTransmitWhenNoRetransmission: true
+        )
+        #expect(first.emittedCounters == [7])
+        #expect(first.lastRetransmissionNanoseconds == [7: 100])
+        #expect(first.sendAttempts == [7: 2])
+        #expect(first.peerReportedMissing == [7])
+        #expect(first.lastSendNanoseconds == 100)
+        let paced = ObstacleBridgeMyUDPRetransmissionPolicy.plan(
+            nowNanoseconds: 120, candidateCounters: [7], availableCounters: [7],
+            firstTransmitNanoseconds: [7: 1], lastRetransmissionNanoseconds: first.lastRetransmissionNanoseconds,
+            sendAttempts: first.sendAttempts, peerReportedMissing: first.peerReportedMissing,
+            peerMissedCount: 1, lastSendNanoseconds: first.lastSendNanoseconds,
+            windowNanoseconds: 50, useFirstTransmitWhenNoRetransmission: true
+        )
+        #expect(paced.emittedCounters.isEmpty)
+        #expect(paced.lastSendNanoseconds == 100)
+    }
+    @Test func myudpCoreSendQueueCoalescesRecordsRespectsFlightWindowAndRollsCounters() throws {
+        let queue = ObstacleBridgeMyUDPSendQueue(nextCounter: .max, maximumInFlight: 2)
+        try queue.enqueue(Data("one".utf8), queuedAtNanoseconds: 10)
+        try queue.enqueue(Data("two".utf8), queuedAtNanoseconds: 11)
+        let batch = try #require(queue.dequeueBatch(inFlightCount: 0))
+        #expect(batch.chunks.map(\.counter) == [.max, 1])
+        #expect(batch.chunks.map(\.payload) == [try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("one".utf8)), try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("two".utf8))])
+        #expect(batch.queuedAtNanoseconds == 10 && batch.waitingRecordCount == 0)
+        #expect(queue.nextCounter == 2)
+        try queue.enqueue(Data("blocked".utf8), queuedAtNanoseconds: 12)
+        #expect(queue.dequeueBatch(inFlightCount: 2) == nil)
+    }
+    @Test func myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps() throws {
+        let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
+            outstandingCounters: [1, 2, 3], peerReportedMissing: [3],
+            lastInOrder: 1, highestReceived: 3, missing: [3]
+        )
+        #expect(plan.retainedCounters == [3])
+        #expect(plan.peerReportedMissing == [3])
+        #expect(plan.lastAcknowledgedByPeer == 1)
+        #expect(ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
+            outstandingCounters: [4], peerReportedMissing: [4],
+            lastInOrder: 0, highestReceived: 0, missing: []
+        ) == .init(retainedCounters: [4], peerReportedMissing: [4], lastAcknowledgedByPeer: 0))
+    }
+    @Test func myudpCoreHeartbeatPolicyTracksRttIdleDelayAndLiveness() throws {
+        let initial = ObstacleBridgeMyUDPHeartbeatSnapshot(establishedNanoseconds: 0, lastReceivedTransmitNanoseconds: 0, lastReceivedWallNanoseconds: 0, lastRTTOkNanoseconds: 0, rttSampleMilliseconds: 0, rttEstimateMilliseconds: 0, transmitDelayEstimateMilliseconds: 0)
+        let update = ObstacleBridgeMyUDPHeartbeatPolicy.update(nowNanoseconds: 200_000_000, transmittedNanoseconds: 9, echoedNanoseconds: 100_000_000, fromIdle: true, prior: initial)
+        #expect(update.rttSampleMilliseconds == 100 && update.rttEstimateMilliseconds == 100 && update.transmitDelayEstimateMilliseconds == 50)
+        #expect(ObstacleBridgeMyUDPHeartbeatPolicy.isConnected(nowNanoseconds: 20_100_000_000, lastRTTOkNanoseconds: update.lastRTTOkNanoseconds))
+        #expect(!ObstacleBridgeMyUDPHeartbeatPolicy.isConnected(nowNanoseconds: 20_200_000_001, lastRTTOkNanoseconds: update.lastRTTOkNanoseconds))
+    }
+    @Test func myudpCoreEchoAndIdlePoliciesPinOutboundTimingEffects() throws {
+        #expect(ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(
+            nowNanoseconds: 150, lastReceivedTransmitNanoseconds: 90, lastReceivedWallNanoseconds: 100
+        ) == 140)
+        #expect(ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(
+            nowNanoseconds: 99, lastReceivedTransmitNanoseconds: 90, lastReceivedWallNanoseconds: 100
+        ) == 0)
+        #expect(ObstacleBridgeMyUDPIdlePolicy.shouldReflect(echoedNanoseconds: 0, transportWritable: true))
+        #expect(!ObstacleBridgeMyUDPIdlePolicy.shouldReflect(echoedNanoseconds: 1, transportWritable: true))
+        #expect(!ObstacleBridgeMyUDPIdlePolicy.shouldReflect(echoedNanoseconds: 0, transportWritable: false))
+    }
+    @Test func myudpCoreReceiverEngineComposesReassemblyHeartbeatAndControl() throws {
+        let engine = ObstacleBridgeMyUDPReceiverEngine()
+        let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("engine".utf8))
+        let delayed = try #require(engine.processData(
+            chunks: [.init(counter: 2, payload: Data(record.dropFirst(3)))],
+            nowNanoseconds: 100, transmittedNanoseconds: 10, echoedNanoseconds: 0, transportWritable: true
+        ))
+        #expect(delayed.completedRecords.isEmpty)
+        #expect(delayed.acknowledgement == .init(lastInOrder: 0, highestReceived: 2, missing: [1]))
+        #expect(delayed.controlReasons == ["inbound_grew_missing"])
+        let control = try ObstacleBridgeMyUDPCodec.decodeControl(try engine.buildControlDatagram(nowNanoseconds: 101))
+        #expect(control.missing == [1] && control.echoedNanoseconds == 11)
+        let delivered = try #require(engine.processData(
+            chunks: [.init(counter: 1, payload: Data(record.prefix(3)))],
+            nowNanoseconds: 102, transmittedNanoseconds: 12, echoedNanoseconds: 0, transportWritable: true
+        ))
+        #expect(delivered.completedRecords == [Data("engine".utf8)])
+        #expect(delivered.controlReasons == ["gap_filled_ack", "advanced_in_order"])
+        #expect(engine.processIdle(
+            nowNanoseconds: 103, transmittedNanoseconds: 13, echoedNanoseconds: 0, transportWritable: true
+        ).shouldReflect)
+        engine.reset()
+        #expect(engine.receiveState.expected == 1 && engine.heartbeat.establishedNanoseconds == 0)
+    }
+    @Test func myudpCoreConfirmationMetricsMatchPythonDelayAndAttemptBuckets() throws {
+        let initial = ObstacleBridgeMyUDPConfirmationMetrics(
+            transmitDelaySampleMilliseconds: 0, transmitDelayEstimateMilliseconds: 10,
+            confirmedTotal: 2, firstPassTotal: 1, repeatedOnceTotal: 1, repeatedMultipleTotal: 0
+        )
+        let finalized = ObstacleBridgeMyUDPConfirmationMetricsPolicy.finalize(
+            confirmedCounters: [7, 8, 9], pathStartNanoseconds: [7: 100_000_000, 8: 120_000_000],
+            firstTransmitNanoseconds: [9: 150_000_000], sendAttempts: [7: 1, 8: 2, 9: 4],
+            acknowledgementNanoseconds: 300_000_000, rttEstimateMilliseconds: 100, prior: initial
+        )
+        #expect(finalized.transmitDelaySampleMilliseconds == 100)
+        #expect(abs(finalized.transmitDelayEstimateMilliseconds - 141.5625) < 0.0001)
+        #expect(finalized.confirmedTotal == 5)
+        #expect(finalized.firstPassTotal == 2)
+        #expect(finalized.repeatedOnceTotal == 2)
+        #expect(finalized.repeatedMultipleTotal == 1)
+        #expect(ObstacleBridgeMyUDPConfirmationMetricsPolicy.rebaseTransmitDelayEstimate(
+            outstandingCount: 0, rttEstimateMilliseconds: 80, priorEstimateMilliseconds: finalized.transmitDelayEstimateMilliseconds
+        ) == 40)
+    }
     @Test func secureLinkFrameEnvelopePreservesFlagsAndRejectsTruncation() throws {
         let wire = ObstacleBridgeSecureLinkFrameCodec.encode(
             type: 4, sessionID: 0x0102, counter: 3, payload: Data("payload".utf8), flags: 0x7f

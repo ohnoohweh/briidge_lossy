@@ -10,18 +10,12 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         private(set) var expected = 1
         private(set) var pending: [Int: ObstacleBridgeUdpOverlayCodec.StreamChunk] = [:]
         private(set) var missing: Set<Int> = []
-        private var pendingHighest: Int?
-        private var streamBuffer = Data()
-        private var expectedRecordLength: Int?
 
         func reset() {
             core.reset()
             expected = 1
             pending.removeAll()
             missing.removeAll()
-            pendingHighest = nil
-            streamBuffer.removeAll()
-            expectedRecordLength = nil
         }
 
         func process(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) -> (Bool, [Data])? {
@@ -33,61 +27,6 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
             })
             missing = Set(core.missing.map(Int.init))
             return (result.accepted, result.completedRecords)
-        }
-
-        private func enqueue(_ chunk: ObstacleBridgeUdpOverlayCodec.StreamChunk) {
-            let counter = chunk.counter
-            guard pending[counter] == nil else { return }
-            pending[counter] = chunk
-            if pendingHighest == nil || ringCmp(counter, pendingHighest ?? counter) > 0 {
-                let gapStart = pendingHighest == nil ? expected : c16Inc(pendingHighest ?? expected)
-                for value in c16Range(gapStart, counter) where pending[value] == nil {
-                    missing.insert(value)
-                }
-                pendingHighest = counter
-            }
-            missing.remove(counter)
-        }
-
-        private func appendContiguous(_ bytes: Data, completed: inout [Data]) -> Bool {
-            streamBuffer.append(bytes)
-            while true {
-                if expectedRecordLength == nil {
-                    guard streamBuffer.count >= ObstacleBridgeUdpOverlayCodec.streamRecordHeaderSize else {
-                        return true
-                    }
-                    let headerStart = streamBuffer.startIndex
-                    let byte1 = streamBuffer.index(after: headerStart)
-                    let byte2 = streamBuffer.index(after: byte1)
-                    let byte3 = streamBuffer.index(after: byte2)
-                    let length = (Int(streamBuffer[headerStart]) << 24) | (Int(streamBuffer[byte1]) << 16) |
-                        (Int(streamBuffer[byte2]) << 8) | Int(streamBuffer[byte3])
-                    streamBuffer.removeFirst(ObstacleBridgeUdpOverlayCodec.streamRecordHeaderSize)
-                    guard length <= ObstacleBridgeUdpOverlayCodec.maxStreamRecordBytes else {
-                        streamBuffer.removeAll()
-                        return false
-                    }
-                    expectedRecordLength = length
-                }
-                guard let length = expectedRecordLength, streamBuffer.count >= length else {
-                    return true
-                }
-                // Materialize the slice so upper codecs receive zero-based Data.
-                completed.append(Data(streamBuffer.prefix(length)))
-                streamBuffer.removeFirst(length)
-                expectedRecordLength = nil
-            }
-        }
-
-        private func identifyMissing() {
-            let keys = pending.keys.filter { $0 != 0 }
-            missing.removeAll()
-            pendingHighest = nil
-            guard let highest = highestRing(Array(keys), ref: expected) else { return }
-            pendingHighest = highest
-            for value in c16Range(expected, highest) where pending[value] == nil {
-                missing.insert(value)
-            }
         }
     }
 
@@ -182,49 +121,20 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         highest: Int,
         missed: [Int]
     ) -> ControlStateSnapshot {
-        if lastInOrder == 0 && highest == 0 && missed.isEmpty {
-            return ControlStateSnapshot(
-                sendBufferKeys: sendBufferKeys.sorted(),
-                peerReportedMissing: Array(Set(peerReportedMissing)).sorted(),
-                lastAckPeer: 0
-            )
+        guard let lastInOrder = UInt16(exactly: lastInOrder), let highest = UInt16(exactly: highest) else {
+            return .init(sendBufferKeys: [], peerReportedMissing: [], lastAckPeer: 0)
         }
-
-        var sendBuf = Set(sendBufferKeys)
-        var reportedMissing = Set(peerReportedMissing)
-        let missedSet = Set(missed)
-        let listAtCapacity = missed.count >= ObstacleBridgeUdpOverlayCodec.controlMaxMissed()
-
-        let toDelete = sendBuf.filter { counter in
-            ringCmp(lastInOrder, counter) >= 0
-        }
-        sendBuf.subtract(toDelete)
-        reportedMissing.subtract(toDelete)
-
-        let ref = lastInOrder != 0 ? lastInOrder : 1
-        let upperBound: Int
-        if listAtCapacity && !missed.isEmpty {
-            upperBound = highestRing(missed, ref: ref) ?? lastInOrder
-        } else {
-            upperBound = highest
-        }
-        let maxSpan = aheadDistance(upperBound, ref)
-        let toDeleteWithinSpan = sendBuf.filter { counter in
-            let distance = aheadDistance(counter, ref)
-            return distance > 0 && distance <= maxSpan && !missedSet.contains(counter) && !reportedMissing.contains(counter)
-        }
-        sendBuf.subtract(toDeleteWithinSpan)
-        reportedMissing.subtract(toDeleteWithinSpan)
-
-        reportedMissing = reportedMissing.intersection(sendBuf)
-        for counter in missedSet where counter != 0 && sendBuf.contains(counter) {
-            reportedMissing.insert(counter)
-        }
-
-        return ControlStateSnapshot(
-            sendBufferKeys: sendBuf.sorted(),
-            peerReportedMissing: reportedMissing.sorted(),
-            lastAckPeer: lastInOrder
+        let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
+            outstandingCounters: sendBufferKeys.compactMap(UInt16.init(exactly:)),
+            peerReportedMissing: peerReportedMissing.compactMap(UInt16.init(exactly:)),
+            lastInOrder: lastInOrder,
+            highestReceived: highest,
+            missing: missed.compactMap(UInt16.init(exactly:))
+        )
+        return .init(
+            sendBufferKeys: plan.retainedCounters.map(Int.init),
+            peerReportedMissing: plan.peerReportedMissing.map(Int.init),
+            lastAckPeer: Int(plan.lastAcknowledgedByPeer)
         )
     }
 
@@ -238,27 +148,16 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         establishedNS: UInt64,
         rttEstMS: Double
     ) -> ControlPolicyDecision {
-        let lastInOrder = lastInOrderFromExpected(expected)
-        if grewMissing {
-            return ControlPolicyDecision(shouldEmit: true, reason: "inbound_grew_missing")
-        }
-        if missingCount == 0 {
-            if ringCmp(lastInOrder, lastSentLastInOrder) > 0 {
-                let ref = lastControlSentNS != 0 ? lastControlSentNS : establishedNS
-                let interval = controlIntervalNS(rttEstMS: rttEstMS)
-                let elapsed = ref != 0 ? nowNS >= ref + interval : true
-                if elapsed {
-                    return ControlPolicyDecision(shouldEmit: true, reason: "advanced_in_order")
-                }
-            }
+        guard let expected = UInt16(exactly: expected), let lastSent = UInt16(exactly: lastSentLastInOrder) else {
             return ControlPolicyDecision(shouldEmit: false, reason: nil)
         }
-        let interval = controlIntervalNS(rttEstMS: rttEstMS)
-        let elapsed = lastControlSentNS != 0 ? nowNS >= lastControlSentNS + interval : true
-        if elapsed {
-            return ControlPolicyDecision(shouldEmit: true, reason: "paced_with_missing")
-        }
-        return ControlPolicyDecision(shouldEmit: false, reason: nil)
+        let decision = ObstacleBridgeMyUDPControlPolicy.inbound(
+            nowNanoseconds: nowNS, expectedCounter: expected, missingCount: missingCount,
+            grewMissing: grewMissing, lastSentLastInOrder: lastSent,
+            lastControlSentNanoseconds: lastControlSentNS, establishedNanoseconds: establishedNS,
+            rttEstimateMilliseconds: rttEstMS
+        )
+        return .init(shouldEmit: decision.shouldEmit, reason: decision.reason)
     }
 
     static func evaluateTimerControlPolicy(
@@ -270,23 +169,15 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         establishedNS: UInt64,
         rttEstMS: Double
     ) -> ControlPolicyDecision {
-        let lastInOrder = lastInOrderFromExpected(expected)
-        if missingCount == 0 {
-            if ringCmp(lastInOrder, lastSentLastInOrder) > 0 {
-                let ref = lastControlSentNS != 0 ? lastControlSentNS : establishedNS
-                let interval = controlIntervalNS(rttEstMS: rttEstMS)
-                if ref != 0 && nowNS >= ref + interval {
-                    return ControlPolicyDecision(shouldEmit: true, reason: "timer_paced_clear_miss")
-                }
-            }
+        guard let expected = UInt16(exactly: expected), let lastSent = UInt16(exactly: lastSentLastInOrder) else {
             return ControlPolicyDecision(shouldEmit: false, reason: nil)
         }
-        let interval = controlIntervalNS(rttEstMS: rttEstMS)
-        let elapsed = lastControlSentNS != 0 ? nowNS >= lastControlSentNS + interval : true
-        if elapsed {
-            return ControlPolicyDecision(shouldEmit: true, reason: "timer_paced_with_missing")
-        }
-        return ControlPolicyDecision(shouldEmit: false, reason: nil)
+        let decision = ObstacleBridgeMyUDPControlPolicy.timer(
+            nowNanoseconds: nowNS, expectedCounter: expected, missingCount: missingCount,
+            lastSentLastInOrder: lastSent, lastControlSentNanoseconds: lastControlSentNS,
+            establishedNanoseconds: establishedNS, rttEstimateMilliseconds: rttEstMS
+        )
+        return .init(shouldEmit: decision.shouldEmit, reason: decision.reason)
     }
 
     static func scheduleRetransmitDueToControl(
@@ -500,7 +391,10 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
             }
         }
 
-        let reflected = echoNS == 0 && sendPortPresent
+        let reflected = ObstacleBridgeMyUDPIdlePolicy.shouldReflect(
+            echoedNanoseconds: echoNS,
+            transportWritable: sendPortPresent
+        )
         let reflectedFrame: Data?
         if reflected {
             reflectedFrame = try ObstacleBridgeUdpOverlayCodec.buildProtocolFrame(
@@ -553,14 +447,6 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         return expected == 1 ? 0 : c16Dec(expected)
     }
 
-    private static func controlIntervalNS(rttEstMS: Double) -> UInt64 {
-        let seconds = 0.5 * (rttEstMS / 1000.0)
-        if seconds <= 0 {
-            return 0
-        }
-        return UInt64(seconds * 1_000_000_000.0)
-    }
-
     private static func retransWindowNS(rttEstMS: Double, multiplier: Double) -> UInt64 {
         let window = rttEstMS * 1_000_000.0 * multiplier
         return max(1, UInt64(window))
@@ -582,54 +468,56 @@ struct ObstacleBridgeUdpOverlaySessionCodec {
         lastRxTxNS: UInt64,
         lastRxWallNS: UInt64
     ) throws -> RetransmitSnapshot {
-        let sendBuf = Set(sendBufferKeys)
-        var updatedLastRetxNS = lastRetxNS
-        var updatedSendAttempts = sendAttempts
-        var updatedLastSendNS = lastSendNS
-        var emittedCounters: [Int] = []
+        let candidates = counters.compactMap(UInt16.init(exactly:))
+        let available = Set(sendBufferKeys.compactMap(UInt16.init(exactly:)))
+        let firstTransmit = Dictionary(uniqueKeysWithValues: sendTXNS.compactMap { key, value in
+            UInt16(exactly: key).map { ($0, value) }
+        })
+        let retransmissions = Dictionary(uniqueKeysWithValues: lastRetxNS.compactMap { key, value in
+            UInt16(exactly: key).map { ($0, value) }
+        })
+        let attempts = Dictionary(uniqueKeysWithValues: sendAttempts.compactMap { key, value in
+            UInt16(exactly: key).map { ($0, value) }
+        })
+        let reportedMissing = peerReportedMissing.compactMap(UInt16.init(exactly:))
+        let plan = ObstacleBridgeMyUDPRetransmissionPolicy.plan(
+            nowNanoseconds: nowNS,
+            candidateCounters: candidates,
+            availableCounters: available,
+            firstTransmitNanoseconds: firstTransmit,
+            lastRetransmissionNanoseconds: retransmissions,
+            sendAttempts: attempts,
+            peerReportedMissing: reportedMissing,
+            peerMissedCount: reasonPeerMissedCount,
+            lastSendNanoseconds: lastSendNS,
+            windowNanoseconds: windowNS,
+            useFirstTransmitWhenNoRetransmission: useFirstTXWhenNoRetx
+        )
         var emittedFrames: [Data] = []
-        var seen: Set<Int> = []
-
-        for counter in counters {
-            if counter == 0 || seen.contains(counter) {
-                continue
-            }
-            seen.insert(counter)
-            guard sendBuf.contains(counter), let meta = sendMeta[counter] else {
-                continue
-            }
-            let lastRetx = updatedLastRetxNS[counter] ?? 0
-            let firstTX = useFirstTXWhenNoRetx ? (sendTXNS[counter] ?? 0) : 0
-            let anchor = lastRetx != 0 ? lastRetx : firstTX
-            if anchor != 0 && nowNS - anchor < windowNS {
-                continue
-            }
-            let echoNS: UInt64
-            if lastRxTxNS != 0 && lastRxWallNS != 0 {
-                echoNS = lastRxTxNS + (nowNS - lastRxWallNS)
-            } else {
-                echoNS = 0
-            }
+        for coreCounter in plan.emittedCounters {
+            let counter = Int(coreCounter)
+            guard let meta = sendMeta[counter] else { continue }
+            let echoNS = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(
+                nowNanoseconds: nowNS,
+                lastReceivedTransmitNanoseconds: lastRxTxNS,
+                lastReceivedWallNanoseconds: lastRxWallNS
+            )
             let frame = try ObstacleBridgeUdpOverlayCodec.buildDataBatchFrame(
                 chunks: [.init(counter: counter, data: meta.data)],
                 txNS: nowNS,
                 echoNS: echoNS
             )
-            emittedCounters.append(counter)
             emittedFrames.append(frame)
-            updatedLastRetxNS[counter] = nowNS
-            updatedLastSendNS = nowNS
-            updatedSendAttempts[counter] = (updatedSendAttempts[counter] ?? 0) + 1
         }
 
         return RetransmitSnapshot(
-            emittedCounters: emittedCounters,
+            emittedCounters: plan.emittedCounters.map(Int.init),
             emittedFrames: emittedFrames,
-            lastRetxNS: updatedLastRetxNS,
-            sendAttempts: updatedSendAttempts,
-            peerReportedMissing: Array(Set(peerReportedMissing)).sorted(),
-            peerMissedCount: reasonPeerMissedCount,
-            lastSendNS: updatedLastSendNS
+            lastRetxNS: Dictionary(uniqueKeysWithValues: plan.lastRetransmissionNanoseconds.map { (Int($0.key), $0.value) }),
+            sendAttempts: Dictionary(uniqueKeysWithValues: plan.sendAttempts.map { (Int($0.key), $0.value) }),
+            peerReportedMissing: plan.peerReportedMissing.map(Int.init),
+            peerMissedCount: plan.peerMissedCount,
+            lastSendNS: plan.lastSendNanoseconds
         )
     }
 

@@ -13,6 +13,7 @@ ADAPTER_FILES = (
     "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift",
 )
 OVERLAY_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift"
+MYUDP_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"
 FORBIDDEN_FRAGMENTS = (
     'Data("O5"',
     'Data("O4"',
@@ -32,6 +33,14 @@ OVERLAY_FORBIDDEN_FRAGMENTS = (
     "var pong = Data([2])",
     "Data([0]) + payload",
 )
+MYUDP_FORBIDDEN_FRAGMENTS = (
+    "expectedCounter",
+    "pendingChunks",
+    "streamBytes",
+    "expectedRecordLength",
+    "controlStateLocked",
+    "missing.count < 64",
+)
 
 
 def validate() -> list[str]:
@@ -45,6 +54,12 @@ def validate() -> list[str]:
     for fragment in OVERLAY_FORBIDDEN_FRAGMENTS:
         if fragment in overlay_text:
             errors.append(f"{OVERLAY_ADAPTER_FILE} retains Core overlay serializer fragment {fragment!r}")
+    myudp_text = (ROOT / MYUDP_ADAPTER_FILE).read_text(encoding="utf-8")
+    if "ObstacleBridgeMyUDPReceiverEngine" not in myudp_text:
+        errors.append(f"{MYUDP_ADAPTER_FILE} does not delegate receive ordering, acknowledgement, and heartbeat state to Core")
+    for fragment in MYUDP_FORBIDDEN_FRAGMENTS:
+        if fragment in myudp_text:
+            errors.append(f"{MYUDP_ADAPTER_FILE} retains Core myudp receive-state fragment {fragment!r}")
     return errors
 
 

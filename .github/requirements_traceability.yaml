@@ -1270,6 +1270,8 @@ REQ-MYU-001:
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreStreamReceiveStateDerivesBoundedControlAcknowledgements
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
 
 REQ-MYU-002:
@@ -1281,6 +1283,7 @@ REQ-MYU-002:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_persistent_missing_retries_survive_flight_window_pressure
     - tests/unit/test_myudp_processing_repro.py::test_lost_multi_chunk_batch_recovers_with_per_chunk_retransmits
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates
 
 REQ-MYU-003:
   integration_tests:
@@ -1289,6 +1292,9 @@ REQ-MYU-003:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_retransmit_skips_stale_raw_frame_when_send_meta_is_missing
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_reported_missing_frame_retries_every_rtt_until_cumulative_ack
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreControlPolicyDistinguishesNewGapsAndTimerPacing
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreRetransmissionPolicyPacesAndDeduplicatesCandidates
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps
 
 REQ-MYU-004:
   integration_tests:
@@ -1301,6 +1307,10 @@ REQ-MYU-004:
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_splits_final_record_to_use_remaining_batch_space
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_reports_stream_and_batch_budgets
     - ios/tests/test_myudp2_swift_codec.py::test_swift_myudp2_batch_codec_and_stream_receive_state
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreSendQueueCoalescesRecordsRespectsFlightWindowAndRollsCounters
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreConfirmationMetricsMatchPythonDelayAndAttemptBuckets
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreEchoAndIdlePoliciesPinOutboundTimingEffects
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreReceiverEngineComposesReassemblyHeartbeatAndControl
     - ios/tests/test_m3_native_sources.py::test_udp_overlay_codec_source_exists
     - ios/tests/test_macos_swift_host_runner.py::test_macos_udp_overlay_codec_uses_core_layout_constants
 
@@ -1322,6 +1332,8 @@ REQ-MYU-006:
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_delivers_only_contiguous_stream_bytes_after_reorder
     - tests/unit/test_myudp2_stream_session.py::test_myudp2_session_counter_rollover_keeps_stream_delivery_contiguous
     - tests/unit/test_myudp_processing_repro.py::test_malformed_stream_record_is_counted_and_not_delivered
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreStreamReceiveStateDerivesBoundedControlAcknowledgements
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreStreamReceiveStateUsesTheWireDerivedMissingLimit
 
 REQ-MYU-007:
   integration_tests:

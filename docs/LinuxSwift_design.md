@@ -531,39 +531,113 @@ met; compiling alone is not completion.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 
-Use `ObstacleBridgeUdpOverlaySessionCodec` and
-`ObstacleBridgeUdpOverlayPeerRuntime` as the initial material for a role-neutral
-core engine, then add any behavior required by the Python reference. Its API
-accepts stream data, received datagrams, timer ticks, and transport-epoch
-resets, then returns delivered records, outbound datagrams, scheduling needs,
-and status changes.
+R004 is the umbrella for the remaining myudp consolidation packages below. It
+closes only when R004A through R004D are complete.
+
+Current status: `ObstacleBridgeCore` owns ordered stream reassembly,
+counter-ring ordering, duplicate suppression, missing-counter discovery,
+split-record buffering, completed-record delivery, bounded CONTROL
+acknowledgement derivation, CONTROL emission policy, retransmission
+eligibility/pacing, queued-record packing, send-window admission, counter
+rollover, DATA_BATCH selection, peer-acknowledgement range cleanup, and
+heartbeat/RTT/liveness policy. Core also owns per-counter acknowledgement
+classification and Python-compatible transmit-delay sampling, max/EWMA
+estimation, empty-pipeline rebasing, outbound echo timestamps, and IDLE probe
+reflection decisions. These behaviors have deterministic Core tests, including
+the payload-derived 713-counter missing-list limit.
+
+`ObstacleBridgeMyUDPReceiverEngine` now composes Core reassembly, heartbeat,
+CONTROL pacing, reset, and CONTROL datagram construction for one peer. The
+Apple peer runtime uses it for inbound DATA and IDLE, CONTROL timer pacing, and
+outbound CONTROL construction; its sender ledger and inbound peer-CONTROL path
+remain separate. The Linux client uses it for inbound DATA reassembly,
+heartbeat, acknowledgement, echo, and CONTROL construction, but still has a
+reduced outbound request/reply sender.
+
+The Apple peer runtime delegates the receive-side aggregate engine but still
+owns the sender ledger, inbound peer-CONTROL coordination, reset sequencing,
+protocol-statistic presentation, and scheduling coordination. The Linux client
+delegates decoding and the aggregate receive engine to Core, but still owns
+outbound record splitting, counter allocation, and a reduced request/reply
+socket lifecycle; it does not yet run the full reliable sender policy. No
+common multi-peer listener state exists yet.
+
+#### LSW-R004A — Complete the role-neutral Core peer engine
+
+Compose the existing Core myudp components into one peer-scoped state machine.
+Its API accepts application stream data, received datagrams, timer ticks, and
+transport-epoch resets, then returns delivered records, outbound datagrams,
+scheduling needs, status changes, and a protocol metrics snapshot.
 
 Definition of Done:
 
-- the engine owns batching/coalescing, send-window bounds, chunk counters,
-  ordered reassembly, ACK/missing policy, fresh-envelope retransmission,
-  CONTROL/IDLE, RTT/transmit-delay estimation, liveness, reset, and metrics;
-- the Linux myudp type owns only UDP socket/address/cancel I/O and execution of
-  timer effects, while the Apple owner similarly delegates protocol state;
-- no myudp counter arithmetic, ACK construction, stream buffer, retransmit
-  decision, or protocol constant remains in either adapter;
-- deterministic tests cover loss, duplication, reordering, coalescing,
-  backpressure, counter rollover, maximum missing lists, malformed input,
-  idle/liveness expiry, and reconnect reset;
-- Python-to-Swift and Swift-to-Python tests qualify Apple and Linux clients, and
-  an in-memory multi-peer test qualifies the common listener state; and
-- the reduced portable myudp codec and Linux reliability implementation are
-  deleted in the same slice.
+- Core owns the sender ledger and payload metadata, acknowledgement cleanup,
+  fresh-envelope retransmission, CONTROL and IDLE behavior, echo timestamps,
+  timer deadlines, and all epoch-reset transitions;
+- callers supply time and protocol events and execute returned effects without
+  reaching into counters, queues, missing sets, or retransmission bookkeeping;
+  and
+- deterministic state-machine tests cover loss, duplication, reordering,
+  coalescing, backpressure, counter rollover, the maximum missing list,
+  malformed input, idle/liveness expiry, and reconnect reset.
 
-LSW-005A must use this engine rather than add listener protocol state to
-`ObstacleBridgeLinuxAdapters`.
+#### LSW-R004B — Reduce the Apple myudp owner to an adapter
 
-Current R004 delivery has moved ordered myUDP stream reassembly into Core:
-counter-ring ordering, duplicate suppression, missing-counter discovery,
-split-record buffering, completed-record delivery, and reset are owned by
-`ObstacleBridgeMyUDPStreamReceiveState`. The Apple session codec delegates each
-inbound chunk to that state. Send-window, retransmission, timer, liveness, and
-Linux socket-owner migration remain required before R004 can close.
+Replace the behavior in `ObstacleBridgeUdpOverlaySessionCodec` and
+`ObstacleBridgeUdpOverlayPeerRuntime` with one R004A engine instance per peer.
+
+Definition of Done:
+
+- the Apple owner retains only Network.framework endpoint/socket ownership,
+  cancellation, clock/timer execution, and delivery of Core effects;
+- no counter arithmetic, ACK construction, stream buffer, retransmit decision,
+  protocol metric mutation, or myudp timing constant remains in the Apple
+  adapter; and
+- Apple client tests and source-ownership guards exercise the Core engine and
+  prevent protocol behavior from returning to the adapter.
+
+Depends on LSW-R004A.
+
+#### LSW-R004C — Replace the reduced Linux myudp client
+
+Run the R004A engine behind the connected POSIX datagram client and remove the
+adapter-local request/reply reliability subset.
+
+Definition of Done:
+
+- the Linux type retains only address resolution, UDP socket I/O,
+  cancellation, clock/timer execution, and delivery of Core effects;
+- duplex receive, batching, send-window backpressure, retransmission,
+  CONTROL/IDLE, liveness, and epoch reset match the Python reference;
+- no counter allocation, ACK construction, stream buffer, echo calculation,
+  or protocol constant remains in `ObstacleBridgeLinuxAdapters`; and
+- focused Linux tests cover independent send/receive progress, timeout,
+  cancellation, malformed datagrams, and reconnect cleanup.
+
+Depends on LSW-R004A and may proceed in parallel with LSW-R004B.
+
+#### LSW-R004D — Qualify common peer and listener state
+
+Add the socket-independent peer registry needed by a shared-datagram listener
+and close the cross-platform myudp parity surface. LSW-005A supplies the Linux
+socket admission mechanism around this state; it must not add listener protocol
+state to `ObstacleBridgeLinuxAdapters`.
+
+Definition of Done:
+
+- the common listener state demultiplexes peer epochs and isolates reliable
+  stream state, timers, bounded queues, expiry, cancellation, and reconnect
+  cleanup per peer without owning a socket;
+- an in-memory multi-peer test covers concurrent admission, traffic,
+  withdrawal, stale epochs, expiry, and reconnect without cross-peer leakage;
+- Python-to-Swift and Swift-to-Python tests qualify both Apple and Linux Swift
+  clients, including loss, duplication, reordering, CONTROL/IDLE, rollover,
+  and maximum missing-list behavior; and
+- obsolete Apple behavior wrappers and the reduced Linux reliability
+  implementation are deleted, with source and dependency guards proving one
+  owner for every myudp protocol policy.
+
+Depends on LSW-R004B and LSW-R004C.
 
 ### LSW-R005 — Consolidate SecureLink and crypto
 
