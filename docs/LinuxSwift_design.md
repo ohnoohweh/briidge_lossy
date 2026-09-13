@@ -534,8 +534,8 @@ the myUDP DATA_BATCH envelope and malformed records, all WebSocket payload
 modes (`binary`, `base64`, `json-base64`, and `semi-text-shape`), SecureLink PSK transcript/key/proof and handshake
 envelope vectors, CKV1 control chunks, O4/O5 OPEN, and RS2/RS3 catalogs. It
 also pins O4/O5 and RS2/RS3 truncation and trailing-byte rejection in both the
-Python reference parser and Core. It still needs text-oriented WebSocket
-payload modes and comparable malformed coverage for the remaining codec
+Python reference parser and Core, plus myUDP CONTROL bytes and malformed
+records. It still needs comparable malformed coverage for the remaining codec
 families before this package closes.
 
 Definition of Done:
@@ -557,8 +557,9 @@ Definition of Done:
 
 Core also owns control-chunk encoding and bounded reassembly. Linux ChannelMux
 normalizes completed `OPEN_CHUNK` and `REMOTE_SERVICES_SET_V2_CHUNK` records
-through that owner before delivery; Apple’s richer codec and remaining overlay
-codecs remain direct consumers until their functions move to Core. R004 through
+through that owner before delivery. Core also owns one-in-flight admission and
+reply matching; the Linux adapter owns only waits and lower-session I/O. Apple’s
+richer codec and remaining overlay codecs remain direct consumers until their functions move to Core. R004 through
 R007 consume those Core owners; R009 expands the final cross-platform migration
 and build qualification.
 
@@ -569,10 +570,9 @@ parser.
 
 #### R003 residual work by platform
 
-- **Linux:** myUDP reliability/control frame handling still needs to consume the
-  Core owner; the common Python-derived corpus still needs comparable malformed
-  coverage for the remaining codec families in Linux SwiftPM; and remaining
-  ChannelMux service/controller policy must leave its adapter owner. Core owns
+- **Linux:** myUDP reliability-window policy is R004 work; the common
+  Python-derived corpus still needs comparable malformed coverage for the
+  remaining codec families in Linux SwiftPM. Core owns
   all WebSocket payload modes, while Linux parses `ws_payload_mode`, negotiates
   it during upgrade, and proves text-frame interoperability with Python.
 - **macOS and iOS:** native shared-runtime consumers must import the package

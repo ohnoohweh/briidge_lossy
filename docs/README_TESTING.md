@@ -208,6 +208,8 @@ vectors, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for the Core
 suite, including Python/Swift agreement on O4/O5 and RS2/RS3 truncation and
 trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
 all shared text payload modes against a Python peer. The macOS Swift probe runs that Core codec suite
+The shared corpus also pins Python-compatible myUDP CONTROL bytes and malformed
+rejection, while direct Core tests cover portable ChannelMux reply admission.
 as well, while the adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove

@@ -79,9 +79,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     @discardableResult public func send(_ payload: Data) throws -> UInt16 {
         guard descriptor >= 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF) }
         guard payload.count <= 65_535 else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-        var record = Data()
-        append(UInt32(payload.count), to: &record)
-        record.append(payload)
+        let record = try ObstacleBridgeMyUDPCodec.encodeStreamRecord(payload)
         var offset = 0
         var firstCounter: UInt16 = 0
         while offset < record.count {
@@ -120,7 +118,11 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             do { frame = try ObstacleBridgeMyUDPCodec.decodeWire(wire) }
             catch { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
             guard frame.type == ObstacleBridgeMyUDPCodec.dataType else {
-                if frame.type == ObstacleBridgeMyUDPCodec.controlType || frame.type == ObstacleBridgeMyUDPCodec.idleType { continue }
+                if frame.type == ObstacleBridgeMyUDPCodec.controlType {
+                    guard (try? ObstacleBridgeMyUDPCodec.decodeControl(wire)) != nil else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
+                    continue
+                }
+                if frame.type == ObstacleBridgeMyUDPCodec.idleType { continue }
                 throw ObstacleBridgeLinuxMyUDPError.invalidReply
             }
             let decoded: (chunks: [ObstacleBridgeMyUDPStreamChunk], transmittedNanoseconds: UInt64, echoedNanoseconds: UInt64)
@@ -163,10 +165,8 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         while true {
             if expectedRecordLength == nil {
                 guard streamBytes.count >= 4 else { return }
-                let header = Array(streamBytes.prefix(4))
-                let length = Int((UInt32(header[0]) << 24) | (UInt32(header[1]) << 16) | (UInt32(header[2]) << 8) | UInt32(header[3]))
+                guard let length = try? ObstacleBridgeMyUDPCodec.decodeStreamRecordLength(Data(streamBytes.prefix(4))) else { streamBytes.removeAll(); return }
                 streamBytes.removeFirst(4)
-                guard length <= 65_535 else { streamBytes.removeAll(); expectedRecordLength = nil; return }
                 expectedRecordLength = length
             }
             guard let length = expectedRecordLength, streamBytes.count >= length else { return }
@@ -203,8 +203,5 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private func isAhead(_ candidate: UInt16, of reference: UInt16) -> Bool {
         let distance = (Int(candidate) - Int(reference) + 65_535) % 65_535
         return distance > 0 && distance < 32_767
-    }
-    private func append(_ value: UInt32, to data: inout Data) {
-        data.append(UInt8((value >> 24) & 0xff)); data.append(UInt8((value >> 16) & 0xff)); data.append(UInt8((value >> 8) & 0xff)); data.append(UInt8(value & 0xff))
     }
 }

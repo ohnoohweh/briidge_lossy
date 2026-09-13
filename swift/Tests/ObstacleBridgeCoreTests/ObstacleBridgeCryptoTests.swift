@@ -22,6 +22,11 @@ struct ObstacleBridgeCryptoTests {
         #expect(try ObstacleBridgeMyUDPCodec.decodeData(wire) == .init(counter: 7, payload: Data("udp".utf8), transmittedNanoseconds: 0x0102, echoedNanoseconds: 0x0304))
         #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeData(Data([1])) }
     }
+    @Test func myudpControlFrameRoundTripsAndRejectsTrailingBytes() throws {
+        let wire = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeControl(wire) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
+        #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeControl(wire + Data([0])) }
+    }
     @Test func hashesAndKeyDerivationMatchKnownAnswerVectors() throws {
         #expect(ObstacleBridgeCrypto.sha256(Data("abc".utf8)).hex == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
         #expect(try ObstacleBridgeCrypto.hmacSHA256(key: Data("key".utf8), message: Data("The quick brown fox jumps over the lazy dog".utf8)).hex == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8")
@@ -101,6 +106,18 @@ struct ObstacleBridgeCryptoTests {
 }
 
 struct ObstacleBridgeCorePortTests {
+    @Test func channelMuxReplyPolicyAdmitsOneAwaitedFrame() throws {
+        let policy = ObstacleBridgeChannelMuxReplyPolicy()
+        let frame = ObstacleBridgeChannelMuxFrame(channelID: 3, protocolType: .tcp, counter: 4, messageType: .data, body: Data())
+        #expect(try !policy.beginExchange(frame))
+        #expect(throws: ObstacleBridgeChannelMuxReplyPolicyError.tooManyInFlightFrames) { try policy.beginExchange(frame) }
+        policy.finishExchange(); policy.activateReceiveOwner()
+        #expect(try policy.beginExchange(frame))
+        #expect(policy.matchesAwaitedReply(frame))
+        #expect(!policy.matchesAwaitedReply(.init(channelID: 4, protocolType: .tcp, counter: 4, messageType: .data, body: Data())))
+        policy.finishExchange()
+    }
+
     @Test func corePortsUseOnlyValueTypesAtTheAdapterBoundary() throws {
         let endpoint = ObstacleBridgeEndpoint(host: "192.0.2.10", port: 443)
         #expect(endpoint == ObstacleBridgeEndpoint(host: "192.0.2.10", port: 443))
@@ -233,6 +250,12 @@ struct ObstacleBridgeCoreCodecTests {
         ))
         for value in try #require(myudp["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeData(.hex(value)) }
+        }
+        let control = try #require(corpus["myudp_control"] as? [String: Any])
+        let controlWire = Data.hex(try #require(control["wire_hex"] as? String))
+        #expect(try ObstacleBridgeMyUDPCodec.decodeControl(controlWire) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
+        for value in try #require(control["malformed_wire_hex"] as? [String]) {
+            #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeControl(.hex(value)) }
         }
         let websocket = try #require(corpus["websocket_binary"] as? [String: Any])
         let websocketPayload = Data.hex(try #require(websocket["payload_hex"] as? String))

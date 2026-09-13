@@ -46,6 +46,18 @@ def test_core_wire_corpus_matches_python_protocol_layouts() -> None:
     decoded_chunks = myudp.MyUDP2BatchCodec.decode_batch(parsed_batch)
     assert [(chunk.counter, chunk.data) for chunk in decoded_chunks] == [(int(myudp_data["counter"]), data_payload)]
 
+    control = corpus["myudp_control"]
+    protocol = myudp.Protocol(myudp.BaseFrameV2)
+    original_now_ns = myudp.now_ns
+    try:
+        myudp.now_ns = lambda: int(control["transmitted_nanoseconds"])
+        protocol._last_rx_tx_ns = int(control["echoed_nanoseconds"])
+        protocol._last_rx_wall_ns = int(control["transmitted_nanoseconds"])
+        wire = protocol.build_frame(myudp.Protocol.PTYPE_CONTROL, struct.pack(">HHH", control["last_in_order"], control["highest_received"], len(control["missing"])) + b"".join(struct.pack(">H", value) for value in control["missing"]))
+    finally:
+        myudp.now_ns = original_now_ns
+    assert wire.hex() == control["wire_hex"]
+
     websocket = corpus["websocket_binary"]
     websocket_payload = bytes.fromhex(websocket["payload_hex"])
     websocket_wire = WebSocketBinaryPayloadCodec().encode(b"\x00" + websocket_payload)
