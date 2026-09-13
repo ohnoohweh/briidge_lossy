@@ -745,6 +745,60 @@ public final class ObstacleBridgeMyUDPReceiverEngine: @unchecked Sendable {
     }
 }
 
+/// Socket-independent myUDP peer state. Adapters submit application records,
+/// wire frames, timer ticks, and epoch resets; they only execute emitted wire
+/// effects and deliver completed records.
+public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
+    public struct Effect: Equatable, Sendable {
+        public let outboundDatagrams: [Data]
+        public let deliveredRecords: [Data]
+        public let nextControlDeadlineNanoseconds: UInt64?
+    }
+
+    private let sender: ObstacleBridgeMyUDPSendQueue
+    private let receiver = ObstacleBridgeMyUDPReceiverEngine()
+    private var outstanding: [UInt16: ObstacleBridgeMyUDPStreamChunk] = [:]
+    private var peerMissing: [UInt16] = []
+
+    public init(maximumInFlight: Int = 200) { sender = .init(maximumInFlight: maximumInFlight) }
+
+    public func resetEpoch() { sender.reset(); receiver.reset(); outstanding.removeAll(); peerMissing.removeAll() }
+
+    public func enqueueApplicationRecord(_ record: Data, nowNanoseconds: UInt64) throws {
+        try sender.enqueue(record, queuedAtNanoseconds: nowNanoseconds)
+    }
+
+    public func flush(nowNanoseconds: UInt64) throws -> Effect {
+        guard let batch = sender.dequeueBatch(inFlightCount: outstanding.count) else { return .init(outboundDatagrams: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }
+        for chunk in batch.chunks { outstanding[chunk.counter] = chunk }
+        let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
+        return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: batch.chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+    }
+
+    public func receiveWire(_ wire: Data, nowNanoseconds: UInt64, transportWritable: Bool = true) throws -> Effect {
+        let frame = try ObstacleBridgeMyUDPCodec.decodeWire(wire)
+        switch frame.type {
+        case ObstacleBridgeMyUDPCodec.dataType:
+            let data = try ObstacleBridgeMyUDPCodec.decodeDataChunks(wire)
+            guard let inbound = receiver.processData(chunks: data.chunks, nowNanoseconds: nowNanoseconds, transmittedNanoseconds: data.transmittedNanoseconds, echoedNanoseconds: data.echoedNanoseconds, transportWritable: transportWritable) else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            let control = inbound.controlReasons.isEmpty ? [] : [try receiver.buildControlDatagram(nowNanoseconds: nowNanoseconds)]
+            return .init(outboundDatagrams: control, deliveredRecords: inbound.completedRecords, nextControlDeadlineNanoseconds: nil)
+        case ObstacleBridgeMyUDPCodec.controlType:
+            let control = try ObstacleBridgeMyUDPCodec.decodeControl(wire)
+            peerMissing = control.missing
+            let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(outstandingCounters: Array(outstanding.keys), peerReportedMissing: peerMissing, lastInOrder: control.lastInOrder, highestReceived: control.highestReceived, missing: control.missing)
+            outstanding = outstanding.filter { plan.retainedCounters.contains($0.key) }
+            peerMissing = plan.peerReportedMissing
+            return .init(outboundDatagrams: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+        case ObstacleBridgeMyUDPCodec.idleType:
+            let idle = receiver.processIdle(nowNanoseconds: nowNanoseconds, transmittedNanoseconds: frame.transmittedNanoseconds, echoedNanoseconds: frame.echoedNanoseconds, transportWritable: transportWritable)
+            let reply = idle.shouldReflect ? [try ObstacleBridgeMyUDPCodec.encodeWire(type: ObstacleBridgeMyUDPCodec.idleType, payload: Data(), transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: frame.transmittedNanoseconds)] : []
+            return .init(outboundDatagrams: reply, deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+        default: throw ObstacleBridgeMyUDPCodecError.invalidFrame
+        }
+    }
+}
+
 /// myudp v2 framing shared with Python. DATA batches carry a reliable byte
 /// stream; upper-layer messages are length-prefixed records in that stream.
 public enum ObstacleBridgeMyUDPCodec {

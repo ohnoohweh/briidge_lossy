@@ -566,8 +566,11 @@ common multi-peer listener state exists yet.
 
 The current source audit confirms that R004 remains open. The Core module has
 the reusable primitives (`ObstacleBridgeMyUDPSendQueue`, acknowledgement,
-retransmission, heartbeat, echo, idle, and receiver policies), but it does not
-yet expose the single peer-scoped event/effect engine required by R004A.
+retransmission, heartbeat, echo, idle, and receiver policies) and now exposes
+the first `ObstacleBridgeMyUDPPeerEngine` event/effect slice for application
+queueing, DATA batching, DATA/CONTROL/IDLE input, delivery, and epoch reset.
+It still needs Core-owned retransmission/timer effects and metrics before it
+meets R004A's full role-neutral contract.
 `ObstacleBridgeUdpOverlayPeerRuntime` still owns Apple sender and scheduling
 state, while `ObstacleBridgeLinuxMyUDPTransportSession` still allocates
 counters, splits records, constructs DATA frames, and treats CONTROL/IDLE as a
@@ -575,10 +578,10 @@ reduced request/reply side path. Its outbound echo timestamp now calls
 `ObstacleBridgeMyUDPEchoPolicy`; there is also no Core peer registry for a
 shared-datagram listener.
 
-The next implementation order is therefore: (1) compose the Core primitives
-into one deterministic peer engine with application-input, wire-input, timer,
-and epoch-reset events; (2) replace the Apple sender/runtime ledger with that
-engine; (3) make the Linux POSIX type execute Core effects only; and (4) add
+The next implementation order is therefore: (1) extend the Core peer engine
+with retransmission, timer, and metric effects; (2) replace the Apple
+sender/runtime ledger with that engine; (3) make the Linux POSIX type execute
+Core effects only; and (4) add
 the socket-independent registry and both-direction Python/Swift multi-peer
 parity qualification. R004 cannot be closed before those four changes and the
 corresponding Apple/Linux source-ownership guards are green.

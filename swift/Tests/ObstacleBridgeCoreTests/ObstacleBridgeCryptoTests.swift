@@ -148,6 +148,19 @@ struct ObstacleBridgeCryptoTests {
         try queue.enqueue(Data("blocked".utf8), queuedAtNanoseconds: 12)
         #expect(queue.dequeueBatch(inFlightCount: 2) == nil)
     }
+    @Test func myudpCorePeerEngineOwnsQueueReceiveControlAndEpochReset() throws {
+        let sender = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: 2)
+        try sender.enqueueApplicationRecord(Data("core-peer".utf8), nowNanoseconds: 1)
+        let outbound = try sender.flush(nowNanoseconds: 2)
+        #expect(outbound.outboundDatagrams.count == 1)
+        let receiver = ObstacleBridgeMyUDPPeerEngine()
+        let delivered = try receiver.receiveWire(outbound.outboundDatagrams[0], nowNanoseconds: 3)
+        #expect(delivered.deliveredRecords == [Data("core-peer".utf8)])
+        #expect(delivered.outboundDatagrams.count == 1)
+        _ = try sender.receiveWire(delivered.outboundDatagrams[0], nowNanoseconds: 4)
+        sender.resetEpoch()
+        #expect(try sender.flush(nowNanoseconds: 5).outboundDatagrams.isEmpty)
+    }
     @Test func myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps() throws {
         let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(
             outstandingCounters: [1, 2, 3], peerReportedMissing: [3],
