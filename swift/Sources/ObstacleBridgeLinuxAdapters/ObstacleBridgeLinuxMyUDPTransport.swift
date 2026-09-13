@@ -74,7 +74,6 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
         stateLock.lock()
         defer { stateLock.unlock() }
         let now = DispatchTime.now().uptimeNanoseconds
-        try execute(peerEngine.tick(nowNanoseconds: now))
         try peerEngine.enqueueApplicationRecord(payload, nowNanoseconds: now)
         var firstCounter: UInt16?
         while true {
@@ -100,13 +99,7 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             stateLock.unlock()
             var buffer = [UInt8](repeating: 0, count: 1_452)
             let received = recv(descriptor, &buffer, buffer.count, 0)
-            guard received > 0 else {
-                let error = errno
-                if error == EAGAIN || error == EWOULDBLOCK {
-                    try serviceTimers()
-                }
-                throw ObstacleBridgeLinuxMyUDPError.ioFailure(error)
-            }
+            guard received > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
             let wire = Data(buffer.prefix(Int(received)))
             stateLock.lock()
             let now = DispatchTime.now().uptimeNanoseconds

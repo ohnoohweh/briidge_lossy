@@ -584,8 +584,9 @@ state. The connected Linux POSIX client now owns only its socket and executes
 `ObstacleBridgeMyUDPPeerEngine` effects: Core owns its counter allocation,
 stream framing/batching, DATA envelope construction, CONTROL/IDLE input and
 response, echo timing, and completed-record queue. The Linux client still
-executes due Core timer effects before sends, after receive timeouts, and via
-an event-loop-callable `serviceTimers()` entry point. The Linux client still
+exposes due Core timer effects through an event-loop-callable `serviceTimers()`
+entry point without changing the connected socket's receive-timeout semantics.
+The Linux client still
 needs timed loss/retransmission qualification against the Python reference;
 the shared-datagram listener still needs adapter wiring to the Core registry.
 
