@@ -168,8 +168,8 @@ struct ObstacleBridgeCryptoTests {
         let sent = try ObstacleBridgeMyUDPCodec.decodeDataChunks(original)
         let control = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 0, highestReceived: sent.chunks[0].counter, missing: [sent.chunks[0].counter], transmittedNanoseconds: 20)
         _ = try engine.receiveWire(control, nowNanoseconds: 20)
-        #expect(try engine.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21).outboundDatagrams.isEmpty)
-        #expect(try engine.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21).outboundDatagrams.count == 1)
+        #expect(try engine.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.isEmpty)
+        #expect(try engine.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.count == 1)
     }
     @Test func myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps() throws {
         let plan = ObstacleBridgeMyUDPAcknowledgementPolicy.plan(

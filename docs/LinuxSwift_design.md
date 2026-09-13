@@ -571,10 +571,14 @@ the first `ObstacleBridgeMyUDPPeerEngine` event/effect slice for application
 queueing, DATA batching, DATA/CONTROL/IDLE input, delivery, and epoch reset.
 It now also owns paced, fresh-envelope retransmission for peer-reported missing
 counters, timer-paced CONTROL emission, and a portable queue/flight/missing/RTT
-metrics snapshot. IDLE reflection is Core-owned on inbound input. The next
-R004A residual is to expose the selected periodic-IDLE deadline through the
-same effect contract; the larger remaining work is adapter adoption and the
-listener registry.
+metrics snapshot. IDLE reflection is Core-owned on inbound input; the larger
+remaining work is adapter adoption and the listener registry.
+
+The periodic-IDLE deadline/effect is now exposed by the Core peer engine. Its
+deadline arithmetic is overflow-safe, and `UInt64.max` is reserved as a
+deterministic-test sentinel that suppresses periodic IDLE emission. R004A's
+remaining work is therefore adapter adoption of this complete Core event/effect
+surface and any metrics parity details discovered by that migration.
 `ObstacleBridgeUdpOverlayPeerRuntime` still owns Apple sender and scheduling
 state, while `ObstacleBridgeLinuxMyUDPTransportSession` still allocates
 counters, splits records, constructs DATA frames, and treats CONTROL/IDLE as a
@@ -582,8 +586,7 @@ reduced request/reply side path. Its outbound echo timestamp now calls
 `ObstacleBridgeMyUDPEchoPolicy`; there is also no Core peer registry for a
 shared-datagram listener.
 
-The next implementation order is therefore: (1) extend the Core peer engine
-with a periodic-IDLE deadline effect; (2) replace the Apple
+The next implementation order is therefore: (1) replace the Apple
 sender/runtime ledger with that engine; (3) make the Linux POSIX type execute
 Core effects only; and (4) add
 the socket-independent registry and both-direction Python/Swift multi-peer
