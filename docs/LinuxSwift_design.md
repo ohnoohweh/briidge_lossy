@@ -559,8 +559,9 @@ synchronous exchange ticks Core after a receive timeout. Linux-host tests use a
 Python UDP peer to prove Core-timer recovery after a dropped DATA datagram and
 exact-once reassembly after duplicated, out-of-order inbound chunks. The built
 foreground client also recovers when an independent Python peer drops its first
-two post-handshake protected DATA datagrams. Broader process-level delay and
-reordering qualification remains outstanding; macOS conditionally
+two post-handshake protected DATA datagrams. The foreground client also
+reassembles a multi-chunk protected response sent in reverse datagram order.
+Broader process-level delay qualification remains outstanding; macOS conditionally
 excludes the adapter tests, so a zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
 The Core registry selects monotonically newer epochs, withdraws superseded peer

@@ -151,12 +151,14 @@ class LinuxSwiftSecureLinkPeer:
         keep_open: bool = False,
         mux_echo: bool = False,
         drop_myudp_application_data_count: int = 0,
+        reorder_myudp_application_reply: bool = False,
     ) -> None:
         self.transport = transport
         self.psk = bytes(psk)
         self.keep_open = keep_open
         self.mux_echo = mux_echo
         self.drop_myudp_application_data_count = max(0, drop_myudp_application_data_count)
+        self.reorder_myudp_application_reply = reorder_myudp_application_reply
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
@@ -359,11 +361,21 @@ class LinuxSwiftSecureLinkPeer:
             nonlocal next_send_counter, drop_next_application_data
             assert peer is not None
             record = struct.pack('!I', len(payload)) + payload
+            datagrams: list[bytes] = []
             for offset in range(0, len(record), 1425):
                 chunk = record[offset:offset + 1425]
                 batch = b'\x01\x01' + struct.pack('!H', len(chunk) + 4) + struct.pack('!HH', next_send_counter, len(chunk)) + chunk
-                listener.sendto(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch, peer)
+                datagrams.append(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch)
                 next_send_counter = increment(next_send_counter)
+            if (
+                self.reorder_myudp_application_reply
+                and payload[1] == 4
+                and int.from_bytes(payload[12:20], 'big') == 2
+                and len(datagrams) > 1
+            ):
+                datagrams.reverse()
+            for datagram in datagrams:
+                listener.sendto(datagram, peer)
             if (
                 self.drop_myudp_application_data_count > 0
                 and len(payload) == 36
@@ -373,6 +385,10 @@ class LinuxSwiftSecureLinkPeer:
                 drop_next_application_data = self.drop_myudp_application_data_count
 
         self._secure_link_transaction(receive, send)
+        # Keep the UDP endpoint alive long enough for the client to drain the
+        # intentionally reverse-ordered reply without an ICMP port-unreachable.
+        if self.reorder_myudp_application_reply:
+            time.sleep(1.0)
 
     def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
         hello = receive()
@@ -7279,6 +7295,30 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeat
             timeout=15.0,
             check=False,
         )
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply(tmp_path: Path) -> None:
+    """The foreground Linux executable reassembles a reordered Core DATA stream."""
+    if not sys.platform.startswith('linux') or not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-reorder-psk'
+    payload = b'r' * 3_000
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, reorder_myudp_application_reply=True)
+    try:
+        config_path = tmp_path / 'linux_swift_myudp_reorder_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        completed = subprocess.run([str(binary_path), '--runtime-config', str(config_path), '--runtime-probe', base64.b64encode(payload).decode('ascii')], cwd=str(ROOT), capture_output=True, text=True, timeout=15.0, check=False)
         assert completed.returncode == 0, completed.stderr
         assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
     finally:
