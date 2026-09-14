@@ -531,6 +531,19 @@ struct ObstacleBridgeCryptoTests {
         let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
         #expect(try server.handleRekeyCommit(rekeyCommit) == rekeyDone)
         #expect(try server.unprotect(inFlightOldGenerationFrame) == Data("in-flight-old-generation".utf8))
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.replayedFrame) {
+            try server.unprotect(oldGenerationFrame)
+        }
+        let oldParsed = try ObstacleBridgeSecureLinkFrameCodec.decode(expiredInFlightOldGenerationFrame)
+        let unrelatedSessionFrame = ObstacleBridgeSecureLinkFrameCodec.encode(
+            type: ObstacleBridgeSecureLinkPSKFrameType.authenticatedData,
+            sessionID: 99,
+            counter: oldParsed.counter,
+            payload: oldParsed.payload
+        )
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
+            try server.unprotect(unrelatedSessionFrame)
+        }
         monotonicTime = 5.001
         #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
             try server.unprotect(expiredInFlightOldGenerationFrame)
@@ -576,9 +589,6 @@ struct ObstacleBridgeCryptoTests {
         let decodedServerFrame = try ObstacleBridgeSecureLinkFrameCodec.decode(serverFrame)
         #expect(decodedServerFrame.sessionID == 8 && decodedServerFrame.counter == 1)
         #expect(try client.unprotect(serverFrame) == Data("new-server".utf8))
-        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.replayedFrame) {
-            try server.unprotect(oldGenerationFrame)
-        }
     }
 
     @Test func secureLinkPskClientExpiresPendingRekeyUsingInjectedClock() throws {

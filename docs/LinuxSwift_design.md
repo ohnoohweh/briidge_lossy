@@ -657,7 +657,8 @@ rekey commit, admitting a higher-counter old-generation client packet already
 in flight while the client holds new sends until `REKEY_DONE`; reset, a new
 initial handshake, and expiry clear that draining generation. Injected-clock
 Core coverage proves both admission before the bound and rejection immediately
-after it, alongside prior-frame replay rejection. Core now owns
+after it, alongside prior-frame replay rejection and invalid-session
+rejection. Core now owns
 the injected monotonic retry-backoff policy and failure/deadline state; Apple
 adapts only the transport attempt and wall-clock retry presentation. Native
 source ownership tests reject a return to adapter-local retry arithmetic.

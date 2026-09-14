@@ -936,9 +936,13 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
                 return plaintext
             } catch { throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed }
         }
-        guard parsed.sessionID == drainingSessionID,
-              drainingUntil.map({ timeProvider() <= $0 }) ?? false,
-              parsed.counter > drainingRxCounter, drainingC2SKey.count == 32 else {
+        guard parsed.sessionID == drainingSessionID else {
+            throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+        }
+        guard drainingUntil.map({ timeProvider() <= $0 }) ?? false else {
+            throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+        }
+        guard parsed.counter > drainingRxCounter, drainingC2SKey.count == 32 else {
             throw parsed.counter <= drainingRxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         do {
