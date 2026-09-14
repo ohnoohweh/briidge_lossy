@@ -407,6 +407,50 @@ struct ObstacleBridgeCryptoTests {
         #expect(try client.unprotect(server.protect(Data("linux-server".utf8))) == Data("linux-server".utf8))
     }
 
+    @Test func secureLinkPskClientPollsInjectedFrameAndTimeRekeyPolicies() throws {
+        var monotonicTime: TimeInterval = 0
+        let psk = Data("automatic-rekey-psk".utf8)
+        let frameClient = try ObstacleBridgeSecureLinkPSKClient(
+            psk: psk,
+            timeProvider: { monotonicTime },
+            rekeyPolicy: .init(afterProtectedFrames: 1),
+            sessionIDProvider: { 8 },
+            randomBytes: { _ in Data(repeating: 3, count: 32) }
+        )
+        let frameServer = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let frameProof = try frameClient.handleServerHello(frameServer.handleClientHello(
+            try frameClient.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
+            serverNonce: Data(repeating: 2, count: 32)
+        ))
+        try frameClient.handleServerAcknowledgement(frameServer.handleClientProof(frameProof))
+        #expect(try frameClient.pollAutomaticRekey() == nil)
+        _ = try frameClient.protect(Data("one-frame".utf8))
+        let frameTriggeredHello = try #require(try frameClient.pollAutomaticRekey())
+        let decodedFrameHello = try ObstacleBridgeSecureLinkFrameCodec.decode(frameTriggeredHello)
+        #expect(decodedFrameHello.type == ObstacleBridgeSecureLinkPSKFrameType.rekeyHello)
+        #expect(decodedFrameHello.sessionID == 8)
+        #expect(decodedFrameHello.payload == Data(repeating: 3, count: 32) + Data([1, 0]))
+
+        let timeClient = try ObstacleBridgeSecureLinkPSKClient(
+            psk: psk,
+            timeProvider: { monotonicTime },
+            rekeyPolicy: .init(afterAuthenticatedSeconds: 60),
+            sessionIDProvider: { 10 },
+            randomBytes: { _ in Data(repeating: 5, count: 32) }
+        )
+        let timeServer = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let timeProof = try timeClient.handleServerHello(timeServer.handleClientHello(
+            try timeClient.begin(sessionID: 9, clientNonce: Data(repeating: 4, count: 32)),
+            serverNonce: Data(repeating: 6, count: 32)
+        ))
+        try timeClient.handleServerAcknowledgement(timeServer.handleClientProof(timeProof))
+        monotonicTime = 59
+        #expect(try timeClient.pollAutomaticRekey() == nil)
+        monotonicTime = 60
+        let timeTriggeredHello = try #require(try timeClient.pollAutomaticRekey())
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(timeTriggeredHello).sessionID == 10)
+    }
+
     @Test func secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters() throws {
         let psk = Data("portable-rekey-psk".utf8)
         let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)

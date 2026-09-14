@@ -268,6 +268,23 @@ public enum ObstacleBridgeSecureLinkPSKFrameType {
     public static let rekeyDone: UInt8 = 8
 }
 
+/// Injected automatic-rekey policy for a portable client. Transport owners
+/// poll the client at their own scheduler boundary and transmit any returned
+/// control frame before their next application frame.
+public struct ObstacleBridgeSecureLinkPSKRekeyPolicy: Sendable, Equatable {
+    public let afterProtectedFrames: UInt64
+    public let afterAuthenticatedSeconds: TimeInterval
+
+    public init(afterProtectedFrames: UInt64 = 0, afterAuthenticatedSeconds: TimeInterval = 0) {
+        self.afterProtectedFrames = afterProtectedFrames
+        self.afterAuthenticatedSeconds = max(0, afterAuthenticatedSeconds)
+    }
+
+    public var isEnabled: Bool {
+        afterProtectedFrames > 0 || afterAuthenticatedSeconds > 0
+    }
+}
+
 /// The client half of the SecureLink v1 PSK handshake and protected-data
 /// envelope. Transport ownership remains external, which makes the same state
 /// machine usable over Linux TCP and WebSocket lower transports.
@@ -275,6 +292,9 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     private let psk: Data
     private let handshakeTimeout: TimeInterval
     private let timeProvider: () -> TimeInterval
+    private let rekeyPolicy: ObstacleBridgeSecureLinkPSKRekeyPolicy
+    private let sessionIDProvider: () -> UInt64
+    private let randomBytes: (Int) -> Data
     private let stateLock = NSRecursiveLock()
     private var sessionID: UInt64 = 0
     private var clientNonce = Data()
@@ -284,6 +304,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     private var rxCounter: UInt64 = 0
     private var authenticated = false
     private var handshakeStartedAt: TimeInterval?
+    private var authenticatedAt: TimeInterval?
+    private var protectedDataFramesSent: UInt64 = 0
     private var pendingSessionID: UInt64 = 0
     private var pendingClientNonce = Data()
     private var pendingServerNonce = Data()
@@ -303,12 +325,18 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     public init(
         psk: Data,
         handshakeTimeout: TimeInterval = 60.0,
-        timeProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+        timeProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime },
+        rekeyPolicy: ObstacleBridgeSecureLinkPSKRekeyPolicy = .init(),
+        sessionIDProvider: @escaping () -> UInt64 = { UInt64.random(in: UInt64.min...UInt64.max) },
+        randomBytes: @escaping (Int) -> Data = { count in Data((0..<count).map { _ in UInt8.random(in: UInt8.min...UInt8.max) }) }
     ) throws {
         guard !psk.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidPSK }
         self.psk = psk
         self.handshakeTimeout = max(0, handshakeTimeout)
         self.timeProvider = timeProvider
+        self.rekeyPolicy = rekeyPolicy
+        self.sessionIDProvider = sessionIDProvider
+        self.randomBytes = randomBytes
     }
 
     public func begin(sessionID: UInt64, clientNonce: Data) throws -> Data {
@@ -322,6 +350,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         self.s2cKey = Data()
         self.rxCounter = 0
         self.authenticated = false
+        self.authenticatedAt = nil
+        self.protectedDataFramesSent = 0
         clearPendingRekey()
         return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.clientHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([1, 0]))
     }
@@ -369,6 +399,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         authenticated = true
         handshakeStartedAt = nil
+        authenticatedAt = timeProvider()
+        protectedDataFramesSent = 0
     }
 
     /// Validates REKEY_REPLY, derives the pending generation, and returns its
@@ -433,7 +465,27 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         s2cKey = pendingS2CKey
         txCounter = 1
         rxCounter = 0
+        authenticatedAt = timeProvider()
+        protectedDataFramesSent = 0
         clearPendingRekey()
+    }
+
+    /// Starts an injected-policy rekey when its frame or time threshold is
+    /// due. A nil result means the active generation remains below both
+    /// thresholds or an exchange is already pending.
+    public func pollAutomaticRekey() throws -> Data? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        try expireHandshakeIfNeeded()
+        guard authenticated, pendingSessionID == 0, rekeyPolicy.isEnabled else { return nil }
+        let frameDue = rekeyPolicy.afterProtectedFrames > 0 &&
+            protectedDataFramesSent >= rekeyPolicy.afterProtectedFrames
+        let timeDue = rekeyPolicy.afterAuthenticatedSeconds > 0 &&
+            (authenticatedAt.map { timeProvider() - $0 >= rekeyPolicy.afterAuthenticatedSeconds } ?? false)
+        guard frameDue || timeDue else { return nil }
+        let nextSessionID = try nextAutomaticSessionID()
+        let nextClientNonce = randomBytes(32)
+        guard nextClientNonce.count == 32 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        return try beginRekey(sessionID: nextSessionID, clientNonce: nextClientNonce)
     }
 
     public func protect(_ payload: Data) throws -> Data {
@@ -448,6 +500,9 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             authenticatedData: header
         )
         txCounter &+= 1
+        if authenticated, pendingSessionID == 0 {
+            protectedDataFramesSent &+= 1
+        }
         return header + ciphertext
     }
 
@@ -487,6 +542,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             clientNonce = Data()
             authenticated = false
             handshakeStartedAt = nil
+            authenticatedAt = nil
+            protectedDataFramesSent = 0
         }
         guard expired else { return }
         c2sKey = Data()
@@ -506,6 +563,16 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         pendingCommit = Data()
         pendingCommitSent = false
         pendingRekeyStartedAt = nil
+    }
+
+    private func nextAutomaticSessionID() throws -> UInt64 {
+        for _ in 0..<16 {
+            let candidate = sessionIDProvider()
+            if candidate != 0, candidate != sessionID, candidate != pendingSessionID {
+                return candidate
+            }
+        }
+        throw ObstacleBridgeSecureLinkPSKClientError.invalidState
     }
 
     private func nonce(counter: UInt64) -> Data {

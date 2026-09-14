@@ -627,9 +627,11 @@ expiry. After a client has authenticated its rekey commit, it holds outbound
 application data until the matching done frame installs the new generation;
 equivalent authenticated rekey replies return the cached commit for safe
 retransmission, and duplicate authenticated commits return the same done frame.
-Automatic frame/time triggers, retry state, readiness/diagnostic
-publication, and a dual-generation cutover window for in-flight application
-traffic remain runtime-level Core gaps.
+The client accepts injected session-id and random-byte providers plus a
+pollable frame/time rekey policy, so transport owners can deterministically
+emit a fresh hello at their scheduler boundary. Runtime configuration and timer
+wiring, retry state, readiness/diagnostic publication, and a dual-generation
+cutover window for in-flight application traffic remain Core integration gaps.
 On Apple, the SwiftPM `Crypto` product currently resolves
 to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
 test is not qualified there because repeated signatures for the RFC seed do
