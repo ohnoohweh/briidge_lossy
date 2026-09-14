@@ -691,7 +691,10 @@ Pull-request validation is event-coalesced: feature branches run the
 `pull_request` workflow once, while `push` validation remains on `main`, and a
 newer PR commit cancels its obsolete matrix. This prevents duplicate privileged
 macOS and Swift lanes from queueing behind one another without doing compiler
-work.
+work. The privileged macOS TUN matrix is path-gated to its TUN, routing,
+helper, host-runner, and qualification-test ownership; SecureLink/Core changes
+continue through the ordinary Swift probe and host-side parity lanes without
+waiting for unrelated privileged network setup.
 
 Definition of Done:
 

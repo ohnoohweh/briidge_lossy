@@ -22,6 +22,7 @@ jobs:
     outputs:
       changed: ${{ steps.changed.outputs.changed }}
       swift_changed: ${{ steps.changed.outputs.swift_changed }}
+      macos_tun_changed: ${{ steps.changed.outputs.macos_tun_changed }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -48,12 +49,14 @@ jobs:
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "swift_changed=true" >> "$GITHUB_OUTPUT"
+            echo "macos_tun_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           if [[ -z "${base:-}" ]]; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "swift_changed=true" >> "$GITHUB_OUTPUT"
+            echo "macos_tun_changed=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -69,6 +72,12 @@ jobs:
             echo "swift_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "swift_changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+          if printf '%s\n' "$changed_files" | grep -Eq '(^tests/integration/test_macos(_swift)?_elevated\.py$|^ios/tests/test_macos_swift_host_runner\.py$|^ios/native/ObstacleBridge(App|PrivilegedHelper|Shared)/(ObstacleBridge(HostRunner|TunnelControl|MacOSTun|TunHelper|ChannelMuxTun|PacketTunnelConfiguration|TunProbe|TunPing)).*\.swift$|^ios/scripts/build_macos_app\.sh$|^scripts/(run_macos(_swift)?_elevated_tests\.sh|(client|server)-tun-hook-macos\.sh)$|^src/obstacle_bridge/bridge_(tun|channelmux_shared_tun).*\.py$)'; then
+            echo "macos_tun_changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "macos_tun_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
   bridge-py-integration-linux:
@@ -122,7 +131,7 @@ jobs:
   bridge-py-integration-macos-elevated:
     name: "Integration Gate (macOS elevated TUN: ${{ matrix.case }})"
     needs: detect-bridge-change
-    if: needs.detect-bridge-change.outputs.changed == 'true'
+    if: needs.detect-bridge-change.outputs.macos_tun_changed == 'true'
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -235,7 +244,7 @@ jobs:
     needs:
       - detect-bridge-change
       - bridge-py-integration-macos-swift-probe
-    if: needs.detect-bridge-change.outputs.swift_changed == 'true'
+    if: needs.detect-bridge-change.outputs.swift_changed == 'true' && needs.detect-bridge-change.outputs.macos_tun_changed == 'true'
     runs-on: macos-latest
     steps:
       - name: Check out repository
