@@ -156,8 +156,9 @@ Current implementation note:
   unconfirmed handshake by clearing their session keys and counters, while the
   Core server serializes concurrent protected sends before assigning counters;
   Core also owns the complete PSK frame-type namespace through rekey.
-  Generated Apple targets link the pinned `Crypto` product and compile the
-  Core primitive source directly. The Apple SecureLink wrapper delegates PSK
+  Generated Apple targets link the pinned `Crypto` product through both target
+  package dependencies and framework-phase product references, then compile
+  the Core primitive source directly. The Apple SecureLink wrapper delegates PSK
   derivation, proofs, and protected-frame AEAD to that common surface; Apple
   lifecycle and status ownership remain separately qualified. Generated
   projects also remove stale source references to deleted Core-migrated

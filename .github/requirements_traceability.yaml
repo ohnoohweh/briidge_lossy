@@ -169,6 +169,8 @@ REQ-AUT-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
     - ios/tests/test_ios_secure_link_runtime.py::test_ios_secure_link_psk_runtime_probe_authenticates_and_exchanges_data
+    # Generated Apple targets must retain both the Crypto package dependency and
+    # the framework-phase product references needed by Xcode explicit modules.
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_codec_source_exists
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_runtime_source_exists

@@ -658,6 +658,10 @@ def add_app_network_extension_framework(text: str) -> str:
 def add_core_crypto_package(text: str) -> str:
     package_id = "71C700000000000000000001"
     product_id = "71C700000000000000000002"
+    product_build_files = {
+        "ObstacleBridge": "71C700000000000000000003",
+        "IPServer": "71C700000000000000000004",
+    }
     if package_id not in text:
         text = insert_before(
             text,
@@ -716,6 +720,46 @@ def add_core_crypto_package(text: str) -> str:
         text, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
         if count != 1:
             raise ValueError(f"{target_name} target package dependency block not found")
+
+    for target_name, build_file_id in product_build_files.items():
+        build_file = (
+            f"\t\t{build_file_id} /* Crypto in {target_name} Frameworks */ = "
+            f"{{isa = PBXBuildFile; productRef = {product_id} /* Crypto */; }};\n"
+        )
+        text = insert_before(text, "/* End PBXBuildFile section */\n", build_file)
+
+        if f"{build_file_id} /* Crypto in {target_name} Frameworks */," in text:
+            continue
+        target_match = re.search(
+            rf"\t\t[0-9A-F]{{24}} /\* {target_name} \*/ = \{{\n"
+            rf"\t\t\tisa = PBXNativeTarget;.*?"
+            rf"\t\t\tbuildPhases = \(\n(?P<phases>.*?)\t\t\t\);",
+            text,
+            flags=re.DOTALL,
+        )
+        if not target_match:
+            raise ValueError(f"{target_name} native target build phases not found")
+        framework_match = re.search(
+            r"\t\t\t\t(?P<id>[0-9A-F]{24}) /\* Frameworks \*/,\n",
+            target_match.group("phases"),
+        )
+        if not framework_match:
+            raise ValueError(f"{target_name} Frameworks build phase id not found")
+        framework_phase_id = framework_match.group("id")
+        framework_pattern = (
+            rf"(\t\t{framework_phase_id} /\* Frameworks \*/ = \{{\n"
+            rf"\t\t\tisa = PBXFrameworksBuildPhase;\n"
+            rf"\t\t\tbuildActionMask = 2147483647;\n"
+            rf"\t\t\tfiles = \(\n)"
+        )
+        text, count = re.subn(
+            framework_pattern,
+            r"\1" + f"\t\t\t\t{build_file_id} /* Crypto in {target_name} Frameworks */,\n",
+            text,
+            count=1,
+        )
+        if count != 1:
+            raise ValueError(f"{target_name} Frameworks build phase block not found")
     return text
 
 
@@ -872,19 +916,20 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t71C200000000000000000037 /* IPServer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = IPServer.entitlements; path = \"../../../../native/IPServer/IPServer.entitlements\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgePacketFlowBridge.swift; path = \"../../../../native/IPServer/ObstacleBridgePacketFlowBridge.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
-    text = insert_before(
-        text,
-        "/* End PBXFrameworksBuildPhase section */\n",
-        "\t\t71C200000000000000000040 /* Frameworks */ = {\n"
-        "\t\t\tisa = PBXFrameworksBuildPhase;\n"
-        "\t\t\tbuildActionMask = 2147483647;\n"
-        "\t\t\tfiles = (\n"
-        "\t\t\t\t71C200000000000000000003 /* Foundation.framework in Frameworks */,\n"
-        "\t\t\t\t71C200000000000000000004 /* NetworkExtension.framework in Frameworks */,\n"
-        "\t\t\t);\n"
-        "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
-        "\t\t};\n",
-    )
+    if "\t\t71C200000000000000000040 /* Frameworks */ = {\n" not in text:
+        text = insert_before(
+            text,
+            "/* End PBXFrameworksBuildPhase section */\n",
+            "\t\t71C200000000000000000040 /* Frameworks */ = {\n"
+            "\t\t\tisa = PBXFrameworksBuildPhase;\n"
+            "\t\t\tbuildActionMask = 2147483647;\n"
+            "\t\t\tfiles = (\n"
+            "\t\t\t\t71C200000000000000000003 /* Foundation.framework in Frameworks */,\n"
+            "\t\t\t\t71C200000000000000000004 /* NetworkExtension.framework in Frameworks */,\n"
+            "\t\t\t);\n"
+            "\t\t\trunOnlyForDeploymentPostprocessing = 0;\n"
+            "\t\t};\n",
+        )
     if "71C200000000000000000050 /* IPServer Extension */" not in text:
         text = replace_once(
             text,

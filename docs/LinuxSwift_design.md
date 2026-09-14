@@ -633,21 +633,20 @@ pollable frame/time rekey policy, so transport owners can deterministically
 emit a fresh hello at their scheduler boundary. Runtime configuration and timer
 wiring, retry state, readiness/diagnostic publication, and a dual-generation
 cutover window for in-flight application traffic remain Core integration gaps.
-On Apple, the SwiftPM `Crypto` product currently resolves
-to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
-test is not qualified there because repeated signatures for the RFC seed do
-not match its deterministic vector. The Apple SecureLink codec delegates
-canonical PSK transcript construction to a CryptoKit-free Core source while
-retaining its backend calls; the Apple runtime retains separate lifecycle
-ownership for deadline, rekey negotiation, readiness, retry status, and
-redacted diagnostics and directly invokes `CryptoKit` for protected frames.
-`ObstacleBridgeNativeCrypto` still supplies
-the Objective-C bridge and directly owns Apple crypto calls. The generated
-project links the pinned `swift-crypto` `Crypto` product into both Apple
-targets, so the same Core source is available without importing `CryptoKit`
-from Core. R005 remains open until the Apple backend passes the complete
-known-answer set and the Apple wrapper delegates its full lifecycle state to
-Core, with platform bridges reduced to their required Objective-C boundary.
+On Apple, the generated project pins `swift-crypto` 4.5.1 and now records its
+`Crypto` product both as a target package dependency and as an explicit
+`PBXFrameworksBuildPhase` product reference for the app and `IPServer`. This
+is required for Xcode's explicit-module build: resolving the package alone
+does not make `import Crypto` available to the Core source. The Apple
+SecureLink codec and protected-frame runtime delegate transcript derivation,
+proof construction, and AEAD to the CryptoKit-free Core surface. The Apple
+runtime still separately owns deadline, rekey negotiation, readiness, retry
+status, and redacted diagnostics; `ObstacleBridgeNativeCrypto` still supplies
+the required Objective-C boundary. The remaining Apple validation is a clean
+simulator/device build using those explicit framework references, followed by
+the complete cross-platform known-answer qualification. R005 remains open
+until the Apple wrapper delegates its full lifecycle state to Core, with
+platform bridges reduced to their required Objective-C boundary.
 
 Definition of Done:
 
