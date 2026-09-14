@@ -118,6 +118,7 @@ Representative anchors for those areas:
 - Linux myUDP SecureLink reference peers retain a completed reply until the post-reply Core CONTROL/IDLE acknowledgement, avoiding UDP connection refusal under parallel qualification
 - Host-side raw-source probes reuse the existing SwiftPM Core/Crypto module build, so the routine pytest suite does not repeat the Core package build that its CI job already performed
 - The raw ChannelMux parity compile includes the Core SecureLink transcript; its CI lanes use verbose test names, bounded pytest timeouts, and 15-minute job limits so an idle compiler or probe reports the owning test instead of silently consuming the default Actions allowance
+- SecureLink runtime raw-probe compilation has its own 120-second subprocess timeout in addition to the CI suite watchdog
 - Apple raw-source host builds import the pinned `Crypto` module without linking a nonexistent `libCrypto` artifact; the module forwards to CryptoKit on that platform
 - Core Swift tests pin bounded monotonic SecureLink authentication retry backoff; Apple transport probes consume that Core retry state while presenting their platform wall-clock deadline
 - current peer snapshot coverage also pins the applied-endpoint handoff for stream transports so `/api/peers` switches from a configured multi-host candidate string to the concrete resolved peer host and port once `ws` or `quic` has selected a live target, keeping the reported address family aligned with the actual connection in use

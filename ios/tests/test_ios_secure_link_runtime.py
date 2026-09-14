@@ -43,7 +43,7 @@ def _compile_swift_secure_link_probe(source_path: Path, binary_path: Path) -> No
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(source_path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=120)
     if completed.returncode != 0:
         raise AssertionError(
             f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"

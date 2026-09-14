@@ -711,7 +711,9 @@ than an implicit Apple-side transcript dependency. The Linux shared,
 Swift-backed macOS, and elevated Swift macOS lanes publish individual test
 names, enforce a bounded test timeout, and have a 15-minute job cap; a stalled
 probe therefore reports its owning test instead of leaving a quiet runner
-alive under the default Actions timeout.
+alive under the default Actions timeout. SecureLink raw-probe compiler calls
+also carry their own 120-second subprocess bound, so a compiler stall reports
+at the exact probe boundary rather than only through the suite watchdog.
 
 Pull-request validation is event-coalesced: feature branches run the
 `pull_request` workflow once, while `push` validation remains on `main`, and a
