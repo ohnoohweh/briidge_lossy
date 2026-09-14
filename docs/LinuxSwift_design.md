@@ -648,7 +648,8 @@ emit a fresh hello at their scheduler boundary. Runtime configuration and timer
 wiring, readiness/diagnostic publication, and a dual-generation cutover window
 for in-flight application traffic remain Core integration gaps. Core now owns
 the injected monotonic retry-backoff policy and failure/deadline state; Apple
-adapts only the transport attempt and wall-clock retry presentation.
+adapts only the transport attempt and wall-clock retry presentation. Native
+source ownership tests reject a return to adapter-local retry arithmetic.
 On Apple, the generated project pins `swift-crypto` 4.5.1 and now records its
 `Crypto` product both as a target package dependency and as an explicit
 `PBXFrameworksBuildPhase` product reference for the app and `IPServer`. This

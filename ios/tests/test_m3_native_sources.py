@@ -1017,6 +1017,11 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
     assert "handleInboundFrame(" in runtime
     assert "flushPendingPayloads(" in runtime
     assert "beginClientHandshake(" in runtime
+    assert "ObstacleBridgeSecureLinkPSKRetryState" in runtime
+    assert "retryState.recordUnauthenticatedFailure" in runtime
+    assert "retryState.isDue" in runtime
+    assert "retryBackoffInitialSec" not in runtime
+    assert "retryBackoffMaxSec" not in runtime
 
 
 def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:
