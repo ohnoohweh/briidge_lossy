@@ -319,6 +319,8 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerSerializesConcurrentProtectedSends
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresPendingRekeyUsingInjectedClock
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresPendingRekeyWithoutRenewingRetransmitDeadline
 
 REQ-AUT-007:
   integration_tests:
@@ -338,6 +340,8 @@ REQ-AUT-007:
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_pending_rekey
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresUnconfirmedHandshakeUsingInjectedClock
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresPendingRekeyUsingInjectedClock
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresPendingRekeyWithoutRenewingRetransmitDeadline
 REQ-AUT-008:
   # Authenticated SecureLink failures are reported to ChannelMux, which owns
   # the resulting lifecycle rotation through the lower layers.

@@ -452,6 +452,60 @@ struct ObstacleBridgeCryptoTests {
         }
     }
 
+    @Test func secureLinkPskClientExpiresPendingRekeyUsingInjectedClock() throws {
+        var monotonicTime: TimeInterval = 0
+        let psk = Data("client-rekey-deadline-psk".utf8)
+        let client = try ObstacleBridgeSecureLinkPSKClient(
+            psk: psk,
+            handshakeTimeout: 60,
+            timeProvider: { monotonicTime }
+        )
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let proof = try client.handleServerHello(server.handleClientHello(
+            try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
+            serverNonce: Data(repeating: 2, count: 32)
+        ))
+        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+        _ = try client.beginRekey(sessionID: 8, clientNonce: Data(repeating: 3, count: 32))
+        monotonicTime = 60
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut) {
+            try client.expireHandshakeIfNeeded()
+        }
+        #expect(!client.isAuthenticated)
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try client.protect(Data("after-rekey-timeout".utf8))
+        }
+    }
+
+    @Test func secureLinkPskServerExpiresPendingRekeyWithoutRenewingRetransmitDeadline() throws {
+        var monotonicTime: TimeInterval = 0
+        let psk = Data("server-rekey-deadline-psk".utf8)
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let server = try ObstacleBridgeSecureLinkPSKServer(
+            psk: psk,
+            handshakeTimeout: 60,
+            timeProvider: { monotonicTime }
+        )
+        let proof = try client.handleServerHello(server.handleClientHello(
+            try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
+            serverNonce: Data(repeating: 2, count: 32)
+        ))
+        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+        let rekeyHello = try client.beginRekey(sessionID: 8, clientNonce: Data(repeating: 3, count: 32))
+        let firstReply = try server.handleRekeyHello(rekeyHello, serverNonce: Data(repeating: 4, count: 32))
+        monotonicTime = 30
+        let retransmitReply = try server.handleRekeyHello(rekeyHello, serverNonce: Data(repeating: 5, count: 32))
+        #expect(retransmitReply == firstReply)
+        monotonicTime = 60
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut) {
+            try server.expireHandshakeIfNeeded()
+        }
+        #expect(!server.isAuthenticated)
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try server.protect(Data("after-rekey-timeout".utf8))
+        }
+    }
+
     @Test func secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock() throws {
         var monotonicTime: TimeInterval = 100
         let client = try ObstacleBridgeSecureLinkPSKClient(

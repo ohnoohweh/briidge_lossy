@@ -620,9 +620,12 @@ rekey transition. The portable peers now complete the operator-supplied
 rekey hello/reply/commit/done exchange, retain the active generation while the
 pending transcript is authenticated, serialize client and server cutover, reset
 both directional counters to `1`, and reject protected frames from the replaced
-session. Automatic frame/time triggers, pending-rekey deadline and retry state,
-readiness/diagnostic publication, and a dual-generation cutover window for
-in-flight application traffic remain runtime-level Core gaps.
+session. Both portable roles also bind the first pending-rekey hello to their
+injected 60-second deadline, retain that deadline across equivalent hello
+retransmits, and fail closed by clearing active and pending generations on
+expiry. Automatic frame/time triggers, retry state, readiness/diagnostic
+publication, and a dual-generation cutover window for in-flight application
+traffic remain runtime-level Core gaps.
 On Apple, the SwiftPM `Crypto` product currently resolves
 to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
 test is not qualified there because repeated signatures for the RFC seed do
