@@ -687,6 +687,12 @@ reuse the already-built SwiftPM Core/Crypto module when it is available, so a
 CI job does not synchronously invoke SwiftPM again after its Core build step.
 An absent module still triggers the one required package build.
 
+Pull-request validation is event-coalesced: feature branches run the
+`pull_request` workflow once, while `push` validation remains on `main`, and a
+newer PR commit cancels its obsolete matrix. This prevents duplicate privileged
+macOS and Swift lanes from queueing behind one another without doing compiler
+work.
+
 Definition of Done:
 
 - the pinned `Crypto` backend supplies the common SHA/HMAC/HKDF/PBKDF2, AEAD,

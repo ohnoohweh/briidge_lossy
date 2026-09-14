@@ -3,10 +3,18 @@ name: bridge.py Integration Gate
 on:
   pull_request:
   push:
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# A branch with an open PR receives both push and pull_request events.  Keep
+# the PR event as its single validation run, and abandon an older matrix as
+# soon as the PR receives a newer commit.
+concurrency:
+  group: bridge-integration-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   detect-bridge-change:
