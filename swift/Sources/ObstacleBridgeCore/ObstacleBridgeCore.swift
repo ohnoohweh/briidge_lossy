@@ -218,12 +218,10 @@ public enum ObstacleBridgeCrypto {
 /// Portable PSK transcript primitives shared with the SecureLink v1 wire
 /// contract. Session-state ownership remains outside this low-level type.
 public enum ObstacleBridgeSecureLinkPSKCrypto {
-    private static let transcriptPrefix = Data("obstaclebridge-securelink-psk-v1|".utf8)
-    private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
-    private static let clientRekeyCommitProofPrefix = Data("obstaclebridge-securelink-client-rekey-commit-v1|".utf8)
-
     public static func deriveKeys(psk: Data, sessionID: UInt64, clientNonce: Data, serverNonce: Data) throws -> (clientToServer: Data, serverToClient: Data) {
-        let transcript = transcriptPrefix + sessionID.bigEndianData + clientNonce + serverNonce
+        let transcript = ObstacleBridgeSecureLinkPSKTranscript.keyDerivationInfo(
+            sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+        )
         let material = try ObstacleBridgeCrypto.hkdfSHA256(
             salt: ObstacleBridgeCrypto.sha256(psk),
             info: transcript,
@@ -236,14 +234,18 @@ public enum ObstacleBridgeSecureLinkPSKCrypto {
     public static func serverProof(psk: Data, sessionID: UInt64, clientNonce: Data, serverNonce: Data) throws -> Data {
         try ObstacleBridgeCrypto.hmacSHA256(
             key: psk,
-            message: serverProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
+            message: ObstacleBridgeSecureLinkPSKTranscript.serverProofMessage(
+                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+            )
         )
     }
 
     public static func clientRekeyCommitProof(psk: Data, sessionID: UInt64, clientNonce: Data, serverNonce: Data) throws -> Data {
         try ObstacleBridgeCrypto.hmacSHA256(
             key: psk,
-            message: clientRekeyCommitProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
+            message: ObstacleBridgeSecureLinkPSKTranscript.clientRekeyCommitProofMessage(
+                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+            )
         )
     }
 }

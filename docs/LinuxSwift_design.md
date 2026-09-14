@@ -635,12 +635,13 @@ cutover window for in-flight application traffic remain Core integration gaps.
 On Apple, the SwiftPM `Crypto` product currently resolves
 to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
 test is not qualified there because repeated signatures for the RFC seed do
-not match its deterministic vector. The Apple runtime uses the same envelope
-but retains a separate PSK runtime instead of delegating its deadline, rekey
-negotiation, readiness, retry status, and redacted diagnostics. Its codec also duplicates
-transcript derivation/proofs, and its runtime directly invokes `CryptoKit` for
-protected frames. `ObstacleBridgeNativeCrypto` still supplies the Objective-C
-bridge and directly owns Apple crypto calls. R005 therefore remains open until
+not match its deterministic vector. The Apple SecureLink codec delegates
+canonical PSK transcript construction to a CryptoKit-free Core source while
+retaining its backend calls; the Apple runtime retains separate lifecycle
+ownership for deadline, rekey negotiation, readiness, retry status, and
+redacted diagnostics and directly invokes `CryptoKit` for protected frames.
+`ObstacleBridgeNativeCrypto` still supplies
+the Objective-C bridge and directly owns Apple crypto calls. R005 therefore remains open until
 the Apple crypto backend passes the complete known-answer set and the Apple
 runtime delegates its full lifecycle state and protected-frame crypto to Core,
 with platform bridges reduced to their required Objective-C boundary.

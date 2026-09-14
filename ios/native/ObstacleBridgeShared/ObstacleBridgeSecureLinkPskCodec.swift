@@ -6,10 +6,6 @@ enum ObstacleBridgeSecureLinkPskCodecError: Error {
 }
 
 struct ObstacleBridgeSecureLinkPskCodec {
-    private static let transcriptPrefix = Data("obstaclebridge-securelink-psk-v1|".utf8)
-    private static let serverProofPrefix = Data("obstaclebridge-securelink-server-proof-v1|".utf8)
-    private static let clientRekeyCommitProofPrefix = Data("obstaclebridge-securelink-client-rekey-commit-v1|".utf8)
-
     struct ParsedFrame: Equatable {
         var slType: Int
         var sessionID: UInt64
@@ -60,11 +56,11 @@ struct ObstacleBridgeSecureLinkPskCodec {
         clientNonce: Data,
         serverNonce: Data
     ) -> (Data, Data) {
-        let transcript = transcriptPrefix + sessionID.bigEndianData + clientNonce + serverNonce
-        let salt = Data(SHA256.hash(data: psk))
         let material = hkdfSHA256(
-            salt: salt,
-            info: transcript,
+            salt: Data(SHA256.hash(data: psk)),
+            info: ObstacleBridgeSecureLinkPSKTranscript.keyDerivationInfo(
+                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+            ),
             keyMaterial: psk + clientNonce + serverNonce,
             length: 64
         )
@@ -77,12 +73,12 @@ struct ObstacleBridgeSecureLinkPskCodec {
         clientNonce: Data,
         serverNonce: Data
     ) -> Data {
-        let message = serverProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
-        let authenticationCode = HMAC<SHA256>.authenticationCode(
-            for: message,
-            using: SymmetricKey(data: psk)
+        hmacSHA256(
+            key: psk,
+            message: ObstacleBridgeSecureLinkPSKTranscript.serverProofMessage(
+                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+            )
         )
-        return Data(authenticationCode)
     }
 
     static func clientRekeyCommitProof(
@@ -91,12 +87,12 @@ struct ObstacleBridgeSecureLinkPskCodec {
         clientNonce: Data,
         serverNonce: Data
     ) -> Data {
-        let message = clientRekeyCommitProofPrefix + sessionID.bigEndianData + clientNonce + serverNonce
-        let authenticationCode = HMAC<SHA256>.authenticationCode(
-            for: message,
-            using: SymmetricKey(data: psk)
+        hmacSHA256(
+            key: psk,
+            message: ObstacleBridgeSecureLinkPSKTranscript.clientRekeyCommitProofMessage(
+                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+            )
         )
-        return Data(authenticationCode)
     }
 
     static func buildJSONPayload(_ object: Any) throws -> Data {
@@ -113,45 +109,22 @@ struct ObstacleBridgeSecureLinkPskCodec {
         return parsed as? [String: Any]
     }
 
-    private static func hkdfSHA256(
-        salt: Data,
-        info: Data,
-        keyMaterial: Data,
-        length: Int
-    ) -> Data {
-        let digestLength = 32
-        let normalizedSalt = salt.isEmpty ? Data(repeating: 0, count: digestLength) : salt
+    private static func hkdfSHA256(salt: Data, info: Data, keyMaterial: Data, length: Int) -> Data {
+        let normalizedSalt = salt.isEmpty ? Data(repeating: 0, count: 32) : salt
         let prk = hmacSHA256(key: normalizedSalt, message: keyMaterial)
         var okm = Data()
         var previous = Data()
         var counter: UInt8 = 1
-
         while okm.count < length {
-            var block = Data()
-            block.append(previous)
-            block.append(info)
-            block.append(counter)
-            previous = hmacSHA256(key: prk, message: block)
+            previous = hmacSHA256(key: prk, message: previous + info + Data([counter]))
             okm.append(previous)
-            counter = counter &+ 1
+            counter &+= 1
         }
-        return okm.prefix(length)
+        return Data(okm.prefix(length))
     }
 
     private static func hmacSHA256(key: Data, message: Data) -> Data {
-        let authenticationCode = HMAC<SHA256>.authenticationCode(
-            for: message,
-            using: SymmetricKey(data: key)
-        )
-        return Data(authenticationCode)
+        Data(HMAC<SHA256>.authenticationCode(for: message, using: SymmetricKey(data: key)))
     }
 
-}
-
-private extension UInt64 {
-    var bigEndianData: Data {
-        var data = Data()
-        data.appendUInt64(self)
-        return data
-    }
 }
