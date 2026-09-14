@@ -755,6 +755,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTranscriptMatchesPythonVector
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_codec_source_exists
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_runtime_source_exists
+    - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
     # Pins portable Core rekey cutover, cached control retransmission, and the
     # client send hold boundary.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters

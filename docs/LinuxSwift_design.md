@@ -583,7 +583,8 @@ Core peer state. Its queue, in-flight, retry-classification, and confirmation
 statistics also read that state, and the mutable Apple sender maps are gone.
 The peer runtime and parity runner no longer reference
 `ObstacleBridgeUdpOverlaySessionCodec`; the test-only compatibility facade has
-been deleted from all source inventories. The runner seeds Core through its
+been deleted from source inventories and the generated-project patch removes
+stale pre-Core file, group, and sources-phase references. The runner seeds Core through its
 application-payload boundary and executes Core control, idle, acknowledgement,
 and retransmission effects. Remaining Apple work is limited to simplifying
 snapshot fields that only mirror Core values. The generated Apple project

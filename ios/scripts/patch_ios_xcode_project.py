@@ -273,6 +273,15 @@ def add_app_shared_swift_sources(text: str) -> str:
         'path = "../../../../native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift";',
         f'path = "{CORE_WEBSOCKET_PAYLOAD_CODEC_PATH}";',
     )
+    # The compatibility facade was deleted when the Apple peer runtime moved
+    # to Core. Older generated projects retain every reference, group entry,
+    # and sources-phase row unless the patch removes it explicitly.
+    text = re.sub(
+        r"^.*ObstacleBridgeUdpOverlaySessionCodec\.swift.*\n",
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
     for build_id, file_id, name in APP_SHARED_STALE_DUPLICATE_IDS:
         text = re.sub(
             rf'^\t\t{build_id} /\* {re.escape(name)} in Sources \*/ = \{{isa = PBXBuildFile; fileRef = {file_id} /\* {re.escape(name)} \*/; \}};\n',

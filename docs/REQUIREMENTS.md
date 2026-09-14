@@ -159,7 +159,9 @@ Current implementation note:
   Generated Apple targets link the pinned `Crypto` product and compile the
   Core primitive source directly. The Apple SecureLink wrapper delegates PSK
   derivation, proofs, and protected-frame AEAD to that common surface; Apple
-  lifecycle and status ownership remain separately qualified.
+  lifecycle and status ownership remain separately qualified. Generated
+  projects also remove stale source references to deleted Core-migrated
+  compatibility facades before Xcode compile admission.
   Linux Swift
   TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
   protected-data tests. The overlay E2E suite runs the built Linux Swift
