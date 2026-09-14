@@ -903,15 +903,15 @@ private func handle(_ request: [String: Any]) throws -> Any {
         else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let derived = ObstacleBridgeSecureLinkPskCodec.deriveKeys(
+        let derived = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(
             psk: Data(psk.utf8),
             sessionID: sessionID.uint64Value,
             clientNonce: clientNonce,
             serverNonce: serverNonce
         )
         return [
-            "c2s_hex": hexFromData(derived.0),
-            "s2c_hex": hexFromData(derived.1),
+            "c2s_hex": hexFromData(derived.clientToServer),
+            "s2c_hex": hexFromData(derived.serverToClient),
         ]
     case "build_securelink_json":
         guard let object = request["object"] else {

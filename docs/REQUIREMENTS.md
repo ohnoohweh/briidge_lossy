@@ -163,7 +163,9 @@ Current implementation note:
   Generated Apple targets link the pinned `Crypto` product through both target
   package dependencies and framework-phase product references, then compile
   the Core primitive source directly. The Apple SecureLink wrapper delegates PSK
-  derivation, proofs, and protected-frame AEAD to that common surface; Apple
+  derivation, proofs, and protected-frame AEAD to that common surface. Its
+  frame/JSON boundary codec contains no transcript, proof, or key-derivation
+  compatibility wrapper; probes call the Core transcript API directly. Apple
   lifecycle and status ownership remain separately qualified. Generated
   projects also remove stale source references to deleted Core-migrated
   compatibility facades before Xcode compile admission.

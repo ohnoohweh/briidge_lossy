@@ -172,6 +172,8 @@ REQ-AUT-001:
     # Generated Apple targets must retain both the Crypto package dependency and
     # the framework-phase product references needed by Xcode explicit modules.
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
+    # The Apple frame/JSON facade cannot regain transcript/proof/key-derive
+    # wrappers; Core remains the sole PSK primitive owner.
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_codec_source_exists
     # Guards Apple consumption of the Core-owned SecureLink frame namespace and
     # delegated Core client/listener lifecycle.

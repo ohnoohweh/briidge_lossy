@@ -973,7 +973,7 @@ def test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_r
 
                     let clientNonce = parsedHello.payload.prefix(32)
                     let serverNonce = Data(repeating: 0x22, count: 32)
-                    let proof = ObstacleBridgeSecureLinkPskCodec.serverProof(
+                    let proof = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(
                         psk: Data("shared-psk".utf8),
                         sessionID: parsedHello.sessionID,
                         clientNonce: Data(clientNonce),

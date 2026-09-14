@@ -49,40 +49,6 @@ struct ObstacleBridgeSecureLinkPskCodec {
         return nonce
     }
 
-    static func deriveKeys(
-        psk: Data,
-        sessionID: UInt64,
-        clientNonce: Data,
-        serverNonce: Data
-    ) -> (Data, Data) {
-        guard let keys = try? ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(
-            psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
-        ) else { return (Data(), Data()) }
-        return (keys.clientToServer, keys.serverToClient)
-    }
-
-    static func serverProof(
-        psk: Data,
-        sessionID: UInt64,
-        clientNonce: Data,
-        serverNonce: Data
-    ) -> Data {
-        (try? ObstacleBridgeSecureLinkPSKCrypto.serverProof(
-            psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
-        )) ?? Data()
-    }
-
-    static func clientRekeyCommitProof(
-        psk: Data,
-        sessionID: UInt64,
-        clientNonce: Data,
-        serverNonce: Data
-    ) -> Data {
-        (try? ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof(
-            psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
-        )) ?? Data()
-    }
-
     static func buildJSONPayload(_ object: Any) throws -> Data {
         guard JSONSerialization.isValidJSONObject(object) else {
             throw ObstacleBridgeSecureLinkPskCodecError.invalidJSON

@@ -930,13 +930,11 @@ def test_secure_link_psk_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeSecureLinkPskCodec" in codec
-    assert "ObstacleBridgeSecureLinkPSKCrypto.deriveKeys" in codec
-    assert "ObstacleBridgeSecureLinkPSKCrypto.serverProof" in codec
-    assert "ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof" in codec
+    assert "ObstacleBridgeSecureLinkPSKCrypto" not in codec
     assert "CryptoKit" not in codec
     assert "buildFrame(" in codec
     assert "parseFrame(" in codec
-    assert "deriveKeys(" in codec
+    assert "deriveKeys(" not in codec
     assert "nonce(counter:" in codec
     assert "buildJSONPayload(" in codec
     assert "parseJSONPayload(" in codec
