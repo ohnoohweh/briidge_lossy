@@ -652,6 +652,10 @@ On Apple, the generated project pins `swift-crypto` 4.5.1 and now records its
 `PBXFrameworksBuildPhase` product reference for the app and `IPServer`. This
 is required for Xcode's explicit-module build: resolving the package alone
 does not make `import Crypto` available to the Core source. The Apple
+host-side raw-source build imports that module without a synthetic `-lCrypto`
+linker flag because the Apple package implementation forwards to CryptoKit and
+does not emit a standalone `libCrypto` artifact. The generated Xcode targets
+retain their explicit package-product references. The Apple
 SecureLink codec and protected-frame runtime delegate transcript derivation,
 proof construction, AEAD, replay, deadline, and rekey transitions to the
 CryptoKit-free Core surface. The Apple wrapper retains readiness/retry status

@@ -105,7 +105,9 @@ if [ -z "${CORE_CRYPTO_MODULE_DIR}" ]; then
   echo "[build_macos_app] unable to locate the pinned Crypto module" >&2
   exit 1
 fi
-SWIFT_EXTRA_FLAGS+=("-I" "${CORE_CRYPTO_MODULE_DIR}" "-L" "$(dirname "${CORE_CRYPTO_MODULE_DIR}")" "-lCrypto")
+# Apple swift-crypto forwards `Crypto` to CryptoKit and emits no libCrypto
+# artifact. The module include path is sufficient for raw-source compilation.
+SWIFT_EXTRA_FLAGS+=("-I" "${CORE_CRYPTO_MODULE_DIR}")
 if [ "${OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION:-0}" = "1" ]; then
   SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")
 fi

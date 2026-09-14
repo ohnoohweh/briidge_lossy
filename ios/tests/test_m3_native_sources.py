@@ -793,6 +793,8 @@ def test_macos_app_main_source_exists() -> None:
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
     assert 'BUILD_VARIANT="${OBSTACLEBRIDGE_MACOS_BUILD_VARIANT:-normal}"' in build_script
     assert 'OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION' in build_script
+    assert 'SWIFT_EXTRA_FLAGS+=("-I" "${CORE_CRYPTO_MODULE_DIR}")' in build_script
+    assert '"-lCrypto"' not in build_script
     assert 'SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")' in build_script
     assert "tunServiceSpec: tunService?.toChannelMuxServiceSpec()" in runner
     assert 'case openTun = "OPEN_TUN"' in tun_helper_contract

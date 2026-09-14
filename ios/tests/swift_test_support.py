@@ -50,7 +50,10 @@ def swift_core_crypto_compile_flags() -> tuple[str, ...]:
     if not module_dirs:
         raise AssertionError("pinned Swift Crypto module directory was not produced")
     module_dir = module_dirs[0]
-    return ("-I", str(module_dir), "-L", str(module_dir.parent), "-lCrypto")
+    # On Apple platforms swift-crypto's `Crypto` module forwards to CryptoKit.
+    # SwiftPM emits the module but no standalone libCrypto artifact, so raw
+    # source probes must import the module without inventing a linker input.
+    return ("-I", str(module_dir))
 
 
 @lru_cache(maxsize=None)

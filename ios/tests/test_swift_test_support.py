@@ -22,7 +22,4 @@ def test_core_crypto_flags_reuse_existing_swiftpm_module_build(
     assert swift_test_support.swift_core_crypto_compile_flags() == (
         "-I",
         str(modules),
-        "-L",
-        str(modules.parent),
-        "-lCrypto",
     )
