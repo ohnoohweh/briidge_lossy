@@ -59,8 +59,11 @@ APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
 
-    assert "private var pendingRekeyStartedAt: TimeInterval?" in source
-    assert "_ = fail(sessionID: pendingSessionID, code: Self.authFailLifecycle)" in source
+    # The timeout belongs to the portable Core lifecycle, not to the Apple
+    # transport adapter.  Keep this guard aligned with that ownership boundary.
+    assert "try c.expireHandshakeIfNeeded()" in source
+    assert "try s.expireHandshakeIfNeeded()" in source
+    assert "pendingRekeyStartedAt" not in source
 
 
 def test_macos_swift_host_runner_keeps_shared_tun_hooks_bound_to_adapter_lifecycle() -> None:

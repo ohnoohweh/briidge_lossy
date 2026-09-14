@@ -99,14 +99,22 @@ def build_macos_swift_artifact(*, failure_injection: bool = False) -> MacOSSwift
     env["OBSTACLEBRIDGE_MACOS_BUILD_VARIANT"] = variant
     if failure_injection:
         env["OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION"] = "1"
-    completed = subprocess.run(
-        [str(BUILD_MACOS_APP_SCRIPT)],
-        cwd=str(ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [str(BUILD_MACOS_APP_SCRIPT)],
+            cwd=str(ROOT),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=180,
+        )
+    except subprocess.TimeoutExpired as error:
+        raise AssertionError(
+            "build_macos_app.sh exceeded its 180-second qualification limit; "
+            "the host-runner suite must not wait indefinitely for an idle build process.\n"
+            f"STDOUT:\n{error.stdout or ''}\nSTDERR:\n{error.stderr or ''}"
+        ) from error
     if completed.returncode != 0:
         raise AssertionError(
             "build_macos_app.sh failed with exit code "
