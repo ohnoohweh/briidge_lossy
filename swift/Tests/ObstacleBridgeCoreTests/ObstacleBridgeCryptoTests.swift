@@ -486,8 +486,9 @@ struct ObstacleBridgeCryptoTests {
 
     @Test func secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters() throws {
         let psk = Data("portable-rekey-psk".utf8)
+        var monotonicTime: TimeInterval = 0
         let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
-        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk, timeProvider: { monotonicTime })
         let proof = try client.handleServerHello(server.handleClientHello(
             try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
             serverNonce: Data(repeating: 2, count: 32)
@@ -519,6 +520,7 @@ struct ObstacleBridgeCryptoTests {
         // the server processes the later commit. The bounded server overlap
         // admits it instead of turning a healthy in-flight packet into loss.
         let inFlightOldGenerationFrame = try client.protect(Data("in-flight-old-generation".utf8))
+        let expiredInFlightOldGenerationFrame = try client.protect(Data("expired-in-flight-old-generation".utf8))
         let rekeyCommit = try client.handleRekeyReply(rekeyReply)
         #expect(client.state.pendingRekeySessionID == 8)
         #expect(client.state.applicationSendingBlocked)
@@ -529,6 +531,10 @@ struct ObstacleBridgeCryptoTests {
         let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
         #expect(try server.handleRekeyCommit(rekeyCommit) == rekeyDone)
         #expect(try server.unprotect(inFlightOldGenerationFrame) == Data("in-flight-old-generation".utf8))
+        monotonicTime = 5.001
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
+            try server.unprotect(expiredInFlightOldGenerationFrame)
+        }
         try client.handleRekeyDone(rekeyDone)
         #expect(client.state.authenticatedGenerationsTotal == 2)
         #expect(server.state.authenticatedGenerationsTotal == 2)
