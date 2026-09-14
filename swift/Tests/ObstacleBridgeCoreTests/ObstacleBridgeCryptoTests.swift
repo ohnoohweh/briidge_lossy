@@ -460,6 +460,14 @@ struct ObstacleBridgeCryptoTests {
             serverNonce: Data(repeating: 2, count: 32)
         ))
         try client.handleServerAcknowledgement(server.handleClientProof(proof))
+        #expect(client.state == .init(
+            sessionID: 7,
+            txCounter: 2,
+            rxCounter: 1,
+            authenticated: true,
+            pendingRekeySessionID: 0,
+            applicationSendingBlocked: false
+        ))
 
         let oldGenerationFrame = try client.protect(Data("before-rekey".utf8))
         #expect(try server.unprotect(oldGenerationFrame) == Data("before-rekey".utf8))
@@ -473,6 +481,8 @@ struct ObstacleBridgeCryptoTests {
             serverNonce: Data(repeating: 4, count: 32)
         )
         let rekeyCommit = try client.handleRekeyReply(rekeyReply)
+        #expect(client.state.pendingRekeySessionID == 8)
+        #expect(client.state.applicationSendingBlocked)
         #expect(try client.handleRekeyReply(rekeyReply) == rekeyCommit)
         #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
             try client.protect(Data("between-commit-and-done".utf8))
@@ -480,6 +490,22 @@ struct ObstacleBridgeCryptoTests {
         let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
         #expect(try server.handleRekeyCommit(rekeyCommit) == rekeyDone)
         try client.handleRekeyDone(rekeyDone)
+        #expect(client.state == .init(
+            sessionID: 8,
+            txCounter: 1,
+            rxCounter: 0,
+            authenticated: true,
+            pendingRekeySessionID: 0,
+            applicationSendingBlocked: false
+        ))
+        #expect(server.state == .init(
+            sessionID: 8,
+            txCounter: 1,
+            rxCounter: 0,
+            authenticated: true,
+            pendingRekeySessionID: 0,
+            applicationSendingBlocked: false
+        ))
 
         #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyHello).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyHello)
         #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyReply).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyReply)

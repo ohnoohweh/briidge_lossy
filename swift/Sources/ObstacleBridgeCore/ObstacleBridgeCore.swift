@@ -272,6 +272,34 @@ public enum ObstacleBridgeSecureLinkPSKFrameType {
     public static let rekeyDone: UInt8 = 8
 }
 
+/// Redacted protocol state exported by a SecureLink PSK role. Platform
+/// wrappers consume this snapshot for status publication; key material and
+/// nonces remain private to the Core state machine.
+public struct ObstacleBridgeSecureLinkPSKState: Sendable, Equatable {
+    public let sessionID: UInt64
+    public let txCounter: UInt64
+    public let rxCounter: UInt64
+    public let authenticated: Bool
+    public let pendingRekeySessionID: UInt64
+    public let applicationSendingBlocked: Bool
+
+    public init(
+        sessionID: UInt64,
+        txCounter: UInt64,
+        rxCounter: UInt64,
+        authenticated: Bool,
+        pendingRekeySessionID: UInt64,
+        applicationSendingBlocked: Bool
+    ) {
+        self.sessionID = sessionID
+        self.txCounter = txCounter
+        self.rxCounter = rxCounter
+        self.authenticated = authenticated
+        self.pendingRekeySessionID = pendingRekeySessionID
+        self.applicationSendingBlocked = applicationSendingBlocked
+    }
+}
+
 /// Injected automatic-rekey policy for a portable client. Transport owners
 /// poll the client at their own scheduler boundary and transmit any returned
 /// control frame before their next application frame.
@@ -322,6 +350,18 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     public var isAuthenticated: Bool {
         stateLock.lock(); defer { stateLock.unlock() }
         return authenticated
+    }
+
+    public var state: ObstacleBridgeSecureLinkPSKState {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return ObstacleBridgeSecureLinkPSKState(
+            sessionID: sessionID,
+            txCounter: txCounter,
+            rxCounter: rxCounter,
+            authenticated: authenticated,
+            pendingRekeySessionID: pendingSessionID,
+            applicationSendingBlocked: pendingCommitSent
+        )
     }
 
     /// The monotonic clock is injected so timeout behavior is deterministic in
@@ -619,6 +659,18 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
     public var isAuthenticated: Bool {
         stateLock.lock(); defer { stateLock.unlock() }
         return authenticated
+    }
+
+    public var state: ObstacleBridgeSecureLinkPSKState {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return ObstacleBridgeSecureLinkPSKState(
+            sessionID: sessionID,
+            txCounter: txCounter,
+            rxCounter: rxCounter,
+            authenticated: authenticated,
+            pendingRekeySessionID: pendingSessionID,
+            applicationSendingBlocked: false
+        )
     }
 
     public init(

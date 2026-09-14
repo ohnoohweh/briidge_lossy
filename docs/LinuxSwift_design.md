@@ -623,7 +623,9 @@ Core's `UInt8` wire value to its existing `Int` codec boundary. The portable pee
 rekey hello/reply/commit/done exchange, retain the active generation while the
 pending transcript is authenticated, serialize client and server cutover, reset
 both directional counters to `1`, and reject protected frames from the replaced
-session. Both portable roles also bind the first pending-rekey hello to their
+session. Both roles export the same redacted Core state snapshot (session,
+counters, authenticated state, pending generation, and send hold) for platform
+status adapters; Apple has not yet adopted that lifecycle snapshot. Both portable roles also bind the first pending-rekey hello to their
 injected 60-second deadline, retain that deadline across equivalent hello
 retransmits, and fail closed by clearing active and pending generations on
 expiry. After a client has authenticated its rekey commit, it holds outbound
