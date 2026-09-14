@@ -163,6 +163,11 @@ Current implementation note:
   pending-rekey/send-hold state, authenticated-generation totals, and
   completed-rekey totals to Core roles. Apple retains transport and
   operator-status adaptation without lifecycle-state mirrors.
+  After a listener processes an authenticated rekey commit, Core admits an
+  already-in-flight higher-counter client DATA frame from the replaced
+  generation for its bounded overlap interval. The client holds new
+  application sends until `REKEY_DONE`; reset, a new initial handshake, and
+  lifecycle expiry clear the draining generation.
   Generated Apple targets link the pinned `Crypto` product through both target
   package dependencies and framework-phase product references, then compile
   the Core primitive source directly. The Apple SecureLink wrapper delegates PSK

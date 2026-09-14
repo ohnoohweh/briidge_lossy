@@ -515,6 +515,10 @@ struct ObstacleBridgeCryptoTests {
             rekeyHello,
             serverNonce: Data(repeating: 4, count: 32)
         )
+        // This DATA has already left the client on the active generation when
+        // the server processes the later commit. The bounded server overlap
+        // admits it instead of turning a healthy in-flight packet into loss.
+        let inFlightOldGenerationFrame = try client.protect(Data("in-flight-old-generation".utf8))
         let rekeyCommit = try client.handleRekeyReply(rekeyReply)
         #expect(client.state.pendingRekeySessionID == 8)
         #expect(client.state.applicationSendingBlocked)
@@ -524,6 +528,7 @@ struct ObstacleBridgeCryptoTests {
         }
         let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
         #expect(try server.handleRekeyCommit(rekeyCommit) == rekeyDone)
+        #expect(try server.unprotect(inFlightOldGenerationFrame) == Data("in-flight-old-generation".utf8))
         try client.handleRekeyDone(rekeyDone)
         #expect(client.state.authenticatedGenerationsTotal == 2)
         #expect(server.state.authenticatedGenerationsTotal == 2)
@@ -565,7 +570,7 @@ struct ObstacleBridgeCryptoTests {
         let decodedServerFrame = try ObstacleBridgeSecureLinkFrameCodec.decode(serverFrame)
         #expect(decodedServerFrame.sessionID == 8 && decodedServerFrame.counter == 1)
         #expect(try client.unprotect(serverFrame) == Data("new-server".utf8))
-        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.replayedFrame) {
             try server.unprotect(oldGenerationFrame)
         }
     }

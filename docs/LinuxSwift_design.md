@@ -651,8 +651,11 @@ emit a fresh hello at their scheduler boundary. Core authentication is the
 single Apple readiness authority: the established `authenticated` and
 `peerConfirmedAuthenticated` status names both derive from portable Core state
 without adapter-local readiness flags. Runtime configuration and timer wiring,
-platform event/diagnostic publication, and a dual-generation cutover window
-for in-flight application traffic remain Core integration gaps. Core now owns
+platform event/diagnostic publication remains outside the portable lifecycle.
+Core retains a bounded five-second server inbound overlap after authenticated
+rekey commit, admitting a higher-counter old-generation client packet already
+in flight while the client holds new sends until `REKEY_DONE`; reset, a new
+initial handshake, and expiry clear that draining generation. Core now owns
 the injected monotonic retry-backoff policy and failure/deadline state; Apple
 adapts only the transport attempt and wall-clock retry presentation. Native
 source ownership tests reject a return to adapter-local retry arithmetic.
