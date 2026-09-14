@@ -626,7 +626,7 @@ retransmits, and fail closed by clearing active and pending generations on
 expiry. After a client has authenticated its rekey commit, it holds outbound
 application data until the matching done frame installs the new generation;
 equivalent authenticated rekey replies return the cached commit for safe
-retransmission.
+retransmission, and duplicate authenticated commits return the same done frame.
 Automatic frame/time triggers, retry state, readiness/diagnostic
 publication, and a dual-generation cutover window for in-flight application
 traffic remain runtime-level Core gaps.

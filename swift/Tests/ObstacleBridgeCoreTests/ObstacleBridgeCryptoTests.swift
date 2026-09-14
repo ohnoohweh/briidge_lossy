@@ -434,6 +434,7 @@ struct ObstacleBridgeCryptoTests {
             try client.protect(Data("between-commit-and-done".utf8))
         }
         let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
+        #expect(try server.handleRekeyCommit(rekeyCommit) == rekeyDone)
         try client.handleRekeyDone(rekeyDone)
 
         #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyHello).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyHello)

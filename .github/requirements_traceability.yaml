@@ -319,8 +319,8 @@ REQ-AUT-006:
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_each_protocol_leg_without_payload_material
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerSerializesConcurrentProtectedSends
     # Covers portable hello/reply/commit/done cutover, idempotent cached
-    # commit retransmission, client send hold, counter reset, and old-session
-    # rejection.
+    # commit/done retransmission, client send hold, counter reset, and
+    # old-session rejection.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresPendingRekeyUsingInjectedClock
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresPendingRekeyWithoutRenewingRetransmitDeadline

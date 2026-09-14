@@ -541,6 +541,9 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
     private var pendingC2SKey = Data()
     private var pendingS2CKey = Data()
     private var pendingRekeyStartedAt: TimeInterval?
+    private var lastCompletedRekeySessionID: UInt64 = 0
+    private var lastCompletedRekeyCommit = Data()
+    private var lastCompletedRekeyDone = Data()
 
     public var isAuthenticated: Bool {
         stateLock.lock(); defer { stateLock.unlock() }
@@ -570,6 +573,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         sessionID = parsed.sessionID
         clientNonce = Data(parsed.payload.prefix(32))
         clearPendingRekey()
+        clearCompletedRekey()
         handshakeStartedAt = timeProvider()
         let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
         c2sKey = keys.clientToServer
@@ -631,6 +635,12 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
         let frame = try parse(wire)
+        if authenticated, frame.type == ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit,
+           frame.sessionID == lastCompletedRekeySessionID,
+           frame.payload == lastCompletedRekeyCommit,
+           !lastCompletedRekeyDone.isEmpty {
+            return lastCompletedRekeyDone
+        }
         guard authenticated, pendingSessionID != 0,
               frame.type == ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit,
               frame.sessionID == pendingSessionID, frame.counter == 0,
@@ -649,11 +659,15 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         s2cKey = pendingS2CKey
         txCounter = 1
         rxCounter = 0
-        clearPendingRekey()
-        return ObstacleBridgeSecureLinkFrameCodec.encode(
+        let done = ObstacleBridgeSecureLinkFrameCodec.encode(
             type: ObstacleBridgeSecureLinkPSKFrameType.rekeyDone,
             sessionID: sessionID, counter: 0, payload: Data()
         )
+        lastCompletedRekeySessionID = sessionID
+        lastCompletedRekeyCommit = frame.payload
+        lastCompletedRekeyDone = done
+        clearPendingRekey()
+        return done
     }
 
     public func protect(_ payload: Data) throws -> Data {
@@ -711,6 +725,12 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         pendingC2SKey = Data()
         pendingS2CKey = Data()
         pendingRekeyStartedAt = nil
+    }
+
+    private func clearCompletedRekey() {
+        lastCompletedRekeySessionID = 0
+        lastCompletedRekeyCommit = Data()
+        lastCompletedRekeyDone = Data()
     }
 
     private func nonce(counter: UInt64) -> Data { var value = counter.bigEndian; return Data([0, 0, 0, 0]) + Data(bytes: &value, count: MemoryLayout<UInt64>.size) }
