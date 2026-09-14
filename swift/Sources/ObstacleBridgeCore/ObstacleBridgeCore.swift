@@ -289,6 +289,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     private var pendingServerNonce = Data()
     private var pendingC2SKey = Data()
     private var pendingS2CKey = Data()
+    private var pendingCommit = Data()
     private var pendingCommitSent = false
     private var pendingRekeyStartedAt: TimeInterval?
 
@@ -376,7 +377,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
         let parsed = try parse(wire)
-        guard authenticated, pendingSessionID != 0, !pendingCommitSent,
+        guard authenticated, pendingSessionID != 0,
               parsed.type == ObstacleBridgeSecureLinkPSKFrameType.rekeyReply,
               parsed.sessionID == pendingSessionID, parsed.counter == 0,
               parsed.payload.count == 65, parsed.payload[32] == 1 else {
@@ -389,6 +390,12 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             clientNonce: pendingClientNonce, serverNonce: serverNonce
         )
         guard proof == expected else { throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed }
+        if pendingCommitSent {
+            guard serverNonce == pendingServerNonce, !pendingCommit.isEmpty else {
+                throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
+            }
+            return pendingCommit
+        }
         let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(
             psk: psk, sessionID: pendingSessionID,
             clientNonce: pendingClientNonce, serverNonce: serverNonce
@@ -401,10 +408,11 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             psk: psk, sessionID: pendingSessionID,
             clientNonce: pendingClientNonce, serverNonce: serverNonce
         )
-        return ObstacleBridgeSecureLinkFrameCodec.encode(
+        pendingCommit = ObstacleBridgeSecureLinkFrameCodec.encode(
             type: ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit,
             sessionID: pendingSessionID, counter: 0, payload: commitProof
         )
+        return pendingCommit
     }
 
     /// Authenticates REKEY_DONE and atomically installs the pending generation.
@@ -495,6 +503,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         pendingServerNonce = Data()
         pendingC2SKey = Data()
         pendingS2CKey = Data()
+        pendingCommit = Data()
         pendingCommitSent = false
         pendingRekeyStartedAt = nil
     }

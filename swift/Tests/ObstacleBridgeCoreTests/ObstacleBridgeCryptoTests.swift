@@ -429,6 +429,7 @@ struct ObstacleBridgeCryptoTests {
             serverNonce: Data(repeating: 4, count: 32)
         )
         let rekeyCommit = try client.handleRekeyReply(rekeyReply)
+        #expect(try client.handleRekeyReply(rekeyReply) == rekeyCommit)
         #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
             try client.protect(Data("between-commit-and-done".utf8))
         }
