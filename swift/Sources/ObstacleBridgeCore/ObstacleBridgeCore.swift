@@ -327,6 +327,56 @@ public struct ObstacleBridgeSecureLinkPSKRekeyPolicy: Sendable, Equatable {
     }
 }
 
+/// Deterministic client-side authentication retry policy. Transport adapters
+/// own connection attempts and wall-clock presentation; Core owns the bounded
+/// failure count and monotonic retry deadline.
+public struct ObstacleBridgeSecureLinkPSKRetryPolicy: Sendable, Equatable {
+    public let initialBackoff: TimeInterval
+    public let maximumBackoff: TimeInterval
+
+    public init(initialBackoff: TimeInterval = 1, maximumBackoff: TimeInterval = 5) {
+        self.initialBackoff = max(0, initialBackoff)
+        self.maximumBackoff = max(self.initialBackoff, maximumBackoff)
+    }
+}
+
+public struct ObstacleBridgeSecureLinkPSKRetryState: Sendable, Equatable {
+    public private(set) var consecutiveFailures = 0
+    public private(set) var retryNotBefore: TimeInterval?
+    public let policy: ObstacleBridgeSecureLinkPSKRetryPolicy
+
+    public init(policy: ObstacleBridgeSecureLinkPSKRetryPolicy = .init()) {
+        self.policy = policy
+    }
+
+    public mutating func recordUnauthenticatedFailure(now: TimeInterval) -> TimeInterval? {
+        guard policy.maximumBackoff > 0 else { return nil }
+        consecutiveFailures += 1
+        let exponent = max(0, consecutiveFailures - 1)
+        let delay = min(policy.maximumBackoff, policy.initialBackoff * pow(2, Double(exponent)))
+        retryNotBefore = now + delay
+        return delay
+    }
+
+    public mutating func reset() {
+        consecutiveFailures = 0
+        retryNotBefore = nil
+    }
+
+    public mutating func clearSchedule() {
+        retryNotBefore = nil
+    }
+
+    public func remainingBackoff(now: TimeInterval) -> TimeInterval {
+        max(0, (retryNotBefore ?? now) - now)
+    }
+
+    public func isDue(now: TimeInterval) -> Bool {
+        guard let retryNotBefore else { return false }
+        return retryNotBefore <= now
+    }
+}
+
 /// The client half of the SecureLink v1 PSK handshake and protected-data
 /// envelope. Transport ownership remains external, which makes the same state
 /// machine usable over Linux TCP and WebSocket lower transports.

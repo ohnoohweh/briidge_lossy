@@ -18,15 +18,12 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
     }
 
     private let runtime: ObstacleBridgeSecureLinkPskRuntime
-    private let retryBackoffInitialSec: TimeInterval
-    private let retryBackoffMaxSec: TimeInterval
     private let timeProvider: () -> TimeInterval
     private let unixTimeProvider: () -> TimeInterval
     private var pendingPayloads: [Data] = []
     private var transportConnected = false
     private var handshakeAttemptsTotal = 0
-    private var consecutiveFailures = 0
-    private var retryNotBeforeMono: TimeInterval = 0.0
+    private var retryState: ObstacleBridgeSecureLinkPSKRetryState
     private var retryNotBeforeUnixTs: TimeInterval?
 
     init(
@@ -37,8 +34,10 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         unixTimeProvider: (() -> TimeInterval)? = nil
     ) {
         self.runtime = runtime
-        self.retryBackoffInitialSec = max(0.0, Double(max(0, retryBackoffInitialMS)) / 1000.0)
-        self.retryBackoffMaxSec = max(self.retryBackoffInitialSec, Double(max(0, retryBackoffMaxMS)) / 1000.0)
+        self.retryState = .init(policy: .init(
+            initialBackoff: Double(max(0, retryBackoffInitialMS)) / 1000.0,
+            maximumBackoff: Double(max(0, retryBackoffMaxMS)) / 1000.0
+        ))
         self.timeProvider = timeProvider ?? { ProcessInfo.processInfo.systemUptime }
         self.unixTimeProvider = unixTimeProvider ?? { Date().timeIntervalSince1970 }
     }
@@ -47,8 +46,8 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         var snapshot = runtime.statusSnapshot()
         let nowMono = timeProvider()
         snapshot.handshakeAttemptsTotal = handshakeAttemptsTotal
-        snapshot.consecutiveFailures = consecutiveFailures
-        snapshot.retryBackoffSec = max(0.0, retryNotBeforeMono - nowMono)
+        snapshot.consecutiveFailures = retryState.consecutiveFailures
+        snapshot.retryBackoffSec = retryState.remainingBackoff(now: nowMono)
         snapshot.nextRetryUnixTs = retryNotBeforeUnixTs
         return snapshot
     }
@@ -99,7 +98,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             )
         }
         let nowMono = timeProvider()
-        if retryNotBeforeMono > nowMono {
+        if retryState.remainingBackoff(now: nowMono) > 0 {
             return OutboundSnapshot(
                 emittedFrames: [],
                 queuedPayloads: pendingPayloads.count,
@@ -219,23 +218,20 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             clearRetrySchedule()
             return
         }
-        guard transportConnected, retryBackoffMaxSec > 0.0 else {
+        guard transportConnected else {
             return
         }
-        consecutiveFailures += 1
-        let exponent = max(0, consecutiveFailures - 1)
-        let delaySec = min(retryBackoffMaxSec, retryBackoffInitialSec * pow(2.0, Double(exponent)))
-        retryNotBeforeMono = timeProvider() + delaySec
+        guard let delaySec = retryState.recordUnauthenticatedFailure(now: timeProvider()) else { return }
         retryNotBeforeUnixTs = unixTimeProvider() + delaySec
     }
 
     private func resetClientRetryPolicy() {
         clearRetrySchedule()
-        consecutiveFailures = 0
+        retryState.reset()
     }
 
     private func clearRetrySchedule() {
-        retryNotBeforeMono = 0.0
+        retryState.clearSchedule()
         retryNotBeforeUnixTs = nil
     }
 
@@ -245,8 +241,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
               transportConnected,
               !status.authenticated,
               status.authFailCode != 0,
-              retryNotBeforeMono > 0.0,
-              retryNotBeforeMono <= nowMono else {
+              retryState.isDue(now: nowMono) else {
             return false
         }
         return true

@@ -3,6 +3,23 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeCryptoTests {
+    @Test func secureLinkRetryStateUsesBoundedMonotonicBackoff() {
+        var state = ObstacleBridgeSecureLinkPSKRetryState(
+            policy: .init(initialBackoff: 1, maximumBackoff: 5)
+        )
+        #expect(state.recordUnauthenticatedFailure(now: 10) == 1)
+        #expect(state.consecutiveFailures == 1)
+        #expect(state.remainingBackoff(now: 10.5) == 0.5)
+        #expect(!state.isDue(now: 10.5))
+        #expect(state.isDue(now: 11))
+        #expect(state.recordUnauthenticatedFailure(now: 11) == 2)
+        #expect(state.recordUnauthenticatedFailure(now: 13) == 4)
+        #expect(state.recordUnauthenticatedFailure(now: 17) == 5)
+        state.reset()
+        #expect(state.consecutiveFailures == 0)
+        #expect(state.retryNotBefore == nil)
+    }
+
     @Test func channelMuxHeaderMatchesEstablishedWireShape() throws {
         let wire = try ObstacleBridgeChannelMuxCodec.encode(
             channelID: 0x0102,
