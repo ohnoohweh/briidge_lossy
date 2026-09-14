@@ -152,6 +152,7 @@ class LinuxSwiftSecureLinkPeer:
         mux_echo: bool = False,
         drop_myudp_application_data_count: int = 0,
         reorder_myudp_application_reply: bool = False,
+        duplicate_myudp_application_reply: bool = False,
         delay_myudp_application_reply_seconds: float = 0.0,
     ) -> None:
         self.transport = transport
@@ -160,6 +161,7 @@ class LinuxSwiftSecureLinkPeer:
         self.mux_echo = mux_echo
         self.drop_myudp_application_data_count = max(0, drop_myudp_application_data_count)
         self.reorder_myudp_application_reply = reorder_myudp_application_reply
+        self.duplicate_myudp_application_reply = duplicate_myudp_application_reply
         self.delay_myudp_application_reply_seconds = max(0.0, delay_myudp_application_reply_seconds)
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
@@ -378,6 +380,13 @@ class LinuxSwiftSecureLinkPeer:
                 and len(datagrams) > 1
             ):
                 datagrams.reverse()
+            if (
+                self.duplicate_myudp_application_reply
+                and payload[1] == 4
+                and int.from_bytes(payload[12:20], 'big') == 2
+                and datagrams
+            ):
+                datagrams.insert(1 if len(datagrams) > 1 else 0, datagrams[0])
             for datagram in datagrams:
                 listener.sendto(datagram, peer)
             if (
@@ -7355,7 +7364,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delaye
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_loss_delay_and_reordering(tmp_path: Path) -> None:
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_loss_delay_reordering_and_duplication(tmp_path: Path) -> None:
     """The foreground Linux client preserves a Core stream through composed faults."""
     if not sys.platform.startswith('linux') or not shutil.which('swift'):
         pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
@@ -7367,6 +7376,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_compos
         psk,
         drop_myudp_application_data_count=2,
         reorder_myudp_application_reply=True,
+        duplicate_myudp_application_reply=True,
         delay_myudp_application_reply_seconds=0.25,
     )
     try:

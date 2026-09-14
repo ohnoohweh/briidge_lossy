@@ -351,7 +351,7 @@ The duplicated areas and their required disposition are:
 
 | Area | Current evidence | Target disposition |
 | --- | --- | --- |
-| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the retired Apple compatibility facade is deleted. Linux host tests cover dropped-DATA timer recovery and duplicated/reordered Python-peer chunks, and the built foreground client recovers when an independent Python peer drops its first post-handshake DATA datagram. Wider delayed/lossy process and mixed-runtime listener evidence remain incomplete. | Finish adapter-stat projection and the R004C/R004D qualification matrix. |
+| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the retired Apple compatibility facade is deleted. Linux host tests cover dropped-DATA timer recovery, duplicated/reordered Python-peer chunks, malformed-datagram rejection, and closed-session cleanup. The built foreground client recovers through composed loss, delay, duplication, and reverse-ordered multi-datagram replies from an independent Python peer. | Complete the bidirectional Apple/Linux qualification matrix for CONTROL/IDLE, rollover, and maximum missing-list pressure. |
 | ChannelMux and services | The portable target implements only the eight-byte mux header. Linux separately encodes O5 OPEN and RS3 catalogs, while the Apple codec also owns O4/O5, RS2/RS3, metadata, control chunks, and reassembly. | One core frame/service model and codec owns all wire formats. Core service/TCP/UDP/TUN state emits socket or packet effects; adapters never serialize ChannelMux themselves. |
 | SecureLink | `ObstacleBridgeCore.swift` contains a reduced PSK client/server implementation. Apple has a separate codec and a fuller runtime with rekey, timeout, retry, readiness, replay, and diagnostic state. | Move the full role-neutral state machine to core and use the pinned `Crypto` implementation. Keep the Objective-C Apple crypto class only as a compatibility facade. |
 | Stream and WebSocket overlays | Linux implements ObstacleBridge APP/PING/PONG framing in its POSIX owner. Apple TCP and QUIC logical runtime files are effectively identical, while the nominally logical WebSocket runtime exposes `URLSessionWebSocketTask.Message`. | Core owns ObstacleBridge stream/WebSocket envelopes, buffering, liveness, and lifecycle decisions. Adapters own TCP, RFC 6455/backend integration, TLS/trust, and QUIC I/O. |
@@ -531,8 +531,8 @@ met; compiling alone is not completion.
 
 ### LSW-R004 — Consolidate the full myudp runtime
 
-R004 is the umbrella for the remaining myudp consolidation packages below. It
-closes only when R004B through R004D are complete.
+R004 closes when the common peer registry and the cross-platform myudp
+qualification matrix are both complete.
 
 Current status: `ObstacleBridgeCore` owns ordered stream reassembly,
 counter-ring ordering, duplicate suppression, missing-counter discovery,
@@ -563,8 +563,8 @@ foreground client also recovers when an independent Python peer drops its first
 two post-handshake protected DATA datagrams. The foreground client also
 reassembles a multi-chunk protected response sent in reverse datagram order.
 The foreground client also completes a protected exchange after composed loss,
-delay, and reverse-ordered multi-datagram reply delivery from an independent
-Python peer. macOS conditionally excludes the Linux adapter tests, so a
+delay, duplicate, and reverse-ordered multi-datagram reply delivery from an
+independent Python peer. macOS conditionally excludes the Linux adapter tests, so a
 zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
 The Core registry selects monotonically newer epochs, withdraws superseded peer
@@ -592,30 +592,14 @@ snapshot fields that only mirror Core values. The generated Apple project
 already compiles the Core source, so this is adapter-surface cleanup, not
 another protocol implementation.
 
-R004 remains open because the listener is not yet wired to an authenticated
-admission-epoch source and the complete bidirectional Python/Swift matrix has
+R004 remains open because the complete bidirectional Python/Swift matrix has
 not yet qualified both Apple and Linux clients for loss, duplication,
 reordering, CONTROL/IDLE, counter rollover, and maximum missing-list pressure.
-The completed Apple-adapter boundary is continuously guarded by the macOS
-parity runner and Apple source-ownership tests.
-
-#### LSW-R004C — Replace the reduced Linux myudp client
-
-Run the Core peer engine behind the connected POSIX datagram client and remove
-the adapter-local request/reply reliability subset.
-
-Definition of Done:
-
-- the Linux type retains only address resolution, UDP socket I/O,
-  cancellation, clock/timer execution, and delivery of Core effects;
-- duplex receive, batching, send-window backpressure, retransmission,
-  CONTROL/IDLE, liveness, and epoch reset match the Python reference;
-- no counter allocation, ACK construction, stream buffer, echo calculation,
-  or protocol constant remains in `ObstacleBridgeLinuxAdapters`; and
-- focused Linux tests cover independent send/receive progress, timeout,
-  cancellation, malformed datagrams, and reconnect cleanup.
-
-May proceed in parallel with LSW-R004B.
+Authenticated listener admission is a separate Linux listener mechanism
+described under the remaining Linux feature work; it must supply epochs to the
+completed Core registry without adding protocol state to the adapter. The
+completed Apple-adapter boundary is continuously guarded by the macOS parity
+runner and Apple source-ownership tests.
 
 #### LSW-R004D — Qualify common peer and listener state
 
@@ -638,7 +622,6 @@ Definition of Done:
   implementation are deleted, with source and dependency guards proving one
   owner for every myudp protocol policy.
 
-Depends on LSW-R004B and LSW-R004C.
 
 ### LSW-R005 — Consolidate SecureLink and crypto
 
