@@ -420,15 +420,26 @@ class LinuxSwiftSecureLinkPeer:
         # before it drains the reply and emits its Core CONTROL/IDLE effect.
         # Retain a live peer for a bounded interval, then finish promptly once
         # the first post-reply transport acknowledgement has been observed.
-        deadline = time.monotonic() + (5.0 if peer is not None else 1.0)
+        # A real client owns the reference peer's lifetime through close().
+        # Under a parallel CI host, a fixed post-reply deadline can expire
+        # while the Swift process still drains its datagrams and turn a valid
+        # reply into an ICMP port-unreachable.  The no-peer unit test retains
+        # its short completion deadline.
+        deadline = time.monotonic() + 1.0 if peer is None else None
         acknowledgement_deadline: Optional[float] = None
-        while time.monotonic() < deadline:
+        while not self._closing.is_set():
+            if deadline is not None and time.monotonic() >= deadline:
+                return
             try:
                 wire, _peer = listener.recvfrom(65535)
             except TimeoutError:
                 if acknowledgement_deadline is not None and time.monotonic() >= acknowledgement_deadline:
                     return
                 continue
+            except OSError:
+                if self._closing.is_set():
+                    return
+                raise
             if wire[:1] == bytes([PTYPE_CONTROL]):
                 self.myudp_control_frames_received += 1
                 acknowledgement_deadline = time.monotonic() + 0.1

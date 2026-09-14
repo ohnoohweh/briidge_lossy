@@ -159,6 +159,7 @@ Current implementation note:
   Apple wrapper consumes those Core constants rather than declaring another
   protocol namespace. Apple client and listener roles delegate PSK handshake,
   protected data, rekey transitions, and injected-clock expiry to Core roles;
+  Core state also supplies authenticated-generation and completed-rekey totals;
   Apple retains transport and operator-status adaptation.
   Generated Apple targets link the pinned `Crypto` product through both target
   package dependencies and framework-phase product references, then compile
@@ -190,10 +191,14 @@ Current implementation note:
   while returning Core CONTROL and IDLE effects; its independent peer keeps the
   UDP endpoint bound until it receives the runner's post-reply CONTROL or IDLE
   acknowledgement, followed by one quiet receive interval, so the runner drains
-  that reply without a port-close ICMP failure;
+  that reply without a port-close ICMP failure. If the acknowledgement is not
+  yet available, the test-owned peer remains bound until test teardown rather
+  than closing on a host-load-sensitive deadline;
   the macOS Swift/Python matrix runs both endpoint roles through dropped DATA,
   batching, duplication/reordering, and a full CONTROL missing-list recovery
-  that requires multiple retransmission DATA batches;
+  that requires multiple retransmission DATA batches. Its raw parity runner
+  compiles the canonical Core source with the pinned `Crypto` module, so Core
+  transcript users cannot disappear from that fixture's compile inventory;
   mixed-runtime process ports, including Admin listeners, are isolated across
   parallel test workers. An explicitly enabled Python listener may publish its
   `remote_servers` catalog to connected peers; the mixed-runtime lane proves

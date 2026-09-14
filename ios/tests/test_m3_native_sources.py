@@ -987,6 +987,11 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "s.expireHandshakeIfNeeded()" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
+    assert "private var coreState: ObstacleBridgeSecureLinkPSKState?" in runtime
+    assert "state?.authenticatedGenerationsTotal" in runtime
+    assert "state?.rekeysCompletedTotal" in runtime
+    assert "authenticatedSessionsTotal &+=" not in runtime
+    assert "rekeysCompletedTotal &+=" not in runtime
     assert "framesFromClientPassedTotal" in runtime
     assert "framesFromClientDroppedTotal" in runtime
     assert "framesToClientPassedTotal" in runtime
@@ -1022,6 +1027,8 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
     assert "retryState.isDue" in runtime
     assert "retryBackoffInitialSec" not in runtime
     assert "retryBackoffMaxSec" not in runtime
+    assert "authenticatedSessionsTotal &+=" not in runtime
+    assert "rekeysCompletedTotal &+=" not in runtime
 
 
 def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:

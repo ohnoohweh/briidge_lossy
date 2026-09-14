@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from ios.tests.swift_test_support import swift_core_crypto_compile_flags
 from obstacle_bridge.bridge import ChannelMux, SessionMetrics
 from obstacle_bridge.bridge import BaseFrameV2, ControlPacket, MyUDP2Session, MyUDP2BatchCodec, Protocol, StreamChunk
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
@@ -39,6 +40,7 @@ SWIFT_SECURELINK_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBrid
 SWIFT_OVERLAY_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"
 SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
+SWIFT_CORE_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"
 SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
 SWIFT_TCP_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeTcpOverlayRuntime.swift"
 SWIFT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "channelmux_codec_runner.swift"
@@ -140,6 +142,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
     binary = output_dir / "channelmux_codec_runner"
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-o",
         str(binary),
         str(SWIFT_CODEC_SOURCE),
@@ -158,6 +161,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
         str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
         str(SWIFT_SERVICE_CODEC_SOURCE),
+        str(SWIFT_CORE_SOURCE),
         str(SWIFT_WS_PAYLOAD_CODEC_SOURCE),
         str(SWIFT_WS_OVERLAY_RUNTIME_SOURCE),
         str(SWIFT_TCP_OVERLAY_RUNTIME_SOURCE),

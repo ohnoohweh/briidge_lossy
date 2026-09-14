@@ -432,6 +432,10 @@ struct ObstacleBridgeCryptoTests {
         let proof = try client.handleServerHello(server.handleClientHello(try client.begin(sessionID: sessionID, clientNonce: clientNonce), serverNonce: serverNonce))
         try client.handleServerAcknowledgement(server.handleClientProof(proof))
         #expect(client.isAuthenticated && server.isAuthenticated)
+        #expect(client.state.authenticatedGenerationsTotal == 1)
+        #expect(server.state.authenticatedGenerationsTotal == 1)
+        #expect(client.state.rekeysCompletedTotal == 0)
+        #expect(server.state.rekeysCompletedTotal == 0)
         #expect(try server.unprotect(client.protect(Data("python-client".utf8))) == Data("python-client".utf8))
         #expect(try client.unprotect(server.protect(Data("linux-server".utf8))) == Data("linux-server".utf8))
     }
@@ -495,7 +499,9 @@ struct ObstacleBridgeCryptoTests {
             rxCounter: 1,
             authenticated: true,
             pendingRekeySessionID: 0,
-            applicationSendingBlocked: false
+            applicationSendingBlocked: false,
+            authenticatedGenerationsTotal: 1,
+            rekeysCompletedTotal: 0
         ))
 
         let oldGenerationFrame = try client.protect(Data("before-rekey".utf8))
@@ -519,13 +525,19 @@ struct ObstacleBridgeCryptoTests {
         let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
         #expect(try server.handleRekeyCommit(rekeyCommit) == rekeyDone)
         try client.handleRekeyDone(rekeyDone)
+        #expect(client.state.authenticatedGenerationsTotal == 2)
+        #expect(server.state.authenticatedGenerationsTotal == 2)
+        #expect(client.state.rekeysCompletedTotal == 1)
+        #expect(server.state.rekeysCompletedTotal == 1)
         #expect(client.state == .init(
             sessionID: 8,
             txCounter: 1,
             rxCounter: 0,
             authenticated: true,
             pendingRekeySessionID: 0,
-            applicationSendingBlocked: false
+            applicationSendingBlocked: false,
+            authenticatedGenerationsTotal: 2,
+            rekeysCompletedTotal: 1
         ))
         #expect(server.state == .init(
             sessionID: 8,
@@ -533,7 +545,9 @@ struct ObstacleBridgeCryptoTests {
             rxCounter: 0,
             authenticated: true,
             pendingRekeySessionID: 0,
-            applicationSendingBlocked: false
+            applicationSendingBlocked: false,
+            authenticatedGenerationsTotal: 2,
+            rekeysCompletedTotal: 1
         ))
 
         #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyHello).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyHello)

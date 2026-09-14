@@ -292,6 +292,10 @@ public struct ObstacleBridgeSecureLinkPSKState: Sendable, Equatable {
     public let authenticated: Bool
     public let pendingRekeySessionID: UInt64
     public let applicationSendingBlocked: Bool
+    /// Authenticated key generations observed during this Core peer's current
+    /// lifecycle. A completed rekey installs another authenticated generation.
+    public let authenticatedGenerationsTotal: UInt64
+    public let rekeysCompletedTotal: UInt64
 
     public init(
         sessionID: UInt64,
@@ -299,7 +303,9 @@ public struct ObstacleBridgeSecureLinkPSKState: Sendable, Equatable {
         rxCounter: UInt64,
         authenticated: Bool,
         pendingRekeySessionID: UInt64,
-        applicationSendingBlocked: Bool
+        applicationSendingBlocked: Bool,
+        authenticatedGenerationsTotal: UInt64 = 0,
+        rekeysCompletedTotal: UInt64 = 0
     ) {
         self.sessionID = sessionID
         self.txCounter = txCounter
@@ -307,6 +313,8 @@ public struct ObstacleBridgeSecureLinkPSKState: Sendable, Equatable {
         self.authenticated = authenticated
         self.pendingRekeySessionID = pendingRekeySessionID
         self.applicationSendingBlocked = applicationSendingBlocked
+        self.authenticatedGenerationsTotal = authenticatedGenerationsTotal
+        self.rekeysCompletedTotal = rekeysCompletedTotal
     }
 }
 
@@ -398,6 +406,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     private var handshakeStartedAt: TimeInterval?
     private var authenticatedAt: TimeInterval?
     private var protectedDataFramesSent: UInt64 = 0
+    private var authenticatedGenerationsTotal: UInt64 = 0
+    private var rekeysCompletedTotal: UInt64 = 0
     private var pendingSessionID: UInt64 = 0
     private var pendingClientNonce = Data()
     private var pendingServerNonce = Data()
@@ -420,7 +430,9 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             rxCounter: rxCounter,
             authenticated: authenticated,
             pendingRekeySessionID: pendingSessionID,
-            applicationSendingBlocked: pendingCommitSent
+            applicationSendingBlocked: pendingCommitSent,
+            authenticatedGenerationsTotal: authenticatedGenerationsTotal,
+            rekeysCompletedTotal: rekeysCompletedTotal
         )
     }
 
@@ -505,6 +517,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         handshakeStartedAt = nil
         authenticatedAt = timeProvider()
         protectedDataFramesSent = 0
+        authenticatedGenerationsTotal &+= 1
     }
 
     /// Validates REKEY_REPLY, derives the pending generation, and returns its
@@ -571,6 +584,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         rxCounter = 0
         authenticatedAt = timeProvider()
         protectedDataFramesSent = 0
+        authenticatedGenerationsTotal &+= 1
+        rekeysCompletedTotal &+= 1
         clearPendingRekey()
     }
 
@@ -672,6 +687,8 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         handshakeStartedAt = nil
         authenticatedAt = nil
         protectedDataFramesSent = 0
+        authenticatedGenerationsTotal = 0
+        rekeysCompletedTotal = 0
         clearPendingRekey()
     }
 
@@ -723,6 +740,8 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
     private var rxCounter: UInt64 = 0
     private var authenticated = false
     private var handshakeStartedAt: TimeInterval?
+    private var authenticatedGenerationsTotal: UInt64 = 0
+    private var rekeysCompletedTotal: UInt64 = 0
     private var pendingSessionID: UInt64 = 0
     private var pendingClientNonce = Data()
     private var pendingServerNonce = Data()
@@ -746,7 +765,9 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
             rxCounter: rxCounter,
             authenticated: authenticated,
             pendingRekeySessionID: pendingSessionID,
-            applicationSendingBlocked: false
+            applicationSendingBlocked: false,
+            authenticatedGenerationsTotal: authenticatedGenerationsTotal,
+            rekeysCompletedTotal: rekeysCompletedTotal
         )
     }
 
@@ -792,6 +813,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         authenticated = true
         handshakeStartedAt = nil
+        authenticatedGenerationsTotal &+= 1
         return try protect(Data())
     }
 
@@ -866,6 +888,8 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         lastCompletedRekeySessionID = sessionID
         lastCompletedRekeyCommit = frame.payload
         lastCompletedRekeyDone = done
+        authenticatedGenerationsTotal &+= 1
+        rekeysCompletedTotal &+= 1
         clearPendingRekey()
         return done
     }
@@ -930,6 +954,8 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         rxCounter = 0
         authenticated = false
         handshakeStartedAt = nil
+        authenticatedGenerationsTotal = 0
+        rekeysCompletedTotal = 0
         clearPendingRekey()
         clearCompletedRekey()
     }

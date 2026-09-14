@@ -650,6 +650,10 @@ for in-flight application traffic remain Core integration gaps. Core now owns
 the injected monotonic retry-backoff policy and failure/deadline state; Apple
 adapts only the transport attempt and wall-clock retry presentation. Native
 source ownership tests reject a return to adapter-local retry arithmetic.
+Core state also owns authenticated-generation and completed-rekey totals, so
+Apple publishes those values without maintaining its own lifecycle-counter
+arithmetic. Apple still owns the stable event names, wall-clock timestamps,
+transport disconnect reason, and packet-flow diagnostics around the Core state.
 On Apple, the generated project pins `swift-crypto` 4.5.1 and now records its
 `Crypto` product both as a target package dependency and as an explicit
 `PBXFrameworksBuildPhase` product reference for the app and `IPServer`. This
@@ -682,7 +686,10 @@ reference endpoint retains a completed reply until the client has emitted its
 Core CONTROL or IDLE acknowledgement, then closes after one quiet receive
 interval. This prevents peer-confirmation and reply-drain scheduling from
 turning a valid authenticated exchange into a UDP connection-refused failure
-under parallel qualification. Host-side raw-source probes
+under parallel qualification. When no acknowledgement is available, an active
+test-owned peer remains live until its owner closes it instead of applying a
+host-load-sensitive post-reply deadline; only the no-peer unit fixture uses a
+short autonomous expiry. Host-side raw-source probes
 reuse the already-built SwiftPM Core/Crypto module when it is available, so a
 CI job does not synchronously invoke SwiftPM again after its Core build step.
 An absent module still triggers the one required package build.
