@@ -628,7 +628,7 @@ Definition of Done:
 - direct `CryptoKit`/`CommonCrypto` SecureLink logic and the reduced portable
   client/server implementation are removed.
 
-May proceed in parallel with LSW-R004.
+May proceed independently of the delivered common myudp foundation.
 
 ### LSW-R006 — Consolidate overlay layers and lifecycle
 
@@ -657,7 +657,7 @@ Definition of Done:
 - Linux configured/live runtime, receive-worker, and reconnect-policy logic is
   removed from the adapter target or reduced to composition-only wrappers.
 
-Depends on LSW-R004 and LSW-R005.
+Depends on the delivered common myudp foundation and LSW-R005.
 
 ### LSW-R007 — Consolidate ChannelMux, services, and TUN state
 
@@ -714,7 +714,7 @@ Definition of Done:
   payload tests pass, after which the Linux subset parser and hard-coded Admin
   payload builders are removed.
 
-Depends on LSW-R004 through LSW-R007.
+Depends on the delivered common myudp foundation and LSW-R005 through LSW-R007.
 
 ### LSW-R009 — Migrate builds, enforce uniqueness, and retain the Windows sentinel
 
@@ -754,7 +754,8 @@ Definition of Done:
 - behavior-bearing compatibility facades, obsolete source lists, and all
   migrated duplicate implementations are removed.
 
-Depends on LSW-R004 through LSW-R008 and gates the non-refactor LSW-008 release
+Depends on the delivered common myudp foundation and LSW-R005 through LSW-R008,
+and gates the non-refactor LSW-008 release
 qualification package below.
 
 ## Remaining Linux feature work
@@ -784,9 +785,9 @@ Depends on LSW-R007.
 
 ### LSW-005A — Linux myudp listener admission
 
-Add server-side Linux UDP ownership around the common myudp engine delivered by
-LSW-R004. It is independent of the TUN milestone and must not add another
-listener protocol implementation.
+Add server-side Linux UDP ownership around the delivered common myudp engine.
+It is independent of the TUN milestone and must not add another listener
+protocol implementation.
 
 Definition of Done:
 
@@ -801,7 +802,8 @@ Definition of Done:
 - built-process Python-client/Linux-Swift-listener E2E tests cover service
   traffic, concurrency, withdrawal, and reconnect without socket leakage.
 
-Depends on LSW-R004 and LSW-R006. It does not depend on LSW-005.
+Depends on the delivered common myudp foundation and LSW-R006. It does not
+depend on LSW-005.
 
 ### LSW-005B — Linux QUIC transport admission
 
@@ -934,13 +936,13 @@ Depends on LSW-R009. It does not gate LSW-008 or the Linux Swift parity result.
 
 ## Suggested sequence and open decisions
 
-The shared codec foundation is established. LSW-R004 myudp and LSW-R005
-SecureLink can proceed in parallel before converging in the common overlay
-coordinator.
-LSW-R007 gates the Linux TUN adapter; LSW-R004 plus LSW-R006 gate the Linux
-myudp listener. LSW-R008 gates the final CLI/Admin surface, and LSW-R009 gates
-release qualification. This order prevents LSW-005 and LSW-005A from creating
-new state that would immediately need to be extracted.
+The shared codec and myudp foundations are established. LSW-R005 SecureLink
+converges with the delivered myudp runtime in the common overlay coordinator.
+LSW-R007 gates the Linux TUN adapter; the delivered myudp foundation plus
+LSW-R006 gate the Linux myudp listener. LSW-R008 gates the final CLI/Admin
+surface, and LSW-R009 gates release qualification. This order prevents LSW-005
+and LSW-005A from creating new state that would immediately need to be
+extracted.
 
 LSW-R010 is intentionally last and optional. It begins only after the Linux
 Swift parity gate is complete, using the already-qualified portable Core rather
