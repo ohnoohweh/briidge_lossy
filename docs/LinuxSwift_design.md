@@ -685,10 +685,9 @@ Linux source/runtime parity tests cover the Core-only adapter boundary. Apple
 native transport probes explicitly deliver the Core server acknowledgement
 before attempting application data, enforcing the same peer-confirmed
 authentication boundary as Python. The target-only IPServer simulator
-build has compiled the Core-only adapter successfully. The remaining Apple
-validation is device qualification and the complete cross-platform known-answer
-set. R005 remains open for those qualification and broader Core lifecycle
-integration requirements.
+build has compiled the Core-only adapter successfully. R005 remains open for
+the Apple/product qualification, requirement-level parity audit, and final CI
+closure defined as `LSW-R005.4` through `LSW-R005.6` below.
 
 Routine Core and Apple SecureLink validation excludes the marked slow
 packet-tunnel probe family. Each scenario constructs a complete host runtime
@@ -723,6 +722,33 @@ work. The privileged macOS TUN matrix is path-gated to its TUN, routing,
 helper, host-runner, and qualification-test ownership; SecureLink/Core changes
 continue through the ordinary Swift probe and host-side parity lanes without
 waiting for unrelated privileged network setup.
+
+#### R005 sub-workpackages and closure state
+
+R005 is no longer one undifferentiated implementation task. The following
+sub-workpackages are the authoritative closure checklist; a completed item is
+retained here only until R005 itself closes, at which point its durable contract
+is folded into the shared architecture description and this work-package block
+is removed.
+
+| ID | Scope and platform | State | Evidence or remaining exit criteria |
+| --- | --- | --- | --- |
+| `LSW-R005.1` | Core crypto ownership (all Swift platforms) | Complete | `ObstacleBridgeCrypto` owns SHA-256, HMAC, HKDF, PBKDF2, AES-GCM, ChaCha20-Poly1305, Ed25519, X25519, and private-key generation through pinned `swift-crypto`; Linux Core vectors cover fixed known answers and invalid inputs. |
+| `LSW-R005.2` | Core PSK protocol state (all Swift platforms) | Complete | One client/server implementation owns framing, handshake, peer confirmation, protected counters, replay rejection, time/frame/operator rekey, retry policy, timeout, reconnect reset, serialized sends, diagnostics state, and the bounded old-generation receive window. Deterministic Linux Core tests cover these transitions. |
+| `LSW-R005.3` | Platform-wrapper reduction (Apple and Linux) | Complete | Apple SecureLink runtime and frame codec contain transport/status or type-boundary adaptation only; the Objective-C crypto selector class delegates to Core. Source-ownership guards reject local proof, AEAD, key-derive, retry, readiness, or lifecycle implementations. Linux transport owners already consume the same Core roles. |
+| `LSW-R005.4` | Apple backend and product qualification (macOS, iOS simulator, physical iOS) | Open | Re-run the complete Core crypto known-answer suite natively on macOS; pass all ten Apple runtime/transport probes after peer-confirmation fixes; build both generated Apple targets with explicit `Crypto` linkage; run the applicable iOS simulator SecureLink E2E; record archive/product-size impact and backend availability. Physical-device execution remains an iOS-only residual when a signed device target is available. |
+| `LSW-R005.5` | Python/Swift behavioral parity and traceability audit (Linux plus macOS) | Open | For every `REQ-AUT-*` PSK behavior in scope, map Python reference implementation, Swift Core/adapter implementation, Python test, Swift test, and mixed-runtime test. Run wrong-key, malformed-frame, replay, timeout, rekey overlap, reconnect, counter exhaustion, concurrency, and TCP/WS/myudp interoperability evidence. No row may be marked parity-complete from a source guard alone. |
+| `LSW-R005.6` | Final release/CI closure (all required CI platforms) | Waiting on `.4` and `.5` | Require the PR's R005-relevant Linux shared, macOS Swift probe/backed, requirements, README/traceability, and Swift ownership checks to pass. Classify unrelated privileged-TUN failures explicitly rather than silently accepting them. Then remove R005 from the pending sequence and retain only the delivered architecture and any physical-device release qualification in the platform qualification section. |
+
+Linux can complete the macOS-independent portion of `LSW-R005.5`, including
+the traceability matrix, Core vectors, mixed Python peers, and ownership guards.
+The remote macOS host can complete the macOS and simulator portions of
+`LSW-R005.4`; only signed physical-device execution is inherently unavailable
+from Linux or an unsigned simulator build. The current PR has a passing macOS
+Swift probe and ownership/traceability guards, while its Linux shared and macOS
+Swift-backed jobs are still running. A macOS Swift elevated-TUN job currently
+reports failure and must be classified after its run log is available; it is
+not R005 evidence merely because it shares the PR workflow.
 
 Definition of Done:
 
