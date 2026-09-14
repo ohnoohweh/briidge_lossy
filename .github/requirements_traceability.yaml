@@ -1340,6 +1340,7 @@ REQ-MYU-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportRejectsMalformedPythonDatagramAndClosedSession
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_out_of_order_delivery_tracks_missing_and_reassembles_without_corruption
     - tests/unit/test_myudp_processing_repro.py::test_network_rx_gap_state_reproduces_stall_shape_until_missing_frame_arrives
     - tests/unit/test_replay_myudp_semantic_log.py::test_replay_myudp_semantic_log_detects_regression_and_reset_match

@@ -556,8 +556,9 @@ limit.
 The connected Linux POSIX client executes peer-engine effects and retains socket
 I/O, endpoint resolution, cancellation, and timer invocation. Its bounded
 synchronous exchange ticks Core after a receive timeout. Linux-host tests use a
-Python UDP peer to prove Core-timer recovery after a dropped DATA datagram and
-exact-once reassembly after duplicated, out-of-order inbound chunks. The built
+Python UDP peer to prove Core-timer recovery after a dropped DATA datagram,
+exact-once reassembly after duplicated, out-of-order inbound chunks, malformed
+datagram rejection, and closed-session timer cancellation. The built
 foreground client also recovers when an independent Python peer drops its first
 two post-handshake protected DATA datagrams. The foreground client also
 reassembles a multi-chunk protected response sent in reverse datagram order.

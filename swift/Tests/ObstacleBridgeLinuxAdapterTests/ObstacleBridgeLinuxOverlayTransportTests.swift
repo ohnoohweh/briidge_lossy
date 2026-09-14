@@ -115,6 +115,16 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receive().payload == Data("python-reordered".utf8))
     }
 
+    @Test func myudpTransportRejectsMalformedPythonDatagramAndClosedSession() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-malformed")
+        defer { peer.stop() }
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "127.0.0.1", port: peer.port)
+        _ = try session.send(Data("register".utf8))
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try session.receive() }
+        session.close()
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try session.serviceTimers() }
+    }
+
     @Test func configuredMyudpSecureLinkSessionCarriesProtectedDataAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-securelink")
         defer { peer.stop() }
@@ -535,6 +545,13 @@ final class PythonOverlayPeer {
                 try: s.recvfrom(1452)
                 except OSError: pass
             s.close()
+            """
+        }
+        if mode == "myudp-malformed" {
+            return """
+            import socket
+            s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
+            _,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.close()
             """
         }
         if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" {
