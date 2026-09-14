@@ -167,7 +167,7 @@ Current implementation note:
   order and deduplicate chunks, and return cumulative transport acknowledgements;
   the foreground myudp client remains qualified when that independent peer
   composes repeated outbound DATA loss with delayed, duplicated, reverse-ordered
-  multi-datagram protected replies;
+  multi-datagram protected replies across the `65535 -> 1` counter rollover;
   mixed-runtime process ports, including Admin listeners, are isolated across
   parallel test workers. An explicitly enabled Python listener may publish its
   `remote_servers` catalog to connected peers; the mixed-runtime lane proves
