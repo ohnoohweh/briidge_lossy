@@ -14,7 +14,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import require_swift_modules
+from swift_test_support import require_swift_modules, swift_core_crypto_compile_flags
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -37,9 +37,11 @@ def _compile_swift_tcp_transport_owner_probe(source_path: Path, binary_path: Pat
     )
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-o",
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),

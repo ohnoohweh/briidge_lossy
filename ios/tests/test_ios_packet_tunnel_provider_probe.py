@@ -21,7 +21,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import require_swift_modules
+from swift_test_support import require_swift_modules, swift_core_crypto_compile_flags
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,6 +148,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
     )
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-DOB_IPSERVER_SWIFT_SMOKE",
         "-DOB_IPSERVER_SWIFT_PROBE",
         "-o",
@@ -189,6 +190,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),

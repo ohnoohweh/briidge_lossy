@@ -98,6 +98,14 @@ if [ -z "${SWIFTC_CMD}" ]; then
 fi
 
 SWIFT_EXTRA_FLAGS=()
+echo "[build_macos_app] preparing pinned Core Crypto module"
+(cd "${REPO_ROOT}" && swift build --target ObstacleBridgeCore)
+CORE_CRYPTO_MODULE_DIR="$(find "${REPO_ROOT}/.build" -path '*/debug/Modules' -type d -print -quit)"
+if [ -z "${CORE_CRYPTO_MODULE_DIR}" ]; then
+  echo "[build_macos_app] unable to locate the pinned Crypto module" >&2
+  exit 1
+fi
+SWIFT_EXTRA_FLAGS+=("-I" "${CORE_CRYPTO_MODULE_DIR}" "-L" "$(dirname "${CORE_CRYPTO_MODULE_DIR}")" "-lCrypto")
 if [ "${OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION:-0}" = "1" ]; then
   SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")
 fi
@@ -157,6 +165,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeCompressLayerRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPSKTranscript.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift" \
@@ -235,6 +244,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeCompressLayerRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPSKTranscript.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift" \

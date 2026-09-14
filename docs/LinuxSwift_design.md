@@ -641,10 +641,12 @@ retaining its backend calls; the Apple runtime retains separate lifecycle
 ownership for deadline, rekey negotiation, readiness, retry status, and
 redacted diagnostics and directly invokes `CryptoKit` for protected frames.
 `ObstacleBridgeNativeCrypto` still supplies
-the Objective-C bridge and directly owns Apple crypto calls. R005 therefore remains open until
-the Apple crypto backend passes the complete known-answer set and the Apple
-runtime delegates its full lifecycle state and protected-frame crypto to Core,
-with platform bridges reduced to their required Objective-C boundary.
+the Objective-C bridge and directly owns Apple crypto calls. The generated
+project links the pinned `swift-crypto` `Crypto` product into both Apple
+targets, so the same Core source is available without importing `CryptoKit`
+from Core. R005 remains open until the Apple backend passes the complete
+known-answer set and the Apple wrapper delegates its full lifecycle state to
+Core, with platform bridges reduced to their required Objective-C boundary.
 
 Definition of Done:
 

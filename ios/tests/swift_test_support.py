@@ -32,6 +32,26 @@ def require_swift_modules(*module_names: str, missing_swiftc_reason: str, missin
 
 
 @lru_cache(maxsize=None)
+def swift_core_crypto_compile_flags() -> tuple[str, ...]:
+    """Expose the pinned SwiftPM Crypto product to raw-source macOS probes."""
+    if sys.platform != "darwin":
+        return ()
+    completed = subprocess.run(
+        ["swift", "build", "--target", "ObstacleBridgeCore"],
+        cwd=str(ROOT), capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"swift build --target ObstacleBridgeCore failed:\n{completed.stdout}\n{completed.stderr}"
+        )
+    module_dirs = sorted(ROOT.glob(".build/*/debug/Modules"))
+    if not module_dirs:
+        raise AssertionError("pinned Swift Crypto module directory was not produced")
+    module_dir = module_dirs[0]
+    return ("-I", str(module_dir), "-L", str(module_dir.parent), "-lCrypto")
+
+
+@lru_cache(maxsize=None)
 def _swift_module_available(swiftc: str, module_name: str) -> bool:
     with tempfile.TemporaryDirectory(prefix="swift-module-probe-") as tmpdir:
         source_path = Path(tmpdir) / "probe.swift"

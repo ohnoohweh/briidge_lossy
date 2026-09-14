@@ -156,10 +156,10 @@ Current implementation note:
   unconfirmed handshake by clearing their session keys and counters, while the
   Core server serializes concurrent protected sends before assigning counters;
   Core also owns the complete PSK frame-type namespace through rekey.
-  The Apple SecureLink codec compiles the CryptoKit-free Core transcript source
-  directly, so its key derivation and server/commit proofs use identical
-  versioned transcript bytes; Apple lifecycle and protected-frame ownership
-  remain separately qualified.
+  Generated Apple targets link the pinned `Crypto` product and compile the
+  Core primitive source directly. The Apple SecureLink wrapper delegates PSK
+  derivation, proofs, and protected-frame AEAD to that common surface; Apple
+  lifecycle and status ownership remain separately qualified.
   Linux Swift
   TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
   protected-data tests. The overlay E2E suite runs the built Linux Swift

@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 enum ObstacleBridgeSecureLinkPskRuntimeError: Error {
@@ -882,25 +881,20 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     private func seal(payload: Data, key: Data, counter: UInt64, aad: Data) throws -> Data {
-        let sealed = try ChaChaPoly.seal(
-            payload,
-            using: SymmetricKey(data: key),
-            nonce: try ChaChaPoly.Nonce(data: ObstacleBridgeSecureLinkPskCodec.nonce(counter: counter)),
-            authenticating: aad
+        try ObstacleBridgeCrypto.chaChaPolySeal(
+            plaintext: payload,
+            key: key,
+            nonce: ObstacleBridgeSecureLinkPskCodec.nonce(counter: counter),
+            authenticatedData: aad
         )
-        return sealed.ciphertext + sealed.tag
     }
 
     private func open(ciphertext: Data, key: Data, counter: UInt64, aad: Data) throws -> Data {
-        let sealed = try ChaChaPoly.SealedBox(
-            nonce: try ChaChaPoly.Nonce(data: ObstacleBridgeSecureLinkPskCodec.nonce(counter: counter)),
-            ciphertext: ciphertext.dropLast(16),
-            tag: ciphertext.suffix(16)
-        )
-        return try ChaChaPoly.open(
-            sealed,
-            using: SymmetricKey(data: key),
-            authenticating: aad
+        try ObstacleBridgeCrypto.chaChaPolyOpen(
+            ciphertextAndTag: ciphertext,
+            key: key,
+            nonce: ObstacleBridgeSecureLinkPskCodec.nonce(counter: counter),
+            authenticatedData: aad
         )
     }
 }

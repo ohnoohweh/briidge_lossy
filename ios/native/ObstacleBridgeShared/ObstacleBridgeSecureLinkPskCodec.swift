@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 
 enum ObstacleBridgeSecureLinkPskCodecError: Error {
@@ -56,15 +55,10 @@ struct ObstacleBridgeSecureLinkPskCodec {
         clientNonce: Data,
         serverNonce: Data
     ) -> (Data, Data) {
-        let material = hkdfSHA256(
-            salt: Data(SHA256.hash(data: psk)),
-            info: ObstacleBridgeSecureLinkPSKTranscript.keyDerivationInfo(
-                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
-            ),
-            keyMaterial: psk + clientNonce + serverNonce,
-            length: 64
-        )
-        return (material.prefix(32), material.suffix(32))
+        guard let keys = try? ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(
+            psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+        ) else { return (Data(), Data()) }
+        return (keys.clientToServer, keys.serverToClient)
     }
 
     static func serverProof(
@@ -73,12 +67,9 @@ struct ObstacleBridgeSecureLinkPskCodec {
         clientNonce: Data,
         serverNonce: Data
     ) -> Data {
-        hmacSHA256(
-            key: psk,
-            message: ObstacleBridgeSecureLinkPSKTranscript.serverProofMessage(
-                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
-            )
-        )
+        (try? ObstacleBridgeSecureLinkPSKCrypto.serverProof(
+            psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+        )) ?? Data()
     }
 
     static func clientRekeyCommitProof(
@@ -87,12 +78,9 @@ struct ObstacleBridgeSecureLinkPskCodec {
         clientNonce: Data,
         serverNonce: Data
     ) -> Data {
-        hmacSHA256(
-            key: psk,
-            message: ObstacleBridgeSecureLinkPSKTranscript.clientRekeyCommitProofMessage(
-                sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
-            )
-        )
+        (try? ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof(
+            psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce
+        )) ?? Data()
     }
 
     static func buildJSONPayload(_ object: Any) throws -> Data {
@@ -107,24 +95,6 @@ struct ObstacleBridgeSecureLinkPskCodec {
             return nil
         }
         return parsed as? [String: Any]
-    }
-
-    private static func hkdfSHA256(salt: Data, info: Data, keyMaterial: Data, length: Int) -> Data {
-        let normalizedSalt = salt.isEmpty ? Data(repeating: 0, count: 32) : salt
-        let prk = hmacSHA256(key: normalizedSalt, message: keyMaterial)
-        var okm = Data()
-        var previous = Data()
-        var counter: UInt8 = 1
-        while okm.count < length {
-            previous = hmacSHA256(key: prk, message: previous + info + Data([counter]))
-            okm.append(previous)
-            counter &+= 1
-        }
-        return Data(okm.prefix(length))
-    }
-
-    private static func hmacSHA256(key: Data, message: Data) -> Data {
-        Data(HMAC<SHA256>.authenticationCode(for: message, using: SymmetricKey(data: key)))
     }
 
 }

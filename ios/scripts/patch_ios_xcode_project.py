@@ -85,6 +85,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C50000000000000000000F", "71C50000000000000000010F", "ObstacleBridgeOverlayStackPlanner.swift"),
     ("71C500000000000000000010", "71C500000000000000000110", "ObstacleBridgePacketTunnelConfiguration.swift"),
     ("71C500000000000000000030", "71C500000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
+    ("71C500000000000000000038", "71C500000000000000000138", "ObstacleBridgeCore.swift"),
     ("71C500000000000000000037", "71C500000000000000000137", "ObstacleBridgeSecureLinkPSKTranscript.swift"),
     ("71C500000000000000000036", "71C500000000000000000136", "ObstacleBridgeChannelMuxFrameCodec.swift"),
     ("71C500000000000000000034", "71C500000000000000000134", "ObstacleBridgeMyUDPCodec.swift"),
@@ -140,6 +141,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000027", "71C610000000000000000127", "ObstacleBridgeOverlayStackPlanner.swift"),
     ("71C61000000000000000000D", "71C61000000000000000010D", "ObstacleBridgeWebSocketPayloadCodec.swift"),
     ("71C610000000000000000030", "71C610000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
+    ("71C610000000000000000038", "71C610000000000000000138", "ObstacleBridgeCore.swift"),
     ("71C610000000000000000037", "71C610000000000000000137", "ObstacleBridgeSecureLinkPSKTranscript.swift"),
     ("71C610000000000000000036", "71C610000000000000000136", "ObstacleBridgeChannelMuxFrameCodec.swift"),
     ("71C610000000000000000034", "71C610000000000000000134", "ObstacleBridgeMyUDPCodec.swift"),
@@ -176,7 +178,7 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name in {"ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
+    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     return f"../../../../native/ObstacleBridgeShared/{name}"
 
@@ -644,6 +646,70 @@ def add_app_network_extension_framework(text: str) -> str:
     return patched
 
 
+def add_core_crypto_package(text: str) -> str:
+    package_id = "71C700000000000000000001"
+    product_id = "71C700000000000000000002"
+    if package_id not in text:
+        text = insert_before(
+            text,
+            "/* End PBXProject section */\n",
+            "/* Begin XCRemoteSwiftPackageReference section */\n"
+            f"\t\t{package_id} /* XCRemoteSwiftPackageReference \\\"swift-crypto\\\" */ = {{\n"
+            "\t\t\tisa = XCRemoteSwiftPackageReference;\n"
+            "\t\t\trepositoryURL = \"https://github.com/apple/swift-crypto.git\";\n"
+            "\t\t\trequirement = {\n"
+            "\t\t\t\tkind = exactVersion;\n"
+            "\t\t\t\tversion = 4.5.1;\n"
+            "\t\t\t};\n"
+            "\t\t};\n"
+            "/* End XCRemoteSwiftPackageReference section */\n"
+            "/* Begin XCSwiftPackageProductDependency section */\n"
+            f"\t\t{product_id} /* Crypto */ = {{\n"
+            "\t\t\tisa = XCSwiftPackageProductDependency;\n"
+            f"\t\t\tpackage = {package_id} /* XCRemoteSwiftPackageReference \\\"swift-crypto\\\" */;\n"
+            "\t\t\tproductName = Crypto;\n"
+            "\t\t};\n"
+            "/* End XCSwiftPackageProductDependency section */\n",
+        )
+    if "\t\t\tpackageReferences = (\n" not in text:
+        project_anchor = "\t\t\tprojectDirPath = \"\";\n"
+        if project_anchor not in text:
+            raise ValueError("PBXProject projectDirPath anchor not found")
+        text = text.replace(
+            project_anchor,
+            "\t\t\tpackageReferences = (\n"
+            f"\t\t\t\t{package_id} /* XCRemoteSwiftPackageReference \\\"swift-crypto\\\" */,\n"
+            "\t\t\t);\n"
+            + project_anchor,
+            1,
+        )
+    for target_name in ("ObstacleBridge", "IPServer"):
+        target_pattern = (
+            rf"(\t\t[0-9A-F]{{24}} /\* {target_name} \*/ = \{{\n"
+            rf"\t\t\tisa = PBXNativeTarget;.*?\t\t\}};)"
+        )
+        target_match = re.search(target_pattern, text, flags=re.DOTALL)
+        if not target_match:
+            raise ValueError(f"{target_name} native target block not found")
+        if product_id in target_match.group(1):
+            continue
+        pattern = (
+            rf"(\t\t[0-9A-F]{{24}} /\* {target_name} \*/ = \{{\n"
+            rf"\t\t\tisa = PBXNativeTarget;.*?)(\t\t\tname = {target_name};\n)"
+        )
+        replacement = (
+            r"\1"
+            "\t\t\tpackageProductDependencies = (\n"
+            f"\t\t\t\t{product_id} /* Crypto */,\n"
+            "\t\t\t);\n"
+            r"\2"
+        )
+        text, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
+        if count != 1:
+            raise ValueError(f"{target_name} target package dependency block not found")
+    return text
+
+
 def patch_app_target(text: str) -> str:
     text = insert_before(
         text,
@@ -843,10 +909,11 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\tsourceTree = \"<group>\";\n"
         "\t\t};\n",
     )
-    text = insert_before(
-        text,
-        "/* End PBXNativeTarget section */\n",
-        "\t\t71C200000000000000000060 /* IPServer */ = {\n"
+    if "71C200000000000000000060 /* IPServer */ = {" not in text:
+        text = insert_before(
+            text,
+            "/* End PBXNativeTarget section */\n",
+            "\t\t71C200000000000000000060 /* IPServer */ = {\n"
         "\t\t\tisa = PBXNativeTarget;\n"
         "\t\t\tbuildConfigurationList = 71C2000000000000000000B0 /* Build configuration list for PBXNativeTarget \"IPServer\" */;\n"
         "\t\t\tbuildPhases = (\n"
@@ -862,8 +929,8 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t\tproductName = IPServer;\n"
         "\t\t\tproductReference = 71C200000000000000000031 /* IPServer.appex */;\n"
         "\t\t\tproductType = \"com.apple.product-type.app-extension\";\n"
-        "\t\t};\n",
-    )
+            "\t\t};\n",
+        )
     text = replace_once(
         text,
         "\t\t\tprojectDirPath = \"\";\n\t\t\tprojectRoot = \"\";\n\t\t\ttargets = (\n\t\t\t\t60796EE119190F4100A9926B /* ObstacleBridge */,\n\t\t\t);\n",
@@ -1009,6 +1076,7 @@ def patch_pbxproj_text(text: str) -> str:
     text = patch_python_build_script(text)
     text = patch_app_target(text)
     text = patch_ipserver_target(text)
+    text = add_core_crypto_package(text)
     return text
 
 

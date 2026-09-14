@@ -930,9 +930,10 @@ def test_secure_link_psk_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeSecureLinkPskCodec" in codec
-    assert "ObstacleBridgeSecureLinkPSKTranscript.keyDerivationInfo" in codec
-    assert "ObstacleBridgeSecureLinkPSKTranscript.serverProofMessage" in codec
-    assert "ObstacleBridgeSecureLinkPSKTranscript.clientRekeyCommitProofMessage" in codec
+    assert "ObstacleBridgeSecureLinkPSKCrypto.deriveKeys" in codec
+    assert "ObstacleBridgeSecureLinkPSKCrypto.serverProof" in codec
+    assert "ObstacleBridgeSecureLinkPSKCrypto.clientRekeyCommitProof" in codec
+    assert "CryptoKit" not in codec
     assert "buildFrame(" in codec
     assert "parseFrame(" in codec
     assert "deriveKeys(" in codec
@@ -949,7 +950,9 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "handleInboundFrame(" in runtime
     assert "sendApp(" in runtime
     assert "serverProof(" in runtime
-    assert "ChaChaPoly" in runtime
+    assert "ObstacleBridgeCrypto.chaChaPolySeal" in runtime
+    assert "ObstacleBridgeCrypto.chaChaPolyOpen" in runtime
+    assert "CryptoKit" not in runtime
     assert "typeClientHello" in runtime
     assert "typeServerHello" in runtime
     assert "typeAuthFail" in runtime
