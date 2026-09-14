@@ -644,11 +644,12 @@ SecureLink codec and protected-frame runtime delegate transcript derivation,
 proof construction, and AEAD to the CryptoKit-free Core surface. The Apple
 runtime still separately owns deadline, rekey negotiation, readiness, retry
 status, and redacted diagnostics; `ObstacleBridgeNativeCrypto` still supplies
-the required Objective-C boundary. The remaining Apple validation is a clean
-simulator/device build using those explicit framework references, followed by
-the complete cross-platform known-answer qualification. R005 remains open
-until the Apple wrapper delegates its full lifecycle state to Core, with
-platform bridges reduced to their required Objective-C boundary.
+the required Objective-C boundary. A clean target-only IPServer simulator
+build has compiled the generated project with those explicit framework
+references. The remaining Apple validation is device qualification and the
+complete cross-platform known-answer set. R005 remains open until the Apple
+wrapper delegates its full lifecycle state to Core, with platform bridges
+reduced to their required Objective-C boundary.
 
 Definition of Done:
 
