@@ -970,6 +970,14 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "coreClient.handleRekeyReply" in runtime
     assert "coreClient.handleRekeyDone" in runtime
     assert "coreClient.expireHandshakeIfNeeded" in runtime
+    assert "private var coreServer: ObstacleBridgeSecureLinkPSKServer?" in runtime
+    assert "coreServer.handleClientHello" in runtime
+    assert "coreServer.handleClientProof" in runtime
+    assert "coreServer.unprotect" in runtime
+    assert "coreServer.protect(payload)" in runtime
+    assert "coreServer.handleRekeyHello" in runtime
+    assert "coreServer.handleRekeyCommit" in runtime
+    assert "coreServer.expireHandshakeIfNeeded" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "framesFromClientPassedTotal" in runtime
