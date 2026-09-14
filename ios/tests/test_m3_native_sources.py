@@ -969,6 +969,7 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "coreClient.protect(payload)" in runtime
     assert "coreClient.handleRekeyReply" in runtime
     assert "coreClient.handleRekeyDone" in runtime
+    assert "coreClient.expireHandshakeIfNeeded" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "framesFromClientPassedTotal" in runtime

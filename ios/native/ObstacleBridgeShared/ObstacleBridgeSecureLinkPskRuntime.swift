@@ -835,6 +835,16 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     }
 
     func expireHandshakeIfNeeded() {
+        if clientMode, let coreClient {
+            do {
+                try coreClient.expireHandshakeIfNeeded()
+                syncCoreClientState()
+            } catch {
+                syncCoreClientState()
+                _ = fail(sessionID: sessionID, code: Self.authFailLifecycle)
+            }
+            return
+        }
         guard lastAuthFailCode == 0 else {
             return
         }

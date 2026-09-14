@@ -627,7 +627,8 @@ session. Both roles export the same redacted Core state snapshot (session,
 counters, authenticated state, pending generation, and send hold) for platform
 status adapters. The Apple client delegates handshake, protected data,
 automatic rekey, and rekey reply/done cutover to the Core client and mirrors
-that snapshot into its status adapter; its listener/server role still owns a
+that snapshot into its status adapter, including the injected-clock handshake
+and pending-rekey deadline; its listener/server role still owns a
 duplicate lifecycle state machine. Both portable roles also bind the first pending-rekey hello to their
 injected 60-second deadline, retain that deadline across equivalent hello
 retransmits, and fail closed by clearing active and pending generations on
