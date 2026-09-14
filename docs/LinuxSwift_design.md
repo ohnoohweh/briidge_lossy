@@ -674,7 +674,12 @@ integration requirements.
 Routine Core and Apple SecureLink validation excludes the marked slow
 packet-tunnel probe family. Each scenario constructs a complete host runtime
 and waits for network-runtime shutdown; it remains an explicit qualification
-command rather than a routine Core iteration. Host-side raw-source probes
+command rather than a routine Core iteration. The Linux myUDP SecureLink
+reference endpoint retains a completed reply until the client has emitted its
+Core CONTROL or IDLE acknowledgement, then closes after one quiet receive
+interval. This prevents peer-confirmation and reply-drain scheduling from
+turning a valid authenticated exchange into a UDP connection-refused failure
+under parallel qualification. Host-side raw-source probes
 reuse the already-built SwiftPM Core/Crypto module when it is available, so a
 CI job does not synchronously invoke SwiftPM again after its Core build step.
 An absent module still triggers the one required package build.

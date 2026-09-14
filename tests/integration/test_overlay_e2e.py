@@ -416,16 +416,25 @@ class LinuxSwiftSecureLinkPeer:
         # immediately after an ordinary reply races the client's receive and
         # can surface as an ICMP port-unreachable instead of that reply.
         listener.settimeout(0.1)
-        deadline = time.monotonic() + 1.0
+        # A connected UDP sender receives ECONNREFUSED if the peer disappears
+        # before it drains the reply and emits its Core CONTROL/IDLE effect.
+        # Retain a live peer for a bounded interval, then finish promptly once
+        # the first post-reply transport acknowledgement has been observed.
+        deadline = time.monotonic() + (5.0 if peer is not None else 1.0)
+        acknowledgement_deadline: Optional[float] = None
         while time.monotonic() < deadline:
             try:
                 wire, _peer = listener.recvfrom(65535)
             except TimeoutError:
+                if acknowledgement_deadline is not None and time.monotonic() >= acknowledgement_deadline:
+                    return
                 continue
             if wire[:1] == bytes([PTYPE_CONTROL]):
                 self.myudp_control_frames_received += 1
+                acknowledgement_deadline = time.monotonic() + 0.1
             elif wire[:1] == bytes([0]):
                 self.myudp_idle_frames_received += 1
+                acknowledgement_deadline = time.monotonic() + 0.1
 
     def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
         hello = receive()

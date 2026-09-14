@@ -188,7 +188,8 @@ Current implementation note:
   composes repeated outbound DATA loss with delayed, duplicated, reverse-ordered
   multi-datagram protected replies across the `65535 -> 1` counter rollover
   while returning Core CONTROL and IDLE effects; its independent peer keeps the
-  UDP endpoint bound briefly after every protected reply so the runner drains
+  UDP endpoint bound until it receives the runner's post-reply CONTROL or IDLE
+  acknowledgement, followed by one quiet receive interval, so the runner drains
   that reply without a port-close ICMP failure;
   the macOS Swift/Python matrix runs both endpoint roles through dropped DATA,
   batching, duplication/reordering, and a full CONTROL missing-list recovery
