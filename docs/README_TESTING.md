@@ -229,7 +229,8 @@ parity result.
 The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state machines in
 one deterministic protected-data exchange, deterministically expires
 unconfirmed client and server handshakes through their injected monotonic
-clocks, and covers the bounded binary, CKV1
+clocks, serializes concurrent server sends into distinct protected counters,
+and covers the bounded binary, CKV1
 control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
 contracts. A shared Python-derived fixture pins TCP malformed records, myUDP
 DATA_BATCH envelope and malformed records, WebSocket binary payload-mode and

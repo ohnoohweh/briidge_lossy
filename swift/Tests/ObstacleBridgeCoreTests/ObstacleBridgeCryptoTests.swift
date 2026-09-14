@@ -445,6 +445,33 @@ struct ObstacleBridgeCryptoTests {
         }
     }
 
+    @Test func secureLinkPskServerSerializesConcurrentProtectedSends() async throws {
+        let psk = Data("concurrent-server-psk".utf8)
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let proof = try client.handleServerHello(server.handleClientHello(
+            try client.begin(sessionID: 9, clientNonce: Data(repeating: 1, count: 32)),
+            serverNonce: Data(repeating: 2, count: 32)
+        ))
+        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+
+        let frames = try await withThrowingTaskGroup(of: Data.self, returning: [Data].self) { group in
+            for value in 0..<32 {
+                group.addTask {
+                    try server.protect(Data([UInt8(value)]))
+                }
+            }
+            var collected = [Data]()
+            for try await frame in group {
+                collected.append(frame)
+            }
+            return collected
+        }
+        let counters = try frames.map { try ObstacleBridgeSecureLinkFrameCodec.decode($0).counter }
+        #expect(Set(counters).count == 32)
+        #expect(Set(counters) == Set(2...33))
+    }
+
     @Test func invalidSizesAreRejectedBeforeCryptoOperations() throws {
         #expect(throws: ObstacleBridgeCryptoError.invalidKeyLength(expected: 32, actual: 31)) {
             try ObstacleBridgeCrypto.aesGCMSeal(plaintext: Data(), key: Data(repeating: 0, count: 31), nonce: Data(repeating: 0, count: 12))

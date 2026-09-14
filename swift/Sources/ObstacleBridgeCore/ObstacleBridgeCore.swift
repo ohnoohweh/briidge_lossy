@@ -431,18 +431,24 @@ public final class ObstacleBridgeSecureLinkPSKClient {
 /// Server half of the SecureLink v1 PSK handshake.  It deliberately mirrors
 /// the client directional keys so a Linux listener can authenticate a Python
 /// client without delegating any cryptographic operation to Python.
-public final class ObstacleBridgeSecureLinkPSKServer {
+public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
     private let psk: Data
     private let handshakeTimeout: TimeInterval
     private let timeProvider: () -> TimeInterval
+    private let stateLock = NSRecursiveLock()
     private var sessionID: UInt64 = 0
     private var clientNonce = Data()
     private var c2sKey = Data()
     private var s2cKey = Data()
     private var txCounter: UInt64 = 1
     private var rxCounter: UInt64 = 0
-    public private(set) var isAuthenticated = false
+    private var authenticated = false
     private var handshakeStartedAt: TimeInterval?
+
+    public var isAuthenticated: Bool {
+        stateLock.lock(); defer { stateLock.unlock() }
+        return authenticated
+    }
 
     public init(
         psk: Data,
@@ -458,6 +464,7 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     /// Validates CLIENT_HELLO and returns SERVER_HELLO using the supplied
     /// nonce so callers can pin deterministic Python-derived vectors.
     public func handleClientHello(_ wire: Data, serverNonce: Data) throws -> Data {
+        stateLock.lock(); defer { stateLock.unlock() }
         let parsed = try parse(wire)
         guard parsed.type == 1, parsed.counter == 0, parsed.payload.count == 34,
               parsed.payload[32] == 1, parsed.payload[33] == 0, serverNonce.count == 32 else {
@@ -469,7 +476,7 @@ public final class ObstacleBridgeSecureLinkPSKServer {
         let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
         c2sKey = keys.clientToServer
         s2cKey = keys.serverToClient
-        txCounter = 1; rxCounter = 0; isAuthenticated = false
+        txCounter = 1; rxCounter = 0; authenticated = false
         let proof = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
         return ObstacleBridgeSecureLinkFrameCodec.encode(type: 2, sessionID: sessionID, counter: 0, payload: serverNonce + Data([1]) + proof)
     }
@@ -477,15 +484,17 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     /// Validates the encrypted empty client proof and returns the encrypted
     /// server acknowledgement which completes the handshake.
     public func handleClientProof(_ wire: Data) throws -> Data {
+        stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
         let plaintext = try unprotect(wire)
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
-        isAuthenticated = true
+        authenticated = true
         handshakeStartedAt = nil
         return try protect(Data())
     }
 
     public func protect(_ payload: Data) throws -> Data {
+        stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
         guard sessionID != 0, s2cKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let counter = txCounter
@@ -496,6 +505,7 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     }
 
     public func unprotect(_ wire: Data) throws -> Data {
+        stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
         let parsed = try parse(wire)
         guard parsed.type == 4, parsed.sessionID == sessionID, parsed.counter > rxCounter, c2sKey.count == 32 else {
@@ -511,9 +521,10 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     /// Applies the same injected-clock deadline as the client while the
     /// listener awaits the protected client confirmation.
     public func expireHandshakeIfNeeded() throws {
+        stateLock.lock(); defer { stateLock.unlock() }
         guard handshakeTimeout > 0,
               sessionID != 0,
-              !isAuthenticated,
+              !authenticated,
               let handshakeStartedAt,
               timeProvider() - handshakeStartedAt >= handshakeTimeout else {
             return
