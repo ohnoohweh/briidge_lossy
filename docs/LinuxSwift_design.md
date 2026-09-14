@@ -631,7 +631,8 @@ respective Core roles. `ObstacleBridgeSecureLinkPskRuntime` contains no local
 proof, AEAD, replay, handshake-timeout, or rekey state machine: it only maps
 transport frames to Core calls and mirrors Core state into the established
 Apple status vocabulary. The native-source parity guard rejects reintroduction
-of those local crypto or lifecycle helpers. Both portable roles also bind the first pending-rekey hello to their
+of those local crypto or lifecycle helpers, including every retired private
+handshake, protected-data, rekey, proof, and AEAD handler. Both portable roles also bind the first pending-rekey hello to their
 injected 60-second deadline, retain that deadline across equivalent hello
 retransmits, and fail closed by clearing active and pending generations on
 expiry. After a client has authenticated its rekey commit, it holds outbound

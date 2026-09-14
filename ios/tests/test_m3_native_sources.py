@@ -986,6 +986,21 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "framesToClientPassedTotal" in runtime
     assert "pendingRekeyStartedAt" not in runtime
     assert "handshakeTimeoutSeconds" not in runtime
+    for removed_fallback in (
+        "private func handleClientHello(",
+        "private func handleServerHello(",
+        "private func handleData(",
+        "private func handleRekeyHello(",
+        "private func handleRekeyReply(",
+        "private func handleRekeyCommit(",
+        "private func handleRekeyDone(",
+        "private func serverProof(",
+        "private func clientRekeyCommitProof(",
+        "private func seal(",
+        "private func open(",
+        "private func startClientRekey(",
+    ):
+        assert removed_fallback not in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:
