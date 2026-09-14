@@ -191,6 +191,7 @@ struct ObstacleBridgeCryptoTests {
         let old = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 1)
         let fresh = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 2)
         let reconnect = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 3)
+        let concurrent = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "other-peer", epoch: 1)
         func inbound(_ payload: String, counter: UInt16, at time: UInt64) throws -> Data {
             try ObstacleBridgeMyUDPCodec.encodeData(
                 payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data(payload.utf8)),
@@ -198,14 +199,18 @@ struct ObstacleBridgeCryptoTests {
                 transmittedNanoseconds: time
             )
         }
-        #expect(try registry.receiveWire(inbound("old", counter: 1, at: 1), from: old, nowNanoseconds: 1).deliveredRecords == [Data("old".utf8)])
+        #expect(try registry.receiveWire(inbound("other", counter: 1, at: 1), from: concurrent, nowNanoseconds: 1).deliveredRecords == [Data("other".utf8)])
+        #expect(try registry.receiveWire(inbound("late", counter: 2, at: 2), from: old, nowNanoseconds: 2).deliveredRecords.isEmpty)
+        #expect(try registry.receiveWire(inbound("old", counter: 1, at: 3), from: old, nowNanoseconds: 3).deliveredRecords == [Data("old".utf8), Data("late".utf8)])
+        #expect(try registry.receiveWire(inbound("duplicate", counter: 1, at: 5), from: old, nowNanoseconds: 5).deliveredRecords.isEmpty)
         #expect(try registry.receiveWire(inbound("fresh", counter: 1, at: 2), from: fresh, nowNanoseconds: 2).deliveredRecords == [Data("fresh".utf8)])
-        #expect(registry.activeKeys == Set([fresh]))
+        #expect(registry.activeKeys == Set([fresh, concurrent]))
         #expect(throws: ObstacleBridgeMyUDPPeerRegistryError.staleEpoch) {
             _ = try registry.receiveWire(inbound("stale", counter: 2, at: 3), from: old, nowNanoseconds: 3)
         }
+        #expect(try registry.receiveWire(inbound("other-again", counter: 2, at: 6), from: concurrent, nowNanoseconds: 6).deliveredRecords == [Data("other-again".utf8)])
         registry.touch(fresh, nowNanoseconds: 20)
-        #expect(registry.expire(nowNanoseconds: 25, idleTimeoutNanoseconds: 10).isEmpty)
+        #expect(registry.expire(nowNanoseconds: 25, idleTimeoutNanoseconds: 10) == [concurrent])
         #expect(try registry.receiveWire(inbound("fresh-again", counter: 2, at: 26), from: fresh, nowNanoseconds: 26).deliveredRecords == [Data("fresh-again".utf8)])
         registry.withdraw(identity: "peer", exceptEpoch: 2)
         #expect(registry.activeKeys == Set([fresh]))
