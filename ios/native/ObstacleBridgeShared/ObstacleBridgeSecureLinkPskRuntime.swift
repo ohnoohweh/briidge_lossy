@@ -7,16 +7,16 @@ enum ObstacleBridgeSecureLinkPskRuntimeError: Error {
 }
 
 final class ObstacleBridgeSecureLinkPskRuntime {
-    static let typeClientHello = ObstacleBridgeSecureLinkPSKFrameType.clientHello
-    static let typeServerHello = ObstacleBridgeSecureLinkPSKFrameType.serverHello
-    static let typeAuthFail = ObstacleBridgeSecureLinkPSKFrameType.authFail
-    static let typeData = ObstacleBridgeSecureLinkPSKFrameType.authenticatedData
-    static let typeRekeyHello = ObstacleBridgeSecureLinkPSKFrameType.rekeyHello
-    static let typeRekeyReply = ObstacleBridgeSecureLinkPSKFrameType.rekeyReply
-    static let typeRekeyCommit = ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit
-    static let typeRekeyDone = ObstacleBridgeSecureLinkPSKFrameType.rekeyDone
+    static let typeClientHello = Int(ObstacleBridgeSecureLinkPSKFrameType.clientHello)
+    static let typeServerHello = Int(ObstacleBridgeSecureLinkPSKFrameType.serverHello)
+    static let typeAuthFail = Int(ObstacleBridgeSecureLinkPSKFrameType.authFail)
+    static let typeData = Int(ObstacleBridgeSecureLinkPSKFrameType.authenticatedData)
+    static let typeRekeyHello = Int(ObstacleBridgeSecureLinkPSKFrameType.rekeyHello)
+    static let typeRekeyReply = Int(ObstacleBridgeSecureLinkPSKFrameType.rekeyReply)
+    static let typeRekeyCommit = Int(ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit)
+    static let typeRekeyDone = Int(ObstacleBridgeSecureLinkPSKFrameType.rekeyDone)
 
-    static let capabilityPSKV1 = ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1
+    static let capabilityPSKV1 = Int(ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1)
 
     static let authFailBadPSK = 1
     static let authFailUnsupported = 2

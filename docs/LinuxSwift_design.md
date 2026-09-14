@@ -618,7 +618,8 @@ monotonic-clock handshake deadline and clear unconfirmed keys and counters on
 expiry; Core serializes server state so concurrent protected sends cannot reuse
 their counter, and Core owns the complete PSK frame-type namespace through the
 rekey transition. The Apple runtime consumes that Core namespace instead of
-reproducing numeric frame-type declarations. The portable peers now complete the operator-supplied
+reproducing numeric frame-type declarations, adapting only from Core's `UInt8`
+wire value to its existing `Int` codec boundary. The portable peers now complete the operator-supplied
 rekey hello/reply/commit/done exchange, retain the active generation while the
 pending transcript is authenticated, serialize client and server cutover, reset
 both directional counters to `1`, and reject protected frames from the replaced

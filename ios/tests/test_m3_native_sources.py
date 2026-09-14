@@ -961,6 +961,8 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyReply" in runtime
     assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit" in runtime
     assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyDone" in runtime
+    assert "Int(ObstacleBridgeSecureLinkPSKFrameType.clientHello)" in runtime
+    assert "Int(ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1)" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "framesFromClientPassedTotal" in runtime
