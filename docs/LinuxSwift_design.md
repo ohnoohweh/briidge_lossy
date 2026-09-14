@@ -654,8 +654,9 @@ proof construction, AEAD, replay, deadline, and rekey transitions to the
 CryptoKit-free Core surface. The Apple wrapper retains readiness/retry status
 and redacted diagnostic publication, while `ObstacleBridgeNativeCrypto` still
 supplies the required Objective-C boundary. Linux source/runtime parity tests
-cover the Core-only adapter boundary; the remaining Apple validation is the
-target build, device qualification, and complete cross-platform known-answer
+cover the Core-only adapter boundary, and the target-only IPServer simulator
+build has compiled the Core-only adapter successfully. The remaining Apple
+validation is device qualification and the complete cross-platform known-answer
 set. R005 remains open for those qualification and broader Core lifecycle
 integration requirements.
 
