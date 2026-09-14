@@ -136,6 +136,7 @@ ARC-CMP-002:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreAcknowledgementPolicyRetainsOnlyReportedGaps
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineOwnsQueueReceiveControlAndEpochReset
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineUsesImmediateMissingAndTimedUnconfirmedRetransmission
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerEngineSplitsMaximumControlRetransmissionIntoBoundedDatagrams
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreSenderLedgerCleansAcknowledgedChunksAndMetrics
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreHeartbeatPolicyTracksRttIdleDelayAndLiveness
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCoreConfirmationMetricsMatchPythonDelayAndAttemptBuckets

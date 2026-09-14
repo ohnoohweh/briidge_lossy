@@ -985,7 +985,7 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
         let chunks = reported + unconfirmed
         let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
         guard !chunks.isEmpty else { return .init(outboundDatagrams: [], outboundDataCounters: [], deliveredRecords: [], nextControlDeadlineNanoseconds: nil) }
-        return .init(outboundDatagrams: [try ObstacleBridgeMyUDPCodec.encodeData(chunks: chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)], outboundDataCounters: chunks.map(\.counter), deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
+        return .init(outboundDatagrams: try encodeDataDatagrams(chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo), outboundDataCounters: chunks.map(\.counter), deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
     }
 
     public func receiveWire(_ wire: Data, nowNanoseconds: UInt64, transportWritable: Bool = true) throws -> Effect {
@@ -1004,7 +1004,7 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
             lastAcknowledgedByPeer = feedback.lastAcknowledgedByPeer
             let chunks = sender.retransmit(candidates: control.missing, nowNanoseconds: nowNanoseconds, windowNanoseconds: retransmissionWindow(rttEstimateMilliseconds: receiver.heartbeat.rttEstimateMilliseconds, multiplier: 1), useFirstTransmitWhenNoRetransmission: false)
             let echo = ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(nowNanoseconds: nowNanoseconds, lastReceivedTransmitNanoseconds: receiver.heartbeat.lastReceivedTransmitNanoseconds, lastReceivedWallNanoseconds: receiver.heartbeat.lastReceivedWallNanoseconds)
-            let retransmission = chunks.isEmpty ? [] : [try ObstacleBridgeMyUDPCodec.encodeData(chunks: chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)]
+            let retransmission = try encodeDataDatagrams(chunks, transmittedNanoseconds: nowNanoseconds, echoedNanoseconds: echo)
             let queued = try flush(nowNanoseconds: nowNanoseconds)
             return .init(outboundDatagrams: retransmission + queued.outboundDatagrams, outboundDataCounters: chunks.map(\.counter) + queued.outboundDataCounters, deliveredRecords: [], nextControlDeadlineNanoseconds: nil)
         case ObstacleBridgeMyUDPCodec.idleType:
@@ -1017,6 +1017,47 @@ public final class ObstacleBridgeMyUDPPeerEngine: @unchecked Sendable {
 
     private func retransmissionWindow(rttEstimateMilliseconds: Double, multiplier: Double) -> UInt64 {
         max(1, UInt64(max(0, rttEstimateMilliseconds) * 1_000_000 * multiplier))
+    }
+
+    /// CONTROL can name up to 713 missing chunks, while one DATA_BATCH admits
+    /// at most 64 chunks and a bounded payload. Preserve the retransmission
+    /// order while emitting as many fresh DATA envelopes as the wire requires.
+    private func encodeDataDatagrams(
+        _ chunks: [ObstacleBridgeMyUDPStreamChunk],
+        transmittedNanoseconds: UInt64,
+        echoedNanoseconds: UInt64
+    ) throws -> [Data] {
+        guard !chunks.isEmpty else { return [] }
+        var datagrams: [Data] = []
+        var batch: [ObstacleBridgeMyUDPStreamChunk] = []
+        var payloadUsed = ObstacleBridgeMyUDPCodec.batchHeaderSize
+
+        func appendBatch() throws {
+            guard !batch.isEmpty else { return }
+            datagrams.append(try ObstacleBridgeMyUDPCodec.encodeData(
+                chunks: batch,
+                transmittedNanoseconds: transmittedNanoseconds,
+                echoedNanoseconds: echoedNanoseconds
+            ))
+            batch.removeAll(keepingCapacity: true)
+            payloadUsed = ObstacleBridgeMyUDPCodec.batchHeaderSize
+        }
+
+        for chunk in chunks {
+            let recordSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize
+                + ObstacleBridgeMyUDPCodec.chunkHeaderSize + chunk.payload.count
+            guard recordSize + ObstacleBridgeMyUDPCodec.batchHeaderSize <= ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize else {
+                throw ObstacleBridgeMyUDPCodecError.payloadTooLarge
+            }
+            if batch.count == ObstacleBridgeMyUDPCodec.maximumBatchRecords
+                || payloadUsed + recordSize > ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize {
+                try appendBatch()
+            }
+            batch.append(chunk)
+            payloadUsed += recordSize
+        }
+        try appendBatch()
+        return datagrams
     }
 }
 

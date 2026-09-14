@@ -523,18 +523,14 @@ The Core codec layer remains portable for a future Windows consumer. Windows
 runtime delivery is separate optional work; it does not require a second codec
 implementation.
 
-## Remaining common-runtime work
+## Common-runtime status and remaining work
 
-The following work packages describe only behavior that remains to be moved or
-implemented. A package is complete only when every Definition of Done item is
-met; compiling alone is not completion.
+The following status describes delivered common-runtime behavior. Remaining
+work packages follow it; compiling alone is not completion.
 
-### LSW-R004 — Consolidate the full myudp runtime
+### myudp runtime status
 
-R004 closes when the common peer registry and the cross-platform myudp
-qualification matrix are both complete.
-
-Current status: `ObstacleBridgeCore` owns ordered stream reassembly,
+`ObstacleBridgeCore` owns ordered stream reassembly,
 counter-ring ordering, duplicate suppression, missing-counter discovery,
 split-record buffering, completed-record delivery, bounded CONTROL
 acknowledgement derivation and pacing, heartbeat/RTT/liveness, echo timestamps,
@@ -594,36 +590,19 @@ snapshot fields that only mirror Core values. The generated Apple project
 already compiles the Core source, so this is adapter-surface cleanup, not
 another protocol implementation.
 
-R004 remains open because the complete bidirectional Python/Swift matrix has
-not yet qualified both Apple and Linux clients for the remaining counterpart
-scenarios and maximum missing-list pressure. The Linux foreground client
-already proves loss, duplication, reordering, CONTROL/IDLE, and counter
-rollover against an independent Python peer.
+The bidirectional macOS host matrix executes Apple Swift and Python endpoints
+in both roles for dropped DATA, multi-record recovery, duplicated and
+reordered DATA, and full missing-list pressure. The Linux foreground client
+independently proves loss, duplication, reordering, CONTROL/IDLE, and counter
+rollover against a Python peer. Core tests additionally pin the exact
+payload-derived maximum CONTROL list and its rejection boundary. Together
+these tests qualify the common peer registry and cross-platform myudp runtime
+without a second reliability implementation.
 Authenticated listener admission is a separate Linux listener mechanism
 described under the remaining Linux feature work; it must supply epochs to the
 completed Core registry without adding protocol state to the adapter. The
 completed Apple-adapter boundary is continuously guarded by the macOS parity
 runner and Apple source-ownership tests.
-
-#### LSW-R004D — Qualify common peer and listener state
-
-Add the socket-independent peer registry needed by a shared-datagram listener
-and close the cross-platform myudp parity surface. LSW-005A supplies the Linux
-socket admission mechanism around this state; it must not add listener protocol
-state to `ObstacleBridgeLinuxAdapters`.
-
-Definition of Done:
-
-- the common listener state demultiplexes peer epochs and isolates reliable
-  stream state, timers, bounded queues, expiry, cancellation, and reconnect
-  cleanup per peer without owning a socket;
-- an in-memory multi-peer test covers concurrent admission, traffic,
-  withdrawal, stale epochs, expiry, and reconnect without cross-peer leakage;
-- Python-to-Swift and Swift-to-Python tests qualify the remaining Apple/Linux
-  counterpart scenarios and maximum missing-list behavior; and
-- obsolete Apple behavior wrappers and the reduced Linux reliability
-  implementation are deleted, with source and dependency guards proving one
-  owner for every myudp protocol policy.
 
 
 ### LSW-R005 — Consolidate SecureLink and crypto

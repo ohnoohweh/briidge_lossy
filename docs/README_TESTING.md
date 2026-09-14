@@ -445,9 +445,13 @@ The `myudp` delay/loss coverage is part of the main integration harness. A loopb
 - delay selected DATA_BATCH datagrams to force deterministic reordering
 - retain sanitized DATA_BATCH framing metadata for E2E assertions
 
-`tc5a_small_records_batched_and_recovered` and
-`tc5b_small_records_reordered_and_duplicated` also run in both Swift/Python
-directions through `test_overlay_e2e_mixed_runtime_myudp_delay_loss`.
+`tc1a_drop_first_data_client_to_server`,
+`tc5a_small_records_batched_and_recovered`,
+`tc5b_small_records_reordered_and_duplicated`, and
+`tc10_full_missed_list_pressure` also run in both Swift/Python directions
+through `test_overlay_e2e_mixed_runtime_myudp_delay_loss`. The full-pressure
+case verifies that one maximum-size CONTROL missing list becomes multiple
+wire-valid retransmission DATA batches.
 
 This gives controlled reproduction of retransmission and missed-frame behavior using the real bridge processes instead of an in-memory simulator.
 
@@ -474,7 +478,8 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
   arbitrary prefix splits, empty records, malformed lengths, and the MTU budget
 - Python myUDP2 batch scheduling and loss recovery, including coalesced records,
   final-space chunk splitting, reorder, duplicate suppression, counter rollover,
-  and fresh per-chunk retransmit envelopes after a lost multi-chunk datagram
+  full missing-list pressure, and fresh per-chunk retransmit envelopes after a
+  lost multi-chunk datagram
 - myUDP2 upper-layer stream-record budgets through SecureLink, Compression, and
   ChannelMux, plus peer-status diagnostics for batch, stream-byte, queue, retry,
   malformed-batch, and malformed-stream counters

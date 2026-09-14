@@ -186,6 +186,30 @@ struct ObstacleBridgeCryptoTests {
         #expect(try unconfirmed.tick(nowNanoseconds: 30, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.isEmpty)
         #expect(try unconfirmed.tick(nowNanoseconds: 31, retransmissionWindowNanoseconds: 21, idleIntervalNanoseconds: .max).outboundDatagrams.count == 1)
     }
+    @Test func myudpCorePeerEngineSplitsMaximumControlRetransmissionIntoBoundedDatagrams() throws {
+        let engine = ObstacleBridgeMyUDPPeerEngine(maximumInFlight: 800)
+        let missing = (1...ObstacleBridgeMyUDPCodec.maximumControlMissingCount).map(UInt16.init)
+        for counter in missing {
+            try engine.enqueueApplicationRecord(Data([UInt8(truncatingIfNeeded: counter)]), nowNanoseconds: 1)
+        }
+        _ = try engine.flush(nowNanoseconds: 1)
+        let control = try ObstacleBridgeMyUDPCodec.encodeControl(
+            lastInOrder: 0,
+            highestReceived: UInt16(ObstacleBridgeMyUDPCodec.maximumControlMissingCount),
+            missing: missing,
+            transmittedNanoseconds: 2
+        )
+
+        let retransmission = try engine.receiveWire(control, nowNanoseconds: 3)
+        let retransmittedCounters = try retransmission.outboundDatagrams.flatMap {
+            try ObstacleBridgeMyUDPCodec.decodeDataChunks($0).chunks.map(\.counter)
+        }
+        #expect(retransmittedCounters == missing)
+        #expect(retransmission.outboundDatagrams.count == 12)
+        #expect(retransmission.outboundDatagrams.allSatisfy {
+            (try? ObstacleBridgeMyUDPCodec.decodeDataChunks($0).chunks.count) ?? 0 <= ObstacleBridgeMyUDPCodec.maximumBatchRecords
+        })
+    }
     @Test func myudpCorePeerRegistryIsolatesEpochsAndWithdrawals() throws {
         let registry = ObstacleBridgeMyUDPPeerRegistry()
         let old = ObstacleBridgeMyUDPPeerRegistry.PeerKey(identity: "peer", epoch: 1)

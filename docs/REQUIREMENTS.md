@@ -169,6 +169,9 @@ Current implementation note:
   composes repeated outbound DATA loss with delayed, duplicated, reverse-ordered
   multi-datagram protected replies across the `65535 -> 1` counter rollover
   while returning Core CONTROL and IDLE effects;
+  the macOS Swift/Python matrix runs both endpoint roles through dropped DATA,
+  batching, duplication/reordering, and a full CONTROL missing-list recovery
+  that requires multiple retransmission DATA batches;
   mixed-runtime process ports, including Admin listeners, are isolated across
   parallel test workers. An explicitly enabled Python listener may publish its
   `remote_servers` catalog to connected peers; the mixed-runtime lane proves
