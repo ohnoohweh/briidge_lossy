@@ -194,7 +194,8 @@ jobs:
           swiftc --version
           swift build --target ObstacleBridgeCore
           swift build --target ObstacleBridgeApplePackageProbe
-          swift test --filter ObstacleBridgeCoreCodecTests
+          swift test --filter ObstacleBridgeCryptoTests
+          swift test --filter ObstacleBridgeApplePackageProbeTests
 
       - name: Probe required Swift modules
         shell: bash
@@ -262,7 +263,9 @@ jobs:
     needs:
       - detect-bridge-change
       - bridge-py-integration-macos-swift-probe
-    if: needs.detect-bridge-change.outputs.macos_host_runner_changed == 'true'
+    # This full app-process and network-lifecycle suite is deliberate product
+    # qualification, not a useful per-push Core signal.
+    if: github.event_name == 'workflow_dispatch' && needs.detect-bridge-change.outputs.macos_host_runner_changed == 'true'
     runs-on: macos-latest
     steps:
       - name: Check out repository

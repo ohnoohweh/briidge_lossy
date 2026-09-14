@@ -389,7 +389,12 @@ struct ObstacleBridgeCryptoTests {
         let edPublic = try ObstacleBridgeCrypto.ed25519PublicKey(privateKey: edPrivate)
         #expect(edPublic.hex == "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
         let signature = try ObstacleBridgeCrypto.ed25519Sign(message: Data(), privateKey: edPrivate)
-        #expect(signature.hex == "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155\n5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b".replacingOccurrences(of: "\n", with: ""))
+        // The Apple Crypto backend may blind signing, so a new valid signature
+        // need not have the RFC's deterministic byte sequence.  Validate the
+        // RFC 8032 known-answer signature directly and separately require a
+        // freshly produced signature to verify with the same known public key.
+        let knownSignature = Data.hex("e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155\n5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b".replacingOccurrences(of: "\n", with: ""))
+        #expect(try ObstacleBridgeCrypto.ed25519Verify(signature: knownSignature, message: Data(), publicKey: edPublic))
         #expect(try ObstacleBridgeCrypto.ed25519Verify(signature: signature, message: Data(), publicKey: edPublic))
 
         let alicePrivate = Data.hex("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")

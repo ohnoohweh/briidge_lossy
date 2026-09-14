@@ -651,7 +651,7 @@ emit a fresh hello at their scheduler boundary. Core authentication is the
 single Apple readiness authority: the established `authenticated` and
 `peerConfirmedAuthenticated` status names both derive from portable Core state
 without adapter-local readiness flags. Runtime configuration and timer wiring,
-platform event/diagnostic publication remains outside the portable lifecycle.
+and platform event/diagnostic publication remain outside the portable lifecycle.
 Core retains a bounded five-second server inbound overlap after authenticated
 rekey commit, admitting a higher-counter old-generation client packet already
 in flight while the client holds new sends until `REKEY_DONE`; reset, a new
@@ -685,7 +685,11 @@ Linux source/runtime parity tests cover the Core-only adapter boundary. Apple
 native transport probes explicitly deliver the Core server acknowledgement
 before attempting application data, enforcing the same peer-confirmed
 authentication boundary as Python. The target-only IPServer simulator
-build has compiled the Core-only adapter successfully. R005 remains open for
+build has compiled the Core-only adapter successfully. Native macOS Core
+validation passes the full `ObstacleBridgeCryptoTests` suite, including the
+SHA/HMAC/HKDF/PBKDF2, AEAD, Ed25519, X25519, and Python-derived SecureLink
+transcript vectors. The Apple package consumer test also passes against the
+pinned `Crypto` product. R005 remains open for
 the Apple/product qualification, requirement-level parity audit, and final CI
 closure defined as `LSW-R005.4` through `LSW-R005.6` below.
 
@@ -723,32 +727,25 @@ helper, host-runner, and qualification-test ownership; SecureLink/Core changes
 continue through the ordinary Swift probe and host-side parity lanes without
 waiting for unrelated privileged network setup.
 
-#### R005 sub-workpackages and closure state
+#### R005 remaining closure state
 
-R005 is no longer one undifferentiated implementation task. The following
-sub-workpackages are the authoritative closure checklist; a completed item is
-retained here only until R005 itself closes, at which point its durable contract
-is folded into the shared architecture description and this work-package block
-is removed.
+Core crypto ownership, portable PSK lifecycle state, and platform-wrapper
+reduction are part of the architecture described above. The remaining items
+below are the authoritative closure checklist.
 
 | ID | Scope and platform | State | Evidence or remaining exit criteria |
 | --- | --- | --- | --- |
-| `LSW-R005.1` | Core crypto ownership (all Swift platforms) | Complete | `ObstacleBridgeCrypto` owns SHA-256, HMAC, HKDF, PBKDF2, AES-GCM, ChaCha20-Poly1305, Ed25519, X25519, and private-key generation through pinned `swift-crypto`; Linux Core vectors cover fixed known answers and invalid inputs. |
-| `LSW-R005.2` | Core PSK protocol state (all Swift platforms) | Complete | One client/server implementation owns framing, handshake, peer confirmation, protected counters, replay rejection, time/frame/operator rekey, retry policy, timeout, reconnect reset, serialized sends, diagnostics state, and the bounded old-generation receive window. Deterministic Linux Core tests cover these transitions. |
-| `LSW-R005.3` | Platform-wrapper reduction (Apple and Linux) | Complete | Apple SecureLink runtime and frame codec contain transport/status or type-boundary adaptation only; the Objective-C crypto selector class delegates to Core. Source-ownership guards reject local proof, AEAD, key-derive, retry, readiness, or lifecycle implementations. Linux transport owners already consume the same Core roles. |
-| `LSW-R005.4` | Apple backend and product qualification (macOS, iOS simulator, physical iOS) | Open | Re-run the complete Core crypto known-answer suite natively on macOS; pass all ten Apple runtime/transport probes after peer-confirmation fixes; build both generated Apple targets with explicit `Crypto` linkage; run the applicable iOS simulator SecureLink E2E; record archive/product-size impact and backend availability. Physical-device execution remains an iOS-only residual when a signed device target is available. |
+| `LSW-R005.4` | Apple backend and product qualification (macOS, iOS simulator, physical iOS) | Open | Native macOS Core crypto vectors and the Apple package consumer pass, and generated target metadata pins `Crypto` for app and `IPServer`. Remaining evidence is a clean generated-project build of both targets, the iOS simulator SecureLink E2E, archive/product-size measurement, and physical-device execution when a signed device target is available. The full macOS host-runner suite is a manual qualification command because it intentionally waits on complete app-process and network-lifecycle shutdown. |
 | `LSW-R005.5` | Python/Swift behavioral parity and traceability audit (Linux plus macOS) | Open | For every `REQ-AUT-*` PSK behavior in scope, map Python reference implementation, Swift Core/adapter implementation, Python test, Swift test, and mixed-runtime test. Run wrong-key, malformed-frame, replay, timeout, rekey overlap, reconnect, counter exhaustion, concurrency, and TCP/WS/myudp interoperability evidence. No row may be marked parity-complete from a source guard alone. |
 | `LSW-R005.6` | Final release/CI closure (all required CI platforms) | Waiting on `.4` and `.5` | Require the PR's R005-relevant Linux shared, macOS Swift probe/backed, requirements, README/traceability, and Swift ownership checks to pass. Classify unrelated privileged-TUN failures explicitly rather than silently accepting them. Then remove R005 from the pending sequence and retain only the delivered architecture and any physical-device release qualification in the platform qualification section. |
 
 Linux can complete the macOS-independent portion of `LSW-R005.5`, including
 the traceability matrix, Core vectors, mixed Python peers, and ownership guards.
-The remote macOS host can complete the macOS and simulator portions of
-`LSW-R005.4`; only signed physical-device execution is inherently unavailable
-from Linux or an unsigned simulator build. The current PR has a passing macOS
-Swift probe and ownership/traceability guards, while its Linux shared and macOS
-Swift-backed jobs are still running. A macOS Swift elevated-TUN job currently
-reports failure and must be classified after its run log is available; it is
-not R005 evidence merely because it shares the PR workflow.
+The macOS host completes native Core validation and can build generated Apple
+targets and execute the simulator evidence. A signed physical iOS target is
+the only inherently device-specific residual. Routine PR validation retains
+bounded Core/adapter probes; full host-runner product qualification is invoked
+manually so unrelated lifecycle waits do not obscure or delay Core evidence.
 
 Definition of Done:
 
