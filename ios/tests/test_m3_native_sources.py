@@ -949,9 +949,10 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "beginClientHandshake(" in runtime
     assert "handleInboundFrame(" in runtime
     assert "sendApp(" in runtime
-    assert "serverProof(" in runtime
-    assert "ObstacleBridgeCrypto.chaChaPolySeal" in runtime
-    assert "ObstacleBridgeCrypto.chaChaPolyOpen" in runtime
+    assert "ObstacleBridgeSecureLinkPskCodec.buildFrame" in runtime
+    assert "ObstacleBridgeCrypto.chaChaPolySeal" not in runtime
+    assert "ObstacleBridgeCrypto.chaChaPolyOpen" not in runtime
+    assert "serverProof(" not in runtime
     assert "CryptoKit" not in runtime
     assert "ObstacleBridgeSecureLinkPSKFrameType.clientHello" in runtime
     assert "ObstacleBridgeSecureLinkPSKFrameType.serverHello" in runtime
@@ -964,27 +965,27 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "Int(ObstacleBridgeSecureLinkPSKFrameType.clientHello)" in runtime
     assert "Int(ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1)" in runtime
     assert "private var coreClient: ObstacleBridgeSecureLinkPSKClient?" in runtime
-    assert "coreClient.handleServerHello" in runtime
-    assert "coreClient.handleServerAcknowledgement" in runtime
+    assert "c.handleServerHello(wire)" in runtime
+    assert "c.handleServerAcknowledgement(wire)" in runtime
     assert "coreClient.protect(payload)" in runtime
-    assert "coreClient.handleRekeyReply" in runtime
-    assert "coreClient.handleRekeyDone" in runtime
-    assert "coreClient.expireHandshakeIfNeeded" in runtime
+    assert "c.handleRekeyReply(wire)" in runtime
+    assert "c.handleRekeyDone(wire)" in runtime
+    assert "c.expireHandshakeIfNeeded()" in runtime
     assert "private var coreServer: ObstacleBridgeSecureLinkPSKServer?" in runtime
-    assert "coreServer.handleClientHello" in runtime
-    assert "coreServer.handleClientProof" in runtime
-    assert "coreServer.unprotect" in runtime
+    assert "s.handleClientHello(wire" in runtime
+    assert "s.handleClientProof(wire)" in runtime
+    assert "s.unprotect(wire)" in runtime
     assert "coreServer.protect(payload)" in runtime
-    assert "coreServer.handleRekeyHello" in runtime
-    assert "coreServer.handleRekeyCommit" in runtime
-    assert "coreServer.expireHandshakeIfNeeded" in runtime
+    assert "s.handleRekeyHello(wire" in runtime
+    assert "s.handleRekeyCommit(wire)" in runtime
+    assert "s.expireHandshakeIfNeeded()" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "framesFromClientPassedTotal" in runtime
     assert "framesFromClientDroppedTotal" in runtime
     assert "framesToClientPassedTotal" in runtime
-    assert "private var pendingRekeyStartedAt: TimeInterval?" in runtime
-    assert "(timeProvider() - pendingRekeyStartedAt) >= Self.handshakeTimeoutSeconds" in runtime
+    assert "pendingRekeyStartedAt" not in runtime
+    assert "handshakeTimeoutSeconds" not in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:

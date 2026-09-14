@@ -627,9 +627,11 @@ session. Both roles export the same redacted Core state snapshot (session,
 counters, authenticated state, pending generation, and send hold) for platform
 status adapters. The Apple client and listener roles delegate handshake,
 protected data, rekey, send protection, and injected-clock deadlines to their
-respective Core roles, mirroring the Core snapshot into the Apple status
-adapter. The obsolete private Apple lifecycle helpers remain to be deleted
-after the full Apple behavioral suite proves the delegated paths. Both portable roles also bind the first pending-rekey hello to their
+respective Core roles. `ObstacleBridgeSecureLinkPskRuntime` contains no local
+proof, AEAD, replay, handshake-timeout, or rekey state machine: it only maps
+transport frames to Core calls and mirrors Core state into the established
+Apple status vocabulary. The native-source parity guard rejects reintroduction
+of those local crypto or lifecycle helpers. Both portable roles also bind the first pending-rekey hello to their
 injected 60-second deadline, retain that deadline across equivalent hello
 retransmits, and fail closed by clearing active and pending generations on
 expiry. After a client has authenticated its rekey commit, it holds outbound
@@ -647,15 +649,14 @@ On Apple, the generated project pins `swift-crypto` 4.5.1 and now records its
 is required for Xcode's explicit-module build: resolving the package alone
 does not make `import Crypto` available to the Core source. The Apple
 SecureLink codec and protected-frame runtime delegate transcript derivation,
-proof construction, and AEAD to the CryptoKit-free Core surface. The Apple
-runtime still separately owns deadline, rekey negotiation, readiness, retry
-status, and redacted diagnostics; `ObstacleBridgeNativeCrypto` still supplies
-the required Objective-C boundary. A clean target-only IPServer simulator
-build has compiled the generated project with those explicit framework
-references. The remaining Apple validation is device qualification and the
-complete cross-platform known-answer set. R005 remains open until the Apple
-wrapper delegates its full lifecycle state to Core, with platform bridges
-reduced to their required Objective-C boundary.
+proof construction, AEAD, replay, deadline, and rekey transitions to the
+CryptoKit-free Core surface. The Apple wrapper retains readiness/retry status
+and redacted diagnostic publication, while `ObstacleBridgeNativeCrypto` still
+supplies the required Objective-C boundary. Linux source/runtime parity tests
+cover the Core-only adapter boundary; the remaining Apple validation is the
+target build, device qualification, and complete cross-platform known-answer
+set. R005 remains open for those qualification and broader Core lifecycle
+integration requirements.
 
 Definition of Done:
 
