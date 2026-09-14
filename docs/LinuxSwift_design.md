@@ -670,7 +670,10 @@ integration requirements.
 Routine Core and Apple SecureLink validation excludes the marked slow
 packet-tunnel probe family. Each scenario constructs a complete host runtime
 and waits for network-runtime shutdown; it remains an explicit qualification
-command rather than a routine Core iteration.
+command rather than a routine Core iteration. Host-side raw-source probes
+reuse the already-built SwiftPM Core/Crypto module when it is available, so a
+CI job does not synchronously invoke SwiftPM again after its Core build step.
+An absent module still triggers the one required package build.
 
 Definition of Done:
 
