@@ -178,8 +178,8 @@ REQ-AUT-001:
     # transcript/proof/key-derive or CryptoKit/CommonCrypto implementations;
     # Core remains the sole primitive owner.
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_codec_source_exists
-    # Guards Apple consumption of the Core-owned SecureLink frame namespace and
-    # delegated Core client/listener lifecycle.
+    # Guards Apple consumption of the Core-owned SecureLink frame namespace,
+    # peer-confirmed readiness, and delegated Core client/listener lifecycle.
     - ios/tests/test_m3_native_sources.py::test_secure_link_psk_runtime_source_exists
     - tests/unit/test_linux_swift_core_wire_corpus.py::test_core_wire_corpus_matches_python_protocol_layouts
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload

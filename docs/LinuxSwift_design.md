@@ -644,8 +644,11 @@ equivalent authenticated rekey replies return the cached commit for safe
 retransmission, and duplicate authenticated commits return the same done frame.
 The client accepts injected session-id and random-byte providers plus a
 pollable frame/time rekey policy, so transport owners can deterministically
-emit a fresh hello at their scheduler boundary. Runtime configuration and timer
-wiring, readiness/diagnostic publication, and a dual-generation cutover window
+emit a fresh hello at their scheduler boundary. Core authentication is the
+single Apple readiness authority: the established `authenticated` and
+`peerConfirmedAuthenticated` status names both derive from portable Core state
+without adapter-local readiness flags. Runtime configuration and timer wiring,
+platform event/diagnostic publication, and a dual-generation cutover window
 for in-flight application traffic remain Core integration gaps. Core now owns
 the injected monotonic retry-backoff policy and failure/deadline state; Apple
 adapts only the transport attempt and wall-clock retry presentation. Native
@@ -665,8 +668,8 @@ does not emit a standalone `libCrypto` artifact. The generated Xcode targets
 retain their explicit package-product references. The Apple
 SecureLink codec and protected-frame runtime delegate transcript derivation,
 proof construction, AEAD, replay, deadline, and rekey transitions to the
-CryptoKit-free Core surface. The Apple wrapper retains readiness and redacted
-diagnostic publication, while `ObstacleBridgeNativeCrypto` is now
+CryptoKit-free Core surface. The Apple wrapper retains redacted diagnostic
+publication, while `ObstacleBridgeNativeCrypto` is now
 an Objective-C selector bridge to the Core HKDF, PBKDF2, AEAD, Ed25519, and
 X25519 surface rather than an additional CryptoKit/CommonCrypto implementation.
 Linux source/runtime parity tests cover the Core-only adapter boundary. Apple

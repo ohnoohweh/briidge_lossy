@@ -985,7 +985,9 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "s.handleRekeyHello(wire" in runtime
     assert "s.handleRekeyCommit(wire)" in runtime
     assert "s.expireHandshakeIfNeeded()" in runtime
-    assert "authenticated && peerConfirmedAuthenticated" in runtime
+    assert "var isAuthenticated: Bool { coreState?.authenticated ?? false }" in runtime
+    assert "private var authenticated = false" not in runtime
+    assert "private var peerConfirmedAuthenticated = false" not in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "private var coreState: ObstacleBridgeSecureLinkPSKState?" in runtime
     assert "state?.authenticatedGenerationsTotal" in runtime
