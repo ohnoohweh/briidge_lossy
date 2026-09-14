@@ -662,6 +662,21 @@ def add_core_crypto_package(text: str) -> str:
         "ObstacleBridge": "71C700000000000000000003",
         "IPServer": "71C700000000000000000004",
     }
+    # `Crypto` is a SwiftPM module dependency.  Adding it to a framework build
+    # phase makes Xcode try to copy swift-crypto's internal resource bundle
+    # (`swift-crypto_Crypto.bundle`), which does not exist for this product on
+    # iOS.  Target package dependencies provide the import/module linkage.
+    for target_name, build_file_id in product_build_files.items():
+        text = re.sub(
+            rf"^\t\t{build_file_id} /\* Crypto in {target_name} Frameworks \*/ = .*?;\n",
+            "",
+            text,
+            flags=re.MULTILINE,
+        )
+        text = text.replace(
+            f"\t\t\t\t{build_file_id} /* Crypto in {target_name} Frameworks */,\n",
+            "",
+        )
     if package_id not in text:
         text = insert_before(
             text,
@@ -721,45 +736,6 @@ def add_core_crypto_package(text: str) -> str:
         if count != 1:
             raise ValueError(f"{target_name} target package dependency block not found")
 
-    for target_name, build_file_id in product_build_files.items():
-        build_file = (
-            f"\t\t{build_file_id} /* Crypto in {target_name} Frameworks */ = "
-            f"{{isa = PBXBuildFile; productRef = {product_id} /* Crypto */; }};\n"
-        )
-        text = insert_before(text, "/* End PBXBuildFile section */\n", build_file)
-
-        if f"{build_file_id} /* Crypto in {target_name} Frameworks */," in text:
-            continue
-        target_match = re.search(
-            rf"\t\t[0-9A-F]{{24}} /\* {target_name} \*/ = \{{\n"
-            rf"\t\t\tisa = PBXNativeTarget;.*?"
-            rf"\t\t\tbuildPhases = \(\n(?P<phases>.*?)\t\t\t\);",
-            text,
-            flags=re.DOTALL,
-        )
-        if not target_match:
-            raise ValueError(f"{target_name} native target build phases not found")
-        framework_match = re.search(
-            r"\t\t\t\t(?P<id>[0-9A-F]{24}) /\* Frameworks \*/,\n",
-            target_match.group("phases"),
-        )
-        if not framework_match:
-            raise ValueError(f"{target_name} Frameworks build phase id not found")
-        framework_phase_id = framework_match.group("id")
-        framework_pattern = (
-            rf"(\t\t{framework_phase_id} /\* Frameworks \*/ = \{{\n"
-            rf"\t\t\tisa = PBXFrameworksBuildPhase;\n"
-            rf"\t\t\tbuildActionMask = 2147483647;\n"
-            rf"\t\t\tfiles = \(\n)"
-        )
-        text, count = re.subn(
-            framework_pattern,
-            r"\1" + f"\t\t\t\t{build_file_id} /* Crypto in {target_name} Frameworks */,\n",
-            text,
-            count=1,
-        )
-        if count != 1:
-            raise ValueError(f"{target_name} Frameworks build phase block not found")
     return text
 
 
