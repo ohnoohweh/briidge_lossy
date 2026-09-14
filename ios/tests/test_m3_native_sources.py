@@ -211,14 +211,20 @@ def test_ipserver_extension_plist_and_entitlements_exist() -> None:
 def test_native_crypto_bridge_source_exists() -> None:
     bridge = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift").read_text(encoding="utf-8")
 
-    assert "CryptoKit" in bridge
-    assert "CommonCrypto" in bridge
+    assert "CryptoKit" not in bridge
+    assert "CommonCrypto" not in bridge
     assert "@objc(ObstacleBridgeNativeCrypto)" in bridge
     assert "aesGCMEncryptKey" in bridge
     assert "chaCha20Poly1305EncryptKey" in bridge
     assert "generateEd25519PrivateKey" in bridge
     assert "generateX25519PrivateKey" in bridge
-    assert "sealed.ciphertext + sealed.tag" in bridge
+    assert "ObstacleBridgeCrypto.hkdfSHA256" in bridge
+    assert "ObstacleBridgeCrypto.pbkdf2SHA256" in bridge
+    assert "ObstacleBridgeCrypto.aesGCMSeal" in bridge
+    assert "ObstacleBridgeCrypto.chaChaPolySeal" in bridge
+    assert "ObstacleBridgeCrypto.ed25519Sign" in bridge
+    assert "ObstacleBridgeCrypto.x25519SharedSecret" in bridge
+    assert "Curve25519." not in bridge
 
 
 def test_channel_mux_codec_source_exists() -> None:

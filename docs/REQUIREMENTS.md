@@ -166,7 +166,10 @@ Current implementation note:
   derivation, proofs, and protected-frame AEAD to that common surface. Its
   frame/JSON boundary codec contains no transcript, proof, or key-derivation
   compatibility wrapper; probes call the Core transcript API directly. Apple
-  lifecycle and status ownership remain separately qualified. Generated
+  lifecycle and status ownership remain separately qualified. The Objective-C
+  `ObstacleBridgeNativeCrypto` bridge delegates HKDF, PBKDF2, AEAD, Ed25519,
+  and X25519 selectors to the same Core crypto surface and contains no direct
+  CryptoKit or CommonCrypto implementation. Generated
   projects also remove stale source references to deleted Core-migrated
   compatibility facades before Xcode compile admission.
   Linux Swift

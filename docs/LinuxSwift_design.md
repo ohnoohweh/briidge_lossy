@@ -655,8 +655,10 @@ does not make `import Crypto` available to the Core source. The Apple
 SecureLink codec and protected-frame runtime delegate transcript derivation,
 proof construction, AEAD, replay, deadline, and rekey transitions to the
 CryptoKit-free Core surface. The Apple wrapper retains readiness/retry status
-and redacted diagnostic publication, while `ObstacleBridgeNativeCrypto` still
-supplies the required Objective-C boundary. Linux source/runtime parity tests
+and redacted diagnostic publication, while `ObstacleBridgeNativeCrypto` is now
+an Objective-C selector bridge to the Core HKDF, PBKDF2, AEAD, Ed25519, and
+X25519 surface rather than an additional CryptoKit/CommonCrypto implementation.
+Linux source/runtime parity tests
 cover the Core-only adapter boundary, and the target-only IPServer simulator
 build has compiled the Core-only adapter successfully. The remaining Apple
 validation is device qualification and the complete cross-platform known-answer

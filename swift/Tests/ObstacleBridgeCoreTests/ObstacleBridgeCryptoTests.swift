@@ -379,6 +379,18 @@ struct ObstacleBridgeCryptoTests {
         let bobPrivate = Data.hex("5dab087e624a8a4b79e17f8b83800ee66f3bb1292618b6fd1c2f8b27ff88e0eb")
         let shared = try ObstacleBridgeCrypto.x25519SharedSecret(privateKey: alicePrivate, peerPublicKey: try ObstacleBridgeCrypto.x25519PublicKey(privateKey: bobPrivate))
         #expect(shared.hex == "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742")
+
+        let generatedEdPrivate = ObstacleBridgeCrypto.generateEd25519PrivateKey()
+        #expect(generatedEdPrivate.count == 32)
+        let generatedEdPublic = try ObstacleBridgeCrypto.ed25519PublicKey(privateKey: generatedEdPrivate)
+        #expect(try ObstacleBridgeCrypto.ed25519Verify(
+            signature: ObstacleBridgeCrypto.ed25519Sign(message: Data("core".utf8), privateKey: generatedEdPrivate),
+            message: Data("core".utf8), publicKey: generatedEdPublic
+        ))
+
+        let generatedXPrivate = ObstacleBridgeCrypto.generateX25519PrivateKey()
+        #expect(generatedXPrivate.count == 32)
+        #expect(try ObstacleBridgeCrypto.x25519PublicKey(privateKey: generatedXPrivate).count == 32)
     }
 
     @Test func secureLinkPskTranscriptMatchesPythonVector() throws {

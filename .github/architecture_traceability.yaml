@@ -715,8 +715,9 @@ ARC-CMP-005:
 
 ARC-CMP-006:
   # One shared Core codec owns the SecureLink PSK envelope and transcript
-  # primitives; the Apple frame/JSON boundary carries no proof or key-derive
-  # compatibility API. Its corpus pins Python-derived transcript, proof, and
+  # primitives; Apple frame/JSON and Objective-C crypto boundaries carry no
+  # proof/key-derive or CryptoKit/CommonCrypto compatibility implementation.
+  # Its corpus pins Python-derived transcript, proof, and
   # client/server handshake bytes.
   # SecureLink integration coverage includes authenticated-readiness gating
   # and failure reporting without direct transport-reconnect ownership. A

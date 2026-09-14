@@ -150,6 +150,11 @@ public enum ObstacleBridgeCrypto {
         }
     }
 
+    /// Generates a new Ed25519 private key through the shared crypto backend.
+    public static func generateEd25519PrivateKey() -> Data {
+        Curve25519.Signing.PrivateKey().rawRepresentation
+    }
+
     public static func ed25519Sign(message: Data, privateKey: Data) throws -> Data {
         try validatePrivateKey(privateKey)
         do {
@@ -175,6 +180,11 @@ public enum ObstacleBridgeCrypto {
         } catch {
             throw ObstacleBridgeCryptoError.cryptoFailure
         }
+    }
+
+    /// Generates a new X25519 private key through the shared crypto backend.
+    public static func generateX25519PrivateKey() -> Data {
+        Curve25519.KeyAgreement.PrivateKey().rawRepresentation
     }
 
     public static func x25519SharedSecret(privateKey: Data, peerPublicKey: Data) throws -> Data {
