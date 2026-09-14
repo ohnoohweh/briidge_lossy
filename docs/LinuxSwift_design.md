@@ -351,7 +351,7 @@ The duplicated areas and their required disposition are:
 
 | Area | Current evidence | Target disposition |
 | --- | --- | --- |
-| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the retired Apple compatibility facade is deleted. Linux host tests cover dropped-DATA timer recovery, duplicated/reordered Python-peer chunks, malformed-datagram rejection, and closed-session cleanup. The built foreground client recovers through composed loss, delay, duplication, and reverse-ordered multi-datagram replies across the `65535 -> 1` counter rollover from an independent Python peer. | Complete the bidirectional Apple/Linux qualification matrix for CONTROL/IDLE and maximum missing-list pressure. |
+| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the retired Apple compatibility facade is deleted. Linux host tests cover dropped-DATA timer recovery, duplicated/reordered Python-peer chunks, malformed-datagram rejection, and closed-session cleanup. The built foreground client recovers through composed loss, delay, duplication, and reverse-ordered multi-datagram replies across the `65535 -> 1` counter rollover, and returns Core CONTROL/IDLE effects, against an independent Python peer. | Complete the Apple/Linux counterpart qualification and maximum missing-list pressure matrix. |
 | ChannelMux and services | The portable target implements only the eight-byte mux header. Linux separately encodes O5 OPEN and RS3 catalogs, while the Apple codec also owns O4/O5, RS2/RS3, metadata, control chunks, and reassembly. | One core frame/service model and codec owns all wire formats. Core service/TCP/UDP/TUN state emits socket or packet effects; adapters never serialize ChannelMux themselves. |
 | SecureLink | `ObstacleBridgeCore.swift` contains a reduced PSK client/server implementation. Apple has a separate codec and a fuller runtime with rekey, timeout, retry, readiness, replay, and diagnostic state. | Move the full role-neutral state machine to core and use the pinned `Crypto` implementation. Keep the Objective-C Apple crypto class only as a compatibility facade. |
 | Stream and WebSocket overlays | Linux implements ObstacleBridge APP/PING/PONG framing in its POSIX owner. Apple TCP and QUIC logical runtime files are effectively identical, while the nominally logical WebSocket runtime exposes `URLSessionWebSocketTask.Message`. | Core owns ObstacleBridge stream/WebSocket envelopes, buffering, liveness, and lifecycle decisions. Adapters own TCP, RFC 6455/backend integration, TLS/trust, and QUIC I/O. |
@@ -564,7 +564,8 @@ two post-handshake protected DATA datagrams. The foreground client also
 reassembles a multi-chunk protected response sent in reverse datagram order.
 The foreground client also completes a protected exchange after composed loss,
 delay, duplicate, and reverse-ordered multi-datagram reply delivery across the
-`65535 -> 1` counter rollover from an independent Python peer. macOS
+`65535 -> 1` counter rollover, while returning Core CONTROL and IDLE effects to
+an independent Python peer. macOS
 conditionally excludes the Linux adapter tests, so a
 zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
@@ -594,8 +595,10 @@ already compiles the Core source, so this is adapter-surface cleanup, not
 another protocol implementation.
 
 R004 remains open because the complete bidirectional Python/Swift matrix has
-not yet qualified both Apple and Linux clients for loss, duplication,
-reordering, CONTROL/IDLE, counter rollover, and maximum missing-list pressure.
+not yet qualified both Apple and Linux clients for the remaining counterpart
+scenarios and maximum missing-list pressure. The Linux foreground client
+already proves loss, duplication, reordering, CONTROL/IDLE, and counter
+rollover against an independent Python peer.
 Authenticated listener admission is a separate Linux listener mechanism
 described under the remaining Linux feature work; it must supply epochs to the
 completed Core registry without adding protocol state to the adapter. The
@@ -616,9 +619,8 @@ Definition of Done:
   cleanup per peer without owning a socket;
 - an in-memory multi-peer test covers concurrent admission, traffic,
   withdrawal, stale epochs, expiry, and reconnect without cross-peer leakage;
-- Python-to-Swift and Swift-to-Python tests qualify both Apple and Linux Swift
-  clients, including loss, duplication, reordering, CONTROL/IDLE, rollover,
-  and maximum missing-list behavior; and
+- Python-to-Swift and Swift-to-Python tests qualify the remaining Apple/Linux
+  counterpart scenarios and maximum missing-list behavior; and
 - obsolete Apple behavior wrappers and the reduced Linux reliability
   implementation are deleted, with source and dependency guards proving one
   owner for every myudp protocol policy.

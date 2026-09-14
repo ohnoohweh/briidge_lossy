@@ -154,6 +154,7 @@ class LinuxSwiftSecureLinkPeer:
         reorder_myudp_application_reply: bool = False,
         duplicate_myudp_application_reply: bool = False,
         myudp_application_reply_counter_seed: int = 1,
+        send_myudp_idle_before_application_reply: bool = False,
         delay_myudp_application_reply_seconds: float = 0.0,
     ) -> None:
         self.transport = transport
@@ -164,7 +165,10 @@ class LinuxSwiftSecureLinkPeer:
         self.reorder_myudp_application_reply = reorder_myudp_application_reply
         self.duplicate_myudp_application_reply = duplicate_myudp_application_reply
         self.myudp_application_reply_counter_seed = max(1, min(0xffff, myudp_application_reply_counter_seed))
+        self.send_myudp_idle_before_application_reply = send_myudp_idle_before_application_reply
         self.delay_myudp_application_reply_seconds = max(0.0, delay_myudp_application_reply_seconds)
+        self.myudp_control_frames_received = 0
+        self.myudp_idle_frames_received = 0
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
@@ -322,7 +326,11 @@ class LinuxSwiftSecureLinkPeer:
                 wire, peer = listener.recvfrom(65535)
                 if len(wire) < 19 or len(wire) != 19 + int.from_bytes(wire[1:3], 'big'):
                     raise RuntimeError('Linux Swift myudp framing mismatch')
-                if wire[0] in (0, PTYPE_CONTROL):
+                if wire[0] == PTYPE_CONTROL:
+                    self.myudp_control_frames_received += 1
+                    continue
+                if wire[0] == 0:
+                    self.myudp_idle_frames_received += 1
                     continue
                 if wire[0] != PTYPE_DATA or len(wire) < 27 or wire[19] != 1:
                     raise RuntimeError('Linux Swift myudp framing mismatch')
@@ -370,6 +378,8 @@ class LinuxSwiftSecureLinkPeer:
             if payload[1] == 4 and int.from_bytes(payload[12:20], 'big') == 2:
                 next_send_counter = self.myudp_application_reply_counter_seed
                 time.sleep(self.delay_myudp_application_reply_seconds)
+                if self.send_myudp_idle_before_application_reply:
+                    listener.sendto(bytes([0]) + struct.pack('!HQQ', 0, 7, 0), peer)
             datagrams: list[bytes] = []
             for offset in range(0, len(record), 1425):
                 chunk = record[offset:offset + 1425]
@@ -402,9 +412,20 @@ class LinuxSwiftSecureLinkPeer:
 
         self._secure_link_transaction(receive, send)
         # Keep the UDP endpoint alive long enough for the client to drain the
-        # intentionally reverse-ordered reply without an ICMP port-unreachable.
-        if self.reorder_myudp_application_reply:
-            time.sleep(1.0)
+        # intentionally reverse-ordered reply and return its CONTROL/IDLE
+        # effects without an ICMP port-unreachable.
+        if self.reorder_myudp_application_reply or self.send_myudp_idle_before_application_reply:
+            listener.settimeout(0.1)
+            deadline = time.monotonic() + 1.0
+            while time.monotonic() < deadline:
+                try:
+                    wire, _peer = listener.recvfrom(65535)
+                except TimeoutError:
+                    continue
+                if wire[:1] == bytes([PTYPE_CONTROL]):
+                    self.myudp_control_frames_received += 1
+                elif wire[:1] == bytes([0]):
+                    self.myudp_idle_frames_received += 1
 
     def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
         hello = receive()
@@ -7367,7 +7388,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delaye
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_across_counter_rollover(tmp_path: Path) -> None:
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_rollover_and_control_idle(tmp_path: Path) -> None:
     """The foreground Linux client preserves a Core stream through composed faults."""
     if not sys.platform.startswith('linux') or not shutil.which('swift'):
         pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
@@ -7381,6 +7402,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_compos
         reorder_myudp_application_reply=True,
         duplicate_myudp_application_reply=True,
         myudp_application_reply_counter_seed=0xffff,
+        send_myudp_idle_before_application_reply=True,
         delay_myudp_application_reply_seconds=0.25,
     )
     try:
@@ -7399,6 +7421,8 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_compos
         )
         assert completed.returncode == 0, completed.stderr
         assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+        assert peer.myudp_control_frames_received >= 1
+        assert peer.myudp_idle_frames_received >= 1
     finally:
         peer.close()
 
