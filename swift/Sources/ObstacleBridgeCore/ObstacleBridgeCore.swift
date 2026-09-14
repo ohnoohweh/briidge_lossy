@@ -431,7 +431,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     public func protect(_ payload: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
-        guard sessionID != 0, c2sKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        guard !pendingCommitSent, sessionID != 0, c2sKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let header = ObstacleBridgeSecureLinkFrameCodec.header(type: ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, sessionID: sessionID, counter: txCounter)
         let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(
             plaintext: payload,

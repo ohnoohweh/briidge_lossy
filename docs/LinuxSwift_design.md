@@ -623,7 +623,9 @@ both directional counters to `1`, and reject protected frames from the replaced
 session. Both portable roles also bind the first pending-rekey hello to their
 injected 60-second deadline, retain that deadline across equivalent hello
 retransmits, and fail closed by clearing active and pending generations on
-expiry. Automatic frame/time triggers, retry state, readiness/diagnostic
+expiry. After a client has authenticated its rekey commit, it holds outbound
+application data until the matching done frame installs the new generation.
+Automatic frame/time triggers, retry state, readiness/diagnostic
 publication, and a dual-generation cutover window for in-flight application
 traffic remain runtime-level Core gaps.
 On Apple, the SwiftPM `Crypto` product currently resolves
