@@ -953,10 +953,14 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "ObstacleBridgeCrypto.chaChaPolySeal" in runtime
     assert "ObstacleBridgeCrypto.chaChaPolyOpen" in runtime
     assert "CryptoKit" not in runtime
-    assert "typeClientHello" in runtime
-    assert "typeServerHello" in runtime
-    assert "typeAuthFail" in runtime
-    assert "typeData" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.clientHello" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.serverHello" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.authFail" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.authenticatedData" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyHello" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyReply" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyDone" in runtime
     assert "authenticated && peerConfirmedAuthenticated" in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "framesFromClientPassedTotal" in runtime

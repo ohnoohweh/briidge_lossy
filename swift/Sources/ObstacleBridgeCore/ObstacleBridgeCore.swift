@@ -261,6 +261,7 @@ public enum ObstacleBridgeSecureLinkPSKClientError: Error, Equatable {
 
 /// SecureLink v1 PSK frame-type ownership, including the rekey transition.
 public enum ObstacleBridgeSecureLinkPSKFrameType {
+    public static let capabilityPSKV1: UInt8 = 1
     public static let clientHello: UInt8 = 1
     public static let serverHello: UInt8 = 2
     public static let authenticatedData: UInt8 = 4

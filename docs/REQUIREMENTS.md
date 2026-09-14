@@ -155,7 +155,9 @@ Current implementation note:
   state machines; both Core roles receive their monotonic clock and expire an
   unconfirmed handshake by clearing their session keys and counters, while the
   Core server serializes concurrent protected sends before assigning counters;
-  Core also owns the complete PSK frame-type namespace through rekey.
+  Core also owns the complete PSK frame-type namespace through rekey, and the
+  Apple wrapper consumes those Core constants rather than declaring another
+  protocol namespace.
   Generated Apple targets link the pinned `Crypto` product through both target
   package dependencies and framework-phase product references, then compile
   the Core primitive source directly. The Apple SecureLink wrapper delegates PSK

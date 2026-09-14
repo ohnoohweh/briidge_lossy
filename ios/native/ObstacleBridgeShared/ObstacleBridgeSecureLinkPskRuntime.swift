@@ -7,16 +7,16 @@ enum ObstacleBridgeSecureLinkPskRuntimeError: Error {
 }
 
 final class ObstacleBridgeSecureLinkPskRuntime {
-    static let typeClientHello = 1
-    static let typeServerHello = 2
-    static let typeAuthFail = 3
-    static let typeData = 4
-    static let typeRekeyHello = 5
-    static let typeRekeyReply = 6
-    static let typeRekeyCommit = 7
-    static let typeRekeyDone = 8
+    static let typeClientHello = ObstacleBridgeSecureLinkPSKFrameType.clientHello
+    static let typeServerHello = ObstacleBridgeSecureLinkPSKFrameType.serverHello
+    static let typeAuthFail = ObstacleBridgeSecureLinkPSKFrameType.authFail
+    static let typeData = ObstacleBridgeSecureLinkPSKFrameType.authenticatedData
+    static let typeRekeyHello = ObstacleBridgeSecureLinkPSKFrameType.rekeyHello
+    static let typeRekeyReply = ObstacleBridgeSecureLinkPSKFrameType.rekeyReply
+    static let typeRekeyCommit = ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit
+    static let typeRekeyDone = ObstacleBridgeSecureLinkPSKFrameType.rekeyDone
 
-    static let capabilityPSKV1 = 1
+    static let capabilityPSKV1 = ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1
 
     static let authFailBadPSK = 1
     static let authFailUnsupported = 2
