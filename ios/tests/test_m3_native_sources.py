@@ -988,6 +988,11 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "var isAuthenticated: Bool { coreState?.authenticated ?? false }" in runtime
     assert "private var authenticated = false" not in runtime
     assert "private var peerConfirmedAuthenticated = false" not in runtime
+    assert "private var txCounter: UInt64 =" not in runtime
+    assert "private var rxCounter: UInt64 =" not in runtime
+    assert "private var pendingSessionID: UInt64 =" not in runtime
+    assert "private var clientRekeyHoldAfterCommit =" not in runtime
+    assert "private var sessionID: UInt64 { coreState?.sessionID ?? failedSessionID }" in runtime
     assert "authenticated: isAuthenticated" in runtime
     assert "private var coreState: ObstacleBridgeSecureLinkPSKState?" in runtime
     assert "state?.authenticatedGenerationsTotal" in runtime

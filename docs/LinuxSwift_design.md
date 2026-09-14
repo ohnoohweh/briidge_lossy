@@ -629,8 +629,11 @@ status adapters. The Apple client and listener roles delegate handshake,
 protected data, rekey, send protection, and injected-clock deadlines to their
 respective Core roles. `ObstacleBridgeSecureLinkPskRuntime` contains no local
 proof, AEAD, replay, handshake-timeout, or rekey state machine: it only maps
-transport frames to Core calls and mirrors Core state into the established
-Apple status vocabulary. The native-source parity guard rejects reintroduction
+transport frames to Core calls and projects Core state into the established
+Apple status vocabulary. Authentication readiness, session/counter snapshots,
+pending-rekey state, and the client send-hold read directly from Core; only a
+failed-session identifier persists after Core clears a failed peer for the
+existing diagnostic vocabulary. The native-source parity guard rejects reintroduction
 of those local crypto or lifecycle helpers, including every retired private
 handshake, protected-data, rekey, proof, and AEAD handler. The Apple frame
 codec similarly contains frame/JSON boundary adaptation only; test probes use

@@ -159,9 +159,10 @@ Current implementation note:
   Apple wrapper consumes those Core constants rather than declaring another
   protocol namespace. Apple client and listener roles delegate PSK handshake,
   protected data, rekey transitions, injected-clock expiry, and
-  peer-confirmed authentication readiness to Core roles; Core state also
-  supplies authenticated-generation and completed-rekey totals. Apple retains
-  transport and operator-status adaptation without a readiness mirror.
+  peer-confirmed authentication readiness, session/counter snapshots,
+  pending-rekey/send-hold state, authenticated-generation totals, and
+  completed-rekey totals to Core roles. Apple retains transport and
+  operator-status adaptation without lifecycle-state mirrors.
   Generated Apple targets link the pinned `Crypto` product through both target
   package dependencies and framework-phase product references, then compile
   the Core primitive source directly. The Apple SecureLink wrapper delegates PSK

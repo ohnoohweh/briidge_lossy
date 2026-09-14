@@ -29,15 +29,12 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private let unixTimeProvider: () -> TimeInterval
     private var coreClient: ObstacleBridgeSecureLinkPSKClient?
     private var coreServer: ObstacleBridgeSecureLinkPSKServer?
-    // These are status snapshots from Core, not a second protocol state machine.
-    private var sessionID: UInt64 = 0
-    private var txCounter: UInt64 = 1
-    private var rxCounter: UInt64 = 0
+    // Failure reporting outlives a fail-closed Core reset; live lifecycle
+    // state is read from Core below rather than copied into this adapter.
+    private var failedSessionID: UInt64 = 0
     private var lastAuthFailCode = 0
-    private var pendingSessionID: UInt64 = 0
     private var lastEvent = "bootstrap", lastRekeyTrigger = "", disconnectReason = "", disconnectDetail = "", trustValidationState = "n/a"
     private var lastEventUnixTs: TimeInterval?
-    private var clientRekeyHoldAfterCommit = false
     private var framesFromClientPassedTotal = 0, framesFromClientDroppedTotal = 0, framesToClientPassedTotal = 0
 
     init(clientMode: Bool, psk: String, rekeyAfterFrames: Int = 0, rekeyAfterSeconds: TimeInterval = 0.0, randomBytes: ((Int) -> Data)? = nil, sessionIDProvider: (() -> UInt64)? = nil, timeProvider: (() -> TimeInterval)? = nil, unixTimeProvider: (() -> TimeInterval)? = nil) {
@@ -65,11 +62,11 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     func beginClientHandshake() throws -> OutboundSnapshot {
         guard clientMode, let coreClient else { throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState }
         coreClient.reset(); reset(false); record("handshake_started")
-        let f = try coreClient.begin(sessionID: sessionIDProvider(), clientNonce: Data(randomBytes(32).prefix(32))); syncClient(); return outbound([f])
+        let f = try coreClient.begin(sessionID: sessionIDProvider(), clientNonce: Data(randomBytes(32).prefix(32))); return outbound([f])
     }
     func sendApp(_ payload: Data) throws -> OutboundSnapshot {
-        if clientMode, let coreClient { var frames = [try coreClient.protect(payload)]; if let r = try coreClient.pollAutomaticRekey() { frames.append(r) }; syncClient(); framesFromClientPassedTotal &+= 1; return outbound(frames) }
-        if !clientMode, let coreServer { let f = try coreServer.protect(payload); syncServer(); framesToClientPassedTotal &+= 1; return outbound([f]) }
+        if clientMode, let coreClient { var frames = [try coreClient.protect(payload)]; if let r = try coreClient.pollAutomaticRekey() { frames.append(r) }; framesFromClientPassedTotal &+= 1; return outbound(frames) }
+        if !clientMode, let coreServer { let f = try coreServer.protect(payload); framesToClientPassedTotal &+= 1; return outbound([f]) }
         throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
     }
     func handleInboundFrame(_ wire: Data) -> InboundSnapshot {
@@ -85,32 +82,35 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         case Self.typeRekeyCommit where !clientMode: return coreServerRekeyCommit(wire)
         case Self.typeRekeyDone where clientMode: return coreClientRekeyDone(wire)
         case Self.typeAuthFail:
-            let code = frame.payload.first.map(Int.init) ?? Self.authFailDecode; coreClient?.reset(); coreServer?.reset(); reset(true); lastAuthFailCode = code; disconnectReason = "auth_failed"; disconnectDetail = "code=\(code)"; trustValidationState = "failed"; record(authFailEvent(code)); return inbound([], [], code)
+            let code = frame.payload.first.map(Int.init) ?? Self.authFailDecode; coreClient?.reset(); coreServer?.reset(); reset(true); failedSessionID = frame.sessionID; lastAuthFailCode = code; disconnectReason = "auth_failed"; disconnectDetail = "code=\(code)"; trustValidationState = "failed"; record(authFailEvent(code)); return inbound([], [], code)
         default: return fail(frame.sessionID, Self.authFailUnsupported)
         }
     }
     func requestClientRekey() throws -> OutboundSnapshot {
         guard clientMode, let coreClient else { throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState }
-        let f = try coreClient.beginRekey(sessionID: nextSessionID(), clientNonce: Data(randomBytes(32).prefix(32))); syncClient(); lastRekeyTrigger = "operator"; record("rekey_started"); return outbound([f])
+        let f = try coreClient.beginRekey(sessionID: nextSessionID(), clientNonce: Data(randomBytes(32).prefix(32))); lastRekeyTrigger = "operator"; record("rekey_started"); return outbound([f])
     }
-    func pollDueFrames() throws -> [Data] { guard clientMode, let coreClient else { return [] }; let frames = try coreClient.pollAutomaticRekey().map { [$0] } ?? []; syncClient(); return frames }
-    func expireHandshakeIfNeeded() { do { if clientMode, let c = coreClient { try c.expireHandshakeIfNeeded(); syncClient() } else if let s = coreServer { try s.expireHandshakeIfNeeded(); syncServer() } } catch { _ = fail(sessionID, Self.authFailLifecycle) } }
+    func pollDueFrames() throws -> [Data] { guard clientMode, let coreClient else { return [] }; return try coreClient.pollAutomaticRekey().map { [$0] } ?? [] }
+    func expireHandshakeIfNeeded() { do { if clientMode, let c = coreClient { try c.expireHandshakeIfNeeded() } else if let s = coreServer { try s.expireHandshakeIfNeeded() } } catch { _ = fail(sessionID, Self.authFailLifecycle) } }
 
-    private func coreClientHello(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { let f = try c.handleServerHello(wire); syncClient(); lastAuthFailCode = 0; disconnectReason = ""; disconnectDetail = ""; trustValidationState = "n/a"; record("server_hello_validated"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func coreClientData(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { let p: Data; if !c.isAuthenticated { try c.handleServerAcknowledgement(wire); p = Data(); trustValidationState = "validated"; record("authenticated") } else { p = try c.unprotect(wire) }; syncClient(); framesToClientPassedTotal &+= 1; return inbound([], p.isEmpty ? [] : [p]) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func coreClientRekeyReply(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { let f = try c.handleRekeyReply(wire); syncClient(); record("rekey_commit_sent"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func coreClientRekeyDone(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { try c.handleRekeyDone(wire); syncClient(); record("rekey_completed"); return inbound([], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func coreServerHello(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let f = try s.handleClientHello(wire, serverNonce: Data(randomBytes(32).prefix(32))); syncServer(); record("server_hello_sent"); return inbound([f], []) } catch { return fail(0, Self.authFailDecode) } }
-    private func coreServerData(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let p: Data; let frames: [Data]; if !s.isAuthenticated { frames = [try s.handleClientProof(wire)]; p = Data(); trustValidationState = "validated"; record("authenticated") } else { p = try s.unprotect(wire); frames = [] }; syncServer(); framesFromClientPassedTotal &+= 1; return inbound(frames, p.isEmpty ? [] : [p]) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func coreServerRekeyHello(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let f = try s.handleRekeyHello(wire, serverNonce: Data(randomBytes(32).prefix(32))); syncServer(); lastRekeyTrigger = "remote"; record("rekey_reply_sent"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func coreServerRekeyCommit(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let f = try s.handleRekeyCommit(wire); syncServer(); record("rekey_completed"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
-    private func syncClient() { guard let s = coreClient?.state else { return }; sessionID = s.sessionID; txCounter = s.txCounter; rxCounter = s.rxCounter; pendingSessionID = s.pendingRekeySessionID; clientRekeyHoldAfterCommit = s.applicationSendingBlocked }
-    private func syncServer() { guard let s = coreServer?.state else { return }; sessionID = s.sessionID; txCounter = s.txCounter; rxCounter = s.rxCounter; pendingSessionID = s.pendingRekeySessionID }
+    private func coreClientHello(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { let f = try c.handleServerHello(wire); lastAuthFailCode = 0; disconnectReason = ""; disconnectDetail = ""; trustValidationState = "n/a"; record("server_hello_validated"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
+    private func coreClientData(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { let p: Data; if !c.isAuthenticated { try c.handleServerAcknowledgement(wire); p = Data(); trustValidationState = "validated"; record("authenticated") } else { p = try c.unprotect(wire) }; framesToClientPassedTotal &+= 1; return inbound([], p.isEmpty ? [] : [p]) } catch { return fail(sessionID, Self.authFailBadPSK) } }
+    private func coreClientRekeyReply(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { let f = try c.handleRekeyReply(wire); record("rekey_commit_sent"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
+    private func coreClientRekeyDone(_ wire: Data) -> InboundSnapshot { guard let c = coreClient else { return fail(0, Self.authFailLifecycle) }; do { try c.handleRekeyDone(wire); record("rekey_completed"); return inbound([], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
+    private func coreServerHello(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let f = try s.handleClientHello(wire, serverNonce: Data(randomBytes(32).prefix(32))); record("server_hello_sent"); return inbound([f], []) } catch { return fail(0, Self.authFailDecode) } }
+    private func coreServerData(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let p: Data; let frames: [Data]; if !s.isAuthenticated { frames = [try s.handleClientProof(wire)]; p = Data(); trustValidationState = "validated"; record("authenticated") } else { p = try s.unprotect(wire); frames = [] }; framesFromClientPassedTotal &+= 1; return inbound(frames, p.isEmpty ? [] : [p]) } catch { return fail(sessionID, Self.authFailBadPSK) } }
+    private func coreServerRekeyHello(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let f = try s.handleRekeyHello(wire, serverNonce: Data(randomBytes(32).prefix(32))); lastRekeyTrigger = "remote"; record("rekey_reply_sent"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
+    private func coreServerRekeyCommit(_ wire: Data) -> InboundSnapshot { guard let s = coreServer else { return fail(0, Self.authFailLifecycle) }; do { let f = try s.handleRekeyCommit(wire); record("rekey_completed"); return inbound([f], []) } catch { return fail(sessionID, Self.authFailBadPSK) } }
     private func outbound(_ frames: [Data]) -> OutboundSnapshot { OutboundSnapshot(sent: true, emittedFrames: frames, authenticated: isAuthenticated, sessionID: sessionID, txCounter: txCounter) }
     private func inbound(_ frames: [Data], _ payloads: [Data], _ code: Int? = nil) -> InboundSnapshot { InboundSnapshot(emittedFrames: frames, deliveredPayloads: payloads, authenticated: isAuthenticated, sessionID: sessionID, rxCounter: rxCounter, authFailCode: code) }
-    private func fail(_ failedSessionID: UInt64, _ code: Int) -> InboundSnapshot { coreClient?.reset(); coreServer?.reset(); reset(true); if failedSessionID != 0 { sessionID = failedSessionID }; lastAuthFailCode = code; disconnectReason = "auth_failed"; disconnectDetail = "code=\(code)"; trustValidationState = "failed"; if !clientMode { framesFromClientDroppedTotal &+= 1 }; record(authFailEvent(code)); let f = ObstacleBridgeSecureLinkPskCodec.buildFrame(slType: Self.typeAuthFail, sessionID: failedSessionID, counter: 0, payload: Data([UInt8(code & 0xff)])); return inbound([f], [], code) }
-    private func reset(_ keepSessionID: Bool) { if !keepSessionID { sessionID = 0; lastEvent = "bootstrap"; lastEventUnixTs = nil; lastRekeyTrigger = ""; disconnectReason = ""; disconnectDetail = ""; trustValidationState = "n/a"; framesFromClientPassedTotal = 0; framesFromClientDroppedTotal = 0; framesToClientPassedTotal = 0 }; txCounter = 1; rxCounter = 0; pendingSessionID = 0; clientRekeyHoldAfterCommit = false; lastAuthFailCode = 0 }
+    private func fail(_ failedSessionID: UInt64, _ code: Int) -> InboundSnapshot { coreClient?.reset(); coreServer?.reset(); reset(true); self.failedSessionID = failedSessionID; lastAuthFailCode = code; disconnectReason = "auth_failed"; disconnectDetail = "code=\(code)"; trustValidationState = "failed"; if !clientMode { framesFromClientDroppedTotal &+= 1 }; record(authFailEvent(code)); let f = ObstacleBridgeSecureLinkPskCodec.buildFrame(slType: Self.typeAuthFail, sessionID: failedSessionID, counter: 0, payload: Data([UInt8(code & 0xff)])); return inbound([f], [], code) }
+    private func reset(_ keepSessionID: Bool) { if !keepSessionID { failedSessionID = 0; lastEvent = "bootstrap"; lastEventUnixTs = nil; lastRekeyTrigger = ""; disconnectReason = ""; disconnectDetail = ""; trustValidationState = "n/a"; framesFromClientPassedTotal = 0; framesFromClientDroppedTotal = 0; framesToClientPassedTotal = 0 }; lastAuthFailCode = 0 }
     private var coreState: ObstacleBridgeSecureLinkPSKState? { clientMode ? coreClient?.state : coreServer?.state }
+    private var sessionID: UInt64 { coreState?.sessionID ?? failedSessionID }
+    private var txCounter: UInt64 { coreState?.txCounter ?? 1 }
+    private var rxCounter: UInt64 { coreState?.rxCounter ?? 0 }
+    private var pendingSessionID: UInt64 { coreState?.pendingRekeySessionID ?? 0 }
+    private var clientRekeyHoldAfterCommit: Bool { coreState?.applicationSendingBlocked ?? false }
     private func nextSessionID() -> UInt64 { var candidate = sessionIDProvider(); while candidate == 0 || candidate == sessionID || candidate == pendingSessionID { candidate = sessionIDProvider() }; return candidate }
     private func record(_ event: String) { lastEvent = event; lastEventUnixTs = unixTimeProvider() }
     private func authFailEvent(_ code: Int) -> String { switch code { case Self.authFailBadPSK: return "auth_failed_bad_psk"; case Self.authFailUnsupported: return "auth_failed_unsupported"; case Self.authFailReplay: return "auth_failed_replay"; case Self.authFailDecode: return "auth_failed_decode"; case Self.authFailLifecycle: return "auth_failed_lifecycle"; default: return "auth_failed" } }
