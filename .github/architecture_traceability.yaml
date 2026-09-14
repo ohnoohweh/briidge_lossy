@@ -158,6 +158,8 @@ ARC-CMP-003:
   # fragmentation integration proof relies on peer byte counters, not logs.
   # The admin UI exposes throttle state at the ChannelMux and physical-TUN
   # aggregate boundaries, not as a per-peer TUN quota view.
+  # Raw ChannelMux parity compiles the Core SecureLink transcript alongside the
+  # Core crypto module and runs in a bounded, test-name-reporting CI lane.
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
     - tests/unit/test_secure_link_psk.py::test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback

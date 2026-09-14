@@ -37,6 +37,7 @@ SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / 
 SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
 SWIFT_MYUDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"
 SWIFT_SECURELINK_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"
+SWIFT_SECURELINK_TRANSCRIPT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"
 SWIFT_OVERLAY_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"
 SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
@@ -158,6 +159,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
         str(SWIFT_MYUDP_CODEC_SOURCE),
         str(SWIFT_SECURELINK_FRAME_CODEC_SOURCE),
+        str(SWIFT_SECURELINK_TRANSCRIPT_SOURCE),
         str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
         str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
         str(SWIFT_SERVICE_CODEC_SOURCE),
@@ -167,7 +169,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_TCP_OVERLAY_RUNTIME_SOURCE),
         str(SWIFT_RUNNER_SOURCE),
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=120)
     if completed.returncode != 0:
         raise AssertionError(
             f"failed to compile Swift ChannelMux parity runner\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
@@ -182,6 +184,7 @@ def _run_swift(binary: Path, request: dict[str, object]) -> dict[str, object]:
         check=False,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     if completed.returncode != 0:
         raise AssertionError(

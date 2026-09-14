@@ -410,6 +410,12 @@ Implementation note: current focused regression coverage for the `REQ-MYU-*` sli
 
 Implementation note: the myUDP2 codec boundary is defined by a bounded `u32` stream-record serializer/deserializer and a strict DATA_BATCH parser/encoder that consumes the frozen wire vectors, rejects invalid record lengths and trailing bytes, and enforces the IPv6-safe batch budget. The Python and shared Swift myudp runtimes carry those stream bytes in DATA_BATCH datagrams, schedule complete chunks within the batch budget, and retransmit each missing chunk in a freshly built batch envelope. The Python E2E harness records sanitized DATA_BATCH framing metadata and qualifies concurrent small-record coalescing plus exact-once recovery after a dropped multi-record batch. `get_stream_record_limit()` is the upper-layer budget contract: ChannelMux uses it for read and fragment sizing, Compression forwards it, and SecureLink reserves protected-frame overhead. The `myudp.budget` peer-status object and transport metrics report stream bytes, chunks, batches, queue bytes/age, retransmitted chunks, malformed batches, and malformed stream records. Swift macOS/iOS device and mixed-runtime qualification remains required before this wire format is eligible for a distributed-network release; there is no runtime wire-format fallback.
 The macOS Swift parity runner seeds retransmission scenarios through the Core-backed application-payload path and initializes Core with the adapter's heartbeat/control state, so its CONTROL, idle, acknowledgement, and retransmission evidence cannot depend on mutable Apple-only sender tables. The retired pre-myUDP2 SessionCodec fixture is absent from every Swift compile inventory; current parity commands compile only the shared Core and platform wrappers.
+Its raw ChannelMux compile inventory includes the Core SecureLink transcript with
+the pinned Core crypto module, so the test exercises the complete Core
+dependency graph rather than an implicit Apple transcript implementation. The
+Linux shared and Swift-backed macOS CI lanes name each active test, enforce a
+per-test timeout, and cap the job duration; a stalled raw compiler or runtime
+probe therefore identifies its owning test within a bounded run.
 Apple myUDP peer-runtime queue budgeting consumes Core-owned batch-header,
 record-length, and chunk-header constants through a compatibility facade, so
 that scheduling boundary cannot retain a divergent platform-local layout.

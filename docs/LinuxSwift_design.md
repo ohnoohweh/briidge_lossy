@@ -692,7 +692,14 @@ host-load-sensitive post-reply deadline; only the no-peer unit fixture uses a
 short autonomous expiry. Host-side raw-source probes
 reuse the already-built SwiftPM Core/Crypto module when it is available, so a
 CI job does not synchronously invoke SwiftPM again after its Core build step.
-An absent module still triggers the one required package build.
+An absent module still triggers the one required package build. The macOS
+ChannelMux parity runner compiles the Core transcript source with the Core
+crypto surface, so its raw probe has the complete Core dependency graph rather
+than an implicit Apple-side transcript dependency. The Linux shared,
+Swift-backed macOS, and elevated Swift macOS lanes publish individual test
+names, enforce a bounded test timeout, and have a 15-minute job cap; a stalled
+probe therefore reports its owning test instead of leaving a quiet runner
+alive under the default Actions timeout.
 
 Pull-request validation is event-coalesced: feature branches run the
 `pull_request` workflow once, while `push` validation remains on `main`, and a

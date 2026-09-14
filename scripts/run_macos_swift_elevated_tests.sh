@@ -33,4 +33,4 @@ restore_artifact_ownership() {
 trap restore_artifact_ownership EXIT
 
 cd "$ROOT_DIR"
-"$PYTHON_BIN" -m pytest -q -rs tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated "$@"
+"$PYTHON_BIN" -m pytest -vv --timeout=120 -rs tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated "$@"

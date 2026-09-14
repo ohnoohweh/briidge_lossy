@@ -82,6 +82,7 @@ jobs:
 
   bridge-py-integration-linux:
     name: Integration Gate (Linux shared)
+    timeout-minutes: 15
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
@@ -102,7 +103,7 @@ jobs:
           pip install -e .[test]
 
       - name: Run Linux shared integration suite
-        run: pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+        run: pytest -vv --timeout=90 -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
 
   bridge-py-integration-windows:
     name: Integration Gate (Windows-specific)
@@ -210,6 +211,7 @@ jobs:
 
   bridge-py-integration-macos-swift:
     name: Integration Gate (macOS Swift-backed)
+    timeout-minutes: 15
     needs:
       - detect-bridge-change
       - bridge-py-integration-macos-swift-probe
@@ -237,10 +239,11 @@ jobs:
       - name: Run Swift-backed host-side suites
         env:
           PYTHONPATH: src:ios/src
-        run: pytest -q -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests
+        run: pytest -vv --timeout=120 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests
 
   bridge-py-integration-macos-swift-elevated:
     name: Integration Gate (macOS Swift elevated TUN)
+    timeout-minutes: 15
     needs:
       - detect-bridge-change
       - bridge-py-integration-macos-swift-probe

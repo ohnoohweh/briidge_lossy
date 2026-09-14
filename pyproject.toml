@@ -17,6 +17,7 @@ dependencies = [
 test = [
     "pytest",
     "pytest-xdist",
+    "pytest-timeout",
 ]
 wintun = [
     "wintun>=0.14.1",
