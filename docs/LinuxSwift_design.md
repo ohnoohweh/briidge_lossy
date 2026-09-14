@@ -667,6 +667,11 @@ validation is device qualification and the complete cross-platform known-answer
 set. R005 remains open for those qualification and broader Core lifecycle
 integration requirements.
 
+Routine Core and Apple SecureLink validation excludes the marked slow
+packet-tunnel probe family. Each scenario constructs a complete host runtime
+and waits for network-runtime shutdown; it remains an explicit qualification
+command rather than a routine Core iteration.
+
 Definition of Done:
 
 - the pinned `Crypto` backend supplies the common SHA/HMAC/HKDF/PBKDF2, AEAD,

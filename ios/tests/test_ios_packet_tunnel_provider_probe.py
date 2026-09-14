@@ -24,6 +24,12 @@ if str(TESTS_DIR) not in sys.path:
 from swift_test_support import require_swift_modules, swift_core_crypto_compile_flags
 
 
+# Each scenario builds and runs a complete packet-tunnel host probe. Keep this
+# coverage opt-in so focused Swift/Core and ordinary host-side PR runs do not
+# serialize network-runtime shutdown waits.
+pytestmark = pytest.mark.slow
+
+
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"

@@ -220,7 +220,7 @@ jobs:
       - name: Run Swift-backed host-side suites
         env:
           PYTHONPATH: src:ios/src
-        run: pytest -q tests/unit/test_channel_mux_swift_parity.py ios/tests
+        run: pytest -q -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests
 
   bridge-py-integration-macos-swift-elevated:
     name: Integration Gate (macOS Swift elevated TUN)
