@@ -411,21 +411,21 @@ class LinuxSwiftSecureLinkPeer:
                 drop_next_application_data = self.drop_myudp_application_data_count
 
         self._secure_link_transaction(receive, send)
-        # Keep the UDP endpoint alive long enough for the client to drain the
-        # intentionally reverse-ordered reply and return its CONTROL/IDLE
-        # effects without an ICMP port-unreachable.
-        if self.reorder_myudp_application_reply or self.send_myudp_idle_before_application_reply:
-            listener.settimeout(0.1)
-            deadline = time.monotonic() + 1.0
-            while time.monotonic() < deadline:
-                try:
-                    wire, _peer = listener.recvfrom(65535)
-                except TimeoutError:
-                    continue
-                if wire[:1] == bytes([PTYPE_CONTROL]):
-                    self.myudp_control_frames_received += 1
-                elif wire[:1] == bytes([0]):
-                    self.myudp_idle_frames_received += 1
+        # Keep the UDP endpoint alive long enough for a loaded Linux runner to
+        # drain every response and return its CONTROL/IDLE effects. Closing
+        # immediately after an ordinary reply races the client's receive and
+        # can surface as an ICMP port-unreachable instead of that reply.
+        listener.settimeout(0.1)
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            try:
+                wire, _peer = listener.recvfrom(65535)
+            except TimeoutError:
+                continue
+            if wire[:1] == bytes([PTYPE_CONTROL]):
+                self.myudp_control_frames_received += 1
+            elif wire[:1] == bytes([0]):
+                self.myudp_idle_frames_received += 1
 
     def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
         hello = receive()
@@ -494,6 +494,20 @@ class LinuxSwiftSecureLinkPeer:
         plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
         response = self._header(4, session_id, 2)
         send(response + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), b'python-e2e:' + plaintext, response))
+
+
+def test_linux_swift_myudp_reference_peer_waits_for_response_drain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reference peer does not close its reply port before a client can drain it."""
+    monkeypatch.setattr(LinuxSwiftSecureLinkPeer, '_secure_link_transaction', lambda self, receive, send: None)
+    peer = LinuxSwiftSecureLinkPeer('myudp', b'linux-swift-reference-peer-drain-psk')
+    try:
+        assert not peer._done.wait(0.15)
+        peer._thread.join(timeout=2.0)
+        assert peer._done.is_set()
+        assert peer.error is None
+    finally:
+        if not peer._done.is_set():
+            peer.close()
 
 
 @contextlib.contextmanager

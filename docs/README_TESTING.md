@@ -215,7 +215,10 @@ transcript vectors. It also exercises authenticated SecureLink PSK handshake
 and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
 peers implemented in local Python fixtures. The myudp fixture consumes the
 length-prefixed reliable byte stream, orders/deduplicates DATA_BATCH chunks,
-and emits cumulative CONTROL acknowledgements. Coverage includes candidate
+emits cumulative CONTROL acknowledgements, and keeps its UDP endpoint bound
+briefly after every protected reply so the Linux runner can drain it without a
+port-close ICMP failure; its fixture-level timing regression runs without a
+Linux Swift toolchain. Coverage includes candidate
 rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
 The fixture additionally proves the independent myUDP transport-counter sequence
 through the SecureLink handshake, peer-first payload delivery, and a protected
