@@ -264,6 +264,7 @@ public enum ObstacleBridgeSecureLinkPSKFrameType {
     public static let capabilityPSKV1: UInt8 = 1
     public static let clientHello: UInt8 = 1
     public static let serverHello: UInt8 = 2
+    public static let authFail: UInt8 = 3
     public static let authenticatedData: UInt8 = 4
     public static let rekeyHello: UInt8 = 5
     public static let rekeyReply: UInt8 = 6
