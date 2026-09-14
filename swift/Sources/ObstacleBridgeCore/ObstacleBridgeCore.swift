@@ -598,6 +598,23 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         throw ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut
     }
 
+    /// Clears all protocol state when a platform transport moves to a fresh
+    /// lifecycle epoch. The adapter retains its own transport/status history.
+    public func reset() {
+        stateLock.lock(); defer { stateLock.unlock() }
+        sessionID = 0
+        clientNonce = Data()
+        c2sKey = Data()
+        s2cKey = Data()
+        txCounter = 1
+        rxCounter = 0
+        authenticated = false
+        handshakeStartedAt = nil
+        authenticatedAt = nil
+        protectedDataFramesSent = 0
+        clearPendingRekey()
+    }
+
     private func clearPendingRekey() {
         pendingSessionID = 0
         pendingClientNonce = Data()

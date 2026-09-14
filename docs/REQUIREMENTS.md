@@ -157,7 +157,9 @@ Current implementation note:
   Core server serializes concurrent protected sends before assigning counters;
   Core also owns the complete PSK frame-type namespace through rekey, and the
   Apple wrapper consumes those Core constants rather than declaring another
-  protocol namespace.
+  protocol namespace. The Apple client role delegates PSK handshake, protected
+  data, and rekey transitions to the Core client while its listener role remains
+  on the staged lifecycle migration.
   Generated Apple targets link the pinned `Crypto` product through both target
   package dependencies and framework-phase product references, then compile
   the Core primitive source directly. The Apple SecureLink wrapper delegates PSK
