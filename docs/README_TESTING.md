@@ -227,7 +227,8 @@ ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
 `bridge-py-integration-macos-swift-probe` CI job and is not a Linux SwiftPM
 parity result.
 The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state machines in
-one deterministic protected-data exchange and the bounded binary, CKV1
+one deterministic protected-data exchange, deterministically expires an
+unconfirmed client handshake through its injected monotonic clock, and covers the bounded binary, CKV1
 control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
 contracts. A shared Python-derived fixture pins TCP malformed records, myUDP
 DATA_BATCH envelope and malformed records, WebSocket binary payload-mode and

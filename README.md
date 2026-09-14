@@ -13,7 +13,8 @@ The project currently targets six platform families:
   service OPEN and service-catalog bytes, including service-record truncation
   and trailing-byte rejection, plus exact and malformed vectors for all WebSocket payload modes;
   Base64 and JSON+Base64 decoding reject invalid characters rather than silently discarding them;
-  SecureLink client/server envelope
+  SecureLink client/server envelope and the portable client's injected-clock
+  unconfirmed-handshake expiry
   and full myUDP/SecureLink/TCP APP/ChannelMux-header framing have Core owners; Apple myUDP queue
   budgeting reads its batch-layout constants from that same Core owner; CONTROL missing-list
   capacity is derived from its wire payload (713 counters) rather than the

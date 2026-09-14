@@ -612,15 +612,20 @@ feature-complete core state machine and one cryptographic primitive surface.
 
 Current status: `ObstacleBridgeCore` supplies the SecureLink envelope, the
 Python-derived PSK transcript primitives, a pinned `Crypto` primitive surface,
-and reduced portable client/server handshake peers. The Apple runtime uses the
-same envelope but retains a separate PSK runtime for rekey negotiation,
-handshake expiry, readiness, retry status, and redacted diagnostics. Its codec
-also duplicates transcript derivation/proofs, and its runtime directly invokes
-`CryptoKit` for protected frames. `ObstacleBridgeNativeCrypto` still supplies
-the Objective-C bridge and directly owns Apple crypto calls. R005 therefore
-remains open until the Apple runtime delegates its full lifecycle state and
-protected-frame crypto to Core, with platform bridges reduced to their required
-Objective-C boundary.
+and portable client/server handshake peers. Its client owns an injected
+monotonic-clock handshake deadline and atomically clears unconfirmed keys and
+counters on expiry. On Apple, the SwiftPM `Crypto` product currently resolves
+to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
+test is not qualified there because repeated signatures for the RFC seed do
+not match its deterministic vector. The Apple runtime uses the same envelope
+but retains a separate PSK runtime for server-role expiry, rekey negotiation,
+readiness, retry status, and redacted diagnostics. Its codec also duplicates
+transcript derivation/proofs, and its runtime directly invokes `CryptoKit` for
+protected frames. `ObstacleBridgeNativeCrypto` still supplies the Objective-C
+bridge and directly owns Apple crypto calls. R005 therefore remains open until
+the Apple crypto backend passes the complete known-answer set and the Apple
+runtime delegates its full lifecycle state and protected-frame crypto to Core,
+with platform bridges reduced to their required Objective-C boundary.
 
 Definition of Done:
 

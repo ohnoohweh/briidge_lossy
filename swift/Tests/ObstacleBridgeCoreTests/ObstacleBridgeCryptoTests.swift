@@ -407,6 +407,24 @@ struct ObstacleBridgeCryptoTests {
         #expect(try client.unprotect(server.protect(Data("linux-server".utf8))) == Data("linux-server".utf8))
     }
 
+    @Test func secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock() throws {
+        var monotonicTime: TimeInterval = 100
+        let client = try ObstacleBridgeSecureLinkPSKClient(
+            psk: Data("deadline-psk".utf8),
+            handshakeTimeout: 60,
+            timeProvider: { monotonicTime }
+        )
+        _ = try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32))
+        monotonicTime = 160
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut) {
+            try client.expireHandshakeIfNeeded()
+        }
+        #expect(!client.isAuthenticated)
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try client.protect(Data("after-timeout".utf8))
+        }
+    }
+
     @Test func invalidSizesAreRejectedBeforeCryptoOperations() throws {
         #expect(throws: ObstacleBridgeCryptoError.invalidKeyLength(expected: 32, actual: 31)) {
             try ObstacleBridgeCrypto.aesGCMSeal(plaintext: Data(), key: Data(repeating: 0, count: 31), nonce: Data(repeating: 0, count: 12))

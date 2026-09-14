@@ -152,7 +152,8 @@ Current implementation note:
   transcript derivation, proof, and handshake-envelope bytes to the shared
   Python-derived corpus. One Core SecureLink frame codec owns the versioned
   envelope and authenticated-data header for both portable client and server
-  state machines.
+  state machines; the Core client receives its monotonic clock and expires an
+  unconfirmed handshake by clearing its session keys and counters.
   Linux Swift
   TCP, cleartext WebSocket, and myudp owners use that contract in mixed-runtime
   protected-data tests. The overlay E2E suite runs the built Linux Swift

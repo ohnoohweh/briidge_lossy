@@ -254,6 +254,7 @@ public enum ObstacleBridgeSecureLinkPSKClientError: Error, Equatable {
     case invalidFrame
     case authenticationFailed
     case replayedFrame
+    case handshakeTimedOut
 }
 
 /// The client half of the SecureLink v1 PSK handshake and protected-data
@@ -261,6 +262,8 @@ public enum ObstacleBridgeSecureLinkPSKClientError: Error, Equatable {
 /// machine usable over Linux TCP and WebSocket lower transports.
 public final class ObstacleBridgeSecureLinkPSKClient {
     private let psk: Data
+    private let handshakeTimeout: TimeInterval
+    private let timeProvider: () -> TimeInterval
     private let lifecycleLock = NSLock()
     private let transmitLock = NSLock()
     private let receiveLock = NSLock()
@@ -271,15 +274,24 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     private var txCounter: UInt64 = 1
     private var rxCounter: UInt64 = 0
     private var authenticated = false
+    private var handshakeStartedAt: TimeInterval?
 
     public var isAuthenticated: Bool {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }
         return authenticated
     }
 
-    public init(psk: Data) throws {
+    /// The monotonic clock is injected so timeout behavior is deterministic in
+    /// every package consumer and never depends on a platform event loop.
+    public init(
+        psk: Data,
+        handshakeTimeout: TimeInterval = 60.0,
+        timeProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) throws {
         guard !psk.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidPSK }
         self.psk = psk
+        self.handshakeTimeout = max(0, handshakeTimeout)
+        self.timeProvider = timeProvider
     }
 
     public func begin(sessionID: UInt64, clientNonce: Data) throws -> Data {
@@ -287,6 +299,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         lifecycleLock.lock()
         self.sessionID = sessionID
         self.clientNonce = clientNonce
+        self.handshakeStartedAt = timeProvider()
         lifecycleLock.unlock()
         transmitLock.lock()
         self.c2sKey = Data()
@@ -302,6 +315,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
 
     /// Validates SERVER_HELLO and returns the encrypted client proof frame.
     public func handleServerHello(_ wire: Data) throws -> Data {
+        try expireHandshakeIfNeeded()
         let parsed = try parse(wire)
         lifecycleLock.lock()
         let expectedSessionID = sessionID
@@ -328,12 +342,17 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     /// Consumes the server's protected empty acknowledgement. No application
     /// payload is permitted before this confirmation has been authenticated.
     public func handleServerAcknowledgement(_ wire: Data) throws {
+        try expireHandshakeIfNeeded()
         let plaintext = try unprotect(wire)
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
-        lifecycleLock.lock(); authenticated = true; lifecycleLock.unlock()
+        lifecycleLock.lock()
+        authenticated = true
+        handshakeStartedAt = nil
+        lifecycleLock.unlock()
     }
 
     public func protect(_ payload: Data) throws -> Data {
+        try expireHandshakeIfNeeded()
         lifecycleLock.lock(); let activeSessionID = sessionID; lifecycleLock.unlock()
         transmitLock.lock()
         defer { transmitLock.unlock() }
@@ -350,6 +369,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
     }
 
     public func unprotect(_ wire: Data) throws -> Data {
+        try expireHandshakeIfNeeded()
         let parsed = try parse(wire)
         lifecycleLock.lock(); let activeSessionID = sessionID; lifecycleLock.unlock()
         receiveLock.lock()
@@ -370,6 +390,31 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         }
         rxCounter = parsed.counter
         return plaintext
+    }
+
+    /// Invalidates an unconfirmed handshake that has exceeded the injected
+    /// monotonic deadline. Authenticated sessions have no handshake deadline.
+    public func expireHandshakeIfNeeded() throws {
+        lifecycleLock.lock()
+        let expired = handshakeTimeout > 0 && sessionID != 0 && !authenticated &&
+            (handshakeStartedAt.map { timeProvider() - $0 >= handshakeTimeout } ?? false)
+        if expired {
+            sessionID = 0
+            clientNonce = Data()
+            authenticated = false
+            handshakeStartedAt = nil
+        }
+        lifecycleLock.unlock()
+        guard expired else { return }
+        transmitLock.lock()
+        c2sKey = Data()
+        txCounter = 1
+        transmitLock.unlock()
+        receiveLock.lock()
+        s2cKey = Data()
+        rxCounter = 0
+        receiveLock.unlock()
+        throw ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut
     }
 
     private func nonce(counter: UInt64) -> Data {
