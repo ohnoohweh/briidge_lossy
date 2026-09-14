@@ -615,7 +615,8 @@ Python-derived PSK transcript primitives, a pinned `Crypto` primitive surface,
 and portable client/server handshake peers. Both portable roles own an injected
 monotonic-clock handshake deadline and clear unconfirmed keys and counters on
 expiry; Core serializes server state so concurrent protected sends cannot reuse
-their counter. On Apple, the SwiftPM `Crypto` product currently resolves
+their counter, and Core owns the complete PSK frame-type namespace through the
+rekey transition. On Apple, the SwiftPM `Crypto` product currently resolves
 to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
 test is not qualified there because repeated signatures for the RFC seed do
 not match its deterministic vector. The Apple runtime uses the same envelope

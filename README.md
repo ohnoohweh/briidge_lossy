@@ -15,6 +15,7 @@ The project currently targets six platform families:
   Base64 and JSON+Base64 decoding reject invalid characters rather than silently discarding them;
   SecureLink client/server envelope and both portable roles' injected-clock
   unconfirmed-handshake expiry plus serialized Core server send counters
+  and the complete Core PSK frame-type namespace
   and full myUDP/SecureLink/TCP APP/ChannelMux-header framing have Core owners; Apple myUDP queue
   budgeting reads its batch-layout constants from that same Core owner; CONTROL missing-list
   capacity is derived from its wire payload (713 counters) rather than the

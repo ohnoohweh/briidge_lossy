@@ -257,6 +257,17 @@ public enum ObstacleBridgeSecureLinkPSKClientError: Error, Equatable {
     case handshakeTimedOut
 }
 
+/// SecureLink v1 PSK frame-type ownership, including the rekey transition.
+public enum ObstacleBridgeSecureLinkPSKFrameType {
+    public static let clientHello: UInt8 = 1
+    public static let serverHello: UInt8 = 2
+    public static let authenticatedData: UInt8 = 4
+    public static let rekeyHello: UInt8 = 5
+    public static let rekeyReply: UInt8 = 6
+    public static let rekeyCommit: UInt8 = 7
+    public static let rekeyDone: UInt8 = 8
+}
+
 /// The client half of the SecureLink v1 PSK handshake and protected-data
 /// envelope. Transport ownership remains external, which makes the same state
 /// machine usable over Linux TCP and WebSocket lower transports.
@@ -310,7 +321,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         self.rxCounter = 0
         receiveLock.unlock()
         lifecycleLock.lock(); self.authenticated = false; lifecycleLock.unlock()
-        return ObstacleBridgeSecureLinkFrameCodec.encode(type: 1, sessionID: sessionID, counter: 0, payload: clientNonce + Data([1, 0]))
+        return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.clientHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([1, 0]))
     }
 
     /// Validates SERVER_HELLO and returns the encrypted client proof frame.
@@ -321,7 +332,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         let expectedSessionID = sessionID
         let expectedClientNonce = clientNonce
         lifecycleLock.unlock()
-        guard parsed.type == 2, parsed.sessionID == expectedSessionID, parsed.counter == 0, parsed.payload.count >= 65 else {
+        guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.serverHello, parsed.sessionID == expectedSessionID, parsed.counter == 0, parsed.payload.count >= 65 else {
             throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         let serverNonce = Data(parsed.payload.prefix(32))
@@ -357,7 +368,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         transmitLock.lock()
         defer { transmitLock.unlock() }
         guard activeSessionID != 0, c2sKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
-        let header = ObstacleBridgeSecureLinkFrameCodec.header(type: 4, sessionID: activeSessionID, counter: txCounter)
+        let header = ObstacleBridgeSecureLinkFrameCodec.header(type: ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, sessionID: activeSessionID, counter: txCounter)
         let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(
             plaintext: payload,
             key: c2sKey,
@@ -374,7 +385,7 @@ public final class ObstacleBridgeSecureLinkPSKClient {
         lifecycleLock.lock(); let activeSessionID = sessionID; lifecycleLock.unlock()
         receiveLock.lock()
         defer { receiveLock.unlock() }
-        guard parsed.type == 4, parsed.sessionID == activeSessionID, parsed.counter > rxCounter, s2cKey.count == 32 else {
+        guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, parsed.sessionID == activeSessionID, parsed.counter > rxCounter, s2cKey.count == 32 else {
             throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         let plaintext: Data
