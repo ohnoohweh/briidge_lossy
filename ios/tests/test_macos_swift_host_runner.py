@@ -519,12 +519,18 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     secure_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
 
-    assert "guard lastRttOkNS > 0 else" in peer_runtime
+    assert "ObstacleBridgeMyUDPHeartbeatPolicy.isConnected" in peer_runtime
+    assert "lastRTTOkNanoseconds != 0" in (
+        ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"
+    ).read_text(encoding="utf-8")
     assert "rttEstimateMilliseconds: rttEstMS" in peer_runtime
     assert "lastControlSentNanoseconds: lastControlSentNS" in peer_runtime
     assert "max(lastRttOkNS, lastRxWallNS)" not in peer_runtime
     assert "func resetTransportEpoch()" in peer_runtime
-    assert "receiveState.reset()" in peer_runtime
+    assert "peerEngine.resetEpoch()" in peer_runtime
+    assert "receiveState.reset()" in (
+        ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"
+    ).read_text(encoding="utf-8")
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
     assert "private static let lowerLayerUnavailableFallbackNS" in udp_owner
     assert "static let outerReadinessGrace: TimeInterval = 15.0" in (
@@ -623,10 +629,10 @@ def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> 
 
     assert '"inflight": protocolStats["inflight"] ?? 0' in host_runner
     assert '"inflight": protocolStats["inflight"] ?? 0' in packet_tunnel
-    assert '"buffered_frames": waitQueue.count' in udp_runtime
-    assert '"waiting_count": waitQueue.count' in udp_runtime
-    assert '"inflight": sendBuffer.count' in udp_runtime
-    assert '"max_inflight": maxInFlight' in udp_runtime
+    assert '"buffered_frames": core.waitingRecordCount' in udp_runtime
+    assert '"waiting_count": core.waitingRecordCount' in udp_runtime
+    assert '"inflight": core.outstandingCounters.count' in udp_runtime
+    assert '"max_inflight": core.maximumInFlight' in udp_runtime
     assert 'schemaItem(key: "max_inflight"' in runtime_config
     assert "static func overlayMaxInflight(from payload: [String: Any]) -> Int" in runtime_config
     assert "maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig)" in packet_tunnel

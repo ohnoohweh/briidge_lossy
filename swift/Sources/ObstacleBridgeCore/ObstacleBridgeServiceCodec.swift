@@ -178,5 +178,5 @@ public enum ObstacleBridgeServiceCodec {
 private extension ObstacleBridgeJSONValue {
     var stringValue: String? { if case .string(let value) = self { value } else { nil } }
     var objectValue: [String: ObstacleBridgeJSONValue]? { if case .object(let value) = self { value } else { nil } }
-    var uint16Value: UInt16? { switch self { case .integer(let value) where (1...Int64(UInt16.max)).contains(value): UInt16(value); case .double(let value) where value.rounded() == value && (1...Double(UInt16.max)).contains(value): UInt16(value); default: nil } }
+    var uint16Value: UInt16? { switch self { case .integer(let value) where (0...Int64(UInt16.max)).contains(value): UInt16(value); case .double(let value) where value.rounded() == value && (0...Double(UInt16.max)).contains(value): UInt16(value); default: nil } }
 }

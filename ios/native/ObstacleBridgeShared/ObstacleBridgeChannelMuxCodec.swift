@@ -250,8 +250,8 @@ struct ObstacleBridgeChannelMuxCodec {
     private static func coreServiceSpec(_ value: ServiceSpec) throws -> ObstacleBridgeServiceSpec {
         guard
             (0...Int(UInt16.max)).contains(value.svcID),
-            (1...Int(UInt16.max)).contains(value.lPort),
-            (1...Int(UInt16.max)).contains(value.rPort)
+            (0...Int(UInt16.max)).contains(value.lPort),
+            (0...Int(UInt16.max)).contains(value.rPort)
         else { throw ObstacleBridgeChannelMuxCodecError.invalidPayload }
         let listenProtocol = protoCode(for: value.lProto)
         let targetProtocol = protoCode(for: value.rProto)
