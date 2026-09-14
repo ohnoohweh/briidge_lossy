@@ -1612,6 +1612,7 @@ Important caveat:
 - The Linux shared subset also includes a listener stale-junk-peer regression that waits for `/api/peers` decode-error visibility before asserting stale-row reap behavior, which keeps the gate aligned with the admin snapshot's eventually consistent update path.
 - macOS elevated scripts preserve the GitHub Actions marker through sudo so hosted-runner diagnostic branches remain active after privilege escalation.
 - SecureLink keeps a 60-second deadline for initial authentication and for a pending rekey on either peer role; a one-way path that still carries transport RTT control traffic therefore fails and enters the normal ChannelMux rotation path instead of remaining indefinitely rekeying.
+- The portable Swift Core PSK peers implement the explicit rekey hello/reply/commit/done exchange with authenticated pending keys, serialized session cutover, fresh directional counters, and old-session frame rejection; automatic triggers and operational lifecycle reporting remain owned by the fuller platform runtimes during Core convergence.
 - myUDP listener peers that continue control traffic without producing an application payload are removed after a bounded pre-auth grace period; Swift myUDP clients publish the remaining app-readiness recovery time and rebuild the sole peer socket before retrying SecureLink.
 - Admin status polling keeps a minimal live-session fallback when stats snapshotting fails before a cached status exists.
 

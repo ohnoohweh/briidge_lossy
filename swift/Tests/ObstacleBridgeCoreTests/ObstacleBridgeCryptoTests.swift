@@ -407,6 +407,51 @@ struct ObstacleBridgeCryptoTests {
         #expect(try client.unprotect(server.protect(Data("linux-server".utf8))) == Data("linux-server".utf8))
     }
 
+    @Test func secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters() throws {
+        let psk = Data("portable-rekey-psk".utf8)
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let proof = try client.handleServerHello(server.handleClientHello(
+            try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
+            serverNonce: Data(repeating: 2, count: 32)
+        ))
+        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+
+        let oldGenerationFrame = try client.protect(Data("before-rekey".utf8))
+        #expect(try server.unprotect(oldGenerationFrame) == Data("before-rekey".utf8))
+
+        let rekeyHello = try client.beginRekey(
+            sessionID: 8,
+            clientNonce: Data(repeating: 3, count: 32)
+        )
+        let rekeyReply = try server.handleRekeyHello(
+            rekeyHello,
+            serverNonce: Data(repeating: 4, count: 32)
+        )
+        let rekeyCommit = try client.handleRekeyReply(rekeyReply)
+        let rekeyDone = try server.handleRekeyCommit(rekeyCommit)
+        try client.handleRekeyDone(rekeyDone)
+
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyHello).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyHello)
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyReply).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyReply)
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyCommit).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit)
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(rekeyDone).type == ObstacleBridgeSecureLinkPSKFrameType.rekeyDone)
+        #expect(client.isAuthenticated && server.isAuthenticated)
+
+        let clientFrame = try client.protect(Data("new-client".utf8))
+        let decodedClientFrame = try ObstacleBridgeSecureLinkFrameCodec.decode(clientFrame)
+        #expect(decodedClientFrame.sessionID == 8 && decodedClientFrame.counter == 1)
+        #expect(try server.unprotect(clientFrame) == Data("new-client".utf8))
+
+        let serverFrame = try server.protect(Data("new-server".utf8))
+        let decodedServerFrame = try ObstacleBridgeSecureLinkFrameCodec.decode(serverFrame)
+        #expect(decodedServerFrame.sessionID == 8 && decodedServerFrame.counter == 1)
+        #expect(try client.unprotect(serverFrame) == Data("new-server".utf8))
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
+            try server.unprotect(oldGenerationFrame)
+        }
+    }
+
     @Test func secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock() throws {
         var monotonicTime: TimeInterval = 100
         let client = try ObstacleBridgeSecureLinkPSKClient(

@@ -616,9 +616,13 @@ and portable client/server handshake peers. Both portable roles own an injected
 monotonic-clock handshake deadline and clear unconfirmed keys and counters on
 expiry; Core serializes server state so concurrent protected sends cannot reuse
 their counter, and Core owns the complete PSK frame-type namespace through the
-rekey transition. The Core client starts a pending rekey without replacing its
-authenticated session, and the Core server validates that hello and returns a
-transcript-bound reply; commit and done handling remain outstanding.
+rekey transition. The portable peers now complete the operator-supplied
+rekey hello/reply/commit/done exchange, retain the active generation while the
+pending transcript is authenticated, serialize client and server cutover, reset
+both directional counters to `1`, and reject protected frames from the replaced
+session. Automatic frame/time triggers, pending-rekey deadline and retry state,
+readiness/diagnostic publication, and a dual-generation cutover window for
+in-flight application traffic remain runtime-level Core gaps.
 On Apple, the SwiftPM `Crypto` product currently resolves
 to the platform `CryptoKit` implementation; the Ed25519 signing known-answer
 test is not qualified there because repeated signatures for the RFC seed do
