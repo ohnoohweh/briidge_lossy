@@ -433,6 +433,8 @@ public final class ObstacleBridgeSecureLinkPSKClient {
 /// client without delegating any cryptographic operation to Python.
 public final class ObstacleBridgeSecureLinkPSKServer {
     private let psk: Data
+    private let handshakeTimeout: TimeInterval
+    private let timeProvider: () -> TimeInterval
     private var sessionID: UInt64 = 0
     private var clientNonce = Data()
     private var c2sKey = Data()
@@ -440,10 +442,17 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     private var txCounter: UInt64 = 1
     private var rxCounter: UInt64 = 0
     public private(set) var isAuthenticated = false
+    private var handshakeStartedAt: TimeInterval?
 
-    public init(psk: Data) throws {
+    public init(
+        psk: Data,
+        handshakeTimeout: TimeInterval = 60.0,
+        timeProvider: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }
+    ) throws {
         guard !psk.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidPSK }
         self.psk = psk
+        self.handshakeTimeout = max(0, handshakeTimeout)
+        self.timeProvider = timeProvider
     }
 
     /// Validates CLIENT_HELLO and returns SERVER_HELLO using the supplied
@@ -456,6 +465,7 @@ public final class ObstacleBridgeSecureLinkPSKServer {
         }
         sessionID = parsed.sessionID
         clientNonce = Data(parsed.payload.prefix(32))
+        handshakeStartedAt = timeProvider()
         let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
         c2sKey = keys.clientToServer
         s2cKey = keys.serverToClient
@@ -467,13 +477,16 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     /// Validates the encrypted empty client proof and returns the encrypted
     /// server acknowledgement which completes the handshake.
     public func handleClientProof(_ wire: Data) throws -> Data {
+        try expireHandshakeIfNeeded()
         let plaintext = try unprotect(wire)
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         isAuthenticated = true
+        handshakeStartedAt = nil
         return try protect(Data())
     }
 
     public func protect(_ payload: Data) throws -> Data {
+        try expireHandshakeIfNeeded()
         guard sessionID != 0, s2cKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let counter = txCounter
         let header = ObstacleBridgeSecureLinkFrameCodec.header(type: 4, sessionID: sessionID, counter: counter)
@@ -483,6 +496,7 @@ public final class ObstacleBridgeSecureLinkPSKServer {
     }
 
     public func unprotect(_ wire: Data) throws -> Data {
+        try expireHandshakeIfNeeded()
         let parsed = try parse(wire)
         guard parsed.type == 4, parsed.sessionID == sessionID, parsed.counter > rxCounter, c2sKey.count == 32 else {
             throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
@@ -492,6 +506,26 @@ public final class ObstacleBridgeSecureLinkPSKServer {
             rxCounter = parsed.counter
             return plaintext
         } catch { throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed }
+    }
+
+    /// Applies the same injected-clock deadline as the client while the
+    /// listener awaits the protected client confirmation.
+    public func expireHandshakeIfNeeded() throws {
+        guard handshakeTimeout > 0,
+              sessionID != 0,
+              !isAuthenticated,
+              let handshakeStartedAt,
+              timeProvider() - handshakeStartedAt >= handshakeTimeout else {
+            return
+        }
+        sessionID = 0
+        clientNonce = Data()
+        c2sKey = Data()
+        s2cKey = Data()
+        txCounter = 1
+        rxCounter = 0
+        self.handshakeStartedAt = nil
+        throw ObstacleBridgeSecureLinkPSKClientError.handshakeTimedOut
     }
 
     private func nonce(counter: UInt64) -> Data { var value = counter.bigEndian; return Data([0, 0, 0, 0]) + Data(bytes: &value, count: MemoryLayout<UInt64>.size) }

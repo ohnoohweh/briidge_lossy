@@ -334,6 +334,7 @@ REQ-AUT-007:
     - tests/unit/test_secure_link_rekey_diagnostics.py::test_rekey_diagnostics_log_timeout_with_pending_session_context
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_pending_rekey
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresUnconfirmedHandshakeUsingInjectedClock
 REQ-AUT-008:
   # Authenticated SecureLink failures are reported to ChannelMux, which owns
   # the resulting lifecycle rotation through the lower layers.
