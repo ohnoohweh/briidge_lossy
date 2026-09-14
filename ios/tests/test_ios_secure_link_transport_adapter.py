@@ -257,7 +257,8 @@ def test_ios_secure_link_transport_adapter_operator_rekey_completes_and_updates_
                     let clientHello = try client.handleTransportConnected().emittedFrames.first!
                     let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
                     let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
-                    _ = server.handleInboundFrame(clientProof)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProof).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let warmupReply = try server.handleOutboundPayload(Data("reply-before-rekey".utf8)).emittedFrames.first!
                     _ = client.handleInboundFrame(warmupReply)
 
@@ -411,7 +412,8 @@ def test_ios_secure_link_transport_adapter_frame_threshold_rekey_matches_python_
                     let clientHello = try client.handleTransportConnected().emittedFrames.first!
                     let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
                     let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
-                    _ = server.handleInboundFrame(clientProof)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProof).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let warmupReply = try server.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
                     _ = client.handleInboundFrame(warmupReply)
 
@@ -529,7 +531,8 @@ def test_ios_secure_link_transport_adapter_time_threshold_rekey_can_fire_while_i
                     let clientHello = try client.handleTransportConnected().emittedFrames.first!
                     let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
                     let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
-                    _ = server.handleInboundFrame(clientProof)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProof).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let warmupReply = try server.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
                     _ = client.handleInboundFrame(warmupReply)
 
@@ -677,7 +680,8 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
                     let authHello = try authClient.handleTransportConnected().emittedFrames.first!
                     let authServerHello = authServer.handleInboundFrame(authHello).emittedFrames.first!
                     let authClientProof = authClient.handleInboundFrame(authServerHello).emittedFrames.first!
-                    _ = authServer.handleInboundFrame(authClientProof)
+                    let authServerAck = authServer.handleInboundFrame(authClientProof).emittedFrames.first!
+                    _ = authClient.handleInboundFrame(authServerAck)
                     let warmupReply = try authServer.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
                     _ = authClient.handleInboundFrame(warmupReply)
                     if !authClient.statusSnapshot().authenticated {
@@ -771,7 +775,8 @@ def test_ios_secure_link_transport_adapter_can_prime_handshake_on_transport_conn
                         throw ProbeError.badState("missing client proof")
                     }
 
-                    _ = server.handleInboundFrame(clientProofFrame)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProofFrame).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let serverSend = try server.handleOutboundPayload(Data("reply-secure".utf8))
                     guard let serverReplyFrame = serverSend.emittedFrames.first else {
                         throw ProbeError.badState("missing server reply")

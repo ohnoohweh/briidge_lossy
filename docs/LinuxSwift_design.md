@@ -658,8 +658,10 @@ CryptoKit-free Core surface. The Apple wrapper retains readiness/retry status
 and redacted diagnostic publication, while `ObstacleBridgeNativeCrypto` is now
 an Objective-C selector bridge to the Core HKDF, PBKDF2, AEAD, Ed25519, and
 X25519 surface rather than an additional CryptoKit/CommonCrypto implementation.
-Linux source/runtime parity tests
-cover the Core-only adapter boundary, and the target-only IPServer simulator
+Linux source/runtime parity tests cover the Core-only adapter boundary. Apple
+native transport probes explicitly deliver the Core server acknowledgement
+before attempting application data, enforcing the same peer-confirmed
+authentication boundary as Python. The target-only IPServer simulator
 build has compiled the Core-only adapter successfully. The remaining Apple
 validation is device qualification and the complete cross-platform known-answer
 set. R005 remains open for those qualification and broader Core lifecycle
