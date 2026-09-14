@@ -357,7 +357,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         self.authenticatedAt = nil
         self.protectedDataFramesSent = 0
         clearPendingRekey()
-        return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.clientHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([1, 0]))
+        return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.clientHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1, 0]))
     }
 
     /// Starts a fresh PSK rekey session; the active session remains in place
@@ -370,7 +370,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         pendingSessionID = sessionID
         pendingClientNonce = clientNonce
         pendingRekeyStartedAt = timeProvider()
-        return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.rekeyHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([1, 0]))
+        return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.rekeyHello, sessionID: sessionID, counter: 0, payload: clientNonce + Data([ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1, 0]))
     }
 
     /// Validates SERVER_HELLO and returns the encrypted client proof frame.
@@ -384,7 +384,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         let serverNonce = Data(parsed.payload.prefix(32))
-        guard parsed.payload[32] == 1 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
+        guard parsed.payload[32] == ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         let proof = Data(parsed.payload[33..<65])
         let expected = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: expectedSessionID, clientNonce: expectedClientNonce, serverNonce: serverNonce)
         guard proof == expected else { throw ObstacleBridgeSecureLinkPSKClientError.authenticationFailed }
@@ -416,7 +416,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         guard authenticated, pendingSessionID != 0,
               parsed.type == ObstacleBridgeSecureLinkPSKFrameType.rekeyReply,
               parsed.sessionID == pendingSessionID, parsed.counter == 0,
-              parsed.payload.count == 65, parsed.payload[32] == 1 else {
+              parsed.payload.count == 65, parsed.payload[32] == ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1 else {
             throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         let serverNonce = Data(parsed.payload.prefix(32))
@@ -637,8 +637,8 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
     public func handleClientHello(_ wire: Data, serverNonce: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
         let parsed = try parse(wire)
-        guard parsed.type == 1, parsed.counter == 0, parsed.payload.count == 34,
-              parsed.payload[32] == 1, parsed.payload[33] == 0, serverNonce.count == 32 else {
+        guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.clientHello, parsed.counter == 0, parsed.payload.count == 34,
+              parsed.payload[32] == ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1, parsed.payload[33] == 0, serverNonce.count == 32 else {
             throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         sessionID = parsed.sessionID
@@ -651,7 +651,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         s2cKey = keys.serverToClient
         txCounter = 1; rxCounter = 0; authenticated = false
         let proof = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(psk: psk, sessionID: sessionID, clientNonce: clientNonce, serverNonce: serverNonce)
-        return ObstacleBridgeSecureLinkFrameCodec.encode(type: 2, sessionID: sessionID, counter: 0, payload: serverNonce + Data([1]) + proof)
+        return ObstacleBridgeSecureLinkFrameCodec.encode(type: ObstacleBridgeSecureLinkPSKFrameType.serverHello, sessionID: sessionID, counter: 0, payload: serverNonce + Data([ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1]) + proof)
     }
 
     /// Validates the encrypted empty client proof and returns the encrypted
@@ -673,7 +673,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         guard authenticated, pendingSessionID == 0 || pendingSessionID == frame.sessionID,
               frame.type == ObstacleBridgeSecureLinkPSKFrameType.rekeyHello,
               frame.sessionID != 0, frame.sessionID != sessionID, frame.payload.count == 34,
-              frame.payload[32] == 1, serverNonce.count == 32 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
+              frame.payload[32] == ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1, serverNonce.count == 32 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         let nonce = Data(frame.payload.prefix(32))
         if pendingSessionID == 0 {
             pendingSessionID = frame.sessionID
@@ -696,7 +696,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         return ObstacleBridgeSecureLinkFrameCodec.encode(
             type: ObstacleBridgeSecureLinkPSKFrameType.rekeyReply,
             sessionID: pendingSessionID, counter: 0,
-            payload: pendingServerNonce + Data([1]) + proof
+            payload: pendingServerNonce + Data([ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1]) + proof
         )
     }
 
@@ -746,7 +746,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         try expireHandshakeIfNeeded()
         guard sessionID != 0, s2cKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let counter = txCounter
-        let header = ObstacleBridgeSecureLinkFrameCodec.header(type: 4, sessionID: sessionID, counter: counter)
+        let header = ObstacleBridgeSecureLinkFrameCodec.header(type: ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, sessionID: sessionID, counter: counter)
         let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(plaintext: payload, key: s2cKey, nonce: nonce(counter: counter), authenticatedData: header)
         txCounter &+= 1
         return header + ciphertext
@@ -756,7 +756,7 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
         stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
         let parsed = try parse(wire)
-        guard parsed.type == 4, parsed.sessionID == sessionID, parsed.counter > rxCounter, c2sKey.count == 32 else {
+        guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, parsed.sessionID == sessionID, parsed.counter > rxCounter, c2sKey.count == 32 else {
             throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
         }
         do {
