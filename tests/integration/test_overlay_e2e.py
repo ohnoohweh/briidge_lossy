@@ -7355,6 +7355,42 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delaye
 
 @pytest.mark.integration
 @pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_loss_delay_and_reordering(tmp_path: Path) -> None:
+    """The foreground Linux client preserves a Core stream through composed faults."""
+    if not sys.platform.startswith('linux') or not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-composed-faults-psk'
+    payload = b'c' * 3_000
+    peer = LinuxSwiftSecureLinkPeer(
+        'myudp',
+        psk,
+        drop_myudp_application_data_count=2,
+        reorder_myudp_application_reply=True,
+        delay_myudp_application_reply_seconds=0.25,
+    )
+    try:
+        config_path = tmp_path / 'linux_swift_myudp_composed_faults_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        completed = subprocess.run(
+            [
+                str(binary_path), '--runtime-config', str(config_path),
+                '--runtime-probe', base64.b64encode(payload).decode('ascii'),
+            ],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=20.0, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
 @pytest.mark.parametrize(
     ('transport', 'session_name', 'peer_key', 'port_key'),
     [

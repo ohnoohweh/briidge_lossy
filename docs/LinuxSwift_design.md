@@ -561,10 +561,10 @@ exact-once reassembly after duplicated, out-of-order inbound chunks. The built
 foreground client also recovers when an independent Python peer drops its first
 two post-handshake protected DATA datagrams. The foreground client also
 reassembles a multi-chunk protected response sent in reverse datagram order.
-The foreground client also completes a protected exchange after independent
-delayed reply delivery. The remaining Linux process qualification is mixed
-fault composition rather than isolated delay, loss, or reordering; macOS conditionally
-excludes the adapter tests, so a zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
+The foreground client also completes a protected exchange after composed loss,
+delay, and reverse-ordered multi-datagram reply delivery from an independent
+Python peer. macOS conditionally excludes the Linux adapter tests, so a
+zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
 The Core registry selects monotonically newer epochs, withdraws superseded peer
 state, and rejects delayed stale-epoch traffic before it can recreate an engine.
@@ -590,10 +590,12 @@ snapshot fields that only mirror Core values. The generated Apple project
 already compiles the Core source, so this is adapter-surface cleanup, not
 another protocol implementation.
 
-R004 remains open because Linux host qualification (R004C) and
-LiveRuntime/mixed-runtime listener qualification (R004D) have not met their
-definitions of done. The completed Apple-adapter boundary is continuously
-guarded by the macOS parity runner and Apple source-ownership tests.
+R004 remains open because the listener is not yet wired to an authenticated
+admission-epoch source and the complete bidirectional Python/Swift matrix has
+not yet qualified both Apple and Linux clients for loss, duplication,
+reordering, CONTROL/IDLE, counter rollover, and maximum missing-list pressure.
+The completed Apple-adapter boundary is continuously guarded by the macOS
+parity runner and Apple source-ownership tests.
 
 #### LSW-R004C — Replace the reduced Linux myudp client
 

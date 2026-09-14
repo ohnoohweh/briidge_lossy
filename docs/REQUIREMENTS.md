@@ -165,6 +165,9 @@ Current implementation note:
   after the Python peer process restarts. The independent Python myudp peer used
   for this qualification must consume the length-prefixed reliable stream,
   order and deduplicate chunks, and return cumulative transport acknowledgements;
+  the foreground myudp client remains qualified when that independent peer
+  composes repeated outbound DATA loss with delayed, reverse-ordered
+  multi-datagram protected replies;
   mixed-runtime process ports, including Admin listeners, are isolated across
   parallel test workers. An explicitly enabled Python listener may publish its
   `remote_servers` catalog to connected peers; the mixed-runtime lane proves

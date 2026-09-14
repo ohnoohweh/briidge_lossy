@@ -1568,7 +1568,7 @@ The supporting manifests remain shared:
 - product-requirement traceability: [.github/requirements_traceability.yaml](.github/requirements_traceability.yaml)
 - architecture traceability: [.github/architecture_traceability.yaml](.github/architecture_traceability.yaml)
 
-This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, Linux Swift foreground `myudp` recovery probes that survive two independently dropped protected application copies, a delayed reply, and a reverse-ordered multi-chunk reply, and the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
+This baseline also includes explicit traceability for the layered reconnect contract where the lower overlay transport can remain connected while SecureLink is still re-handshaking, Linux Swift foreground `myudp` recovery probes that survive two independently dropped protected application copies and a delayed, reverse-ordered multi-chunk reply in the same protected exchange, and the macOS mixed Swift/Python `myudp` harness alignment with the packaged Swift source set and readiness gates.
 It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. Python and iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached. Once ready, TUN reads remain unthrottled; only completed ChannelMux TUN data is dropped immediately before SecureLink when estimated transport delay reaches two seconds.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
@@ -1582,10 +1582,10 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
-| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `8` | `0` | `8` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `57` | `0` | `57` |
+| Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `60` | `0` | `60` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `65` | `152` | `217` |
+| Total parity-oriented evidence | Sum of the lanes above | `72` | `152` | `224` |
 
 Important caveat:
 
