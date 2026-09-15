@@ -8,6 +8,18 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func liveRuntimePublishesBoundedRetryWindow() {
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 500, maximumAttempts: 2)
+        )
+        let reconnecting = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "reconnecting", $0.nextRetryMilliseconds == 250 { reconnecting.signal() } }
+        runtime.start()
+        #expect(reconnecting.wait(timeout: .now() + 3) == .success)
+        runtime.stop()
+    }
+
     @Test func myudpRegistryListenerKeepsTwoUdpPeersIsolated() throws {
         let listener = try ObstacleBridgeLinuxMyUDPListener(port: 0, bindHost: "127.0.0.1")
         let first = try connectUDP(port: listener.port)

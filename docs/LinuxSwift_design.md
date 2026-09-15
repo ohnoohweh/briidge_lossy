@@ -766,7 +766,7 @@ manually so unrelated lifecycle waits do not obscure or delay Core evidence.
 | `R005.5c-2` Live rekey | Complete | An independent Python peer completes an explicit rekey and post-rekey protected exchange with each admitted Swift transport, through the common Core state machine. |
 | `R005.5c-3` Reconnect/fresh epoch | Complete | TCP, WebSocket, and myUDP reconnect to independent Python peers with new SecureLink sessions and reject retired-session protected data at the configured-session adapter boundary. |
 | `R005.5c-4` Counter boundaries | Complete | Core covers SecureLink exhaustion and epoch reset; independent Python peers observe TCP/WebSocket protected progression and myUDP `65535 -> 1` rollover. Reconnect probes confirm a fresh epoch on every admitted transport. |
-| `R005.5d-1` Lifecycle/retry | Open | Swift live-runtime evidence exposes bounded SecureLink retry, missed-disconnect timeout fallback, and fresh-epoch readiness against a Python peer. |
+| `R005.5d-1` Lifecycle/retry | In progress | The Swift live snapshot now exposes the bounded next-retry delay. Add a mixed Python-peer missed-disconnect timeout fallback and fresh-epoch readiness proof. |
 | `R005.5d-2` Operator state | Open | Swift admin/peer snapshots supply the required peer-scoped SecureLink lifecycle and traffic/counter contract, with traceable tests. |
 | `R005.5e-1` Generic compression layer | Open | Extract or introduce a platform-neutral compression wrapper compatible with Python and Apple; Linux/Apple adapters only supply I/O. |
 | `R005.5e-2` Compression interoperability | Open | Prove enabled, disabled, and mismatched compression settings plus required telemetry against the Python peer on Swift. |
