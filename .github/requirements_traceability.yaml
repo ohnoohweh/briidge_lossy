@@ -348,6 +348,7 @@ REQ-AUT-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkRejectsMalformedPythonPeerFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkRejectsReplayedPythonPeerFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReconnectsWithFreshPythonPeerSession
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReconnectsWithFreshPythonPeerSession
 
 REQ-AUT-007:
   integration_tests:
