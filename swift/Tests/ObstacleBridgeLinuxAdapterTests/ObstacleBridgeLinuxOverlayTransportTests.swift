@@ -307,6 +307,15 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         try secureLinkSessionReconnects(mode: "myudp-securelink-reconnect", transport: .myudp)
     }
 
+    @Test func admittedTransportsRejectStalePythonPeerFramesAfterReconnect() throws {
+        for (mode, transport) in [
+            ("tcp-securelink-reconnect-stale", ObstacleBridgeLinuxTransport.tcp),
+            ("ws-securelink-reconnect-stale", .ws),
+        ] {
+            try secureLinkSessionRejectsStaleReconnectFrame(mode: mode, transport: transport)
+        }
+    }
+
     private func secureLinkSessionReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
@@ -547,6 +556,17 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         try session.rekey(sessionID: 91, clientNonce: Data(repeating: 10, count: 32))
         #expect(try session.send(Data("after-rekey".utf8)) == Data("python:after-rekey".utf8))
     }
+
+    private func secureLinkSessionRejectsStaleReconnectFrame(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
+        let peer = try PythonOverlayPeer(mode: mode)
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, webSocketPath: "/overlay", secureLinkPSK: Data("linux-swift-psk".utf8)))
+        let first = try runtime.connect(sessionID: 94, clientNonce: Data(repeating: 13, count: 32))
+        #expect(try first.send(Data("retired".utf8)) == Data("python:retired".utf8))
+        let second = try runtime.reconnect(sessionID: 95, clientNonce: Data(repeating: 14, count: 32))
+        defer { runtime.disconnect() }
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) { try second.receiveInbound() }
+    }
 }
 
 final class PythonOverlayPeer {
@@ -768,11 +788,12 @@ final class PythonOverlayPeer {
             s.sendto(data,peer); s.close()
             """
         }
-        if mode == "tcp-securelink-reconnect" || mode == "ws-securelink-reconnect" {
+        if mode == "tcp-securelink-reconnect" || mode == "ws-securelink-reconnect" || mode == "tcp-securelink-reconnect-stale" || mode == "ws-securelink-reconnect-stale" {
             return """
             import base64, hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
-            WS = \(mode == "ws-securelink-reconnect" ? "True" : "False")
+            WS = \(mode.hasPrefix("ws-") ? "True" : "False")
+            STALE = \(mode.contains("-stale") ? "True" : "False")
             s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(2); print(s.getsockname()[1], flush=True)
             def nread(c,n):
                 b=b''
@@ -799,7 +820,8 @@ final class PythonOverlayPeer {
                 out=b''; prior=b''
                 for i in range(1,(length+31)//32+1): prior=hmac.new(prk,prior+info+bytes([i]),hashlib.sha256).digest(); out+=prior
                 return out[:length]
-            for _ in range(2):
+            stale=None
+            for epoch in range(2):
                 c,_=s.accept()
                 if WS:
                     request=b''
@@ -811,7 +833,10 @@ final class PythonOverlayPeer {
                 proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write(c,header(2,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+                if STALE and epoch == 1:
+                    write(c,stale); c.close(); continue
                 app=read(c); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write(c,response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response)); c.close()
+                stale=response
             s.close()
             """
         }
