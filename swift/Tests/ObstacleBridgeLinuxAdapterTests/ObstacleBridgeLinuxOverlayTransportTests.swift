@@ -251,6 +251,18 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         try secureLinkSessionRoundTrip(mode: "ws-securelink", transport: .ws)
     }
 
+    @Test func tcpAndWebSocketSecureLinkCountersProgressAgainstPythonPeer() throws {
+        for (mode, transport) in [("tcp-securelink-counter", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-counter", .ws)] {
+            let peer = try PythonOverlayPeer(mode: mode)
+            defer { peer.stop() }
+            let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, webSocketPath: "/overlay", secureLinkPSK: Data("linux-swift-psk".utf8)))
+            let session = try runtime.connect(sessionID: 96, clientNonce: Data(repeating: 15, count: 32))
+            defer { runtime.disconnect() }
+            #expect(try session.send(Data("first".utf8)) == Data("python:2:first".utf8))
+            #expect(try session.send(Data("second".utf8)) == Data("python:3:second".utf8))
+        }
+    }
+
     @Test func tcpSecureLinkWrongPskFailsClosedAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "tcp-securelink")
         defer { peer.stop() }
@@ -986,6 +998,8 @@ final class PythonOverlayPeer {
                         reply_plain = plain[:5] + b'\\x00\\x00\\x00'
                     elif MODE == 'tcp-secure-mux-echo':
                         reply_plain = plain
+                    elif MODE.endswith('counter'):
+                        reply_plain = b'python:'+str(counter).encode()+b':'+plain
                     else:
                         reply_plain = b'python:' + plain
                     response_counter=counter + (1 if MODE.endswith('duplex') else 0)
