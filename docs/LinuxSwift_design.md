@@ -771,6 +771,33 @@ manually so unrelated lifecycle waits do not obscure or delay Core evidence.
 | `R005.5e-1` Generic compression layer | In progress | Core owns portable bounded zlib plus the mux compressed-flag policy, eligible-type gate, and no-gain fallback. Wire Linux to that policy and make the Apple runtime delegate to it; adapters retain only I/O and projections. |
 | `R005.5e-2` Compression interoperability | Open | Prove enabled, disabled, and mismatched compression settings plus required telemetry against the Python peer on Swift. |
 
+##### R005 closure sub-workpackages
+
+Each sub-workpackage below has a single observable contract and explicit
+evidence.  Completion requires its implementation and its named test evidence;
+neither a source inspection nor a Core-only test closes an adapter or product
+row.
+
+| Work package | Platform | State | Scope and measurable exit criterion |
+| --- | --- | --- | --- |
+| `R005.4a` | macOS | Open | Build the generated macOS `ObstacleBridge` and `IPServer` targets from a clean checkout with the pinned `Crypto` package, without an output-root workaround. Preserve the build log/artifact evidence. |
+| `R005.4b` | iOS simulator | Open | Run the SecureLink E2E scenario in the generated iOS simulator target, including an authenticated payload exchange and redacted status output. |
+| `R005.4c` | Apple release qualification | Open | Produce an archive and record product-size impact; run the physical-device SecureLink scenario when a signed device target is available. This is the only device-dependent R005 sub-workpackage. |
+| `R005.5d-1a` | Linux Swift | Complete | Publish the bounded `nextRetryMilliseconds` value in the live-runtime snapshot and prove that stop cancels the pending retry presentation. |
+| `R005.5d-1b` | Linux Swift + Python peer | Open | Simulate a peer that misses/discards the disconnect signal. Swift must transition through the configured timeout/retry path, publish the bounded retry window, and not leak the retired session. |
+| `R005.5d-1c` | Linux Swift + Python peer | Open | After the timeout-driven reconnect, prove readiness only after the new epoch is authenticated and reject application data from the old epoch. Cover every admitted transport or record a transport-specific exclusion. |
+| `R005.5d-2a` | Linux Swift | Open | Define one redacted peer snapshot projection containing lifecycle state, epoch/session identity suitable for diagnostics, readiness, retry state, and protected traffic/counter totals. It must be derived from Core/adapter state rather than independently reconstructed. |
+| `R005.5d-2b` | Linux Swift | Open | Expose the projection through the Linux status/admin surface and prove PSKs and other secrets are absent while peer identity and transport ownership remain distinct. |
+| `R005.5d-2c` | Linux Swift + Python reference | Open | Compare the supported lifecycle, retry, and traffic/counter fields with the Python snapshot contract for connected, reconnecting, failed, and stopped states. Document deliberate platform omissions as capability limits. |
+| `R005.5e-1a` | Linux Swift | Open | Admit compression through typed runtime configuration with compatibility-preserving defaults, bounds, and eligible ChannelMux message types. Reject invalid compression configuration explicitly. |
+| `R005.5e-1b` | Linux Swift | Open | Route every outbound ChannelMux frame through the Core policy and unwrap every inbound compressed frame before ChannelMux decoding, for both request/reply and receive-worker paths. Retain the no-gain fallback. |
+| `R005.5e-1c` | macOS/iOS | Open | Replace the Apple zlib/mux parsing path with delegation to the common Core compression policy while keeping Apple-specific I/O and configuration persistence in its wrapper. |
+| `R005.5e-2a` | Linux Swift + Python peer | Open | Prove enabled compression interoperates bidirectionally with a Python peer, including compressed request and compressed response. |
+| `R005.5e-2b` | Linux Swift + Python peer | Open | Prove disabled mode emits/accepts uncompressed frames, and mismatched enabled/disabled peers fail deterministically without silently corrupting a session. |
+| `R005.5e-2c` | Linux Swift | Open | Publish redacted compression status and byte/count telemetry in the operator snapshot; prove it tracks compressed, uncompressed, and rejected frames. |
+| `R005.6a` | CI | Waiting on `R005.4` and `R005.5` | Make the required Linux shared, macOS Swift, requirements/README/traceability, and ownership guards mandatory for the R005 change set; retain their exact commands in the PR evidence. |
+| `R005.6b` | CI/release | Waiting on `R005.4` and `R005.5` | Classify any privileged-TUN or device-only result separately, verify that it cannot hide an R005 failure, and remove R005 from the pending sequence only after every applicable sub-workpackage is complete or explicitly capability-scoped. |
+
 Definition of Done:
 
 - the pinned `Crypto` backend supplies the common SHA/HMAC/HKDF/PBKDF2, AEAD,
