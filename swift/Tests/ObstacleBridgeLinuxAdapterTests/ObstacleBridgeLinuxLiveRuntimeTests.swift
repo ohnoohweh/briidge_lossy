@@ -96,6 +96,31 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         try assertProtectedReceiveFailureReconnects(mode: "myudp-securelink-close-after-ack", transport: .myudp)
     }
 
+    @Test func silentProtectedPythonPeerUsesDeadlineRetryAndFreshReadyEpoch() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-silent-reconnect")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .tcp, host: "127.0.0.1", port: peer.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                receiveIdleTimeoutMilliseconds: 50
+            ),
+            policy: .init(initialDelayMilliseconds: 100, maximumDelayMilliseconds: 200, maximumAttempts: 3)
+        )
+        let retryPresented = DispatchSemaphore(value: 0)
+        let freshReady = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { snapshot in
+            if snapshot.state == "reconnecting", snapshot.nextRetryMilliseconds == 100 { retryPresented.signal() }
+            if snapshot.state == "connected", runtime.configuredRuntime.connectionEpoch >= 2 {
+                freshReady.signal()
+            }
+        }
+        runtime.start()
+        #expect(retryPresented.wait(timeout: .now() + 3) == .success)
+        #expect(freshReady.wait(timeout: .now() + 3) == .success)
+        runtime.stop()
+    }
+
     private func assertProtectedReceiveFailureReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }

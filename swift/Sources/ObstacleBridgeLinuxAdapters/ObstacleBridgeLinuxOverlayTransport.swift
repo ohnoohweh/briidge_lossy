@@ -73,9 +73,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let transport: ObstacleBridgeLinuxTransport
     private let wsPath: String
     private let wsPayloadMode: ObstacleBridgeWebSocketPayloadMode
+    private let receiveTimeoutMilliseconds: Int
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary") throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", receiveTimeoutMilliseconds: Int = 5_000) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -87,6 +88,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.transport = transport
         self.wsPath = wsPath.hasPrefix("/") ? wsPath : "/\(wsPath)"
         self.wsPayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(wsPayloadMode)
+        self.receiveTimeoutMilliseconds = max(1, receiveTimeoutMilliseconds)
         self.snapshot = .init(transport: transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
     }
 
@@ -101,18 +103,18 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 let result: Data
                 switch transport {
                 case .tcp:
-                    let connection = try POSIXStreamConnection(host: host, port: port)
+                    let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
                     try connection.write(tcpWire(payload))
                     result = try readTCPApplicationFrame(connection)
                 case .ws:
-                    let connection = try POSIXStreamConnection(host: host, port: port)
+                    let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
                     try performWebSocketUpgrade(connection)
                     let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
                     result = try readWebSocketApplicationPayload(connection)
                 case .myudp:
-                    let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port)
+                    let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
                     result = try connection.exchange(payload)
                 case .quic:
@@ -132,7 +134,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         snapshot = .init(transport: transport.rawValue, state: "connecting", attempts: 1, failureReason: nil)
         do {
             if transport == .myudp {
-                let datagram = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port)
+                let datagram = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
                 return ObstacleBridgeLinuxOverlayTransportSession(
                     exchange: { payload in try datagram.exchange(payload) },
@@ -141,7 +143,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     close: { datagram.close() }
                 )
             }
-            let connection = try POSIXStreamConnection(host: host, port: port)
+            let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
             if transport == .ws { try performWebSocketUpgrade(connection) }
             snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
             let send: (Data) throws -> Void = { [weak self] payload in
@@ -339,7 +341,7 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
 private final class POSIXStreamConnection {
     private var fd: Int32
 
-    init(host: String, port: Int) throws {
+    init(host: String, port: Int, timeoutMilliseconds: Int = 5_000) throws {
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         hints.ai_socktype = Int32(SOCK_STREAM.rawValue)
@@ -356,7 +358,7 @@ private final class POSIXStreamConnection {
         while let address = candidate {
             let socketFD = socket(address.pointee.ai_family, address.pointee.ai_socktype, address.pointee.ai_protocol)
             if socketFD >= 0 {
-                Self.configureTimeouts(socketFD)
+                Self.configureTimeouts(socketFD, timeoutMilliseconds: timeoutMilliseconds)
                 if connect(socketFD, address.pointee.ai_addr, address.pointee.ai_addrlen) == 0 {
                     openedFD = socketFD
                     break
@@ -418,8 +420,9 @@ private final class POSIXStreamConnection {
         throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
     }
 
-    private static func configureTimeouts(_ fd: Int32) {
-        var timeout = timeval(tv_sec: 5, tv_usec: 0)
+    private static func configureTimeouts(_ fd: Int32, timeoutMilliseconds: Int) {
+        let bounded = max(1, timeoutMilliseconds)
+        var timeout = timeval(tv_sec: bounded / 1_000, tv_usec: (bounded % 1_000) * 1_000)
         _ = withUnsafePointer(to: &timeout) {
             setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, $0, socklen_t(MemoryLayout<timeval>.size))
         }

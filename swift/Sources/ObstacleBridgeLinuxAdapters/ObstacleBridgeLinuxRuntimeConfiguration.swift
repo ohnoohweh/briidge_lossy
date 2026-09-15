@@ -47,13 +47,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let webSocketPath: String
     public let webSocketPayloadMode: String
     public let secureLinkPSK: Data?
+    public let receiveIdleTimeoutMilliseconds: Int
     /// Outbound compression policy. Inbound compressed frames remain accepted
     /// so a listener can safely interoperate with a peer-selected policy.
     public let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", secureLinkPSK: Data? = nil, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -62,6 +63,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.webSocketPath = webSocketPath
         self.webSocketPayloadMode = webSocketPayloadMode
         self.secureLinkPSK = secureLinkPSK
+        self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
         self.compressionPolicy = compressionPolicy
         self.ownServices = ownServices
         self.remoteServices = remoteServices
@@ -148,6 +150,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             minimumBodyBytes: compressionMinimumBytes,
             allowedMessageTypes: compressionMessageTypes(string(root["compress_layer_types"]))
         )
+        let receiveIdleTimeoutMilliseconds = max(1, integer(root["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
         return .init(
@@ -158,6 +161,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             webSocketPath: string(session["ws_path"]) ?? "/",
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
             secureLinkPSK: psk,
+            receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
             compressionPolicy: compressionPolicy,
             ownServices: try serviceSpecs(root, key: "own_servers"),
             remoteServices: try serviceSpecs(root, key: "remote_servers")

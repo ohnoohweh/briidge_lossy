@@ -851,12 +851,13 @@ final class PythonOverlayPeer {
             s.sendto(data,peer); s.close()
             """
         }
-        if mode == "tcp-securelink-reconnect" || mode == "ws-securelink-reconnect" || mode == "tcp-securelink-reconnect-stale" || mode == "ws-securelink-reconnect-stale" {
+        if mode == "tcp-securelink-reconnect" || mode == "ws-securelink-reconnect" || mode == "tcp-securelink-reconnect-stale" || mode == "ws-securelink-reconnect-stale" || mode == "tcp-securelink-silent-reconnect" {
             return """
-            import base64, hashlib, hmac, socket, struct
+            import base64, hashlib, hmac, socket, struct, time
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
             WS = \(mode.hasPrefix("ws-") ? "True" : "False")
             STALE = \(mode.contains("-stale") ? "True" : "False")
+            SILENT = \(mode.contains("silent") ? "True" : "False")
             s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(2); print(s.getsockname()[1], flush=True)
             def nread(c,n):
                 b=b''
@@ -896,6 +897,8 @@ final class PythonOverlayPeer {
                 proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write(c,header(2,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+                if SILENT and epoch == 0:
+                    time.sleep(0.08); c.close(); continue
                 if STALE and epoch == 1:
                     write(c,stale); c.close(); continue
                 app=read(c); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write(c,response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response)); c.close()

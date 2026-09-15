@@ -71,6 +71,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.compressionPolicy.level == 9)
         #expect(config.compressionPolicy.minimumBodyBytes == 0)
         #expect(config.compressionPolicy.allowedMessageTypes == [0, 1])
+        #expect(config.receiveIdleTimeoutMilliseconds == 5_000)
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedCompressionAlgorithm("Linux compress_layer_algo=brotli is unavailable")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
                 "runner": ["overlay_transport": "tcp"],
