@@ -111,6 +111,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[test]
 
+      # The Linux/Swift scenarios share one runner binary. Build it before
+      # xdist starts so workers never wait on the test helper's global lock.
+      - name: Build Linux Swift runner once
+        run: ./scripts/build_linux_app.sh
+
       - name: Run Linux shared integration suite
         # These tests own multiple peers and network processes. Four workers
         # keep their lifecycle deadlines reliable on hosted Linux runners.
