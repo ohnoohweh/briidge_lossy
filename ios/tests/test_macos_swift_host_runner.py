@@ -330,6 +330,21 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeInProcessMacOSTunHelperClient(" in xpc_source
     assert 'queue: DispatchQueue(label: "ObstacleBridgeTunHelperXPCService.Backend")' in xpc_source
     assert "try server.handleXPCPayload(raw)" in xpc_source
+
+
+def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
+    elevated = (ROOT / "tests" / "integration" / "test_macos_swift_elevated.py").read_text(encoding="utf-8")
+    xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+
+    # The ordinary packet-carry lane starts the built app bundle and requires
+    # an actual XPC transport.  The separate /Applications copy is only for
+    # destructive stale-package repair coverage and cannot mask this result.
+    assert "def test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved" in elevated
+    assert "_run_swift_elevated_packet_carry(tmp_path, require_packaged_xpc=True)" in elevated
+    assert 'transportKind: "xpc"' in (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert "'fullPath is nil'; this is a failing packaged-XPC qualification result, not an approval skip" in elevated
+    assert "SMAppServiceActivationTest.app" in elevated
     assert "try server.handleXPCPacketPayload(raw)" in xpc_source
     assert "self?.sendPacketFromHelper(packet)" in xpc_source
     assert "self?.sendEventFromHelper(event: event, payload: payload)" in xpc_source

@@ -718,10 +718,10 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
             f"registration preflight; last_package={last!r}; last_admin_error={last_admin_error}"
         )
     if _macos_smappservice_btm_full_path_bug_detected():
-        pytest.skip(
-            "macOS Background Task Management rejected the Team-signed SMAppService daemon with "
-            "'fullPath is nil' (known macOS 26 platform defect); last_package="
-            f"{last!r}"
+        raise RuntimeError(
+            "macOS Background Task Management rejected the packaged SMAppService daemon with "
+            "'fullPath is nil'; this is a failing packaged-XPC qualification result, not an approval skip; "
+            f"last_package={last!r}"
         )
     raise RuntimeError(f"packaged XPC helper did not become reachable; last_package={last!r}")
 

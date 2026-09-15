@@ -1628,10 +1628,10 @@ Done in this branch:
 
 macOS 26 residual: on hosts where Background Task Management logs the exact
 `ObstacleBridge.TunHelper` rejection `FATAL ERROR - fullPath is nil`, the
-packaged-XPC tests skip as an external OS block after their ordinary reachability
-timeout. This is deliberately narrow: it requires both the helper identifier and
-the `fullPath is nil` record; any other XPC timeout remains a test failure. The
-observed package has a Team-signed host and helper, an
+production-mechanism packaged-XPC test fails after its ordinary reachability
+timeout and includes that diagnosis. This is deliberately narrow: it requires
+both the helper identifier and the `fullPath is nil` record; any other XPC
+timeout also remains a test failure. The observed package has a Team-signed host and helper, an
 `AssociatedBundleIdentifiers` entry for the host, the required helper location
 `Contents/MacOS/ObstacleBridgeTunHelper`, and a LaunchDaemon plist with the
 matching `BundleProgram`. Thus this residual does not establish XPC packet-carry

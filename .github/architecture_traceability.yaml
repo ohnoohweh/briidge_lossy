@@ -376,9 +376,9 @@ ARC-CMP-004:
   # GitHub-hosted macOS cannot grant the Swift host runner permission for real
   # utun packet injection, so that packet-carry case remains a local-authorized
   # integration assertion and skips in the hosted lane.
-  # A macOS 26 packaged-XPC test skips only for the exact BTM helper-specific
-  # `fullPath is nil` rejection; other helper reachability timeouts remain
-  # architecture-contract failures.
+  # A macOS 26 packaged-XPC test reports the exact BTM helper-specific
+  # `fullPath is nil` rejection as an architecture-contract failure; other
+  # helper reachability timeouts also fail.
   # myUDP connection readiness requires completed application-payload progress,
   # not merely UDP control traffic: raw-only listener peers are reaped and
   # Swift client recovery publishes its retry deadline before socket rebuild.
