@@ -8,6 +8,7 @@ import json
 import re
 import sys
 from collections import Counter
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -25,6 +26,11 @@ TEST_DEF_RE = re.compile(
 )
 
 
+@lru_cache(maxsize=None)
+def _test_definitions(path: Path) -> set[str]:
+    return set(TEST_DEF_RE.findall(path.read_text(encoding="utf-8")))
+
+
 def requirement_ids() -> set[str]:
     return set(REQ_RE.findall(REQUIREMENTS_PATH.read_text(encoding="utf-8")))
 
@@ -36,8 +42,7 @@ def test_exists(reference: str) -> str | None:
     path = ROOT / rel_path
     if not path.is_file():
         return f"missing test file {rel_path}"
-    definitions = set(TEST_DEF_RE.findall(path.read_text(encoding="utf-8")))
-    if name not in definitions:
+    if name not in _test_definitions(path):
         return f"missing test {name} in {rel_path}"
     return None
 

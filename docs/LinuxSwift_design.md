@@ -667,15 +667,15 @@ Core state also owns authenticated-generation and completed-rekey totals, so
 Apple publishes those values without maintaining its own lifecycle-counter
 arithmetic. Apple still owns the stable event names, wall-clock timestamps,
 transport disconnect reason, and packet-flow diagnostics around the Core state.
-On Apple, the generated project pins `swift-crypto` 4.5.1 and now records its
-`Crypto` product both as a target package dependency and as an explicit
-`PBXFrameworksBuildPhase` product reference for the app and `IPServer`. This
-is required for Xcode's explicit-module build: resolving the package alone
-does not make `import Crypto` available to the Core source. The Apple
-host-side raw-source build imports that module without a synthetic `-lCrypto`
-linker flag because the Apple package implementation forwards to CryptoKit and
-does not emit a standalone `libCrypto` artifact. The generated Xcode targets
-retain their explicit package-product references. The Apple
+On Apple, the generated project pins `swift-crypto` 4.5.1 and declares its
+`Crypto` product as a target package dependency for the app and `IPServer`.
+The product is deliberately absent from `PBXFrameworksBuildPhase`: treating
+the package product as a framework conflicts with its privacy-resource bundle
+under Xcode 26. The Apple host-side raw-source build imports that module
+without a synthetic `-lCrypto` linker flag because the Apple package
+implementation forwards to CryptoKit and does not emit a standalone
+`libCrypto` artifact. The generated Xcode targets retain their explicit
+package-product dependencies. The Apple
 SecureLink codec and protected-frame runtime delegate transcript derivation,
 proof construction, AEAD, replay, deadline, and rekey transitions to the
 CryptoKit-free Core surface. The Apple wrapper retains redacted diagnostic
@@ -736,17 +736,19 @@ below are the authoritative closure checklist.
 
 | ID | Scope and platform | State | Evidence or remaining exit criteria |
 | --- | --- | --- | --- |
-| `LSW-R005.4` | Apple backend and product qualification (macOS, iOS simulator, physical iOS) | Open | Native macOS Core crypto vectors and the Apple package consumer pass. The generated app and `IPServer` targets declare the pinned `Crypto` package product, but the ordinary Briefcase/Xcode build remains blocked while Xcode 26 writes `swift-crypto_Crypto.bundle` under the package checkout and then looks for it under the project build directory. Remaining evidence is a clean generated-project build of both targets without an output-root workaround, the iOS simulator SecureLink E2E, archive/product-size measurement, and physical-device execution when a signed device target is available. The full macOS host-runner suite is a manual qualification command because it intentionally waits on complete app-process and network-lifecycle shutdown. |
+| `LSW-R005.4` | Apple backend and product qualification (macOS, iOS simulator, physical iOS) | Open | Native macOS Core crypto vectors and the Apple package consumer pass. An Xcode build targeting the iOS Simulator SDK, with a deterministic `-derivedDataPath`, builds the app and `IPServer` targets and produces a 63 MB unsigned Debug app bundle. Building with Xcode is allowed; booting, installing into, or launching an iOS Simulator is blocked on this workstation because its resource use makes the host unusable. Briefcase's default project-build root remains incompatible with Xcode 26's `swift-crypto_Crypto.bundle` output and is not qualification evidence. Remaining evidence is signed archive/product-size measurement, a dedicated resource-capable Mac simulator SecureLink E2E, and physical-device execution when a signed device target is available. The full macOS host-runner suite is a manual qualification command because it intentionally waits on complete app-process and network-lifecycle shutdown. |
 | `LSW-R005.5` | Python/Swift behavioral parity and traceability audit (Linux plus macOS) | In progress | A requirement-level PSK matrix and validator replace the previous aggregate SecureLink inventory row. Core now rejects pre-peer-confirmation application I/O, wrong-key handshake proof, reserved-counter reuse after exhaustion, and old transport-epoch ciphertext with focused Swift tests; TCP also proves wrong-PSK rejection against an independent Python peer. The remaining row-level mixed-runtime and adapter/admin evidence is itemized below. No row may be marked parity-complete from a source guard alone. |
 | `LSW-R005.6` | Final release/CI closure (all required CI platforms) | Waiting on `.4` and `.5` | Require the PR's R005-relevant Linux shared, macOS Swift probe/backed, requirements, README/traceability, and Swift ownership checks to pass. Classify unrelated privileged-TUN failures explicitly rather than silently accepting them. Then remove R005 from the pending sequence and retain only the delivered architecture and any physical-device release qualification in the platform qualification section. |
 
 Linux can complete the macOS-independent portion of `LSW-R005.5`, including
 the traceability matrix, Core vectors, mixed Python peers, and ownership guards.
 The macOS host completes native Core validation and can build generated Apple
-targets and execute the simulator evidence. A signed physical iOS target is
-the only inherently device-specific residual. Routine PR validation retains
-bounded Core/adapter probes; full host-runner product qualification is invoked
-manually so unrelated lifecycle waits do not obscure or delay Core evidence.
+targets. It does not boot, install into, or launch an iOS Simulator; simulator
+evidence runs only on a dedicated resource-capable Mac. A signed physical iOS
+target is the only inherently device-specific residual. Routine PR validation
+retains bounded Core/adapter probes; full host-runner product qualification is
+invoked manually so unrelated lifecycle waits do not obscure or delay Core
+evidence.
 
 ##### LSW-R005.5 evidence slices
 
@@ -781,7 +783,7 @@ row.
 | Work package | Platform | State | Scope and measurable exit criterion |
 | --- | --- | --- | --- |
 | `R005.4a` | macOS | Open | Build the generated macOS `ObstacleBridge` and `IPServer` targets from a clean checkout with the pinned `Crypto` package, without an output-root workaround. Preserve the build log/artifact evidence. |
-| `R005.4b` | iOS simulator | Open | Run the SecureLink E2E scenario in the generated iOS simulator target, including an authenticated payload exchange and redacted status output. |
+| `R005.4b` | iOS simulator | Open — dedicated host | Run the SecureLink E2E scenario in the generated iOS simulator target, including an authenticated payload exchange and redacted status output. This workstation permits Xcode Simulator-SDK builds but blocks Simulator boot, install, and launch. |
 | `R005.4c` | Apple release qualification | Open | Produce an archive and record product-size impact; run the physical-device SecureLink scenario when a signed device target is available. This is the only device-dependent R005 sub-workpackage. |
 | `R005.5d-1a` | Linux Swift | Complete | Publish the bounded `nextRetryMilliseconds` value in the live-runtime snapshot and prove that stop cancels the pending retry presentation. |
 | `R005.5d-1b` | Linux Swift + Python peer | Complete | TCP and WebSocket Python peers deliberately remain silent after authenticated acknowledgement. The typed 50 ms receive-idle deadline fails the old epoch, publishes the bounded retry window, and reconnects without retaining it. |

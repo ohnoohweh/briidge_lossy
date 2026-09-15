@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 from check_linux_swift_r001_inventory import INVENTORY_PATH as LSW_R001_INVENTORY_PATH
@@ -32,6 +33,11 @@ TEST_DEF_RE = re.compile(
     re.MULTILINE,
 )
 TRACEABILITY_TEST_KEYS = ("tests", "integration_tests", "unit_tests")
+
+
+@lru_cache(maxsize=None)
+def _test_definitions(path: Path) -> set[str]:
+    return set(TEST_DEF_RE.findall(path.read_text(encoding="utf-8")))
 
 
 def _git_changed_files(*diff_args: str) -> list[str]:
@@ -117,9 +123,7 @@ def _validate_traceability(requirement_ids: set[str], traceability: dict[str, di
             if not file_path.exists():
                 errors.append(f"{TRACEABILITY_PATH}: missing test file {rel_path} for {req_id}")
                 continue
-            text = file_path.read_text(encoding="utf-8")
-            defs = set(TEST_DEF_RE.findall(text))
-            if test_name not in defs:
+            if test_name not in _test_definitions(file_path):
                 errors.append(f"{TRACEABILITY_PATH}: missing test {test_name} in {rel_path} for {req_id}")
     return errors
 
@@ -143,9 +147,7 @@ def _validate_architecture_traceability(architecture_ids: set[str], traceability
             if not file_path.exists():
                 errors.append(f"{ARCH_TRACEABILITY_PATH}: missing test file {rel_path} for {arc_id}")
                 continue
-            text = file_path.read_text(encoding="utf-8")
-            defs = set(TEST_DEF_RE.findall(text))
-            if test_name not in defs:
+            if test_name not in _test_definitions(file_path):
                 errors.append(f"{ARCH_TRACEABILITY_PATH}: missing test {test_name} in {rel_path} for {arc_id}")
     return errors
 
