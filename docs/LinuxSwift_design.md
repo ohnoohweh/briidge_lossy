@@ -768,7 +768,7 @@ manually so unrelated lifecycle waits do not obscure or delay Core evidence.
 | `R005.5c-4` Counter boundaries | Complete | Core covers SecureLink exhaustion and epoch reset; independent Python peers observe TCP/WebSocket protected progression and myUDP `65535 -> 1` rollover. Reconnect probes confirm a fresh epoch on every admitted transport. |
 | `R005.5d-1` Lifecycle/retry | In progress | The Swift live snapshot now exposes the bounded next-retry delay. Add a mixed Python-peer missed-disconnect timeout fallback and fresh-epoch readiness proof. |
 | `R005.5d-2` Operator state | Open | Swift admin/peer snapshots supply the required peer-scoped SecureLink lifecycle and traffic/counter contract, with traceable tests. |
-| `R005.5e-1` Generic compression layer | Open | Extract or introduce a platform-neutral compression wrapper compatible with Python and Apple; Linux/Apple adapters only supply I/O. |
+| `R005.5e-1` Generic compression layer | In progress | `CZlib` is available to the shared Swift package on Linux. Move the Python/Apple mux compression policy and zlib framing into Core; Linux/Apple adapters must only supply I/O and projections. |
 | `R005.5e-2` Compression interoperability | Open | Prove enabled, disabled, and mismatched compression settings plus required telemetry against the Python peer on Swift. |
 
 Definition of Done:

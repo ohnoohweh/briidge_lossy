@@ -6,9 +6,15 @@ var products: [Product] = [
 ]
 
 var targets: [Target] = [
+    .systemLibrary(
+        name: "CZlib",
+        pkgConfig: "zlib",
+        providers: [.apt(["zlib1g-dev"]), .brew(["zlib"])]
+    ),
     .target(
         name: "ObstacleBridgeCore",
         dependencies: [
+            "CZlib",
             .product(name: "Crypto", package: "swift-crypto"),
         ],
         path: "swift/Sources/ObstacleBridgeCore"
