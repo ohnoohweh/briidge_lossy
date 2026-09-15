@@ -112,7 +112,9 @@ jobs:
           pip install -e .[test]
 
       - name: Run Linux shared integration suite
-        run: pytest -vv --timeout=90 -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+        # These tests own multiple peers and network processes. Four workers
+        # keep their lifecycle deadlines reliable on hosted Linux runners.
+        run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only"
 
   bridge-py-integration-windows:
     name: Integration Gate (Windows-specific)

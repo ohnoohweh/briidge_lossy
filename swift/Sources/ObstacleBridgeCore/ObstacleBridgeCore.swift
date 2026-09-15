@@ -620,6 +620,21 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         return try beginRekey(sessionID: nextSessionID, clientNonce: nextClientNonce)
     }
 
+    /// Returns the active automatic-rekey cause without beginning a rekey.
+    /// Platform wrappers use this Core-owned decision for redacted status.
+    public func automaticRekeyTrigger() -> String? {
+        stateLock.lock(); defer { stateLock.unlock() }
+        guard authenticated, pendingSessionID == 0, rekeyPolicy.isEnabled else { return nil }
+        if rekeyPolicy.afterProtectedFrames > 0 && protectedDataFramesSent >= rekeyPolicy.afterProtectedFrames {
+            return "frame_threshold"
+        }
+        if rekeyPolicy.afterAuthenticatedSeconds > 0,
+           authenticatedAt.map({ timeProvider() - $0 >= rekeyPolicy.afterAuthenticatedSeconds }) ?? false {
+            return "time_threshold"
+        }
+        return nil
+    }
+
     public func protect(_ payload: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
         return try protectLocked(payload, requireAuthenticated: true)
