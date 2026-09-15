@@ -295,6 +295,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         }
     }
 
+    @Test func tcpSecureLinkReconnectsWithFreshPythonPeerSession() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-reconnect")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let first = try runtime.connect(sessionID: 92, clientNonce: Data(repeating: 11, count: 32))
+        #expect(try first.send(Data("first-epoch".utf8)) == Data("python:first-epoch".utf8))
+        let second = try runtime.reconnect(sessionID: 93, clientNonce: Data(repeating: 12, count: 32))
+        #expect(first.snapshot.state == "disconnected")
+        #expect(try second.send(Data("second-epoch".utf8)) == Data("python:second-epoch".utf8))
+        runtime.disconnect()
+    }
+
     @Test func configDrivenRuntimePumpsProtectedDataAgainstPythonPeers() throws {
         for (mode, transport) in [("tcp-securelink", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink", .ws)] {
             let peer = try PythonOverlayPeer(mode: mode)
@@ -711,6 +726,35 @@ final class PythonOverlayPeer {
             data,peer=s.recvfrom(1452)
             assert len(data)>=27 and data[0]==1 and data[19:21]==b'\\x01\\x01'
             s.sendto(data,peer); s.close()
+            """
+        }
+        if mode == "tcp-securelink-reconnect" {
+            return """
+            import hashlib, hmac, socket, struct
+            from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(2); print(s.getsockname()[1], flush=True)
+            def nread(c,n):
+                b=b''
+                while len(b)<n:
+                    x=c.recv(n-len(b))
+                    if not x: raise RuntimeError('eof')
+                    b+=x
+                return b
+            def read(c):
+                n=struct.unpack('!I',nread(c,4))[0]; body=nread(c,n); assert body[:1]==b'\\0'; return body[1:]
+            def write(c,p): c.sendall(struct.pack('!I',len(p)+1)+b'\\0'+p)
+            def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')
+            def expand(prk,info,length):
+                out=b''; prior=b''
+                for i in range(1,(length+31)//32+1): prior=hmac.new(prk,prior+info+bytes([i]),hashlib.sha256).digest(); out+=prior
+                return out[:length]
+            for _ in range(2):
+                c,_=s.accept(); hello=read(c); sid=int.from_bytes(hello[4:12],'big'); cn=hello[20:52]; sn=bytes(range(32)); psk=b'linux-swift-psk'
+                proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write(c,header(2,sid,0)+sn+b'\\x01'+proof)
+                salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
+                client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+                app=read(c); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write(c,response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response)); c.close()
+            s.close()
             """
         }
         if mode == "tcp-reconnect" || mode == "tcp-drop-then-echo" || mode == "tcp-mux-reconnect" {
