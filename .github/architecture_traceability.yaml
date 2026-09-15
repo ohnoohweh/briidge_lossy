@@ -19,7 +19,7 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_rollover_and_control_idle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
   unit_tests:
     - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason
@@ -770,6 +770,9 @@ ARC-CMP-006:
     # client send hold boundary.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerCompletesPortableClientHandshake
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskRejectsWrongKeyAndUnauthenticatedApplicationTraffic
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskCounterPolicyRejectsReservedZeroAfterExhaustion
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTransportEpochResetDropsOldGenerationAndStartsFreshCounters
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresUnconfirmedHandshakeUsingInjectedClock
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresUnconfirmedHandshakeUsingInjectedClock
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresPendingRekeyUsingInjectedClock
@@ -782,6 +785,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesTcpListenerConfigurationWithoutOutboundPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesCleartextWebSocketListenerConfigurationWithoutOutboundPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkWrongPskFailsClosedAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configDrivenRuntimePumpsProtectedDataAgainstPythonPeers
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpDuplexSessionReceivesPeerFrameBeforeLocalSend
@@ -801,7 +805,7 @@ ARC-CMP-006:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_rollover_and_control_idle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_service_round_trip
     # Full Python TCP/WS/myudp catalog publication, live withdrawal, reverse service delivery, and recovery.
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_runtime_linux_swift_service_round_trip

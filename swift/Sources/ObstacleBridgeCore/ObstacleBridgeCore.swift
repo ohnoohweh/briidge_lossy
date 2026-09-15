@@ -385,6 +385,19 @@ public struct ObstacleBridgeSecureLinkPSKRetryState: Sendable, Equatable {
     }
 }
 
+/// Counter lifecycle shared by both SecureLink PSK roles. A protected frame
+/// never uses counter zero; after the final usable value, the next send fails
+/// rather than reusing a nonce after wraparound.
+public enum ObstacleBridgeSecureLinkPSKCounter {
+    public static func canSend(counter: UInt64) -> Bool {
+        counter > 0
+    }
+
+    public static func nextAfterSend(counter: UInt64) -> UInt64 {
+        counter &+ 1
+    }
+}
+
 /// The client half of the SecureLink v1 PSK handshake and protected-data
 /// envelope. Transport ownership remains external, which makes the same state
 /// machine usable over Linux TCP and WebSocket lower transports.
@@ -503,7 +516,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
         let keys = try ObstacleBridgeSecureLinkPSKCrypto.deriveKeys(psk: psk, sessionID: expectedSessionID, clientNonce: expectedClientNonce, serverNonce: serverNonce)
         c2sKey = keys.clientToServer
         s2cKey = keys.serverToClient
-        return try protect(Data())
+        return try protectLocked(Data(), requireAuthenticated: false)
     }
 
     /// Consumes the server's protected empty acknowledgement. No application
@@ -511,7 +524,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
     public func handleServerAcknowledgement(_ wire: Data) throws {
         stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
-        let plaintext = try unprotect(wire)
+        let plaintext = try unprotectLocked(wire, requireAuthenticated: false)
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         authenticated = true
         handshakeStartedAt = nil
@@ -609,8 +622,16 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
 
     public func protect(_ payload: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
+        return try protectLocked(payload, requireAuthenticated: true)
+    }
+
+    private func protectLocked(_ payload: Data, requireAuthenticated: Bool) throws -> Data {
         try expireHandshakeIfNeeded()
-        guard !pendingCommitSent, sessionID != 0, c2sKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        guard !requireAuthenticated || authenticated else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        guard !pendingCommitSent, sessionID != 0, c2sKey.count == 32,
+              ObstacleBridgeSecureLinkPSKCounter.canSend(counter: txCounter) else {
+            throw ObstacleBridgeSecureLinkPSKClientError.invalidState
+        }
         let header = ObstacleBridgeSecureLinkFrameCodec.header(type: ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, sessionID: sessionID, counter: txCounter)
         let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(
             plaintext: payload,
@@ -618,7 +639,7 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
             nonce: nonce(counter: txCounter),
             authenticatedData: header
         )
-        txCounter &+= 1
+        txCounter = ObstacleBridgeSecureLinkPSKCounter.nextAfterSend(counter: txCounter)
         if authenticated, pendingSessionID == 0 {
             protectedDataFramesSent &+= 1
         }
@@ -627,7 +648,12 @@ public final class ObstacleBridgeSecureLinkPSKClient: @unchecked Sendable {
 
     public func unprotect(_ wire: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
+        return try unprotectLocked(wire, requireAuthenticated: true)
+    }
+
+    private func unprotectLocked(_ wire: Data, requireAuthenticated: Bool) throws -> Data {
         try expireHandshakeIfNeeded()
+        guard !requireAuthenticated || authenticated else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let parsed = try parse(wire)
         guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, parsed.sessionID == sessionID, parsed.counter > rxCounter, s2cKey.count == 32 else {
             throw parsed.counter <= rxCounter ? ObstacleBridgeSecureLinkPSKClientError.replayedFrame : ObstacleBridgeSecureLinkPSKClientError.invalidFrame
@@ -821,12 +847,12 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
     public func handleClientProof(_ wire: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
         try expireHandshakeIfNeeded()
-        let plaintext = try unprotect(wire)
+        let plaintext = try unprotectLocked(wire, requireAuthenticated: false)
         guard plaintext.isEmpty else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         authenticated = true
         handshakeStartedAt = nil
         authenticatedGenerationsTotal &+= 1
-        return try protect(Data())
+        return try protectLocked(Data(), requireAuthenticated: false)
     }
 
     public func handleRekeyHello(_ wire: Data, serverNonce: Data) throws -> Data {
@@ -912,18 +938,31 @@ public final class ObstacleBridgeSecureLinkPSKServer: @unchecked Sendable {
 
     public func protect(_ payload: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
+        return try protectLocked(payload, requireAuthenticated: true)
+    }
+
+    private func protectLocked(_ payload: Data, requireAuthenticated: Bool) throws -> Data {
         try expireHandshakeIfNeeded()
-        guard sessionID != 0, s2cKey.count == 32, txCounter > 0 else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        guard !requireAuthenticated || authenticated else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
+        guard sessionID != 0, s2cKey.count == 32,
+              ObstacleBridgeSecureLinkPSKCounter.canSend(counter: txCounter) else {
+            throw ObstacleBridgeSecureLinkPSKClientError.invalidState
+        }
         let counter = txCounter
         let header = ObstacleBridgeSecureLinkFrameCodec.header(type: ObstacleBridgeSecureLinkPSKFrameType.authenticatedData, sessionID: sessionID, counter: counter)
         let ciphertext = try ObstacleBridgeCrypto.chaChaPolySeal(plaintext: payload, key: s2cKey, nonce: nonce(counter: counter), authenticatedData: header)
-        txCounter &+= 1
+        txCounter = ObstacleBridgeSecureLinkPSKCounter.nextAfterSend(counter: txCounter)
         return header + ciphertext
     }
 
     public func unprotect(_ wire: Data) throws -> Data {
         stateLock.lock(); defer { stateLock.unlock() }
+        return try unprotectLocked(wire, requireAuthenticated: true)
+    }
+
+    private func unprotectLocked(_ wire: Data, requireAuthenticated: Bool) throws -> Data {
         try expireHandshakeIfNeeded()
+        guard !requireAuthenticated || authenticated else { throw ObstacleBridgeSecureLinkPSKClientError.invalidState }
         let parsed = try parse(wire)
         guard parsed.type == ObstacleBridgeSecureLinkPSKFrameType.authenticatedData else { throw ObstacleBridgeSecureLinkPSKClientError.invalidFrame }
         if parsed.sessionID == sessionID {

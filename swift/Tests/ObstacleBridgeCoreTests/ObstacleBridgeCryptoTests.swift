@@ -445,6 +445,60 @@ struct ObstacleBridgeCryptoTests {
         #expect(try client.unprotect(server.protect(Data("linux-server".utf8))) == Data("linux-server".utf8))
     }
 
+    @Test func secureLinkPskRejectsWrongKeyAndUnauthenticatedApplicationTraffic() throws {
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: Data("client-psk".utf8))
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: Data("different-server-psk".utf8))
+        let hello = try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32))
+        let serverHello = try server.handleClientHello(hello, serverNonce: Data(repeating: 2, count: 32))
+
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.authenticationFailed) {
+            try client.handleServerHello(serverHello)
+        }
+        #expect(!client.isAuthenticated)
+        #expect(!server.isAuthenticated)
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try client.protect(Data("must-not-send".utf8))
+        }
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try server.protect(Data("must-not-send".utf8))
+        }
+    }
+
+    @Test func secureLinkPskCounterPolicyRejectsReservedZeroAfterExhaustion() {
+        #expect(ObstacleBridgeSecureLinkPSKCounter.canSend(counter: 1))
+        #expect(ObstacleBridgeSecureLinkPSKCounter.canSend(counter: UInt64.max))
+        #expect(ObstacleBridgeSecureLinkPSKCounter.nextAfterSend(counter: UInt64.max) == 0)
+        #expect(!ObstacleBridgeSecureLinkPSKCounter.canSend(counter: 0))
+    }
+
+    @Test func secureLinkPskTransportEpochResetDropsOldGenerationAndStartsFreshCounters() throws {
+        let psk = Data("fresh-epoch-psk".utf8)
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+        let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
+        let proof = try client.handleServerHello(server.handleClientHello(
+            try client.begin(sessionID: 7, clientNonce: Data(repeating: 1, count: 32)),
+            serverNonce: Data(repeating: 2, count: 32)
+        ))
+        try client.handleServerAcknowledgement(server.handleClientProof(proof))
+        let oldFrame = try client.protect(Data("old-generation".utf8))
+        #expect(try server.unprotect(oldFrame) == Data("old-generation".utf8))
+
+        client.reset()
+        server.reset()
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try server.unprotect(oldFrame)
+        }
+
+        let freshProof = try client.handleServerHello(server.handleClientHello(
+            try client.begin(sessionID: 8, clientNonce: Data(repeating: 3, count: 32)),
+            serverNonce: Data(repeating: 4, count: 32)
+        ))
+        try client.handleServerAcknowledgement(server.handleClientProof(freshProof))
+        let freshFrame = try client.protect(Data("fresh-generation".utf8))
+        #expect(try ObstacleBridgeSecureLinkFrameCodec.decode(freshFrame).counter == 2)
+        #expect(try server.unprotect(freshFrame) == Data("fresh-generation".utf8))
+    }
+
     @Test func secureLinkPskClientPollsInjectedFrameAndTimeRekeyPolicies() throws {
         var monotonicTime: TimeInterval = 0
         let psk = Data("automatic-rekey-psk".utf8)

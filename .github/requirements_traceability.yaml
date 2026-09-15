@@ -17,7 +17,7 @@ REQ-OVL-001:
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorRotatesCandidateAfterFailedEpoch
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorRecoversAfterSilentPeerTimeout
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
 
 REQ-RUN-001:
@@ -226,6 +226,8 @@ REQ-AUT-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskRejectsWrongKeyAndUnauthenticatedApplicationTraffic
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkWrongPskFailsClosedAgainstPythonPeer
 
 REQ-AUT-004:
   # Directional SecureLink and myUDP-boundary frame counters are pinned by the
@@ -337,6 +339,8 @@ REQ-AUT-006:
     # commit/done retransmission, client send hold, counter reset, and
     # old-session rejection.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskCounterPolicyRejectsReservedZeroAfterExhaustion
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskTransportEpochResetDropsOldGenerationAndStartsFreshCounters
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskClientExpiresPendingRekeyUsingInjectedClock
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresPendingRekeyWithoutRenewingRetransmitDeadline
 
@@ -1304,7 +1308,7 @@ REQ-MYU-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_rollover_and_control_idle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
   unit_tests:
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_control_feedback_retransmits_only_reported_missing_frames
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords
@@ -1320,7 +1324,7 @@ REQ-MYU-002:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply
-    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_rollover_and_control_idle
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_udp_peer_runtime_retransmit_timer_matches_python

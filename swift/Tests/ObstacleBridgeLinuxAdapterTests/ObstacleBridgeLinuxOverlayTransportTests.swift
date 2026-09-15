@@ -221,7 +221,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         supervisor.stop()
     }
 
-    @Test func myudpSupervisorRecoversAfterSilentPeerTimeout() throws {
+    @Test func myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .myudp, host: "127.0.0.1,127.0.0.1", port: peer.port))
@@ -230,7 +230,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         supervisor.onSnapshot = { if $0.state == "connected" { connected.signal() } }
         supervisor.start(probe: Data("silent-myudp".utf8), sessionID: 140, clientNonce: Data(repeating: 13, count: 32))
         #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(supervisor.snapshot.attempts == 2)
+        #expect(supervisor.snapshot.attempts == 1)
         supervisor.stop()
     }
 
@@ -240,6 +240,23 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
 
     @Test func webSocketSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer() throws {
         try secureLinkSessionRoundTrip(mode: "ws-securelink", transport: .ws)
+    }
+
+    @Test func tcpSecureLinkWrongPskFailsClosedAgainstPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink")
+        defer { peer.stop() }
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: .tcp)
+        let session = try lower.openSession()
+        defer { session.close() }
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: Data("wrong-linux-swift-psk".utf8))
+        let hello = try client.begin(sessionID: 77, clientNonce: Data(repeating: 7, count: 32))
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.authenticationFailed) {
+            try client.handleServerHello(session.exchange(hello))
+        }
+        #expect(!client.isAuthenticated)
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidState) {
+            try client.protect(Data("must-not-forward".utf8))
+        }
     }
 
     @Test func configDrivenRuntimePumpsProtectedDataAgainstPythonPeers() throws {

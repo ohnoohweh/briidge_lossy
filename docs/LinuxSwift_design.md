@@ -351,7 +351,7 @@ The duplicated areas and their required disposition are:
 
 | Area | Current evidence | Target disposition |
 | --- | --- | --- |
-| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the retired Apple compatibility facade is deleted. Linux host tests cover dropped-DATA timer recovery, duplicated/reordered Python-peer chunks, malformed-datagram rejection, and closed-session cleanup. The built foreground client recovers through composed loss, delay, duplication, and reverse-ordered multi-datagram replies across the `65535 -> 1` counter rollover, and returns Core CONTROL/IDLE effects, against an independent Python peer. | Complete the Apple/Linux counterpart qualification and maximum missing-list pressure matrix. |
+| myudp v2 | `ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift` owns framing and peer reliability state. The Apple peer runtime and connected Linux POSIX client execute Core effects; the retired Apple compatibility facade is deleted. Linux host tests cover dropped-DATA timer recovery, duplicated/reordered Python-peer chunks, malformed-datagram rejection, and closed-session cleanup. The built foreground client recovers through composed loss, delay, duplication, and reverse-ordered multi-datagram replies, and returns Core CONTROL/IDLE effects, against an independent Python peer. | Complete the Apple/Linux counterpart qualification, maximum missing-list pressure matrix, and a valid wire-sequential end-to-end counter-rollover scenario. |
 | ChannelMux and services | The portable target implements only the eight-byte mux header. Linux separately encodes O5 OPEN and RS3 catalogs, while the Apple codec also owns O4/O5, RS2/RS3, metadata, control chunks, and reassembly. | One core frame/service model and codec owns all wire formats. Core service/TCP/UDP/TUN state emits socket or packet effects; adapters never serialize ChannelMux themselves. |
 | SecureLink | `ObstacleBridgeCore.swift` contains a reduced PSK client/server implementation. Apple has a separate codec and a fuller runtime with rekey, timeout, retry, readiness, replay, and diagnostic state. | Move the full role-neutral state machine to core and use the pinned `Crypto` implementation. Keep the Objective-C Apple crypto class only as a compatibility facade. |
 | Stream and WebSocket overlays | Linux implements ObstacleBridge APP/PING/PONG framing in its POSIX owner. Apple TCP and QUIC logical runtime files are effectively identical, while the nominally logical WebSocket runtime exposes `URLSessionWebSocketTask.Message`. | Core owns ObstacleBridge stream/WebSocket envelopes, buffering, liveness, and lifecycle decisions. Adapters own TCP, RFC 6455/backend integration, TLS/trust, and QUIC I/O. |
@@ -559,9 +559,10 @@ foreground client also recovers when an independent Python peer drops its first
 two post-handshake protected DATA datagrams. The foreground client also
 reassembles a multi-chunk protected response sent in reverse datagram order.
 The foreground client also completes a protected exchange after composed loss,
-delay, duplicate, and reverse-ordered multi-datagram reply delivery across the
-`65535 -> 1` counter rollover, while returning Core CONTROL and IDLE effects to
-an independent Python peer. macOS
+delay, duplicate, and reverse-ordered multi-datagram reply delivery while
+returning Core CONTROL and IDLE effects to an independent Python peer. A
+valid wire-sequential mixed-runtime counter-rollover scenario remains open.
+macOS
 conditionally excludes the Linux adapter tests, so a
 zero-test selection is not evidence. The shared-datagram listener maps endpoint plus admission epoch to `ObstacleBridgeMyUDPPeerRegistry`,
 which isolates peer queues, receive state, activity, expiry, and withdrawal.
@@ -736,7 +737,7 @@ below are the authoritative closure checklist.
 | ID | Scope and platform | State | Evidence or remaining exit criteria |
 | --- | --- | --- | --- |
 | `LSW-R005.4` | Apple backend and product qualification (macOS, iOS simulator, physical iOS) | Open | Native macOS Core crypto vectors and the Apple package consumer pass. The generated app and `IPServer` targets declare the pinned `Crypto` package product, but the ordinary Briefcase/Xcode build remains blocked while Xcode 26 writes `swift-crypto_Crypto.bundle` under the package checkout and then looks for it under the project build directory. Remaining evidence is a clean generated-project build of both targets without an output-root workaround, the iOS simulator SecureLink E2E, archive/product-size measurement, and physical-device execution when a signed device target is available. The full macOS host-runner suite is a manual qualification command because it intentionally waits on complete app-process and network-lifecycle shutdown. |
-| `LSW-R005.5` | Python/Swift behavioral parity and traceability audit (Linux plus macOS) | Open | For every `REQ-AUT-*` PSK behavior in scope, map Python reference implementation, Swift Core/adapter implementation, Python test, Swift test, and mixed-runtime test. Run wrong-key, malformed-frame, replay, timeout, rekey overlap, reconnect, counter exhaustion, concurrency, and TCP/WS/myudp interoperability evidence. No row may be marked parity-complete from a source guard alone. |
+| `LSW-R005.5` | Python/Swift behavioral parity and traceability audit (Linux plus macOS) | In progress | A requirement-level PSK matrix and validator replace the previous aggregate SecureLink inventory row. Core now rejects pre-peer-confirmation application I/O, wrong-key handshake proof, reserved-counter reuse after exhaustion, and old transport-epoch ciphertext with focused Swift tests; TCP also proves wrong-PSK rejection against an independent Python peer. The remaining row-level mixed-runtime and adapter/admin evidence is itemized below. No row may be marked parity-complete from a source guard alone. |
 | `LSW-R005.6` | Final release/CI closure (all required CI platforms) | Waiting on `.4` and `.5` | Require the PR's R005-relevant Linux shared, macOS Swift probe/backed, requirements, README/traceability, and Swift ownership checks to pass. Classify unrelated privileged-TUN failures explicitly rather than silently accepting them. Then remove R005 from the pending sequence and retain only the delivered architecture and any physical-device release qualification in the platform qualification section. |
 
 Linux can complete the macOS-independent portion of `LSW-R005.5`, including
@@ -746,6 +747,16 @@ targets and execute the simulator evidence. A signed physical iOS target is
 the only inherently device-specific residual. Routine PR validation retains
 bounded Core/adapter probes; full host-runner product qualification is invoked
 manually so unrelated lifecycle waits do not obscure or delay Core evidence.
+
+##### LSW-R005.5 evidence slices
+
+| Slice | State | Remaining exit criterion |
+| --- | --- | --- |
+| `.5a` Requirement-level matrix and verifier | Complete | `LinuxSwift_r001_inventory.json` now has one `r005_psk_traceability` row for every PSK requirement. Its guard rejects an omitted/duplicate requirement, missing implementation path or test definition, and a `complete` row lacking Python implementation/test, Swift implementation/test, or mixed-runtime evidence. Partial rows require an explicit gap. |
+| `.5b` Core negative/lifecycle parity | Partially complete | Linux Swift tests cover wrong-key proof rejection, the peer-confirmation application-I/O gate, reserved-counter exhaustion policy, reconnect reset, malformed corpus, replay, deadline, bounded overlap, and concurrent sends. The Core and focused Linux adapter suites pass. Add independent-Python coverage for the remaining malformed/replay/rekey/reconnect transitions and run the same Core suite on macOS. |
+| `.5c` TCP, WebSocket, and myUDP mixed-runtime parity | In progress | The built Linux executable passes TCP/WebSocket/myUDP PSK round trips against the Python peer; TCP wrong-key rejection and myUDP repeated-loss, delayed, duplicated, reverse-ordered reply, CONTROL, and IDLE behavior also pass. Add independent-Python malformed/replay/rekey/reconnect and counter handling probes for every admitted transport. A valid wire-sequential myUDP counter-rollover scenario remains open; a prior discontinuous `2 -> 65535` fixture was removed because it was not a valid rollover. |
+| `.5d` Lifecycle and operator-visible state | Open | Map and execute Swift adapter evidence for `REQ-AUT-004`, `REQ-AUT-008`, and `REQ-AUT-009`: peer-scoped state/counters, bounded retry presentation, disconnect/reauthentication, and fresh-epoch readiness. Do not use a Core-only state assertion as evidence for adapter/admin behavior. |
+| `.5e` Compression-wrapped PSK interoperability | Open | Establish the `REQ-AUT-020` Swift wrapper/adapter path or record it as a real product gap; then prove mismatched peer compression settings and telemetry against the Python reference. |
 
 Definition of Done:
 

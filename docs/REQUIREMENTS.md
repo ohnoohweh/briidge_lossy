@@ -114,6 +114,10 @@ Current implementation note:
 
 - delivered secure-link modes now include `secure_link_mode=psk` and `secure_link_mode=cert`
 - both delivered modes run on `overlay_transport=myudp`, `tcp`, `ws`, and `quic`
+- the shared Swift PSK Core permits its public protected application send and
+  receive operations only after peer-confirmed authentication; its private
+  handshake helpers are the sole path allowed to construct or consume the
+  empty proof and acknowledgement frames before that boundary
 - the current runtime keeps mux payload budgeting aligned with the wrapped transport session budget for `myudp`, `tcp`, and `quic`, so SecureLink wrapping does not reduce healthy forwarded application traffic to the mux-header size alone
 - when a protected client observes a transport-epoch change during reconnect or restart recovery, it now restarts the secure-link client handshake against that fresh transport epoch instead of continuing on stale client-side handshake state
 - when a protected client is reconnecting on a fresh transport epoch, operator-visible connection state is layered rather than collapsed into a single boolean: the lower overlay transport may already be connected while SecureLink is still handshaking, so transport-connected visibility must remain true until that lower layer actually drops even when `app_ready` remains false and protected traffic is not yet eligible to flow
@@ -194,12 +198,11 @@ Current implementation note:
   order and deduplicate chunks, and return cumulative transport acknowledgements;
   the foreground myudp client remains qualified when that independent peer
   composes repeated outbound DATA loss with delayed, duplicated, reverse-ordered
-  multi-datagram protected replies across the `65535 -> 1` counter rollover
-  while returning Core CONTROL and IDLE effects; its independent peer keeps the
+  multi-datagram protected replies while returning Core CONTROL and IDLE effects;
+  its independent peer keeps the
   UDP endpoint bound until it receives the runner's post-reply CONTROL or IDLE
-  acknowledgement, followed by one quiet receive interval, so the runner drains
-  that reply without a port-close ICMP failure. If the acknowledgement is not
-  yet available, the test-owned peer remains bound until test teardown rather
+  acknowledgement, so the runner drains that reply without a port-close ICMP
+  failure. The test-owned peer remains bound until test teardown rather than
   than closing on a host-load-sensitive deadline;
   the macOS Swift/Python matrix runs both endpoint roles through dropped DATA,
   batching, duplication/reordering, and a full CONTROL missing-list recovery

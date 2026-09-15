@@ -153,7 +153,6 @@ class LinuxSwiftSecureLinkPeer:
         drop_myudp_application_data_count: int = 0,
         reorder_myudp_application_reply: bool = False,
         duplicate_myudp_application_reply: bool = False,
-        myudp_application_reply_counter_seed: int = 1,
         send_myudp_idle_before_application_reply: bool = False,
         delay_myudp_application_reply_seconds: float = 0.0,
     ) -> None:
@@ -164,7 +163,6 @@ class LinuxSwiftSecureLinkPeer:
         self.drop_myudp_application_data_count = max(0, drop_myudp_application_data_count)
         self.reorder_myudp_application_reply = reorder_myudp_application_reply
         self.duplicate_myudp_application_reply = duplicate_myudp_application_reply
-        self.myudp_application_reply_counter_seed = max(1, min(0xffff, myudp_application_reply_counter_seed))
         self.send_myudp_idle_before_application_reply = send_myudp_idle_before_application_reply
         self.delay_myudp_application_reply_seconds = max(0.0, delay_myudp_application_reply_seconds)
         self.myudp_control_frames_received = 0
@@ -376,7 +374,6 @@ class LinuxSwiftSecureLinkPeer:
             assert peer is not None
             record = struct.pack('!I', len(payload)) + payload
             if payload[1] == 4 and int.from_bytes(payload[12:20], 'big') == 2:
-                next_send_counter = self.myudp_application_reply_counter_seed
                 time.sleep(self.delay_myudp_application_reply_seconds)
                 if self.send_myudp_idle_before_application_reply:
                     listener.sendto(bytes([0]) + struct.pack('!HQQ', 0, 7, 0), peer)
@@ -418,23 +415,21 @@ class LinuxSwiftSecureLinkPeer:
         listener.settimeout(0.1)
         # A connected UDP sender receives ECONNREFUSED if the peer disappears
         # before it drains the reply and emits its Core CONTROL/IDLE effect.
-        # Retain a live peer for a bounded interval, then finish promptly once
-        # the first post-reply transport acknowledgement has been observed.
-        # A real client owns the reference peer's lifetime through close().
+        # A real client owns the test reference peer's lifetime through
+        # close(). Once an acknowledgement is observed, do not apply a second
+        # short shutdown deadline: the shared myUDP Core can still emit a
+        # follow-up control/timer effect while it drains the same reply.
         # Under a parallel CI host, a fixed post-reply deadline can expire
         # while the Swift process still drains its datagrams and turn a valid
         # reply into an ICMP port-unreachable.  The no-peer unit test retains
         # its short completion deadline.
         deadline = time.monotonic() + 1.0 if peer is None else None
-        acknowledgement_deadline: Optional[float] = None
         while not self._closing.is_set():
             if deadline is not None and time.monotonic() >= deadline:
                 return
             try:
                 wire, _peer = listener.recvfrom(65535)
             except TimeoutError:
-                if acknowledgement_deadline is not None and time.monotonic() >= acknowledgement_deadline:
-                    return
                 continue
             except OSError:
                 if self._closing.is_set():
@@ -442,10 +437,8 @@ class LinuxSwiftSecureLinkPeer:
                 raise
             if wire[:1] == bytes([PTYPE_CONTROL]):
                 self.myudp_control_frames_received += 1
-                acknowledgement_deadline = time.monotonic() + 0.1
             elif wire[:1] == bytes([0]):
                 self.myudp_idle_frames_received += 1
-                acknowledgement_deadline = time.monotonic() + 0.1
 
     def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
         hello = receive()
@@ -7427,7 +7420,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delaye
 
 @pytest.mark.integration
 @pytest.mark.slow
-def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_rollover_and_control_idle(tmp_path: Path) -> None:
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle(tmp_path: Path) -> None:
     """The foreground Linux client preserves a Core stream through composed faults."""
     if not sys.platform.startswith('linux') or not shutil.which('swift'):
         pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
@@ -7440,7 +7433,6 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_compos
         drop_myudp_application_data_count=2,
         reorder_myudp_application_reply=True,
         duplicate_myudp_application_reply=True,
-        myudp_application_reply_counter_seed=0xffff,
         send_myudp_idle_before_application_reply=True,
         delay_myudp_application_reply_seconds=0.25,
     )

@@ -15,6 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 INVENTORY_PATH = ROOT / "docs/LinuxSwift_r001_inventory.json"
 REQUIREMENTS_PATH = ROOT / "docs/REQUIREMENTS.md"
 REQ_RE = re.compile(r"`(REQ-[A-Z]+-\d+)`")
+R005_PSK_REQUIREMENTS = {
+    *(f"REQ-AUT-{value:03}" for value in range(1, 11)),
+    "REQ-AUT-020",
+}
 TEST_DEF_RE = re.compile(
     r"^\s*(?:(?:async\s+)?def|(?:@Test\s+)?func)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.MULTILINE,
@@ -59,6 +63,61 @@ def repository_source_files(inventory: dict[str, object]) -> set[str]:
         for root in inventory["source_roots"]
         for path in (ROOT / root).glob("*.swift")
     }
+
+
+def validate_r005_psk_traceability(inventory: dict[str, object]) -> list[str]:
+    """Require R005.5 to state parity evidence per PSK requirement, not in aggregate."""
+    errors: list[str] = []
+    rows = inventory.get("r005_psk_traceability")
+    if not isinstance(rows, list):
+        return ["R005 PSK traceability matrix is missing"]
+
+    seen: Counter[str] = Counter()
+    evidence_keys = (
+        "python_implementations",
+        "swift_implementations",
+        "python_tests",
+        "swift_tests",
+        "mixed_runtime_tests",
+    )
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append("R005 PSK traceability rows must be objects")
+            continue
+        requirement = row.get("requirement")
+        if not isinstance(requirement, str):
+            errors.append("R005 PSK traceability row lacks a requirement")
+            continue
+        seen[requirement] += 1
+        status = row.get("status")
+        if status not in {"complete", "partial"}:
+            errors.append(f"{requirement}: invalid R005 PSK traceability status {status!r}")
+        if status == "partial" and not row.get("gap"):
+            errors.append(f"{requirement}: partial R005 PSK row requires an explicit gap")
+        for key in evidence_keys:
+            references = row.get(key)
+            if not isinstance(references, list):
+                errors.append(f"{requirement}: {key} must be a list")
+                continue
+            for reference in references:
+                issue = implementation_exists(reference) if key.endswith("implementations") else test_exists(reference)
+                if issue:
+                    errors.append(f"{requirement}: {key}: {issue}")
+        if status == "complete":
+            for key in evidence_keys:
+                if not row.get(key):
+                    errors.append(f"{requirement}: complete R005 PSK row lacks {key}")
+            if row.get("gap"):
+                errors.append(f"{requirement}: complete R005 PSK row cannot retain a gap")
+
+    for requirement, count in sorted(seen.items()):
+        if count != 1:
+            errors.append(f"R005 PSK traceability requirement must be unique: {requirement} appears {count} times")
+    for requirement in sorted(R005_PSK_REQUIREMENTS - set(seen)):
+        errors.append(f"R005 PSK traceability missing requirement: {requirement}")
+    for requirement in sorted(set(seen) - R005_PSK_REQUIREMENTS):
+        errors.append(f"R005 PSK traceability has out-of-scope requirement: {requirement}")
+    return errors
 
 
 def validate(inventory: dict[str, object]) -> list[str]:
@@ -130,6 +189,7 @@ def validate(inventory: dict[str, object]) -> list[str]:
         errors.append(f"unmapped requirement: {req_id}")
     for req_id in sorted(set(mapped_requirements) - expected_requirements):
         errors.append(f"inventory names unknown requirement: {req_id}")
+    errors.extend(validate_r005_psk_traceability(inventory))
     return errors
 
 
