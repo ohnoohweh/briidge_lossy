@@ -11,10 +11,9 @@ else
 fi
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  exec sudo env \
-    OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1 \
-    OBSTACLEBRIDGE_GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
-    "$0" "$@"
+  # Re-exec the whitelisted wrapper itself.  Prefixing it with `env` changes
+  # the sudo command path, so a narrowly scoped NOPASSWD rule cannot match.
+  exec sudo -n "$0" "$@"
 fi
 
 export OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1
@@ -23,6 +22,7 @@ export GITHUB_ACTIONS="${GITHUB_ACTIONS:-${OBSTACLEBRIDGE_GITHUB_ACTIONS:-}}"
 restore_artifact_ownership() {
   if [[ -n "${SUDO_UID:-}" && -n "${SUDO_GID:-}" ]]; then
     chown -R "${SUDO_UID}:${SUDO_GID}" \
+      "$ROOT_DIR/.build" \
       "$ROOT_DIR/ios/build/macos" \
       "$ROOT_DIR/ios/build/generated" \
       "$ROOT_DIR/src/obstacle_bridge/_generated" \
@@ -33,4 +33,57 @@ restore_artifact_ownership() {
 trap restore_artifact_ownership EXIT
 
 cd "$ROOT_DIR"
-"$PYTHON_BIN" -m pytest -q -rs tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated "$@"
+if [[ "${1:-}" == "--diagnose-macos-tun-helper" ]]; then
+  helper_label="com.obstaclebridge.macos.ObstacleBridge.TunHelper"
+  launchctl print "system/${helper_label}" 2>&1 || true
+  log show --style compact --last 15m \
+    --predicate "process == \"ObstacleBridgeTunHelper\" OR eventMessage CONTAINS \"${helper_label}\"" \
+    2>&1 || true
+  exit 0
+fi
+
+if [[ "${1:-}" == "--codesign-identity" ]]; then
+  if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+    echo "[run_macos_swift_elevated_tests] --codesign-identity requires an identity" >&2
+    exit 2
+  fi
+  export OBSTACLEBRIDGE_CODESIGN_IDENTITY="$2"
+  # A signing identity changes the packaged artifact even if Swift sources are
+  # unchanged; bypass source-only freshness checks for this explicit request.
+  export OBSTACLEBRIDGE_FORCE_MACOS_BUILD=1
+  shift 2
+fi
+
+REUSE_EXISTING_BUILD=0
+if [[ "${1:-}" == "--reuse-macos-build" ]]; then
+  REUSE_EXISTING_BUILD=1
+  shift
+fi
+
+if [[ "$REUSE_EXISTING_BUILD" -eq 1 ]]; then
+  for required_artifact in \
+    "$ROOT_DIR/ios/build/macos/ObstacleBridgeHostRunner" \
+    "$ROOT_DIR/ios/build/macos/ObstacleBridge.app/Contents/MacOS/ObstacleBridgeHostRunner" \
+    "$ROOT_DIR/ios/build/macos/ObstacleBridge.app/Contents/MacOS/ObstacleBridgeTunHelper"; do
+    if [[ ! -x "$required_artifact" ]]; then
+      echo "[run_macos_swift_elevated_tests] --reuse-macos-build requires $required_artifact" >&2
+      exit 2
+    fi
+  done
+else
+  # Build the complete app bundle exactly once.  The test helper reuses that
+  # declared shared artifact for every selected elevated case.
+  "$PYTHON_BIN" -c 'from ios.tests.swift_test_support import build_macos_swift_artifact; build_macos_swift_artifact()'
+fi
+export OBSTACLEBRIDGE_REUSE_MACOS_BUILD=1
+# A cold Swift build is allowed 180 seconds by swift_test_support.  Keep the
+# outer pytest deadline above that build allowance plus the live-test budget;
+# otherwise pytest interrupts a valid build at 120 seconds and retries it for
+# every test case.
+TEST_TARGETS=(tests/integration/test_macos_swift_elevated.py)
+if [[ "$#" -gt 0 ]]; then
+  # A node id replaces the default file target.  Passing both makes pytest run
+  # the whole file and the selected node, which repeats every elevated case.
+  TEST_TARGETS=("$@")
+fi
+"$PYTHON_BIN" -m pytest -vv --timeout=300 -rs -m macos_elevated --run-macos-elevated "${TEST_TARGETS[@]}"

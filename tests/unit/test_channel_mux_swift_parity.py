@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from ios.tests.swift_test_support import swift_core_crypto_compile_flags
 from obstacle_bridge.bridge import ChannelMux, SessionMetrics
 from obstacle_bridge.bridge import BaseFrameV2, ControlPacket, MyUDP2Session, MyUDP2BatchCodec, Protocol, StreamChunk
 from obstacle_bridge.bridge import Runner, TcpStreamSession, UdpSession, QuicSession, WebSocketSession, SecureLinkPskSession
@@ -25,14 +26,22 @@ ROOT = Path(__file__).resolve().parents[2]
 SWIFT_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxCodec.swift"
 SWIFT_SECURELINK_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeSecureLinkPskCodec.swift"
 SWIFT_UDP_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayCodec.swift"
-SWIFT_UDP_SESSION_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlaySessionCodec.swift"
 SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
 SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTunRuntime.swift"
 SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxUdpRuntime.swift"
 SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTcpRuntime.swift"
 SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeCompressLayerRuntime.swift"
 SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeOverlayStackPlanner.swift"
-SWIFT_WS_PAYLOAD_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebSocketPayloadCodec.swift"
+SWIFT_WS_PAYLOAD_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"
+SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
+SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
+SWIFT_MYUDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"
+SWIFT_SECURELINK_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"
+SWIFT_SECURELINK_TRANSCRIPT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"
+SWIFT_OVERLAY_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"
+SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
+SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
+SWIFT_CORE_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"
 SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
 SWIFT_TCP_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeTcpOverlayRuntime.swift"
 SWIFT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "channelmux_codec_runner.swift"
@@ -134,24 +143,33 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
     binary = output_dir / "channelmux_codec_runner"
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-o",
         str(binary),
         str(SWIFT_CODEC_SOURCE),
         str(SWIFT_SECURELINK_SOURCE),
         str(SWIFT_UDP_CODEC_SOURCE),
-        str(SWIFT_UDP_SESSION_CODEC_SOURCE),
         str(SWIFT_UDP_PEER_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE),
         str(SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE),
         str(SWIFT_OVERLAY_STACK_PLANNER_SOURCE),
+        str(SWIFT_BINARY_CODEC_SOURCE),
+        str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
+        str(SWIFT_MYUDP_CODEC_SOURCE),
+        str(SWIFT_SECURELINK_FRAME_CODEC_SOURCE),
+        str(SWIFT_SECURELINK_TRANSCRIPT_SOURCE),
+        str(SWIFT_OVERLAY_FRAME_CODEC_SOURCE),
+        str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
+        str(SWIFT_SERVICE_CODEC_SOURCE),
+        str(SWIFT_CORE_SOURCE),
         str(SWIFT_WS_PAYLOAD_CODEC_SOURCE),
         str(SWIFT_WS_OVERLAY_RUNTIME_SOURCE),
         str(SWIFT_TCP_OVERLAY_RUNTIME_SOURCE),
         str(SWIFT_RUNNER_SOURCE),
     ]
-    completed = subprocess.run(command, check=False, capture_output=True, text=True)
+    completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=120)
     if completed.returncode != 0:
         raise AssertionError(
             f"failed to compile Swift ChannelMux parity runner\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
@@ -166,6 +184,7 @@ def _run_swift(binary: Path, request: dict[str, object]) -> dict[str, object]:
         check=False,
         capture_output=True,
         text=True,
+        timeout=30,
     )
     if completed.returncode != 0:
         raise AssertionError(

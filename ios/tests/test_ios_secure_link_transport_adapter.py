@@ -13,7 +13,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import require_swift_module
+from swift_test_support import require_swift_module, swift_core_crypto_compile_flags
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,9 +28,17 @@ def _compile_swift_secure_link_transport_probe(source_path: Path, binary_path: P
     )
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-o",
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
@@ -197,10 +205,10 @@ def test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_
         "server_disconnect_detail": "",
         "client_trust_validation_state": "validated",
         "server_trust_validation_state": "validated",
-        "client_frames_from_client_passed_total": 2,
+        "client_frames_from_client_passed_total": 1,
         "server_frames_from_client_passed_total": 2,
         "client_frames_to_client_passed_total": 2,
-        "server_frames_to_client_passed_total": 2,
+        "server_frames_to_client_passed_total": 1,
         "client_frames_from_client_dropped_total": 0,
         "server_frames_from_client_dropped_total": 0,
     }
@@ -249,7 +257,8 @@ def test_ios_secure_link_transport_adapter_operator_rekey_completes_and_updates_
                     let clientHello = try client.handleTransportConnected().emittedFrames.first!
                     let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
                     let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
-                    _ = server.handleInboundFrame(clientProof)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProof).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let warmupReply = try server.handleOutboundPayload(Data("reply-before-rekey".utf8)).emittedFrames.first!
                     _ = client.handleInboundFrame(warmupReply)
 
@@ -403,7 +412,8 @@ def test_ios_secure_link_transport_adapter_frame_threshold_rekey_matches_python_
                     let clientHello = try client.handleTransportConnected().emittedFrames.first!
                     let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
                     let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
-                    _ = server.handleInboundFrame(clientProof)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProof).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let warmupReply = try server.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
                     _ = client.handleInboundFrame(warmupReply)
 
@@ -521,7 +531,8 @@ def test_ios_secure_link_transport_adapter_time_threshold_rekey_can_fire_while_i
                     let clientHello = try client.handleTransportConnected().emittedFrames.first!
                     let serverHello = server.handleInboundFrame(clientHello).emittedFrames.first!
                     let clientProof = client.handleInboundFrame(serverHello).emittedFrames.first!
-                    _ = server.handleInboundFrame(clientProof)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProof).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let warmupReply = try server.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
                     _ = client.handleInboundFrame(warmupReply)
 
@@ -669,7 +680,8 @@ def test_ios_secure_link_transport_adapter_retry_and_recovery_policy_matches_pyt
                     let authHello = try authClient.handleTransportConnected().emittedFrames.first!
                     let authServerHello = authServer.handleInboundFrame(authHello).emittedFrames.first!
                     let authClientProof = authClient.handleInboundFrame(authServerHello).emittedFrames.first!
-                    _ = authServer.handleInboundFrame(authClientProof)
+                    let authServerAck = authServer.handleInboundFrame(authClientProof).emittedFrames.first!
+                    _ = authClient.handleInboundFrame(authServerAck)
                     let warmupReply = try authServer.handleOutboundPayload(Data("warmup".utf8)).emittedFrames.first!
                     _ = authClient.handleInboundFrame(warmupReply)
                     if !authClient.statusSnapshot().authenticated {
@@ -763,7 +775,8 @@ def test_ios_secure_link_transport_adapter_can_prime_handshake_on_transport_conn
                         throw ProbeError.badState("missing client proof")
                     }
 
-                    _ = server.handleInboundFrame(clientProofFrame)
+                    let serverHandshakeAck = server.handleInboundFrame(clientProofFrame).emittedFrames.first!
+                    _ = client.handleInboundFrame(serverHandshakeAck)
                     let serverSend = try server.handleOutboundPayload(Data("reply-secure".utf8))
                     guard let serverReplyFrame = serverSend.emittedFrames.first else {
                         throw ProbeError.badState("missing server reply")
@@ -965,7 +978,7 @@ def test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_r
 
                     let clientNonce = parsedHello.payload.prefix(32)
                     let serverNonce = Data(repeating: 0x22, count: 32)
-                    let proof = ObstacleBridgeSecureLinkPskCodec.serverProof(
+                    let proof = try ObstacleBridgeSecureLinkPSKCrypto.serverProof(
                         psk: Data("shared-psk".utf8),
                         sessionID: parsedHello.sessionID,
                         clientNonce: Data(clientNonce),

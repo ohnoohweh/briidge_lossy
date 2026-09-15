@@ -111,7 +111,7 @@ final class ObstacleBridgeCompressLayerRuntime {
         self.peerSelectedMinBytes = max(0, peerSelectedMinBytes)
         self.peerSelectedAllowedMTypes = Self.parseAllowedMTypes(peerSelectedAllowedMTypesRaw)
         self.maxAppPayload = max(0, maxAppPayload)
-        self.maxMuxPayload = max(0, self.maxAppPayload - Self.muxHeaderSize)
+        self.maxMuxPayload = min(Int(UInt16.max), max(0, self.maxAppPayload - Self.muxHeaderSize))
     }
 
     func handleInboundPayload(_ payload: Data, peerID: Int? = nil) -> ReceiveSnapshot {
@@ -138,13 +138,17 @@ final class ObstacleBridgeCompressLayerRuntime {
         decompressOKTotal += 1
         markPeerActive(peerID: peerID)
         addPeerCounter(peerID: peerID, field: \PeerStats.decompressOKTotal, value: 1)
-        let wire = Self.buildMuxFrame(
+        guard let wire = Self.buildMuxFrame(
             chanID: parsed.chanID,
             proto: parsed.proto,
             counter: parsed.counter,
             mtype: baseMType,
             body: decoded
-        )
+        ) else {
+            decompressFailTotal += 1
+            addPeerCounter(peerID: peerID, field: \PeerStats.decompressFailTotal, value: 1)
+            return ReceiveSnapshot(deliveredPayload: nil, deliveredPeerID: peerID, dropped: true, decompressed: false)
+        }
         return ReceiveSnapshot(deliveredPayload: wire, deliveredPeerID: peerID, dropped: false, decompressed: true)
     }
 
@@ -182,13 +186,15 @@ final class ObstacleBridgeCompressLayerRuntime {
         addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressAppliedTotal, value: 1)
         addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressOutputBytesTotal, value: compressed.count)
 
-        let wire = Self.buildMuxFrame(
+        guard let wire = Self.buildMuxFrame(
             chanID: parsed.chanID,
             proto: parsed.proto,
             counter: parsed.counter,
             mtype: parsed.mtype + Self.compressedFlag,
             body: compressed
-        )
+        ) else {
+            return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
+        }
         return SendSnapshot(wirePayload: wire, sentBytes: payload.count, compressed: true)
     }
 
@@ -317,45 +323,24 @@ final class ObstacleBridgeCompressLayerRuntime {
     }
 
     private static func parseMuxFrame(_ payload: Data) -> ParsedMuxFrame? {
-        guard payload.count >= muxHeaderSize else {
-            return nil
-        }
-        let chanID = Int(readUInt16BE(payload, offset: 0))
-        let proto = Int(payload[2])
-        let counter = Int(readUInt16BE(payload, offset: 3))
-        let mtype = Int(payload[5])
-        let bodyLength = Int(readUInt16BE(payload, offset: 6))
-        guard payload.count == muxHeaderSize + bodyLength else {
-            return nil
-        }
+        guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else { return nil }
         return ParsedMuxFrame(
-            chanID: chanID,
-            proto: proto,
-            counter: counter,
-            mtype: mtype,
-            body: payload.subdata(in: muxHeaderSize..<(muxHeaderSize + bodyLength))
+            chanID: Int(frame.channelID),
+            proto: Int(frame.protocolType),
+            counter: Int(frame.counter),
+            mtype: Int(frame.messageType),
+            body: frame.body
         )
     }
 
-    private static func buildMuxFrame(chanID: Int, proto: Int, counter: Int, mtype: Int, body: Data) -> Data {
-        var frame = Data()
-        frame.reserveCapacity(muxHeaderSize + body.count)
-        appendUInt16BE(UInt16(clamping: chanID), to: &frame)
-        frame.append(UInt8(clamping: proto))
-        appendUInt16BE(UInt16(clamping: counter), to: &frame)
-        frame.append(UInt8(clamping: mtype))
-        appendUInt16BE(UInt16(clamping: body.count), to: &frame)
-        frame.append(body)
-        return frame
-    }
-
-    private static func readUInt16BE(_ data: Data, offset: Int) -> UInt16 {
-        return (UInt16(data[offset]) << 8) | UInt16(data[offset + 1])
-    }
-
-    private static func appendUInt16BE(_ value: UInt16, to data: inout Data) {
-        data.append(UInt8((value >> 8) & 0xff))
-        data.append(UInt8(value & 0xff))
+    private static func buildMuxFrame(chanID: Int, proto: Int, counter: Int, mtype: Int, body: Data) -> Data? {
+        try? ObstacleBridgeChannelMuxFrameCodec.encode(
+            channelID: UInt16(clamping: chanID),
+            protocolType: UInt8(clamping: proto),
+            counter: UInt16(clamping: counter),
+            messageType: UInt8(clamping: mtype),
+            body: body
+        )
     }
 
     private static func safeCompress(_ payload: Data, level: Int) -> Data? {

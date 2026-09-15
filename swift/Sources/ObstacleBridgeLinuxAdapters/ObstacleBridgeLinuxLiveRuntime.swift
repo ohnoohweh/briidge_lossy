@@ -1,11 +1,12 @@
 import Dispatch
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public struct ObstacleBridgeLinuxLiveRuntimeSnapshot: Equatable, Sendable {
     public let state: String
     public let attempts: Int
     public let failureReason: String?
+    public let nextRetryMilliseconds: Int?
 }
 
 public enum ObstacleBridgeLinuxLiveRuntimeError: Error, Equatable, LocalizedError {
@@ -41,7 +42,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var stopped = true
     private var attempts = 0
     private var failureReason: String?
-    private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil)
+    private var nextRetryMilliseconds: Int?
+    private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
 
     public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init()) {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
@@ -248,13 +250,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 return
             }
             let delay = min(policy.maximumDelayMilliseconds, policy.initialDelayMilliseconds * (1 << min(attempts - 1, 10)))
-            publish(state: "reconnecting", failureReason: failureReason)
             scheduleRetry(afterMilliseconds: delay)
+            publish(state: "reconnecting", failureReason: failureReason)
         }
     }
 
     private func scheduleRetry(afterMilliseconds delay: Int) {
         cancelRetry()
+        nextRetryMilliseconds = delay
         let timer = DispatchSource.makeTimerSource(queue: queue)
         retryTimer = timer
         timer.schedule(deadline: .now() + .milliseconds(delay))
@@ -270,10 +273,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         retryTimer?.setEventHandler {}
         retryTimer?.cancel()
         retryTimer = nil
+        nextRetryMilliseconds = nil
     }
 
     private func publish(state: String, failureReason: String?) {
-        let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason)
+        let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason, nextRetryMilliseconds: nextRetryMilliseconds)
         snapshot = value
         onSnapshot?(value)
     }
@@ -355,7 +359,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             cancelReceive: { session.cancelReceive() },
             sink: { [weak self] workerEpoch, payload in
                 guard let self, self.configuredRuntime.connectionEpoch == workerEpoch,
-                      let frame = try? ObstacleBridgeChannelMuxCodec.decode(payload) else { return }
+                      let frame = try? mux.decodeInbound(payload) else { return }
                 mux.receive(frame)
             },
             onFailure: { [weak self] workerEpoch, reason in

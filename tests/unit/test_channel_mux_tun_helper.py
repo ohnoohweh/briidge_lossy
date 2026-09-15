@@ -199,6 +199,44 @@ class ChannelMuxTunHelperTests(unittest.IsolatedAsyncioTestCase):
         mux._close_tun_device(dev)
         await asyncio.sleep(0)
 
+    async def test_peer_tun_runtime_health_expects_server_side_gateway_address(self):
+        args = build_runtime_args_from_config(
+            {
+                "TUN_routing": {
+                    "tunnel_address": "192.168.107.1",
+                    "tunnel_prefix": 24,
+                    "tunnel_gateway": "192.168.107.2",
+                    "tunnel_address6": "fd20:107::1",
+                    "tunnel_prefix6": 64,
+                    "tunnel_gateway6": "fd20:107::2",
+                },
+                "tun_execution": {"mode": "helper", "helper_backend": "darwin-native"},
+            }
+        )
+        args._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
+        args._tun_helper_backend = LinuxTunHelperInMemoryBackend()
+        args._tun_helper_client = None
+        mux = ChannelMux.from_args(_FakeSession(connected=True), asyncio.get_running_loop(), args)
+        svc_key = ("peer", 7, 21)
+        mux._peer_installed_services[svc_key] = ChannelMux.ServiceSpec(
+            svc_id=21, l_proto="tun", l_bind="utun7", l_port=1600,
+            r_proto="tun", r_host="utun7", r_port=1600,
+        )
+        dev = mux._open_tun_device("utun7", 1600, svc_key=svc_key)
+        mux._svc_tun_devices[svc_key] = dev
+
+        with patch.object(
+            mux,
+            "_linux_tun_interface_addresses",
+            return_value={"ipv4": ["192.168.107.2"], "ipv6": ["fd20:107::2"], "stdout4": "", "stdout6": ""},
+        ), patch.object(mux.log, "critical") as critical:
+            await mux._run_tun_runtime_health_check(dev, reason="unit-test", delay_s=0)
+
+        self.assertFalse(mux._tun_runtime_health_by_service.get(svc_key))
+        critical.assert_not_called()
+        mux._close_tun_device(dev)
+        await asyncio.sleep(0)
+
     async def test_helper_mode_network_payload_merges_auto_excluded_overlay_routes(self):
         args = build_runtime_args_from_config(
             {

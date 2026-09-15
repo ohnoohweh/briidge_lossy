@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
-@testable import ObstacleBridgePortable
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxServiceDataPlaneTests {
     @Test func localTcpConnectionProducesOpenDataAndClose() throws {

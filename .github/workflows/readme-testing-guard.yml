@@ -3,6 +3,11 @@ name: README_TESTING Guard
 on:
   pull_request:
   push:
+    branches: [main]
+
+concurrency:
+  group: readme-testing-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   readme-testing-guard:

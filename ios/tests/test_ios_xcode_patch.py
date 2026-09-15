@@ -221,6 +221,13 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift" in patched
@@ -233,6 +240,12 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
     assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
+    assert 'repositoryURL = "https://github.com/apple/swift-crypto.git";' in patched
+    assert "productName = Crypto;" in patched
+    assert "packageProductDependencies = (" in patched
+    assert "Crypto in ObstacleBridge Frameworks" not in patched
+    assert "Crypto in IPServer Frameworks" not in patched
+    assert "ObstacleBridgeUdpOverlaySessionCodec.swift" not in patched
     assert "ObstacleBridgeAdminAPI.swift in Sources" in patched
     assert "ObstacleBridgeChannelMuxCodec.swift in Sources" in patched
     assert "ObstacleBridgeRuntimeConfig.swift in Sources" in patched

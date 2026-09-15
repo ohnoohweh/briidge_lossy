@@ -196,8 +196,8 @@ final class ObstacleBridgeWebAdminServer {
     }
 
     private func response(for request: HTTPRequest) -> Data {
-        let snapshot = statusProvider()
         if request.path == "/api/status" || request.path == "/status" || request.path == "/healthz" {
+            let snapshot = statusProvider()
             return Self.httpResponse(
                 statusLine: "HTTP/1.1 200 OK",
                 contentType: "application/json; charset=utf-8",
@@ -205,6 +205,7 @@ final class ObstacleBridgeWebAdminServer {
             )
         }
         if request.path == "/api/bootstrap" {
+            let snapshot = statusProvider()
             return Self.httpResponse(
                 statusLine: "HTTP/1.1 200 OK",
                 contentType: "application/json; charset=utf-8",
@@ -228,6 +229,7 @@ final class ObstacleBridgeWebAdminServer {
                 body: staticFile.body
             )
         }
+        let snapshot = statusProvider()
         let html = Self.htmlIndex(
             title: fallbackIndexTitle,
             subtitle: fallbackIndexSubtitle,
