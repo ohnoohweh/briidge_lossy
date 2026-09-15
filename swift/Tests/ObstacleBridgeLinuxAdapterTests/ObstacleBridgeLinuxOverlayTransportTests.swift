@@ -776,7 +776,7 @@ final class PythonOverlayPeer {
             s.close()
             """
         }
-        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
+        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-silent" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
             return """
             import hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -814,6 +814,8 @@ final class PythonOverlayPeer {
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 commit,counter,peer=recv(); expected=hmac.new(psk,b'obstaclebridge-securelink-client-rekey-commit-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); assert commit[:2]==b'\\x01\\x07' and commit[20:]==expected; send(header(8,sid,0),counter,peer)
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,1); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'python:'+plain,response),counter,peer)
+            elif MODE == 'myudp-securelink-silent':
+                import time; time.sleep(0.2)
             elif MODE == 'myudp-securelink-close-after-ack':
                 s.close()
             elif MODE == 'myudp-securelink-mux-duplex':
@@ -824,7 +826,7 @@ final class PythonOverlayPeer {
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,3); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),b'python:'+plain,response),4,peer)
             else:
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),PREFIX+plain,response),counter,peer)
-            if MODE != 'myudp-securelink-close-after-ack':
+            if MODE not in ('myudp-securelink-close-after-ack', 'myudp-securelink-silent'):
                 try: s.settimeout(1); s.recvfrom(1452)
                 except OSError: pass
             s.close()
