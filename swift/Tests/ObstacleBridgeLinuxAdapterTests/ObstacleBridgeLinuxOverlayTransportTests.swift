@@ -98,6 +98,15 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
+    @Test func myudpTransportUsesSequentialRolloverAgainstPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-rollover")
+        defer { peer.stop() }
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "127.0.0.1", port: peer.port, nextDataCounter: .max)
+        defer { session.close() }
+        #expect(try session.exchange(Data("max".utf8)) == Data("python:65535:max".utf8))
+        #expect(try session.exchange(Data("wrapped".utf8)) == Data("python:1:wrapped".utf8))
+    }
+
     @Test func myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first-data")
         defer { peer.stop() }
@@ -785,6 +794,23 @@ final class PythonOverlayPeer {
             if MODE != 'myudp-securelink-close-after-ack':
                 try: s.settimeout(1); s.recvfrom(1452)
                 except OSError: pass
+            s.close()
+            """
+        }
+        if mode == "myudp-rollover" {
+            return """
+            import socket, struct
+            s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1],flush=True)
+            for response_counter,expected in enumerate((65535,1),1):
+                while True:
+                    wire,peer=s.recvfrom(1452)
+                    if wire[0]==1 and wire[19:21]==b'\\x01\\x01': break
+                stream=wire[27:]; size=int.from_bytes(stream[:4],'big'); payload=stream[4:4+size]; observed=int.from_bytes(wire[23:25],'big')
+                reply=b'python:'+str(observed).encode()+b':'+payload; record=struct.pack('!I',len(reply))+reply; counter=response_counter
+                batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',counter,len(record))+record
+                s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
+            try: s.settimeout(1); s.recvfrom(1452)
+            except OSError: pass
             s.close()
             """
         }

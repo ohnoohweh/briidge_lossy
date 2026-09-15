@@ -26,11 +26,14 @@ public enum ObstacleBridgeLinuxMyUDPError: Error, Equatable, LocalizedError {
 /// traffic, never application replies.
 public final class ObstacleBridgeLinuxMyUDPTransportSession {
     private var descriptor: Int32
-    private let peerEngine = ObstacleBridgeMyUDPPeerEngine()
+    private let peerEngine: ObstacleBridgeMyUDPPeerEngine
     private let stateLock = NSLock()
     private let receiveLock = NSLock()
 
-    public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000) throws {
+    /// `nextDataCounter` is an injectable Core seed for deterministic
+    /// rollover qualification; normal runtime construction uses `1`.
+    public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000, nextDataCounter: UInt16 = 1) throws {
+        peerEngine = .init(nextCounter: nextDataCounter)
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         hints.ai_socktype = Int32(SOCK_DGRAM.rawValue)
