@@ -3,6 +3,14 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeCryptoTests {
+    @Test func muxCompressionRoundTripsAndPreservesNoGainFrames() throws {
+        let wire = try ObstacleBridgeChannelMuxFrameCodec.encode(channelID: 7, protocolType: 1, counter: 2, messageType: 0, body: Data(repeating: 65, count: 256))
+        let protected = try ObstacleBridgeMuxCompression.protect(wire)
+        #expect(protected.compressed)
+        #expect(try ObstacleBridgeMuxCompression.unprotect(protected.wire).wire == wire)
+        let short = try ObstacleBridgeChannelMuxFrameCodec.encode(channelID: 7, protocolType: 1, counter: 3, messageType: 0, body: Data("short".utf8))
+        #expect(!(try ObstacleBridgeMuxCompression.protect(short)).compressed)
+    }
     @Test func secureLinkRetryStateUsesBoundedMonotonicBackoff() {
         var state = ObstacleBridgeSecureLinkPSKRetryState(
             policy: .init(initialBackoff: 1, maximumBackoff: 5)
