@@ -225,7 +225,12 @@ class LinuxSwiftSecureLinkPeer:
                 listener.bind(('127.0.0.1', 0))
                 if sock_type == socket.SOCK_STREAM:
                     listener.listen(1)
-                listener.settimeout(0.25 if self.keep_open else 5.0)
+                # Repeated myUDP loss deliberately delays the first protected
+                # application record beyond the ordinary reference-peer idle
+                # window. Its test-owned subprocess still bounds this case.
+                listener.settimeout(
+                    0.25 if self.keep_open else 15.0 if self.drop_myudp_application_data_count else 5.0
+                )
                 self._socket = listener
                 self.port = int(listener.getsockname()[1])
                 self._ready.set()
@@ -7350,12 +7355,7 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeat
     binary_path = _linux_swift_runner_binary()
     psk = b'linux-swift-myudp-loss-psk'
     payload = b'linux-swift-myudp-runtime-loss-recovery'
-    peer = LinuxSwiftSecureLinkPeer(
-        'myudp',
-        psk,
-        keep_open=True,
-        drop_myudp_application_data_count=2,
-    )
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, drop_myudp_application_data_count=2)
     try:
         runtime_config = {
             'runner': {'overlay_transport': 'myudp'},
