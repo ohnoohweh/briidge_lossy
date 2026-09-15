@@ -769,6 +769,7 @@ ARC-CMP-006:
     # Pins portable Core rekey cutover, cached control retransmission, and the
     # client send hold boundary.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::admittedTransportsRekeyAgainstPythonPeerAndKeepTrafficFlowing
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerCompletesPortableClientHandshake
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskRejectsWrongKeyAndUnauthenticatedApplicationTraffic
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskCounterPolicyRejectsReservedZeroAfterExhaustion

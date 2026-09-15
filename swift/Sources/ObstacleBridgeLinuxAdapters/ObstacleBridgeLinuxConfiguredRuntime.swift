@@ -91,6 +91,22 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
     }
 
+    /// Rotates the authenticated PSK generation while preserving this lower
+    /// transport epoch. The role-neutral SecureLink Core owns transcript
+    /// validation and atomic key cutover; this adapter only performs the
+    /// request/response exchanges required by its platform transport.
+    public func rekey(sessionID: UInt64, clientNonce: Data) throws {
+        guard let secureLink else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+        do {
+            let reply = try lowerSession.exchange(secureLink.beginRekey(sessionID: sessionID, clientNonce: clientNonce))
+            let commit = try secureLink.handleRekeyReply(reply)
+            try secureLink.handleRekeyDone(lowerSession.exchange(commit))
+        } catch {
+            fail(error)
+            throw error
+        }
+    }
+
     /// Used exclusively by the epoch's receive worker. Compatibility request
     /// replies are consumed here, so an older diagnostic caller cannot create
     /// a second descriptor reader beside ChannelMux dispatch.
