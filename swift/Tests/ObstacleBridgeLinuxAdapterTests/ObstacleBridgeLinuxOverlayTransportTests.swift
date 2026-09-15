@@ -259,6 +259,24 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         }
     }
 
+    @Test func tcpAndWebSocketSecureLinkRejectMalformedPythonPeerFrames() throws {
+        for (mode, transport) in [
+            ("tcp-securelink-malformed", ObstacleBridgeLinuxTransport.tcp),
+            ("ws-securelink-malformed", .ws),
+        ] {
+            try secureLinkPeerRejectsMalformedFrame(mode: mode, transport: transport)
+        }
+    }
+
+    @Test func tcpAndWebSocketSecureLinkRejectReplayedPythonPeerFrames() throws {
+        for (mode, transport) in [
+            ("tcp-securelink-replay", ObstacleBridgeLinuxTransport.tcp),
+            ("ws-securelink-replay", .ws),
+        ] {
+            try secureLinkPeerRejectsReplay(mode: mode, transport: transport)
+        }
+    }
+
     @Test func configDrivenRuntimePumpsProtectedDataAgainstPythonPeers() throws {
         for (mode, transport) in [("tcp-securelink", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink", .ws)] {
             let peer = try PythonOverlayPeer(mode: mode)
@@ -440,6 +458,35 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.receiveInbound() == Data("python-first".utf8))
         try session.sendOneWay(Data("swift-second".utf8))
         #expect(try session.receiveInbound() == Data("python:swift-second".utf8))
+    }
+
+    private func secureLinkPeerRejectsMalformedFrame(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
+        let peer = try PythonOverlayPeer(mode: mode)
+        defer { peer.stop() }
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: transport, wsPath: "/overlay")
+        let session = try lower.openSession()
+        defer { session.close() }
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: Data("linux-swift-psk".utf8))
+        let proof = try client.handleServerHello(session.exchange(try client.begin(sessionID: 88, clientNonce: Data(repeating: 8, count: 32))))
+        try client.handleServerAcknowledgement(session.exchange(proof))
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) {
+            try client.unprotect(session.receive())
+        }
+    }
+
+    private func secureLinkPeerRejectsReplay(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
+        let peer = try PythonOverlayPeer(mode: mode)
+        defer { peer.stop() }
+        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: peer.port, transport: transport, wsPath: "/overlay")
+        let session = try lower.openSession()
+        defer { session.close() }
+        let client = try ObstacleBridgeSecureLinkPSKClient(psk: Data("linux-swift-psk".utf8))
+        let proof = try client.handleServerHello(session.exchange(try client.begin(sessionID: 89, clientNonce: Data(repeating: 9, count: 32))))
+        try client.handleServerAcknowledgement(session.exchange(proof))
+        #expect(try client.unprotect(session.receive()) == Data("python-first".utf8))
+        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.replayedFrame) {
+            try client.unprotect(session.receive())
+        }
     }
 }
 
@@ -703,7 +750,11 @@ final class PythonOverlayPeer {
             material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof=read_payload(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''
             ack=header(4,sid,1); write_payload(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
-            if MODE.endswith('close-after-ack'):
+            if MODE.endswith('malformed'):
+                write_payload(header(4,sid+1,2)+bytes(16))
+            elif MODE.endswith('replay'):
+                first=header(4,sid,2); framed=first+ChaCha20Poly1305(s2c).encrypt(bytes(4)+(2).to_bytes(8,'big'),b'python-first',first); write_payload(framed); write_payload(framed)
+            elif MODE.endswith('close-after-ack'):
                 c.close(); s.close()
             elif MODE.endswith('duplex'):
                 if MODE == 'tcp-securelink-catalog-duplex':
@@ -715,7 +766,7 @@ final class PythonOverlayPeer {
                 else:
                     first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
                 first=header(4,sid,2); write_payload(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first))
-            if not MODE.endswith('close-after-ack'):
+            if not (MODE.endswith('close-after-ack') or MODE.endswith('malformed') or MODE.endswith('replay')):
                 for counter in range(2, 8):
                     app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+counter.to_bytes(8,'big'),app[20:],app[:20])
                     if MODE == 'tcp-secure-mux-echo' and len(plain) >= 8 and plain[5] == 1:

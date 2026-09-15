@@ -258,7 +258,9 @@ trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
 all shared text payload modes against a Python peer. The shared corpus also
 pins Python-compatible myUDP CONTROL bytes and malformed rejection; direct
 Core and Apple-probe tests pin the payload-derived 713-counter missing-list
-boundary. Direct Core tests also cover portable ChannelMux reply admission. The
+boundary. Linux TCP and WebSocket adapter probes additionally make independent
+Python peers send malformed and duplicate protected frames after authentication;
+both must fail closed. Direct Core tests also cover portable ChannelMux reply admission. The
 macOS build-source
 guard and generated-iOS-project patch test ensure each Apple target compiles
 the WebSocket payload, binary, full myUDP, SecureLink envelope, ChannelMux header, and TCP/WebSocket APP/PING/PONG codecs from Core rather than a

@@ -32,7 +32,9 @@ The project currently targets six platform families:
   serialization has one shared Core owner. Linux TCP/UDP service listeners
   publish kernel-assigned ephemeral ports in their Core OPEN records, and the
   SwiftPM peer-fixture lane bounds child processes for reproducible full-suite
-  qualification;
+  qualification; its TCP and WebSocket SecureLink adapters reject malformed
+  and replayed protected frames from independent Python peers after
+  authentication;
   TUN, packaging, and several listener paths remain unfinished. See [Linux
   Swift Client Design](docs/LinuxSwift_design.md) for the supported scope,
   limitations, and roadmap.

@@ -118,6 +118,10 @@ Current implementation note:
   receive operations only after peer-confirmed authentication; its private
   handshake helpers are the sole path allowed to construct or consume the
   empty proof and acknowledgement frames before that boundary
+- the Linux Swift TCP and WebSocket adapters reject malformed peer frames and
+  duplicate protected peer frames from an independent Python implementation
+  after the authenticated acknowledgement; the same negative peer coverage is
+  still required for myudp and for transport rekey/reconnect paths
 - the current runtime keeps mux payload budgeting aligned with the wrapped transport session budget for `myudp`, `tcp`, and `quic`, so SecureLink wrapping does not reduce healthy forwarded application traffic to the mux-header size alone
 - when a protected client observes a transport-epoch change during reconnect or restart recovery, it now restarts the secure-link client handshake against that fresh transport epoch instead of continuing on stale client-side handshake state
 - when a protected client is reconnecting on a fresh transport epoch, operator-visible connection state is layered rather than collapsed into a single boolean: the lower overlay transport may already be connected while SecureLink is still handshaking, so transport-connected visibility must remain true until that lower layer actually drops even when `app_ready` remains false and protected traffic is not yet eligible to flow
