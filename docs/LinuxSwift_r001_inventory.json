@@ -337,12 +337,12 @@
     {
       "requirement": "REQ-AUT-020",
       "status": "partial",
-      "gap": "Linux Swift has no compression wrapper equivalent to the Python SecureLink composition; mismatched-compression interoperability and telemetry are unimplemented.",
+      "gap": "Linux Swift has typed zlib policy admission and Core-owned mux wrapping/unwrapping, but still lacks the Apple delegation, supported peer-snapshot telemetry, and real Python-runtime enabled/disabled/mismatched-peer qualification.",
       "python_implementations": ["src/obstacle_bridge/bridge_compression.py", "src/obstacle_bridge/bridge_runner.py"],
-      "swift_implementations": [],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxRuntimeConfiguration.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift"],
       "python_tests": ["tests/unit/test_compress_layer.py::test_server_passive_wrapper_activates_peer_after_compressed_rx"],
-      "swift_tests": [],
-      "mixed_runtime_tests": []
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesBoundedMuxCompressionConfiguration", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxCompressesAndUnwrapsProtectedFramesAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::protectedUnsolicitedChannelMuxFrameReachesOneReceiveOwner"],
+      "mixed_runtime_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxCompressesAndUnwrapsProtectedFramesAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::protectedUnsolicitedChannelMuxFrameReachesOneReceiveOwner"]
     }
   ],
   "known_differences": [

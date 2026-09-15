@@ -58,6 +58,28 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.webSocketPayloadMode == "json-base64")
     }
 
+    @Test func parsesBoundedMuxCompressionConfiguration() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 4242],
+            "compress_layer": true,
+            "compress_layer_level": 99,
+            "compress_layer_min_bytes": -1,
+            "compress_layer_types": "data, open, unknown",
+        ]))
+        #expect(config.compressionPolicy.enabled)
+        #expect(config.compressionPolicy.level == 9)
+        #expect(config.compressionPolicy.minimumBodyBytes == 0)
+        #expect(config.compressionPolicy.allowedMessageTypes == [0, 1])
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedCompressionAlgorithm("Linux compress_layer_algo=brotli is unavailable")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "tcp"],
+                "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 4242],
+                "compress_layer_algo": "brotli",
+            ]))
+        }
+    }
+
     @Test func parsesSectionedMyudpConfiguration() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "myudp"],

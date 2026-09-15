@@ -359,7 +359,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             cancelReceive: { session.cancelReceive() },
             sink: { [weak self] workerEpoch, payload in
                 guard let self, self.configuredRuntime.connectionEpoch == workerEpoch,
-                      let frame = try? ObstacleBridgeChannelMuxCodec.decode(payload) else { return }
+                      let frame = try? mux.decodeInbound(payload) else { return }
                 mux.receive(frame)
             },
             onFailure: { [weak self] workerEpoch, reason in

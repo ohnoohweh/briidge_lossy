@@ -162,12 +162,13 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
     }
 
     @Test func protectedUnsolicitedChannelMuxFrameReachesOneReceiveOwner() throws {
-        for (mode, transport) in [("tcp-securelink-mux-duplex", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-mux-duplex", .ws)] {
+        for (mode, transport) in [("tcp-securelink-mux-duplex", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-mux-duplex", .ws), ("tcp-securelink-mux-compressed-duplex", .tcp)] {
             let peer = try PythonOverlayPeer(mode: mode)
             defer { peer.stop() }
             let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
                 transport: transport, host: "127.0.0.1", port: peer.port,
-                secureLinkPSK: Data("linux-swift-psk".utf8)
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                compressionPolicy: .init(enabled: mode.contains("compressed"), minimumBodyBytes: 1)
             ))
             let session = try runtime.connect(sessionID: 67, clientNonce: Data(repeating: 7, count: 32))
             defer { runtime.disconnect() }
@@ -177,7 +178,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
             mux.onUnsolicitedFrame = { frame in received = frame; delivered.signal() }
             mux.activateReceiveOwner()
             let worker = ObstacleBridgeLinuxReceiveWorker(epoch: runtime.connectionEpoch, receive: { try session.receiveInbound() }, cancelReceive: { session.cancelReceive() }) { _, wire in
-                if let frame = try? ObstacleBridgeChannelMuxCodec.decode(wire) { mux.receive(frame) }
+                if let frame = try? mux.decodeInbound(wire) { mux.receive(frame) }
             }
             worker.start()
             #expect(delivered.wait(timeout: .now() + 3) == .success)
@@ -213,6 +214,21 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         defer { runtime.disconnect() }
         let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
         let frame = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data("mux-myudp".utf8))
+        #expect(try mux.exchange(frame) == frame)
+    }
+
+    @Test func linuxChannelMuxCompressesAndUnwrapsProtectedFramesAgainstPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-mux-compressed-echo")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            compressionPolicy: .init(enabled: true, level: 3, minimumBodyBytes: 1, allowedMessageTypes: [0])
+        ))
+        let session = try runtime.connect(sessionID: 51, clientNonce: Data(repeating: 5, count: 32))
+        defer { runtime.disconnect() }
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
+        let frame = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
         #expect(try mux.exchange(frame) == frame)
     }
 
@@ -910,7 +926,7 @@ final class PythonOverlayPeer {
             """
         }
         return """
-        import base64, hashlib, hmac, socket, struct
+        import base64, hashlib, hmac, socket, struct, zlib
         from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
         MODE = "\(mode)"
         s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(1); print(s.getsockname()[1], flush=True)
@@ -982,6 +998,10 @@ final class PythonOverlayPeer {
                     body=json.dumps(rows,separators=(',',':')).encode()
                     catalog=b'RS3'+(1).to_bytes(8,'big')+(1).to_bytes(4,'big')+len(body).to_bytes(4,'big')+body
                     first_plain=b'\\0\\0\\0\\0\\0\\x04'+len(catalog).to_bytes(2,'big')+catalog
+                elif MODE == 'tcp-securelink-mux-compressed-duplex':
+                    raw=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello'
+                    compressed=zlib.compress(raw[8:], 3)
+                    first_plain=raw[:5]+b'\\x80'+len(compressed).to_bytes(2,'big')+compressed
                 else:
                     first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
                 first=header(4,sid,2); write_payload(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first))
@@ -994,7 +1014,12 @@ final class PythonOverlayPeer {
             if not (MODE.endswith('close-after-ack') or MODE.endswith('malformed') or MODE.endswith('replay') or MODE.endswith('rekey')):
                 for counter in range(2, 8):
                     app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+counter.to_bytes(8,'big'),app[20:],app[:20])
-                    if MODE == 'tcp-secure-mux-echo' and len(plain) >= 8 and plain[5] == 1:
+                    if MODE == 'tcp-securelink-mux-compressed-echo':
+                        assert len(plain) >= 8 and plain[5] == 0x80
+                        body=zlib.decompress(plain[8:])
+                        compressed=zlib.compress(body, 3)
+                        reply_plain=plain[:5]+b'\\x80'+len(compressed).to_bytes(2,'big')+compressed
+                    elif MODE == 'tcp-secure-mux-echo' and len(plain) >= 8 and plain[5] == 1:
                         reply_plain = plain[:5] + b'\\x00\\x00\\x00'
                     elif MODE == 'tcp-secure-mux-echo':
                         reply_plain = plain

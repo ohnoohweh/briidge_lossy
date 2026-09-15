@@ -8,13 +8,14 @@ public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, Loca
     case invalidValue(String)
     case unavailableTransport(String)
     case unsupportedSecureLinkMode(String)
+    case unsupportedCompressionAlgorithm(String)
     case missingPSK
     case unsupportedWebSocketTLS
     case invalidService(String)
 
     public var errorDescription: String? {
         switch self {
-        case .unreadableFile(let message), .missingValue(let message), .invalidValue(let message), .unavailableTransport(let message), .unsupportedSecureLinkMode(let message), .invalidService(let message): return message
+        case .unreadableFile(let message), .missingValue(let message), .invalidValue(let message), .unavailableTransport(let message), .unsupportedSecureLinkMode(let message), .unsupportedCompressionAlgorithm(let message), .invalidService(let message): return message
         case .malformedJSON: return "runtime config must be a JSON object"
         case .missingPSK: return "secure_link_mode=psk requires a non-empty secure_link_psk"
         case .unsupportedWebSocketTLS: return "Linux wss is unavailable until a TLS backend is qualified"
@@ -46,10 +47,13 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let webSocketPath: String
     public let webSocketPayloadMode: String
     public let secureLinkPSK: Data?
+    /// Outbound compression policy. Inbound compressed frames remain accepted
+    /// so a listener can safely interoperate with a peer-selected policy.
+    public let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", secureLinkPSK: Data? = nil, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", secureLinkPSK: Data? = nil, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -58,6 +62,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.webSocketPath = webSocketPath
         self.webSocketPayloadMode = webSocketPayloadMode
         self.secureLinkPSK = secureLinkPSK
+        self.compressionPolicy = compressionPolicy
         self.ownServices = ownServices
         self.remoteServices = remoteServices
     }
@@ -131,6 +136,18 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             psk = Data(value.utf8)
         default: throw ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedSecureLinkMode("Linux secure_link_mode=\(secureMode) is unavailable")
         }
+        let compressionAlgorithm = (string(root["compress_layer_algo"]) ?? "zlib").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard compressionAlgorithm == "zlib" else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedCompressionAlgorithm("Linux compress_layer_algo=\(compressionAlgorithm) is unavailable")
+        }
+        let compressionLevel = min(9, max(0, integer(root["compress_layer_level"]) ?? 3))
+        let compressionMinimumBytes = max(0, integer(root["compress_layer_min_bytes"]) ?? 64)
+        let compressionPolicy = ObstacleBridgeMuxCompressionPolicy(
+            enabled: boolean(root["compress_layer"]) ?? false,
+            level: compressionLevel,
+            minimumBodyBytes: compressionMinimumBytes,
+            allowedMessageTypes: compressionMessageTypes(string(root["compress_layer_types"]))
+        )
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
         return .init(
@@ -141,6 +158,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             webSocketPath: string(session["ws_path"]) ?? "/",
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
             secureLinkPSK: psk,
+            compressionPolicy: compressionPolicy,
             ownServices: try serviceSpecs(root, key: "own_servers"),
             remoteServices: try serviceSpecs(root, key: "remote_servers")
         )
@@ -149,6 +167,18 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     private static func string(_ value: Any?) -> String? { value as? String }
     private static func integer(_ value: Any?) -> Int? { value as? Int ?? (value as? NSNumber)?.intValue }
     private static func boolean(_ value: Any?) -> Bool? { value as? Bool ?? (value as? NSNumber)?.boolValue }
+
+    private static func compressionMessageTypes(_ raw: String?) -> Set<UInt8> {
+        let names: [String: UInt8] = [
+            "data": 0, "open": 1, "close": 2, "remote_services_set_v1": 3,
+            "remote_services_set_v2": 4, "data_frag": 5,
+            "remote_services_set_v2_chunk": 6, "open_chunk": 7,
+        ]
+        let parsed = Set((raw ?? "data,data_frag").split(separator: ",").compactMap {
+            names[String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()]
+        })
+        return parsed.isEmpty ? [0, 5] : parsed
+    }
 
     private static func serviceSpecs(_ root: [String: Any], key: String) throws -> [ObstacleBridgeLinuxServiceSpec] {
         let mux = root["channel_mux"] as? [String: Any]

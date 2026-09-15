@@ -14,6 +14,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     private let runtime: ObstacleBridgeLinuxConfiguredRuntime
     private let session: ObstacleBridgeLinuxConfiguredSession
     private let epoch: UInt64
+    private let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
     private let lock = NSLock()
     private let replyPolicy = ObstacleBridgeChannelMuxReplyPolicy()
     private var awaited: ObstacleBridgeChannelMuxFrame?
@@ -27,6 +28,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         self.runtime = runtime
         self.session = session
         self.epoch = runtime.connectionEpoch
+        self.compressionPolicy = runtime.configuration.compressionPolicy
         for frame in startupFrames {
             guard try exchange(frame) == frame else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
         }
@@ -45,8 +47,8 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
             replyPolicy.finishExchange()
             lock.lock(); awaited = nil; replySignal = nil; lock.unlock()
         }
-        let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
-        if !duplex { return try ObstacleBridgeChannelMuxCodec.decode(session.send(wire)) }
+        let wire = try protectedWire(for: frame)
+        if !duplex { return try decodeInbound(session.send(wire)) }
         try session.sendOneWay(wire)
         guard signal?.wait(timeout: .now() + 10) == .success else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
         lock.lock(); let value = reply; lock.unlock()
@@ -60,8 +62,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// immediate ChannelMux acknowledgement to send.
     public func sendUnsolicited(_ frame: ObstacleBridgeChannelMuxFrame) throws {
         guard runtime.connectionEpoch == epoch, runtime.status().appReady else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
-        let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
-        try session.sendOneWay(wire)
+        try session.sendOneWay(protectedWire(for: frame))
     }
 
     /// Marks this mux as driven by the one live receive owner. Once enabled,
@@ -69,6 +70,13 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// lower descriptor a second time.
     public func activateReceiveOwner() {
         replyPolicy.activateReceiveOwner()
+    }
+
+    /// The sole ChannelMux decode boundary for this epoch. Compression belongs
+    /// to Core; the Linux wrapper only places it around the transport record.
+    public func decodeInbound(_ wire: Data) throws -> ObstacleBridgeChannelMuxFrame {
+        let plain = try ObstacleBridgeMuxCompression.unprotect(wire).wire
+        return try ObstacleBridgeChannelMuxCodec.decode(plain)
     }
 
     /// Called only by the configured session's receive worker after it has
@@ -109,5 +117,10 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
             messageType: completedType,
             body: body
         )
+    }
+
+    private func protectedWire(for frame: ObstacleBridgeChannelMuxFrame) throws -> Data {
+        let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
+        return try ObstacleBridgeMuxCompression.protect(wire, policy: compressionPolicy).wire
     }
 }
