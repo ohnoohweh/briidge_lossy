@@ -15,6 +15,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeControlChunkCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPSKTranscript.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift",
