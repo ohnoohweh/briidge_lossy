@@ -19,7 +19,6 @@ APP_BUNDLE="${BUILD_DIR}/ObstacleBridge.app"
 APP_CONTENTS_DIR="${APP_BUNDLE}/Contents"
 APP_MACOS_DIR="${APP_CONTENTS_DIR}/MacOS"
 APP_RESOURCES_DIR="${APP_CONTENTS_DIR}/Resources"
-APP_LAUNCHSERVICES_DIR="${APP_CONTENTS_DIR}/Library/LaunchServices"
 APP_LAUNCHDAEMONS_DIR="${APP_CONTENTS_DIR}/Library/LaunchDaemons"
 APP_EXECUTABLE="${APP_MACOS_DIR}/ObstacleBridge"
 APP_INFO_PLIST="${APP_CONTENTS_DIR}/Info.plist"
@@ -197,7 +196,7 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
 
 echo "[build_macos_app] preparing macOS app bundle"
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${APP_MACOS_DIR}" "${APP_RESOURCES_DIR}" "${APP_LAUNCHSERVICES_DIR}" "${APP_LAUNCHDAEMONS_DIR}"
+mkdir -p "${APP_MACOS_DIR}" "${APP_RESOURCES_DIR}" "${APP_LAUNCHDAEMONS_DIR}"
 
 echo "[build_macos_app] generating macOS app icon"
 build_macos_app_icon
@@ -311,8 +310,8 @@ cp "${REPO_ROOT}/ios/build/generated/obstaclebridge-build-info.json" "${BUILD_IN
 cp "${BUILD_INFO_JSON}" "${APP_RESOURCES_DIR}/ObstacleBridge.build-info.json"
 cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
 chmod 755 "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
-cp "${HELPER_BINARY_PATH}" "${APP_LAUNCHSERVICES_DIR}/${HELPER_EXECUTABLE_NAME}"
-chmod 755 "${APP_LAUNCHSERVICES_DIR}/${HELPER_EXECUTABLE_NAME}"
+cp "${HELPER_BINARY_PATH}" "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"
+chmod 755 "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"
 
 cat > "${HELPER_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -321,13 +320,17 @@ cat > "${HELPER_PLIST}" <<EOF
 <dict>
   <key>Label</key>
   <string>${HELPER_BUNDLE_ID}</string>
+  <key>AssociatedBundleIdentifiers</key>
+  <array>
+    <string>${APP_BUNDLE_ID}</string>
+  </array>
   <key>MachServices</key>
   <dict>
     <key>${HELPER_BUNDLE_ID}.xpc</key>
     <true/>
   </dict>
   <key>BundleProgram</key>
-  <string>Contents/Library/LaunchServices/${HELPER_EXECUTABLE_NAME}</string>
+  <string>Contents/MacOS/${HELPER_EXECUTABLE_NAME}</string>
   <key>RunAtLoad</key>
   <false/>
 </dict>
@@ -335,10 +338,17 @@ cat > "${HELPER_PLIST}" <<EOF
 EOF
 
 if [ "${APP_CODESIGN_IDENTITY}" != "off" ]; then
+  # SMAppService launches this as a separate system daemon.  It needs both an
+  # explicit signature and the identifier declared by its LaunchDaemon plist.
+  # The host runner is another nested executable, and signing the outer app
+  # bundle requires it to have a valid signature first.
+  echo "[build_macos_app] codesigning macOS host runner"
+  codesign --force --sign "${APP_CODESIGN_IDENTITY}" --identifier "${APP_BUNDLE_ID}.HostRunner" --timestamp=none "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
+  echo "[build_macos_app] codesigning macOS TUN helper"
+  codesign --force --sign "${APP_CODESIGN_IDENTITY}" --identifier "${HELPER_BUNDLE_ID}" --timestamp=none "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"
   echo "[build_macos_app] codesigning app bundle"
   CODESIGN_ARGS=(
     --force
-    --deep
     --sign "${APP_CODESIGN_IDENTITY}"
     --timestamp=none
   )

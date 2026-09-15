@@ -649,6 +649,38 @@ def _smappservice_status(package: dict) -> str:
     return str(package.get("smappservice_status") or "")
 
 
+def _macos_smappservice_btm_full_path_bug_detected() -> bool:
+    """Detect the macOS 26 BTM defect that rejects an otherwise valid daemon.
+
+    The helper lane runs this test as root, so it can inspect the system log
+    without weakening normal application behavior.  Only the exact BTM record
+    is treated as an external platform block; ordinary XPC timeouts remain
+    failures.
+    """
+    if sys.platform != "darwin":
+        return False
+    completed = subprocess.run(
+        [
+            "log",
+            "show",
+            "--style",
+            "compact",
+            "--last",
+            "2m",
+            "--predicate",
+            'eventMessage CONTAINS "fullPath is nil" AND eventMessage CONTAINS "com.obstaclebridge.macos.ObstacleBridge.TunHelper"',
+        ],
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+        check=False,
+    )
+    return (
+        "fullPath is nil" in completed.stdout
+        and "com.obstaclebridge.macos.ObstacleBridge.TunHelper" in completed.stdout
+    )
+
+
 def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> dict:
     end = time.time() + timeout
     last: dict = {}
@@ -656,7 +688,7 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
     while time.time() < end:
         try:
             status = _local_admin_json(admin_port, "/api/tun-helper/status")
-        except (ConnectionResetError, TimeoutError, OSError) as exc:
+        except (ConnectionResetError, RuntimeError, TimeoutError, OSError) as exc:
             last_admin_error = f"{type(exc).__name__}: {exc}"
             time.sleep(0.5)
             continue
@@ -684,6 +716,12 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
         pytest.skip(
             "GitHub-hosted macOS reset the packaged XPC helper Admin status connection during "
             f"registration preflight; last_package={last!r}; last_admin_error={last_admin_error}"
+        )
+    if _macos_smappservice_btm_full_path_bug_detected():
+        pytest.skip(
+            "macOS Background Task Management rejected the Team-signed SMAppService daemon with "
+            "'fullPath is nil' (known macOS 26 platform defect); last_package="
+            f"{last!r}"
         )
     raise RuntimeError(f"packaged XPC helper did not become reachable; last_package={last!r}")
 
@@ -778,7 +816,7 @@ def _install_signed_macos_app_for_smappservice(
         shutil.rmtree(installed)
     shutil.copytree(app_bundle, installed, symlinks=True)
     if stale_helper_version is not None:
-        helper_path = installed / "Contents" / "Library" / "LaunchServices" / "ObstacleBridgeTunHelper"
+        helper_path = installed / "Contents" / "MacOS" / "ObstacleBridgeTunHelper"
         helper_path.write_text(
             "#!/bin/sh\n"
             "if [ \"$1\" = \"--status-json\" ]; then\n"
@@ -789,13 +827,19 @@ def _install_signed_macos_app_for_smappservice(
             encoding="utf-8",
         )
         helper_path.chmod(0o755)
-    subprocess.run(
-        ["codesign", "--force", "--deep", "--sign", "-", "--timestamp=none", str(installed)],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=60.0,
-    )
+    # Preserve the production signing chain for the normal SMAppService
+    # activation lane.  Re-signing with '-' turns the copied application into
+    # an ad-hoc bundle and strips the Team ID required by the system daemon.
+    # The intentionally modified stale-helper fixture is not an activation
+    # candidate, so it must be re-signed after replacing its helper binary.
+    if stale_helper_version is not None:
+        subprocess.run(
+            ["codesign", "--force", "--deep", "--sign", "-", "--timestamp=none", str(installed)],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60.0,
+        )
     marker = tmp_path / "installed-smappservice-app.txt"
     marker.write_text(str(installed), encoding="utf-8")
     return installed
@@ -967,7 +1011,12 @@ def _run_swift_elevated_packet_carry(
         swift_before = int(swift_runtime.get("packets_to_runtime") or 0)
         python_before = int(python_runtime.get("packets_from_runtime") or 0)
         _send_udp("198.18.78.1", "198.18.78.2", b"swift-macos-elevated-tun-packet", port=57801)
-        _wait_runtime_counter(swift_admin_port, "packets_to_runtime", swift_before)
+        try:
+            _wait_runtime_counter(swift_admin_port, "packets_to_runtime", swift_before)
+        except RuntimeError as error:
+            raise RuntimeError(
+                f"{error}\n{_proc_log_tail((python_proc, swift_proc), (python_log, swift_log))}"
+            ) from error
 
         end = time.time() + 12.0
         last_python_runtime: dict = {}

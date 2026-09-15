@@ -7,6 +7,7 @@ enum ObstacleBridgeMacOSTunAdapterError: Error, LocalizedError {
     case unsupportedPlatform
     case controlLookupFailed
     case connectFailed(Int32)
+    case nonBlockingConfigurationFailed(Int32)
     case invalidPacketVersion(Int)
     case writeFailed(Int32)
 
@@ -18,6 +19,8 @@ enum ObstacleBridgeMacOSTunAdapterError: Error, LocalizedError {
             return "Unable to resolve com.apple.net.utun_control"
         case .connectFailed(let code):
             return "Unable to connect utun control socket errno=\(code)"
+        case .nonBlockingConfigurationFailed(let code):
+            return "Unable to configure utun socket for non-blocking reads errno=\(code)"
         case .invalidPacketVersion(let version):
             return "Unsupported IP version for utun packet: \(version)"
         case .writeFailed(let code):
@@ -103,7 +106,7 @@ final class ObstacleBridgeMacOSTunAdapter {
             let controlID = try Self.lookupControlID(fd: socketFD)
             try Self.connectUTUN(fd: socketFD, controlID: controlID)
             actualIfname = Self.queryIfname(fd: socketFD, fallback: requestedIfname)
-            _ = Darwin.fcntl(socketFD, F_SETFL, O_NONBLOCK)
+            try Self.configureNonBlockingRead(fd: socketFD)
             try Self.configureInterface(ifname: actualIfname, mtu: mtu)
             fd = socketFD
             let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
@@ -185,6 +188,18 @@ final class ObstacleBridgeMacOSTunAdapter {
         }
 #endif
     }
+
+#if os(macOS)
+    private static func configureNonBlockingRead(fd: Int32) throws {
+        let flags = Darwin.fcntl(fd, F_GETFL)
+        guard flags >= 0 else {
+            throw ObstacleBridgeMacOSTunAdapterError.nonBlockingConfigurationFailed(errno)
+        }
+        guard Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw ObstacleBridgeMacOSTunAdapterError.nonBlockingConfigurationFailed(errno)
+        }
+    }
+#endif
 
     static func packet(fromUTUNFrame frame: Data) -> Data? {
         guard frame.count >= 4 else { return nil }

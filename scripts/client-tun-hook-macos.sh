@@ -642,7 +642,16 @@ add_included_routes_v4() {
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     route -n add -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || \
-      route -n change -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || true
+      route -n change -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+        # A previous interrupted elevated run can leave an incompatible route
+        # entry.  Replace that owned included route once; do not silently
+        # report a successful network apply when no route reaches the utun.
+        route -n delete -net "$route_spec" >/dev/null 2>&1 || true
+        route -n add -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+          log "failed to install included IPv4 route=${route_spec} interface=${IFNAME}"
+          return 1
+        }
+      }
     printf '%s\n' "$route_spec" >> "$STATE_ROUTES4"
   done < <(expand_included_routes_v4)
 }
@@ -652,7 +661,13 @@ add_included_routes_v6() {
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     route -n add -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || \
-      route -n change -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || true
+      route -n change -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+        route -n delete -inet6 "$route_spec" >/dev/null 2>&1 || true
+        route -n add -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+          log "failed to install included IPv6 route=${route_spec} interface=${IFNAME}"
+          return 1
+        }
+      }
     printf '%s\n' "$route_spec" >> "$STATE_ROUTES6"
   done < <(expand_included_routes_v6)
 }

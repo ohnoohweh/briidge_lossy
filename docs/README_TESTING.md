@@ -367,6 +367,20 @@ For the local elevated TUN slices, use:
 ./scripts/run_macos_swift_elevated_tests.sh
 ```
 
+When a prior invocation has already built the same Swift artifact, rerun a
+single elevated macOS Swift node without rebuilding it:
+
+```bash
+./scripts/run_macos_swift_elevated_tests.sh --reuse-macos-build \
+  tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
+```
+
+For an approved elevated session, `--diagnose-macos-tun-helper` prints the
+system launchd record and recent helper diagnostics without starting a test.
+Use `--codesign-identity "Apple Development: Name (TEAMID)"` before the test
+node when qualifying the packaged `SMAppService` daemon; ad-hoc signatures do
+not provide a Team ID for that system service.
+
 ```powershell
 $env:WINTUN_DIR="C:\path\to\wintun\bin\amd64"
 python -m pytest tests/integration/test_windows_elevated.py -m "windows_elevated" -rs -q
@@ -385,6 +399,7 @@ Notes for those commands:
 - Darwin helper snapshots retain a bounded lifecycle-hook history; elevated tests assert required hook execution from that history because a shared helper can perform more than one TUN lifecycle operation before status is polled
 - Darwin packet-carry probes derive each `utun` source address from the local `ifconfig` endpoint, rather than matching either side of the point-to-point address display
 - the macOS Swift elevated slice requires macOS, `swiftc`, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it builds the macOS app bundle, launches `ObstacleBridgeHostRunner` from inside the app bundle so the bundled Darwin hook scripts are used, pairs it with a Python `darwin-native` helper peer, verifies real Swift-owned `utun` creation plus packet-counter movement, verifies live route/DNS hook apply/remove effects plus Swift Admin TUN config/peer/global verification parity with Linux/Python, exercises the packaged XPC helper path when macOS reports `SMAppService` approval/reachability for the bundled helper, and runs Admin helper activation, unregister/re-register, and stale-version repair actions from a locally signed app installed under `/Applications`. The wrapper grants 300 seconds per test: this includes the separately enforced 180-second cold-build qualification plus live elevated execution, and avoids killing a valid build at the former 120-second outer pytest deadline.
+- the Darwin client hook retries a stale conflicting included IPv4/IPv6 route by replacing it once, then fails the apply operation with an explicit diagnostic if the route still cannot be installed; it never silently records a missing route as applied
 - the GitHub integration gate runs each Python macOS elevated case in its own `macos-latest` job; each job verifies passwordless `sudo` first because hosted CI cannot answer an interactive password prompt, preserves the GitHub Actions marker through sudo, and treats hosted-runner refusal of privileged Darwin route/address/ping/helper-approval side effects as diagnostic while still requiring the Admin status payload to report the attempted TUN interface and verification state when the runner exposes the `utun` row; if hosted macOS leaves the inline TUN list empty after privileged setup, the job confirms the Admin diagnostics endpoint is responsive and skips that environment-only assertion. Independent job names identify the affected case even if the hosted runner loses its log connection.
 - the GitHub integration gate runs the focused macOS Swift elevated matrix when Swift-relevant files changed. The complete app-process/XPC slice is workflow-dispatch qualification because its approval and shutdown waits are not useful routine PR feedback; it retains the same passwordless `sudo` preflight and the same distinction between real-machine route/DNS/ping proof and hosted-runner diagnostic verification. Packaged XPC assertions are skipped only when hosted macOS leaves the helper `not_registered` with `helper service is not enabled`, or resets the Admin status connection, after registration preflight
 - the Windows slice requires a usable WinTun installation and `WINTUN_DIR` pointing at the directory that contains the matching-architecture `wintun.dll`; the normal runtime now self-relaunches through a UAC prompt for local TUN sessions, but the elevated integration slice still needs to run under an Administrator token so pytest can create adapters directly

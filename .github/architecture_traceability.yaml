@@ -233,6 +233,7 @@ ARC-CMP-003:
     - tests/unit/test_tun_hook_scripts.py::test_auto_overlay_peer_excluded_routes_uses_ws_address_override_without_dns
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_brings_interface_up_before_underlay_route_is_known
     - tests/unit/test_tun_hook_scripts.py::test_client_tun_hook_normalizes_ipv4_mapped_ipv6_peer_for_route_programming
+    - tests/unit/test_tun_hook_scripts.py::test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_server_tun_stop_skips_on_stopped_hook_when_device_is_retained
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
@@ -375,6 +376,9 @@ ARC-CMP-004:
   # GitHub-hosted macOS cannot grant the Swift host runner permission for real
   # utun packet injection, so that packet-carry case remains a local-authorized
   # integration assertion and skips in the hosted lane.
+  # A macOS 26 packaged-XPC test skips only for the exact BTM helper-specific
+  # `fullPath is nil` rejection; other helper reachability timeouts remain
+  # architecture-contract failures.
   # myUDP connection readiness requires completed application-payload progress,
   # not merely UDP control traffic: raw-only listener peers are reaped and
   # Swift client recovery publishes its retry deadline before socket rebuild.

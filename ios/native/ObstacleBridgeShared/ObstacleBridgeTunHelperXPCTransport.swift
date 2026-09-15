@@ -27,7 +27,7 @@ enum ObstacleBridgeTunHelperXPC {
         machServiceName: String = ObstacleBridgeMacOSTunHelperService.xpcMachServiceName,
         timeout: TimeInterval = 0.25
     ) -> [String: Any] {
-        let connection = NSXPCConnection(machServiceName: machServiceName, options: [])
+        let connection = NSXPCConnection(machServiceName: machServiceName, options: [.privileged])
         connection.remoteObjectInterface = interface()
         defer {
             connection.invalidate()
@@ -78,7 +78,7 @@ final class ObstacleBridgeNSXPCTunHelperCommandTransport: ObstacleBridgeTunHelpe
         packetSink: ((Data) -> Void)? = nil,
         eventSink: ((String, [String: Any]) -> Void)? = nil
     ) {
-        self.connection = NSXPCConnection(machServiceName: machServiceName, options: [])
+        self.connection = NSXPCConnection(machServiceName: machServiceName, options: [.privileged])
         self.connection.remoteObjectInterface = ObstacleBridgeTunHelperXPC.interface()
         if packetSink != nil || eventSink != nil {
             let handler = ObstacleBridgeTunHelperXPCClientCallbackHandler(

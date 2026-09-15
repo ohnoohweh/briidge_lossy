@@ -142,6 +142,7 @@ final class ObstacleBridgeHostRunner {
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
+    private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
     private var bootstrapState: [String: Any] = [:]
@@ -171,6 +172,7 @@ final class ObstacleBridgeHostRunner {
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
     private var macOSTunHelperRuntimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
     private var macOSTunHelperTransportKind = "none"
+    private var cachedMacOSTunHelperPackage: [String: Any] = [:]
     private var macOSTunChannelConnectedHookFired = false
     private var macOSOverlayUnderlayGatewayV4 = ""
     private var macOSOverlayUnderlayInterfaceV4 = ""
@@ -1540,10 +1542,21 @@ final class ObstacleBridgeHostRunner {
         )
     }
 
-    private func macOSTunHelperStatusSnapshot() -> [String: Any] {
+    private func macOSTunHelperStatusSnapshot(refreshPackage: Bool = false) -> [String: Any] {
         let configured = ownServerSpecs.contains { $0.listenProtocol == "tun" && $0.targetProtocol == "tun" }
 #if os(macOS)
-        let package = ObstacleBridgeMacOSTunHelperService.statusSnapshot()
+        let package: [String: Any]
+        if refreshPackage {
+            let refreshed = ObstacleBridgeMacOSTunHelperService.statusSnapshot()
+            macOSTunHelperPackageQueue.sync {
+                cachedMacOSTunHelperPackage = refreshed
+            }
+            package = refreshed
+        } else {
+            package = macOSTunHelperPackageQueue.sync {
+                cachedMacOSTunHelperPackage
+            }
+        }
 #else
         let package: [String: Any] = [
             "install_supported": false,
@@ -3404,12 +3417,13 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func deliverLocalTunPacketToActiveOverlay(_ packet: Data) {
-        if let client = macOSTunHelperClient {
-            if client.transportKind == "xpc" {
-                macOSTunHelperRuntimeSnapshot.recordPacketToRuntime()
-            } else {
-                macOSTunHelperRuntimeSnapshot = client.runtimeSnapshot
-            }
+        if macOSTunHelperClient != nil {
+            // Packet callbacks arrive independently of request/reply helper
+            // commands.  A loopback client therefore has no later command
+            // response from which to refresh its mirrored snapshot.  Keep the
+            // host-owned counter authoritative for both XPC and loopback
+            // transports before forwarding the packet to the overlay.
+            macOSTunHelperRuntimeSnapshot.recordPacketToRuntime()
         }
         currentOverlayOwner()?.owner.sendLocalTunPacket(packet)
     }
@@ -3703,7 +3717,7 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
         }
         return ObstacleBridgeAdminAPI.jsonResponse([
             "ok": true,
-            "tun_helper": macOSTunHelperStatusSnapshot(),
+            "tun_helper": macOSTunHelperStatusSnapshot(refreshPackage: true),
         ])
     }
 
@@ -3766,6 +3780,11 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
                     "open_approval_settings",
                 ],
             ], statusLine: "HTTP/1.1 400 Bad Request")
+        }
+        if let package = result["status"] as? [String: Any] {
+            macOSTunHelperPackageQueue.sync {
+                cachedMacOSTunHelperPackage = package
+            }
         }
         result["tun_helper"] = macOSTunHelperStatusSnapshot()
         return ObstacleBridgeAdminAPI.jsonResponse(result)

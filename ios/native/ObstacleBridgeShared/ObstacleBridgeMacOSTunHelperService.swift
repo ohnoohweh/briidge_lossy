@@ -11,12 +11,15 @@ enum ObstacleBridgeMacOSTunHelperService {
     static let expectedHelperVersion = "1"
     static let helperLaunchDaemonPlistName = "\(helperBundleIdentifier).plist"
     static let xpcMachServiceName = "\(helperBundleIdentifier).xpc"
-    static let helperLaunchServicesRelativePath = "Contents/Library/LaunchServices/\(helperExecutableName)"
+    // SMAppService daemon helpers are executable programs within the app's
+    // MacOS directory.  LaunchServices is not a valid BundleProgram location
+    // for a system daemon and launchd rejects that package with EX_CONFIG.
+    static let helperExecutableRelativePath = "Contents/MacOS/\(helperExecutableName)"
     static let helperLaunchDaemonRelativePath = "Contents/Library/LaunchDaemons/\(helperLaunchDaemonPlistName)"
 
     static func statusSnapshot(appBundleURL explicitAppBundleURL: URL? = nil) -> [String: Any] {
         let appBundleURL = explicitAppBundleURL ?? detectedAppBundleURL()
-        let helperURL = appBundleURL?.appendingPathComponent(helperLaunchServicesRelativePath)
+        let helperURL = appBundleURL?.appendingPathComponent(helperExecutableRelativePath)
         let launchDaemonPlistURL = appBundleURL?.appendingPathComponent(helperLaunchDaemonRelativePath)
         let helperPresent = helperURL.map { FileManager.default.isExecutableFile(atPath: $0.path) } ?? false
         let plistPresent = launchDaemonPlistURL.map { FileManager.default.fileExists(atPath: $0.path) } ?? false
@@ -270,11 +273,22 @@ enum ObstacleBridgeMacOSTunHelperService {
         process.standardError = errorPipe
         do {
             try process.run()
-            process.waitUntilExit()
         } catch {
             return [
                 "ok": false,
                 "error": error.localizedDescription,
+            ]
+        }
+        let deadline = Date().addingTimeInterval(1.0)
+        while process.isRunning && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        if process.isRunning {
+            process.terminate()
+            process.waitUntilExit()
+            return [
+                "ok": false,
+                "error": "bundled helper status check timed out",
             ]
         }
         let output = outputPipe.fileHandleForReading.readDataToEndOfFile()

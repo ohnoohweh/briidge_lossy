@@ -846,7 +846,9 @@ REQ-LIFE-010:
   # sever the Actions control connection, while remaining required on an
   # authorized local host; the Swift packaged-XPC case may leave the helper
   # service disabled after privileged setup but the Admin diagnostics endpoint
-  # remains responsive.
+  # remains responsive. On macOS 26, an installed Team-signed packaged-XPC
+  # lane skips only after BTM emits the exact helper-specific `fullPath is nil`
+  # rejection; every other reachability timeout is a failure.
   # The elevated wrapper emits unbuffered per-test progress and exit route,
   # interface, and process diagnostics so a hosted interruption identifies its
   # last active case. The hosted Python matrix runs every elevated case in an
@@ -877,6 +879,7 @@ REQ-LIFE-010:
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_reports_helper_death_warning
     - tests/integration/test_windows_elevated.py::test_overlay_e2e_windows_elevated_tun_helper_native_repairs_stale_network_state
   unit_tests:
+    - tests/unit/test_tun_hook_scripts.py::test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_from_sectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_explicit_config_path_for_embedders
