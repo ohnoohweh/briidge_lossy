@@ -345,6 +345,8 @@ REQ-AUT-006:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskServerExpiresPendingRekeyWithoutRenewingRetransmitDeadline
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectMalformedPythonPeerFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectReplayedPythonPeerFrames
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkRejectsMalformedPythonPeerFrames
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkRejectsReplayedPythonPeerFrames
 
 REQ-AUT-007:
   integration_tests:

@@ -296,12 +296,12 @@
     {
       "requirement": "REQ-AUT-007",
       "status": "partial",
-      "gap": "Core rejects malformed/replayed frames and bounds both handshake roles, but independent-Python malformed/replay and fresh-epoch probes are not yet available on all Linux Swift transports.",
+      "gap": "Core and independent Python peers reject malformed/replayed frames on TCP, WebSocket, and myUDP, but reconnect/fresh-epoch rejection remains unproved at every admitted Linux Swift transport boundary.",
       "python_implementations": ["src/obstacle_bridge/bridge_securelink.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift"],
       "python_tests": ["tests/unit/test_secure_link_psk.py::test_malformed_frame_after_authentication_fails_closed"],
       "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords"],
-      "mixed_runtime_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectMalformedPythonPeerFrames", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectReplayedPythonPeerFrames"]
+      "mixed_runtime_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectMalformedPythonPeerFrames", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectReplayedPythonPeerFrames", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkRejectsMalformedPythonPeerFrames", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkRejectsReplayedPythonPeerFrames"]
     },
     {
       "requirement": "REQ-AUT-008",

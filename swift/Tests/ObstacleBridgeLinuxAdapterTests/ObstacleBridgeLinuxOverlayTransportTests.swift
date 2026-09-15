@@ -277,6 +277,14 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         }
     }
 
+    @Test func myudpSecureLinkRejectsMalformedPythonPeerFrames() throws {
+        try secureLinkPeerRejectsMalformedFrame(mode: "myudp-securelink-malformed", transport: .myudp)
+    }
+
+    @Test func myudpSecureLinkRejectsReplayedPythonPeerFrames() throws {
+        try secureLinkPeerRejectsReplay(mode: "myudp-securelink-replay", transport: .myudp)
+    }
+
     @Test func configDrivenRuntimePumpsProtectedDataAgainstPythonPeers() throws {
         for (mode, transport) in [("tcp-securelink", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink", .ws)] {
             let peer = try PythonOverlayPeer(mode: mode)
@@ -618,7 +626,7 @@ final class PythonOverlayPeer {
             _,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.close()
             """
         }
-        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" {
+        if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" {
             return """
             import hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
@@ -643,7 +651,14 @@ final class PythonOverlayPeer {
             proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); send(header(2,sid,0)+sn+b'\\x01'+proof,counter,peer)
             salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
             client_proof,counter,peer=recv(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); send(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack),counter,peer)
-            if MODE == 'myudp-securelink-close-after-ack':
+            if MODE == 'myudp-securelink-malformed':
+                send(header(4,sid+1,2)+bytes(16),counter+1,peer)
+            elif MODE == 'myudp-securelink-replay':
+                first=header(4,sid,2); framed=first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python-first',first); send(framed,counter+1,peer)
+                try: s.settimeout(1); s.recvfrom(1452)
+                except OSError: pass
+                send(framed,counter+2,peer)
+            elif MODE == 'myudp-securelink-close-after-ack':
                 s.close()
             elif MODE == 'myudp-securelink-mux-duplex':
                 first=header(4,sid,2); send(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello',first),3,peer)
