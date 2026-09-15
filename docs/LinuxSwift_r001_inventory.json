@@ -286,12 +286,12 @@
     {
       "requirement": "REQ-AUT-006",
       "status": "partial",
-      "gap": "Core and independent Python peers prove live rekey and fresh reauthentication on TCP/WebSocket, while myUDP reconnect plus stale-frame rejection remain unproved at the adapter boundary.",
+      "gap": "Core and independent Python peers prove live rekey and fresh reauthentication on TCP, WebSocket, and myUDP; stale protected-frame rejection after reconnect remains unproved at every adapter boundary.",
       "python_implementations": ["src/obstacle_bridge/bridge_securelink.py", "src/obstacle_bridge/bridge_runner.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
       "python_tests": ["tests/unit/test_secure_link_psk.py::test_psk_rekey_rotates_session_id_and_keeps_data_flowing"],
       "swift_tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters"],
-      "mixed_runtime_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::admittedTransportsRekeyAgainstPythonPeerAndKeepTrafficFlowing", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReconnectsWithFreshPythonPeerSession", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReconnectsWithFreshPythonPeerSession"]
+      "mixed_runtime_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::admittedTransportsRekeyAgainstPythonPeerAndKeepTrafficFlowing", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReconnectsWithFreshPythonPeerSession", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReconnectsWithFreshPythonPeerSession", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkReconnectsWithFreshPythonPeerSession"]
     },
     {
       "requirement": "REQ-AUT-007",

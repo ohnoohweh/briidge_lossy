@@ -303,6 +303,10 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         try secureLinkSessionReconnects(mode: "ws-securelink-reconnect", transport: .ws)
     }
 
+    @Test func myudpSecureLinkReconnectsWithFreshPythonPeerSession() throws {
+        try secureLinkSessionReconnects(mode: "myudp-securelink-reconnect", transport: .myudp)
+    }
+
     private func secureLinkSessionReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
@@ -671,6 +675,34 @@ final class PythonOverlayPeer {
             import socket
             s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             _,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.close()
+            """
+        }
+        if mode == "myudp-securelink-reconnect" {
+            return """
+            import hashlib, hmac, socket, struct
+            from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
+            def recv():
+                while True:
+                    wire,peer=s.recvfrom(1452)
+                    if not (wire[0]==1 and wire[19:21]==b'\\x01\\x01'): continue
+                    stream=wire[27:]; size=int.from_bytes(stream[:4],'big'); assert len(stream)==4+size
+                    return stream[4:],int.from_bytes(wire[23:25],'big'),peer
+            def send(payload,counter,peer):
+                record=struct.pack('!I',len(payload))+payload; batch=b'\\x01\\x01'+struct.pack('!H',4+len(record))+struct.pack('!HH',counter,len(record))+record
+                s.sendto(b'\\x01'+struct.pack('!HQQ',len(batch),0,0)+batch,peer)
+            def header(t,sid,counter): return bytes([1,t,0,0])+sid.to_bytes(8,'big')+counter.to_bytes(8,'big')
+            def expand(prk,info,length):
+                out=b''; prior=b''
+                for i in range(1,(length+31)//32+1): prior=hmac.new(prk,prior+info+bytes([i]),hashlib.sha256).digest(); out+=prior
+                return out[:length]
+            for _ in range(2):
+                hello,counter,peer=recv(); sid=int.from_bytes(hello[4:12],'big'); cn=hello[20:52]; sn=bytes(range(32)); psk=b'linux-swift-psk'
+                proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); send(header(2,sid,0)+sn+b'\\x01'+proof,counter,peer)
+                salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
+                client_proof,counter,peer=recv(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); send(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack),counter,peer)
+                app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response),counter,peer)
+            s.close()
             """
         }
         if mode == "myudp-securelink" || mode == "myudp-secure-mux" || mode == "myudp-securelink-duplex" || mode == "myudp-securelink-mux-duplex" || mode == "myudp-securelink-close-after-ack" || mode == "myudp-securelink-malformed" || mode == "myudp-securelink-replay" || mode == "myudp-securelink-rekey" {
