@@ -408,11 +408,18 @@ class LinuxSwiftSecureLinkPeer:
                 drop_next_application_data = self.drop_myudp_application_data_count
 
         self._secure_link_transaction(receive, send)
+        if self._closing.is_set():
+            return
         # Keep the UDP endpoint alive long enough for a loaded Linux runner to
         # drain every response and return its CONTROL/IDLE effects. Closing
         # immediately after an ordinary reply races the client's receive and
         # can surface as an ICMP port-unreachable instead of that reply.
-        listener.settimeout(0.1)
+        try:
+            listener.settimeout(0.1)
+        except OSError:
+            if self._closing.is_set():
+                return
+            raise
         # A connected UDP sender receives ECONNREFUSED if the peer disappears
         # before it drains the reply and emits its Core CONTROL/IDLE effect.
         # A real client owns the test reference peer's lifetime through

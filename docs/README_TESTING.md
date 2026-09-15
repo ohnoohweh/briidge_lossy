@@ -115,7 +115,7 @@ Representative anchors for those areas:
 - The same runtime boundary projects Core session/counter, pending-rekey, and send-hold values directly, retaining only the failed session identifier required after Core clears a failed peer
 - The Objective-C Apple crypto selector bridge is source-guarded as a Core-only facade, while Core vector tests cover its shared HKDF, PBKDF2, AEAD, Ed25519, and X25519 backend including Core-owned private-key generation
 - Packet-tunnel provider probes are marked `slow`: they construct complete host runtimes and may wait for network-runtime shutdown. Routine Swift/Core validation uses `pytest -q -m "not slow" ios/tests`; run `pytest -q -m slow ios/tests/test_ios_packet_tunnel_provider_probe.py` explicitly when changing packet-tunnel behavior
-- Linux myUDP SecureLink reference peers retain a completed reply until the post-reply Core CONTROL/IDLE acknowledgement, avoiding UDP connection refusal under parallel qualification
+- Linux myUDP SecureLink reference peers retain a completed reply until the post-reply Core CONTROL/IDLE acknowledgement, avoiding UDP connection refusal under parallel qualification; owner-requested socket closure during that drain is normal teardown rather than a false `Bad file descriptor` failure
 - Host-side raw-source probes reuse the existing SwiftPM Core/Crypto module build, so the routine pytest suite does not repeat the Core package build that its CI job already performed
 - The raw ChannelMux parity compile includes the Core SecureLink transcript; its CI lanes use verbose test names, bounded pytest timeouts, and 15-minute job limits so an idle compiler or probe reports the owning test instead of silently consuming the default Actions allowance
 - SecureLink runtime raw-probe compilation has its own 120-second subprocess timeout in addition to the CI suite watchdog
@@ -158,7 +158,7 @@ Use these when you want a product-specific view instead of the blended shared re
 
 ```bash
 pytest -q tests/unit
-pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
 pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
 
@@ -345,9 +345,13 @@ pytest -q -n 16 tests/integration/test_overlay_e2e.py
 For CI-aligned OS splitting, use:
 
 ```bash
-pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
 pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
+
+The full non-Windows overlay lifecycle matrix remains an explicit manual
+qualification command: `pytest -vv --timeout=90 -n 4
+tests/integration/test_overlay_e2e.py -m "not windows_only"`.
 
 For the local elevated TUN slices, use:
 
@@ -382,7 +386,7 @@ Notes for those commands:
 - Darwin packet-carry probes derive each `utun` source address from the local `ifconfig` endpoint, rather than matching either side of the point-to-point address display
 - the macOS Swift elevated slice requires macOS, `swiftc`, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it builds the macOS app bundle, launches `ObstacleBridgeHostRunner` from inside the app bundle so the bundled Darwin hook scripts are used, pairs it with a Python `darwin-native` helper peer, verifies real Swift-owned `utun` creation plus packet-counter movement, verifies live route/DNS hook apply/remove effects plus Swift Admin TUN config/peer/global verification parity with Linux/Python, exercises the packaged XPC helper path when macOS reports `SMAppService` approval/reachability for the bundled helper, and runs Admin helper activation, unregister/re-register, and stale-version repair actions from a locally signed app installed under `/Applications`
 - the GitHub integration gate runs each Python macOS elevated case in its own `macos-latest` job; each job verifies passwordless `sudo` first because hosted CI cannot answer an interactive password prompt, preserves the GitHub Actions marker through sudo, and treats hosted-runner refusal of privileged Darwin route/address/ping/helper-approval side effects as diagnostic while still requiring the Admin status payload to report the attempted TUN interface and verification state when the runner exposes the `utun` row; if hosted macOS leaves the inline TUN list empty after privileged setup, the job confirms the Admin diagnostics endpoint is responsive and skips that environment-only assertion. Independent job names identify the affected case even if the hosted runner loses its log connection.
-- the GitHub integration gate also runs the macOS Swift elevated slice when Swift-relevant files changed, with the same passwordless `sudo` preflight and the same distinction between real-machine route/DNS/ping proof and hosted-runner diagnostic verification; packaged XPC assertions are skipped only when hosted macOS leaves the helper `not_registered` with `helper service is not enabled`, or resets the Admin status connection, after registration preflight
+- the GitHub integration gate runs the focused macOS Swift elevated matrix when Swift-relevant files changed. The complete app-process/XPC slice is workflow-dispatch qualification because its approval and shutdown waits are not useful routine PR feedback; it retains the same passwordless `sudo` preflight and the same distinction between real-machine route/DNS/ping proof and hosted-runner diagnostic verification. Packaged XPC assertions are skipped only when hosted macOS leaves the helper `not_registered` with `helper service is not enabled`, or resets the Admin status connection, after registration preflight
 - the Windows slice requires a usable WinTun installation and `WINTUN_DIR` pointing at the directory that contains the matching-architecture `wintun.dll`; the normal runtime now self-relaunches through a UAC prompt for local TUN sessions, but the elevated integration slice still needs to run under an Administrator token so pytest can create adapters directly
 
 ## Test patterns

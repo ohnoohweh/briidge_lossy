@@ -116,9 +116,39 @@ jobs:
       - name: Build Linux Swift runner once
         run: ./scripts/build_linux_app.sh
 
-      - name: Run Linux shared integration suite
+      - name: Run Linux Swift integration subset
         # These tests own multiple peers and network processes. Four workers
         # keep their lifecycle deadlines reliable on hosted Linux runners.
+        # The full Python-overlay lifecycle matrix is manual qualification;
+        # routine PR validation covers the Linux Swift product boundary.
+        run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
+
+  bridge-py-integration-linux-full:
+    name: Integration Gate (Linux full overlay qualification)
+    timeout-minutes: 30
+    needs: detect-bridge-change
+    if: github.event_name == 'workflow_dispatch' && needs.detect-bridge-change.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Build Linux Swift runner once
+        run: ./scripts/build_linux_app.sh
+
+      - name: Run full Linux overlay qualification suite
         run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only"
 
   bridge-py-integration-windows:
@@ -304,7 +334,10 @@ jobs:
     needs:
       - detect-bridge-change
       - bridge-py-integration-macos-swift-probe
-    if: needs.detect-bridge-change.outputs.swift_changed == 'true' && needs.detect-bridge-change.outputs.macos_tun_changed == 'true'
+    # The independently scheduled elevated matrix supplies routine coverage.
+    # This app-process/XPC suite waits on approval and shutdown boundaries, so
+    # it is explicit qualification rather than a redundant PR timeout source.
+    if: github.event_name == 'workflow_dispatch' && needs.detect-bridge-change.outputs.swift_changed == 'true' && needs.detect-bridge-change.outputs.macos_tun_changed == 'true'
     runs-on: macos-latest
     steps:
       - name: Check out repository
