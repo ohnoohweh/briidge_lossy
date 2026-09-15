@@ -1514,10 +1514,23 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
     def _expected_tun_runtime_addresses(
         self,
         spec: Optional["ChannelMux.ServiceSpec"],
+        *,
+        svc_key: Optional["ChannelMux.ServiceKey"] = None,
     ) -> tuple[str, str]:
         if spec is None or str(getattr(spec, "l_proto", "") or "") != "tun":
             return "", ""
         config = self._tun_routing_config()
+        # A peer-installed service is a server-side listener.  Its Darwin
+        # hook deliberately assigns the configured gateway (the far endpoint)
+        # to the local utun interface.  Checking it against tunnel_address
+        # reports a false critical health failure and makes the admin status
+        # choose the wrong interface during paired elevated runs.
+        if isinstance(svc_key, tuple) and str(svc_key[0]) == "peer":
+            remote_env = config.remote_hook_env()
+            return (
+                str(remote_env.get("TUN_ADDR") or "").split("/", 1)[0].strip(),
+                str(remote_env.get("TUN_ADDR6") or "").split("/", 1)[0].strip(),
+            )
         return (
             str(getattr(config, "tunnel_address", "") or "").strip(),
             str(getattr(config, "tunnel_address6", "") or "").strip(),
@@ -1595,7 +1608,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             return
         svc_key = getattr(dev, "service_key", None)
         spec = self._svc_spec_or_none(int(svc_key[2]), svc_key=svc_key) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
-        expected4, expected6 = self._expected_tun_runtime_addresses(spec)
+        expected4, expected6 = self._expected_tun_runtime_addresses(spec, svc_key=svc_key)
         if not expected4 and not expected6:
             self._clear_tun_runtime_health(svc_key)
             return
@@ -1622,7 +1635,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             await asyncio.sleep(delay_s)
         svc_key = getattr(dev, "service_key", None)
         spec = self._svc_spec_or_none(int(svc_key[2]), svc_key=svc_key) if isinstance(svc_key, tuple) and len(svc_key) >= 3 else None
-        expected4, expected6 = self._expected_tun_runtime_addresses(spec)
+        expected4, expected6 = self._expected_tun_runtime_addresses(spec, svc_key=svc_key)
         if not expected4 and not expected6:
             self._clear_tun_runtime_health(svc_key)
             return

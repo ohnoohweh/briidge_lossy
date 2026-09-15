@@ -485,6 +485,7 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_server_firewall_rules_for_remote_server_catalog
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_records_critical_runtime_health_when_expected_tun_addresses_missing
+    - tests/unit/test_channel_mux_tun_helper.py::test_peer_tun_runtime_health_expects_server_side_gateway_address
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_refreshes_helper_snapshot_after_apply_success
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_applies_after_external_helper_reports_actual_ifname
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_start_skips_runtime_listener_on_created_hook

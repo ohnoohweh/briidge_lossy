@@ -33,4 +33,8 @@ restore_artifact_ownership() {
 trap restore_artifact_ownership EXIT
 
 cd "$ROOT_DIR"
-"$PYTHON_BIN" -m pytest -vv --timeout=120 -rs tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated "$@"
+# A cold Swift build is allowed 180 seconds by swift_test_support.  Keep the
+# outer pytest deadline above that build allowance plus the live-test budget;
+# otherwise pytest interrupts a valid build at 120 seconds and retries it for
+# every test case.
+"$PYTHON_BIN" -m pytest -vv --timeout=300 -rs tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated "$@"

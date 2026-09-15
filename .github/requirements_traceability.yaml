@@ -982,6 +982,7 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_registers_reader_and_delivers_packets
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_removes_network_on_close
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_records_critical_runtime_health_when_expected_tun_addresses_missing
+    - tests/unit/test_channel_mux_tun_helper.py::test_peer_tun_runtime_health_expects_server_side_gateway_address
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_merges_auto_excluded_overlay_routes
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_stop_awaits_external_helper_remove_network
