@@ -786,7 +786,7 @@ row.
 
 | Work package | Platform | State | Scope and measurable exit criterion |
 | --- | --- | --- | --- |
-| `R005.4a` | macOS | Open | Build the generated macOS `ObstacleBridge` and `IPServer` targets from a clean checkout with the pinned `Crypto` package, without an output-root workaround. Preserve the build log/artifact evidence. |
+| `R005.4a` | macOS | Open | The repository has a script-built macOS app/host runner, but no generated macOS Xcode project or `IPServer` target: Briefcase configuration and the repo-owned project patcher currently cover iOS only. Add that generated macOS product with the pinned `Crypto` package, build both targets from a clean checkout without an output-root workaround, and preserve its build-log and artifact evidence. The script build is not substitute evidence for this product boundary. |
 | `R005.4b` | iOS simulator | Open — dedicated host | Run the SecureLink E2E scenario in the generated iOS simulator target, including an authenticated payload exchange and redacted status output. This workstation permits Xcode Simulator-SDK builds but blocks Simulator boot, install, and launch. |
 | `R005.4c` | Apple release qualification | Open | The generated arm64 iPhoneOS Debug archive is 87 MB (63 MB app; 4.6 MB `IPServer.appex`) and intentionally unsigned. Produce the signed release archive and record its product-size impact; run the physical-device SecureLink scenario when a signed device target is available. This is the only device-dependent R005 sub-workpackage. |
 | `R005.5d-1a` | Linux Swift | Complete | Publish the bounded `nextRetryMilliseconds` value in the live-runtime snapshot and prove that stop cancels the pending retry presentation. |
