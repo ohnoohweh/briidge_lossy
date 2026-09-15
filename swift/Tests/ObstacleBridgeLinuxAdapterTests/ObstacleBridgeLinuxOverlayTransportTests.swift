@@ -311,6 +311,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         for (mode, transport) in [
             ("tcp-securelink-reconnect-stale", ObstacleBridgeLinuxTransport.tcp),
             ("ws-securelink-reconnect-stale", .ws),
+            ("myudp-securelink-reconnect-stale", .myudp),
         ] {
             try secureLinkSessionRejectsStaleReconnectFrame(mode: mode, transport: transport)
         }
@@ -697,10 +698,11 @@ final class PythonOverlayPeer {
             _,peer=s.recvfrom(1452); s.sendto(b'\\x01',peer); s.close()
             """
         }
-        if mode == "myudp-securelink-reconnect" {
+        if mode == "myudp-securelink-reconnect" || mode == "myudp-securelink-reconnect-stale" {
             return """
             import hashlib, hmac, socket, struct
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+            MODE_STALE = \(mode.contains("-stale") ? "True" : "False")
             s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM); s.bind(('127.0.0.1',0)); print(s.getsockname()[1], flush=True)
             def recv():
                 while True:
@@ -716,12 +718,19 @@ final class PythonOverlayPeer {
                 out=b''; prior=b''
                 for i in range(1,(length+31)//32+1): prior=hmac.new(prk,prior+info+bytes([i]),hashlib.sha256).digest(); out+=prior
                 return out[:length]
-            for _ in range(2):
+            stale=None
+            for epoch in range(2):
                 hello,counter,peer=recv(); sid=int.from_bytes(hello[4:12],'big'); cn=hello[20:52]; sn=bytes(range(32)); psk=b'linux-swift-psk'
                 proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); send(header(2,sid,0)+sn+b'\\x01'+proof,counter,peer)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof,counter,peer=recv(); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); send(ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack),counter,peer)
+                if MODE_STALE and epoch == 1:
+                    send(stale,counter+1,peer)
+                    try: s.settimeout(1); s.recvfrom(1452)
+                    except OSError: pass
+                    continue
                 app,counter,peer=recv(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); send(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response),counter,peer)
+                stale=response
             s.close()
             """
         }
