@@ -9,7 +9,7 @@
 # address ranges rather than live deployment endpoints.
 REQ-OVL-001:
   # The myUDP reference peer drains the client's CONTROL/IDLE acknowledgement;
-  # owner-requested socket closure is normal teardown, never a false failure.
+  # repeated-loss recovery remains owner-bound until its subprocess ends.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip

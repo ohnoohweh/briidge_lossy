@@ -7350,7 +7350,12 @@ def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeat
     binary_path = _linux_swift_runner_binary()
     psk = b'linux-swift-myudp-loss-psk'
     payload = b'linux-swift-myudp-runtime-loss-recovery'
-    peer = LinuxSwiftSecureLinkPeer('myudp', psk, drop_myudp_application_data_count=2)
+    peer = LinuxSwiftSecureLinkPeer(
+        'myudp',
+        psk,
+        keep_open=True,
+        drop_myudp_application_data_count=2,
+    )
     try:
         runtime_config = {
             'runner': {'overlay_transport': 'myudp'},
