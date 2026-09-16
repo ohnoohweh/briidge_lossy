@@ -141,6 +141,14 @@ Python-only diagnostic/traffic fields that Linux has not qualified.
 | failed | `failed` / `false` | `disconnected` before SecureLink admission | failure reason, no current session |
 | connected | `connected` / `true` after PSK admission | `authenticated` for PSK, otherwise `off` | current session and Core counters |
 
+Each peer row also carries a redacted `compression_layer` object derived from
+the Core compression policy and the Linux ChannelMux boundary. It publishes
+the effective zlib policy plus attempted/applied/no-gain counts and bytes,
+dedicated compressed TX/RX counts and bytes, uncompressed TX/RX counts and bytes, and
+rejected compressed-frame counts and bytes. It records no payload bytes,
+keys, or zlib state. Core classifies the compression decision and decoder
+outcome; the Linux Admin adapter only serializes that snapshot.
+
 ## Engineering rules
 
 - Move shared behavior in vertical slices. A slice changes both consumers to
@@ -173,7 +181,6 @@ lives in the traceability records.
 | `R005.4c` | iOS device | Produce a signed release archive, record its size, and run the SecureLink scenario on a signed physical target. |
 | `R005.5e-2a` | Linux Swift + Python peer | Qualify bidirectional enabled compression for protected request and response traffic. |
 | `R005.5e-2b` | Linux Swift + Python peer | Qualify disabled behavior and deterministic enabled/disabled mismatch failure without session corruption. |
-| `R005.5e-2c` | Linux Swift | Publish redacted compression state and compressed/uncompressed/rejected byte and count telemetry. |
 | `R005.6a` | CI | Require the relevant Linux, macOS, traceability, README, and ownership gates for R005 changes. |
 | `R005.6b` | CI/release | Classify privileged-TUN and device-only results separately and close R005 only after every applicable row is qualified. |
 

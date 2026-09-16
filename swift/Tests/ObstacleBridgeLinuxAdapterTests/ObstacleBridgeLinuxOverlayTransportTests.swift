@@ -232,6 +232,62 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try mux.exchange(frame) == frame)
     }
 
+    @Test func compressionSnapshotCountsCompressedUncompressedAndRejectedFrames() throws {
+        let compressedPeer = try PythonOverlayPeer(mode: "tcp-securelink-mux-compressed-echo")
+        defer { compressedPeer.stop() }
+        let compressedRuntime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: compressedPeer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            compressionPolicy: .init(enabled: true, level: 3, minimumBodyBytes: 1, allowedMessageTypes: [0])
+        ))
+        let compressedSession = try compressedRuntime.connect(sessionID: 52, clientNonce: Data(repeating: 5, count: 32))
+        defer { compressedRuntime.disconnect() }
+        let compressedMux = try ObstacleBridgeLinuxChannelMuxSession(runtime: compressedRuntime, session: compressedSession)
+        let repetitive = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
+        #expect(try compressedMux.exchange(repetitive) == repetitive)
+        let malformedCompressed = try ObstacleBridgeChannelMuxFrameCodec.encode(
+            channelID: 2, protocolType: 0, counter: 2,
+            messageType: ObstacleBridgeMuxCompression.compressedFlag, body: Data([0xde, 0xad, 0xbe, 0xef])
+        )
+        #expect(throws: ObstacleBridgeCompression.Error.invalidInput) { try compressedMux.decodeInbound(malformedCompressed) }
+        let compressed = compressedRuntime.status().peer.compression
+        #expect(compressed.enabled)
+        #expect(compressed.algorithm == "zlib")
+        #expect(compressed.compressAttemptsTotal == 1)
+        #expect(compressed.compressAppliedTotal == 1)
+        #expect(compressed.compressedFramesSentTotal == 1)
+        #expect(compressed.compressedFramesReceivedTotal == 1)
+        #expect(compressed.compressedInputBytesSentTotal == 256)
+        #expect(compressed.compressedOutputBytesSentTotal < 256)
+        #expect(compressed.compressInputBytesTotal == 256)
+        #expect(compressed.compressOutputBytesTotal < 256)
+        #expect(compressed.compressedInputBytesReceivedTotal > 0)
+        #expect(compressed.compressedOutputBytesReceivedTotal == 256)
+        #expect(compressed.rejectedFramesTotal == 1)
+        #expect(compressed.rejectedBytesTotal == 4)
+
+        let plainPeer = try PythonOverlayPeer(mode: "tcp-secure-mux-echo")
+        defer { plainPeer.stop() }
+        let plainRuntime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: plainPeer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            compressionPolicy: .init(enabled: true, level: 3, minimumBodyBytes: 1024, allowedMessageTypes: [0])
+        ))
+        let plainSession = try plainRuntime.connect(sessionID: 53, clientNonce: Data(repeating: 6, count: 32))
+        defer { plainRuntime.disconnect() }
+        let plainMux = try ObstacleBridgeLinuxChannelMuxSession(runtime: plainRuntime, session: plainSession)
+        let plainFrame = ObstacleBridgeChannelMuxFrame(channelID: 3, protocolType: .udp, counter: 1, messageType: .data, body: Data("plain".utf8))
+        #expect(try plainMux.exchange(plainFrame) == plainFrame)
+        let plain = plainRuntime.status().peer.compression
+        #expect(plain.compressAttemptsTotal == 0)
+        #expect(plain.compressAppliedTotal == 0)
+        #expect(plain.uncompressedFramesSentTotal == 1)
+        #expect(plain.uncompressedFramesReceivedTotal == 1)
+        #expect(plain.uncompressedBytesSentTotal == 5)
+        #expect(plain.uncompressedBytesReceivedTotal == 5)
+        #expect(plain.rejectedFramesTotal == 0)
+    }
+
     @Test func myudpSupervisorRotatesCandidateAfterFailedEpoch() throws {
         let peer = try PythonOverlayPeer(mode: "myudp")
         defer { peer.stop() }

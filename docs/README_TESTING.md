@@ -246,6 +246,12 @@ the authenticated secure-link protocol state remains distinct from transport
 `connected`, retry is a bounded duration, and Python-only traffic/rate and
 diagnostic categories are documented capability limits rather than fabricated
 zero-valued fields.
+`compressionSnapshotCountsCompressedUncompressedAndRejectedFrames` uses Python
+peers for compressed and uncompressed ChannelMux exchanges, injects a malformed
+compressed record at the shared Core decoder boundary, and verifies the
+redacted Linux snapshot records the corresponding count and byte telemetry.
+`peersSerializesNonzeroCompressionTelemetry` then confirms the same nonzero
+Core-derived telemetry is visible through Linux `/api/peers`.
 The silent-peer reconnect probe records the replacement authenticated snapshot
 before injecting retired-epoch data, then requires the resulting withdrawal.
 The fixture additionally proves the independent myUDP transport-counter sequence

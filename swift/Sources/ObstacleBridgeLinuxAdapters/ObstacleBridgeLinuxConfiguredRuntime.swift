@@ -26,6 +26,7 @@ public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
     public let protectedFramesReceivedTotal: UInt64
     public let authenticatedGenerationsTotal: UInt64
     public let rekeysCompletedTotal: UInt64
+    public let compression: ObstacleBridgeMuxCompressionSnapshot
 }
 
 public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
@@ -210,6 +211,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     private var activeSession: ObstacleBridgeLinuxConfiguredSession?
     private var activeHost: String?
     private var secureLinkState: String
+    let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
     private(set) public var connectionEpoch: UInt64 = 0
     private var candidateStartIndex = 0
     // `connect` runs on the live runtime's serialized queue, but `stop` must
@@ -224,6 +226,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         self.configuration = configuration
         self.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
         self.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
+        self.compressionTelemetry = .init(policy: configuration.compressionPolicy)
     }
 
     public func connect(sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
@@ -398,7 +401,8 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 protectedFramesSentTotal: coreState?.protectedFramesSentTotal ?? 0,
                 protectedFramesReceivedTotal: coreState?.protectedFramesReceivedTotal ?? 0,
                 authenticatedGenerationsTotal: coreState?.authenticatedGenerationsTotal ?? 0,
-                rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0
+                rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0,
+                compression: compressionTelemetry.snapshot()
             )
         )
     }

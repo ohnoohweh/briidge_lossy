@@ -15,6 +15,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     private let session: ObstacleBridgeLinuxConfiguredSession
     private let epoch: UInt64
     private let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
+    private let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
     private let lock = NSLock()
     private let replyPolicy = ObstacleBridgeChannelMuxReplyPolicy()
     private var awaited: ObstacleBridgeChannelMuxFrame?
@@ -29,6 +30,7 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
         self.session = session
         self.epoch = runtime.connectionEpoch
         self.compressionPolicy = runtime.configuration.compressionPolicy
+        self.compressionTelemetry = runtime.compressionTelemetry
         for frame in startupFrames {
             guard try exchange(frame) == frame else { throw ObstacleBridgeLinuxChannelMuxError.staleEpoch }
         }
@@ -75,8 +77,18 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
     /// The sole ChannelMux decode boundary for this epoch. Compression belongs
     /// to Core; the Linux wrapper only places it around the transport record.
     public func decodeInbound(_ wire: Data) throws -> ObstacleBridgeChannelMuxFrame {
-        let plain = try ObstacleBridgeMuxCompression.unprotect(wire).wire
-        return try ObstacleBridgeChannelMuxCodec.decode(plain)
+        let encoded = try ObstacleBridgeChannelMuxFrameCodec.decode(wire)
+        do {
+            let result = try ObstacleBridgeMuxCompression.unprotect(wire)
+            let decoded = try ObstacleBridgeChannelMuxCodec.decode(result.wire)
+            compressionTelemetry.recordInbound(inputBodyBytes: encoded.body.count, outputBodyBytes: decoded.body.count, decompressed: result.decompressed)
+            return decoded
+        } catch {
+            if encoded.messageType >= ObstacleBridgeMuxCompression.compressedFlag {
+                compressionTelemetry.recordRejectedInbound(bodyBytes: encoded.body.count)
+            }
+            throw error
+        }
     }
 
     /// Called only by the configured session's receive worker after it has
@@ -121,6 +133,9 @@ public final class ObstacleBridgeLinuxChannelMuxSession {
 
     private func protectedWire(for frame: ObstacleBridgeChannelMuxFrame) throws -> Data {
         let wire = try ObstacleBridgeChannelMuxCodec.encode(channelID: frame.channelID, protocolType: frame.protocolType, counter: frame.counter, messageType: frame.messageType, body: frame.body)
-        return try ObstacleBridgeMuxCompression.protect(wire, policy: compressionPolicy).wire
+        let result = try ObstacleBridgeMuxCompression.protect(wire, policy: compressionPolicy)
+        let output = try ObstacleBridgeChannelMuxFrameCodec.decode(result.wire)
+        compressionTelemetry.recordOutbound(inputBodyBytes: frame.body.count, outputBodyBytes: output.body.count, attempted: result.attempted, compressed: result.compressed)
+        return result.wire
     }
 }

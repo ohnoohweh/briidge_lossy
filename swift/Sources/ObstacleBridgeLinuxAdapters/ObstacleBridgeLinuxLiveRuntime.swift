@@ -104,7 +104,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 protectedFramesSentTotal: base.peer.protectedFramesSentTotal,
                 protectedFramesReceivedTotal: base.peer.protectedFramesReceivedTotal,
                 authenticatedGenerationsTotal: base.peer.authenticatedGenerationsTotal,
-                rekeysCompletedTotal: base.peer.rekeysCompletedTotal
+                rekeysCompletedTotal: base.peer.rekeysCompletedTotal,
+                // Compression telemetry changes on the live ChannelMux data
+                // path, so do not reuse the connection-start status cache.
+                // Core remains the single counter owner.
+                compression: configuredRuntime.compressionTelemetry.snapshot()
             )
         )
     }

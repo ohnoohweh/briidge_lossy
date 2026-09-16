@@ -4,6 +4,7 @@ import FoundationNetworking
 #endif
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxAdminServerTests {
     @Test func statusAndPeersAreRedactedAndDescribeLayeredState() async throws {
@@ -73,6 +74,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
         let row = try #require(peers.first)
         let secureLink = try #require(row["secure_link"] as? [String: Any])
+        let compression = try #require(row["compression_layer"] as? [String: Any])
         #expect(row["peer_id"] as? String == "configured-peer")
         #expect(row["transport"] as? String == "tcp")
         #expect(row["connection_epoch"] as? Int == 1)
@@ -85,7 +87,38 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(secureLink["protected_frames_sent_total"] as? UInt64 == 1)
         #expect(secureLink["protected_frames_received_total"] as? UInt64 == 1)
         #expect(secureLink["authenticated_generations_total"] as? UInt64 == 1)
+        #expect(compression["enabled"] as? Bool == false)
+        #expect(compression["algorithm"] as? String == "zlib")
+        #expect(compression["compressed_frames_sent_total"] as? UInt64 == 0)
+        #expect(compression["compressed_output_bytes_sent_total"] as? UInt64 == 0)
+        #expect(compression["rejected_frames_total"] as? UInt64 == 0)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: peers), as: UTF8.self).contains(secret))
+    }
+
+    @Test func peersSerializesNonzeroCompressionTelemetry() async throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-mux-compressed-echo")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            compressionPolicy: .init(enabled: true, level: 3, minimumBodyBytes: 1, allowedMessageTypes: [0])
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime)
+        try server.start()
+        defer { server.stop(); runtime.disconnect() }
+        let session = try runtime.connect(sessionID: 78, clientNonce: Data(repeating: 8, count: 32))
+        let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
+        let frame = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
+        #expect(try mux.exchange(frame) == frame)
+
+        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let row = try #require(peers.first)
+        let compression = try #require(row["compression_layer"] as? [String: Any])
+        #expect(compression["enabled"] as? Bool == true)
+        #expect(compression["compress_applied_total"] as? UInt64 == 1)
+        #expect(compression["compressed_frames_sent_total"] as? UInt64 == 1)
+        #expect(compression["compressed_frames_received_total"] as? UInt64 == 1)
+        #expect((compression["compressed_output_bytes_sent_total"] as? UInt64 ?? 256) < 256)
     }
 
     private func getJSON(_ text: String) async throws -> Any {
