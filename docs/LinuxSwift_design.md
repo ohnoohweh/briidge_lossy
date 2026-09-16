@@ -214,10 +214,38 @@ lives in the traceability records.
 
 | Item | Remaining outcome |
 | --- | --- |
-| `LSW-R006` | Move the overlay coordinator, stream/WebSocket logical framing, epoch/readiness, reconnect, receive ownership, cancellation, and backpressure decisions into Core; adapters execute transport effects only. |
+| `LSW-R006` | Complete the dependency-ordered overlay-core packages below. The parent closes only when their shared Core owner is consumed by Linux and Apple products and its parity/ownership evidence passes. |
 | `LSW-R007` | Move ChannelMux TCP/UDP/TUN state, service/catalog lifecycle, packet policy, and portable IP handling into Core; retain platform socket and packet-device execution below it. |
 | `LSW-R008` | Consolidate typed configuration, capability admission, Admin routing/redaction, onboarding, and secret transformation in Core while retaining platform storage and HTTP services. |
 | `LSW-R009` | Finish package-product adoption, remove duplicate shared source ownership, and make Linux/macOS/Core/Windows-sentinel validation and traceability required CI behavior. |
+
+### LSW-R006 — Overlay coordinator convergence
+
+R006 moves decisions for an already-established overlay epoch into
+`ObstacleBridgeCore`. It does not move HTTP upgrade/TLS/trust, POSIX or
+Network.framework I/O, URLSession callbacks, Dispatch scheduling, resolver
+calls, or packet/service behavior. Those remain platform adapters; ChannelMux
+service and packet policy remain R007. A Core transition accepts typed input
+and returns typed state, counters, and effects. The adapter performs those
+effects and returns the next typed completion or failure, tagged with its
+generation.
+
+| Package | Depends on | Scope | Definition of Done |
+| --- | --- | --- | --- |
+| `LSW-R006.1` Core overlay contract | — | Define public, OS-neutral overlay input, effect, snapshot, clock, entropy, and generation types. Establish one coordinator API for connect, lower-transport completion, authenticated readiness, receive result, timer result, failure, and stop. | `ObstacleBridgeCore` contains the typed contract and deterministic coordinator with no OS/socket/UI imports; equal scripted inputs produce equal state/effect sequences; invalid or stale-generation inputs cannot mutate the active epoch; focused Swift tests cover the full transition table and a Python-derived lifecycle fixture. |
+| `LSW-R006.2` Logical stream and WebSocket envelope | R006.1 | Move TCP APP/PING/PONG selection and WebSocket payload-mode plus APP/PING/PONG envelope handling out of Linux and Apple runtime owners. Retain TCP length reads, HTTP upgrade, WebSocket masking/fragment reads, and URLSession message conversion in adapters. | Core converts typed lower payloads into application delivery, reply, discard, or protocol-failure effects and serializes the reciprocal reply; corpus tests compare TCP and WebSocket binary/text/base64 forms against Python vectors, including PING/PONG before authentication and malformed payload rejection; Linux POSIX and Apple URLSession wrappers only translate native I/O to/from the Core payload contract. |
+| `LSW-R006.3` Epoch, readiness, and lifecycle publication | R006.1, R006.2 | Move candidate-independent lifecycle state, authenticated readiness, epoch replacement, and redacted overlay snapshot decisions into the coordinator. R007 owns the subsequent service/catalog actions. | Core admits application traffic only after the matching epoch is authenticated and ready; replacement or failure withdraws the old epoch before publishing the next; duplicate/stale completion cannot re-enable readiness; deterministic tests pin state, epoch, failure reason, and redacted snapshot parity with Python fixtures; Linux and Apple status adapters serialize the Core snapshot rather than rebuild lifecycle fields. |
+| `LSW-R006.4` Reconnect and candidate policy | R006.1, R006.3 | Move bounded attempt counting, exponential delay, candidate rotation, fresh session/nonce request, retry exhaustion, and stop-before-retry decisions from `ObstacleBridgeLinuxReconnectSupervisor` and Apple lifecycle owners into Core. Timers and actual connects stay adapters. | A fake clock/scheduler proves exact initial/max delay, candidate rotation, fresh-epoch request, exhaustion, and cancellation behavior without Dispatch timers; a scheduled effect carries its generation and a cancelled/old timer cannot open a connection; Python/Swift parity tests cover TCP, WebSocket, and myudp candidate outcomes; adapter code contains scheduling and connection execution but no retry arithmetic or admission policy. |
+| `LSW-R006.5` Receive ownership and cancellation | R006.1, R006.3 | Move the one-receive-owner-per-epoch rule, receive handoff admission, terminal receive classification, and stop/reconnect ordering into Core. Blocking reads, task cancellation, descriptor close, and callback dispatch remain adapters. | Core emits at most one active receive effect for an epoch, rejects a second owner or stale receive completion, and withdraws/cancels before exposing a replacement; deterministic tests cover blocked receive, close, reconnect, EOF, malformed lower frame, and late callback ordering; Linux and Apple wrappers retain only native read/cancel operations and deliver generation-tagged completions. |
+| `LSW-R006.6` Overlay backpressure and liveness | R006.1–R006.5 | Move bounded overlay ingress/egress admission, early-send buffering, PING/PONG liveness accounting, drop reasons, and redacted counters into Core. This package stops at overlay records; ChannelMux service, UDP, and TUN queue policy remains R007. | Core produces deterministic send/queue/drop/reply effects and bounded counters for full queues, no-ready-epoch traffic, liveness frames, and no-progress failure; tests compare resulting application delivery, drops, and snapshots with Python reference cases; adapters cannot bypass a Core admission result or maintain alternate queue limits/counters. |
+| `LSW-R006.7` Product adoption and closure | R006.1–R006.6 | Replace the corresponding decision owners in `ObstacleBridgeLinuxAdapters` and `ios/native/ObstacleBridgeShared`; retain only platform I/O wrappers. Add enforceable ownership and cross-product qualification. | Linux, macOS host runner, and iOS extension compile against the same Core coordinator/types; source guards reject duplicate overlay/retry/readiness/backpressure policy outside Core; focused Core, Linux/Python mixed-runtime, macOS Swift-backed, and iOS source/device-harness evidence pass; `docs/README_TESTING.md`, requirement traceability, and architecture traceability map every affected requirement to Core and product evidence; no applicable R006 scope item remains partial or unowned. |
+
+R006 parent Definition of Done: packages R006.1 through R006.7 are complete;
+the Core contract is the only Swift owner of overlay decisions in this scope;
+each product adapter applies Core effects without changing policy; Python remains
+the behavioral reference through byte, transition, counter, failure, and
+redacted-snapshot comparison; and the required Linux/macOS/iOS evidence is
+recorded with privileged or physical-device results explicitly classified.
 
 ### Linux product mechanisms
 
