@@ -149,6 +149,13 @@ rejected compressed-frame counts and bytes. It records no payload bytes,
 keys, or zlib state. Core classifies the compression decision and decoder
 outcome; the Linux Admin adapter only serializes that snapshot.
 
+Enabled compression is qualified end-to-end with an independent Python TCP
+SecureLink peer: Swift emits a protected compressed ChannelMux request, Python
+rejects any uncompressed request, independently decompresses and recompresses
+the response, and Swift restores the original response frame. This is the
+supported R005.5e-2a bidirectional contract; disabled/mismatched-policy
+qualification remains separate R005.5e-2b work.
+
 ## Engineering rules
 
 - Move shared behavior in vertical slices. A slice changes both consumers to
@@ -179,7 +186,6 @@ lives in the traceability records.
 | `R005.4a` | macOS | Generate and build the macOS Xcode product and `IPServer` target from a clean checkout with the pinned Crypto package; retain artifact evidence. |
 | `R005.4b` | iOS simulator | Run an authenticated SecureLink exchange and redacted-status scenario in the generated simulator target on a host that can boot, install, and launch it. |
 | `R005.4c` | iOS device | Produce a signed release archive, record its size, and run the SecureLink scenario on a signed physical target. |
-| `R005.5e-2a` | Linux Swift + Python peer | Qualify bidirectional enabled compression for protected request and response traffic. |
 | `R005.5e-2b` | Linux Swift + Python peer | Qualify disabled behavior and deterministic enabled/disabled mismatch failure without session corruption. |
 | `R005.6a` | CI | Require the relevant Linux, macOS, traceability, README, and ownership gates for R005 changes. |
 | `R005.6b` | CI/release | Classify privileged-TUN and device-only results separately and close R005 only after every applicable row is qualified. |

@@ -550,6 +550,7 @@ REQ-AUT-020:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_overlay_stack_default_compress_client_matches_python
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::compressionSnapshotCountsCompressedUncompressedAndRejectedFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peersSerializesNonzeroCompressionTelemetry
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer
 REQ-WSP-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env

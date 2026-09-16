@@ -252,6 +252,10 @@ compressed record at the shared Core decoder boundary, and verifies the
 redacted Linux snapshot records the corresponding count and byte telemetry.
 `peersSerializesNonzeroCompressionTelemetry` then confirms the same nonzero
 Core-derived telemetry is visible through Linux `/api/peers`.
+`enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer`
+requires a Python peer to reject an uncompressed protected request and to send
+an independently recompressed protected response, proving enabled compression
+in both directions rather than only local codec round-tripping.
 The silent-peer reconnect probe records the replacement authenticated snapshot
 before injecting retired-epoch data, then requires the resulting withdrawal.
 The fixture additionally proves the independent myUDP transport-counter sequence

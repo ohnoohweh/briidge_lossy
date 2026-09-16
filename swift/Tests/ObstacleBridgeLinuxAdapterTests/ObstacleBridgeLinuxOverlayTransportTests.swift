@@ -217,7 +217,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try mux.exchange(frame) == frame)
     }
 
-    @Test func linuxChannelMuxCompressesAndUnwrapsProtectedFramesAgainstPythonPeer() throws {
+    @Test func enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer() throws {
         let peer = try PythonOverlayPeer(mode: "tcp-securelink-mux-compressed-echo")
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
@@ -230,6 +230,15 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
         let frame = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
         #expect(try mux.exchange(frame) == frame)
+        let compression = runtime.status().peer.compression
+        // The Python fixture rejects a request unless its ChannelMux DATA
+        // body is zlib-compressed, then independently decompresses and
+        // recompresses the response before protecting it.
+        #expect(compression.compressAppliedTotal == 1)
+        #expect(compression.compressedFramesSentTotal == 1)
+        #expect(compression.compressedFramesReceivedTotal == 1)
+        #expect(compression.compressedOutputBytesSentTotal < 256)
+        #expect(compression.compressedOutputBytesReceivedTotal == 256)
     }
 
     @Test func compressionSnapshotCountsCompressedUncompressedAndRejectedFrames() throws {
