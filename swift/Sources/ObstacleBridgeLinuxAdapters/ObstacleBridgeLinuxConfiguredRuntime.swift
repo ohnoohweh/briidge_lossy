@@ -1,6 +1,29 @@
 import Foundation
 import ObstacleBridgeCore
 
+/// One redacted peer projection assembled from the Core SecureLink state and
+/// the adapter-owned transport lifecycle. It deliberately has no PSK, nonce,
+/// key, or raw frame material, so the Linux Admin surface can publish one
+/// authoritative peer row without independently rebuilding protocol fields.
+public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
+    public let transport: String
+    public let lifecycleState: String
+    public let connectionEpoch: UInt64
+    public let sessionID: UInt64?
+    public let pendingRekeySessionID: UInt64?
+    public let ready: Bool
+    public let authenticated: Bool
+    public let applicationSendingBlocked: Bool
+    public let attempts: Int
+    public let nextRetryMilliseconds: Int?
+    public let protectedTxCounter: UInt64
+    public let protectedRxCounter: UInt64
+    public let protectedFramesSentTotal: UInt64
+    public let protectedFramesReceivedTotal: UInt64
+    public let authenticatedGenerationsTotal: UInt64
+    public let rekeysCompletedTotal: UInt64
+}
+
 public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
     public let transport: String
     public let state: String
@@ -26,6 +49,7 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
     public let droppedReceiveFrames: Int
     public let receiveQueueDepth: Int
     public let receiveFailureReason: String?
+    public let peer: ObstacleBridgeLinuxPeerSnapshot
 }
 
 /// Config-driven lower transport plus optional SecureLink PSK state. The
@@ -127,6 +151,12 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         requestLock.lock(); receiveOwnerActive = true; requestLock.unlock()
     }
     public func cancelReceive() { lowerSession.close() }
+
+    /// Redacted Core-owned SecureLink state for the current adapter epoch.
+    /// Neither role exposes its PSK, nonces, or traffic plaintext here.
+    public var secureLinkProtocolState: ObstacleBridgeSecureLinkPSKState? {
+        secureLink?.state ?? secureLinkServer?.state
+    }
 
     public func close() {
         lowerSession.close()
@@ -265,7 +295,9 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// Redacted state suitable for an Admin/API adapter. It deliberately
     /// identifies only the configured secure-link mode, never its secret.
     public func status() -> ObstacleBridgeLinuxRuntimeStatus {
-        .init(
+        let coreState = activeSession?.secureLinkProtocolState
+        let appReady = snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated")
+        return .init(
             transport: configuration.transport.rawValue,
             state: snapshot.state,
             attempts: snapshot.attempts,
@@ -275,7 +307,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             port: configuration.port,
             secureLinkMode: configuration.secureLinkPSK == nil ? "off" : "psk",
             secureLinkState: secureLinkState,
-            appReady: snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated"),
+            appReady: appReady,
             activeTCPChannels: 0,
             activeUDPChannels: 0,
             queuedServiceFrames: 0,
@@ -289,7 +321,25 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             receivedFrames: 0,
             droppedReceiveFrames: 0,
             receiveQueueDepth: 0,
-            receiveFailureReason: nil
+            receiveFailureReason: nil,
+            peer: .init(
+                transport: configuration.transport.rawValue,
+                lifecycleState: snapshot.state,
+                connectionEpoch: connectionEpoch,
+                sessionID: coreState.map { $0.sessionID == 0 ? nil : $0.sessionID } ?? nil,
+                pendingRekeySessionID: coreState.map { $0.pendingRekeySessionID == 0 ? nil : $0.pendingRekeySessionID } ?? nil,
+                ready: appReady,
+                authenticated: coreState?.authenticated ?? false,
+                applicationSendingBlocked: coreState?.applicationSendingBlocked ?? false,
+                attempts: snapshot.attempts,
+                nextRetryMilliseconds: nil,
+                protectedTxCounter: coreState?.txCounter ?? 0,
+                protectedRxCounter: coreState?.rxCounter ?? 0,
+                protectedFramesSentTotal: coreState?.protectedFramesSentTotal ?? 0,
+                protectedFramesReceivedTotal: coreState?.protectedFramesReceivedTotal ?? 0,
+                authenticatedGenerationsTotal: coreState?.authenticatedGenerationsTotal ?? 0,
+                rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0
+            )
         )
     }
 

@@ -17,6 +17,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.onSnapshot = { if $0.state == "reconnecting", $0.nextRetryMilliseconds == 250 { reconnecting.signal() } }
         runtime.start()
         #expect(reconnecting.wait(timeout: .now() + 3) == .success)
+        let peer = runtime.status().peer
+        #expect(peer.lifecycleState == "reconnecting")
+        #expect(peer.nextRetryMilliseconds == 250)
+        #expect(!peer.ready)
+        #expect(peer.sessionID == nil)
         runtime.stop()
     }
 

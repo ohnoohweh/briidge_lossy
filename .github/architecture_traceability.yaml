@@ -748,6 +748,9 @@ ARC-CMP-006:
   # authenticated failures are reported to ChannelMux for lifecycle rotation,
   # plus cert local-identity reload reconnect/re-authentication at the
   # secure-link layer boundary.
+  # Linux Admin consumes one redacted Core/adapter peer projection for
+  # lifecycle, epoch/session, retry, and protected-frame counter state; it
+  # must not reconstruct or serialize PSK material.
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_lifecycle_forwards_transport_epoch_and_rotation_request
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
@@ -782,6 +785,8 @@ ARC-CMP-006:
     # Pins portable Core rekey cutover, cached control retransmission, and the
     # client send hold boundary.
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkPskPeersCompleteRekeyAndResetDirectionalCounters
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimePublishesBoundedRetryWindow
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::admittedTransportsRekeyAgainstPythonPeerAndKeepTrafficFlowing
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkReconnectsWithFreshPythonPeerSession
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketSecureLinkReconnectsWithFreshPythonPeerSession

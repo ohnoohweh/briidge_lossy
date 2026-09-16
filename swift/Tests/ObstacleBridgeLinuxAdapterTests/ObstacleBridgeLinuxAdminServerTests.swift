@@ -54,6 +54,39 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(disconnected["app_ready"] as? Bool == false)
     }
 
+    @Test func peerProjectionUsesCoreCountersAndNeverSerializesPSK() async throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink")
+        defer { peer.stop() }
+        let secret = "linux-swift-psk"
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .tcp,
+            host: "127.0.0.1",
+            port: peer.port,
+            secureLinkPSK: Data(secret.utf8)
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime)
+        try server.start()
+        defer { server.stop(); runtime.disconnect() }
+
+        let session = try runtime.connect(sessionID: 77, clientNonce: Data(repeating: 7, count: 32))
+        #expect(try session.send(Data("projection".utf8)) == Data("python:projection".utf8))
+        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let row = try #require(peers.first)
+        let secureLink = try #require(row["secure_link"] as? [String: Any])
+        #expect(row["peer_id"] as? String == "configured-peer")
+        #expect(row["transport"] as? String == "tcp")
+        #expect(row["connection_epoch"] as? Int == 1)
+        #expect(row["app_ready"] as? Bool == true)
+        #expect(secureLink["authenticated"] as? Bool == true)
+        #expect(secureLink["session_id"] as? UInt64 == 77)
+        #expect(secureLink["protected_tx_counter"] as? UInt64 == 3)
+        #expect(secureLink["protected_rx_counter"] as? UInt64 == 2)
+        #expect(secureLink["protected_frames_sent_total"] as? UInt64 == 1)
+        #expect(secureLink["protected_frames_received_total"] as? UInt64 == 1)
+        #expect(secureLink["authenticated_generations_total"] as? UInt64 == 1)
+        #expect(!String(decoding: try JSONSerialization.data(withJSONObject: peers), as: UTF8.self).contains(secret))
+    }
+
     private func getJSON(_ text: String) async throws -> Any {
         let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: text)))
         #expect((response as? HTTPURLResponse)?.statusCode == 200)

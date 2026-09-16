@@ -43,6 +43,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var attempts = 0
     private var failureReason: String?
     private var nextRetryMilliseconds: Int?
+    private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
     private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
 
     public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init()) {
@@ -69,6 +70,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let openedTCPChannels = summaries.reduce(0) { $0 + $1.openedTCPChannels }
         let openedUDPChannels = summaries.reduce(0) { $0 + $1.openedUDPChannels }
         let base = statusProjection
+        let live = liveSnapshotProjection
         statusLock.unlock()
         return .init(
             transport: base.transport, state: base.state, attempts: base.attempts,
@@ -84,7 +86,25 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             receivedFrames: receive?.receivedFrames ?? 0,
             droppedReceiveFrames: receive?.droppedFrames ?? 0,
             receiveQueueDepth: receive?.queueDepth ?? 0,
-            receiveFailureReason: receive?.failureReason
+            receiveFailureReason: receive?.failureReason,
+            peer: .init(
+                transport: base.peer.transport,
+                lifecycleState: live.state,
+                connectionEpoch: base.peer.connectionEpoch,
+                sessionID: base.peer.sessionID,
+                pendingRekeySessionID: base.peer.pendingRekeySessionID,
+                ready: live.state == "connected" && base.peer.ready,
+                authenticated: base.peer.authenticated,
+                applicationSendingBlocked: base.peer.applicationSendingBlocked,
+                attempts: live.attempts,
+                nextRetryMilliseconds: live.nextRetryMilliseconds,
+                protectedTxCounter: base.peer.protectedTxCounter,
+                protectedRxCounter: base.peer.protectedRxCounter,
+                protectedFramesSentTotal: base.peer.protectedFramesSentTotal,
+                protectedFramesReceivedTotal: base.peer.protectedFramesReceivedTotal,
+                authenticatedGenerationsTotal: base.peer.authenticatedGenerationsTotal,
+                rekeysCompletedTotal: base.peer.rekeysCompletedTotal
+            )
         )
     }
 
@@ -278,6 +298,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     private func publish(state: String, failureReason: String?) {
         let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason, nextRetryMilliseconds: nextRetryMilliseconds)
+        statusLock.lock()
+        liveSnapshotProjection = value
+        statusLock.unlock()
         snapshot = value
         onSnapshot?(value)
     }

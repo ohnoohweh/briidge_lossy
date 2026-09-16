@@ -257,6 +257,7 @@ REQ-AUT-004:
     - tests/unit/test_secure_link_psk.py::test_psk_handshake_and_protected_data_flow_over_wrapped_inner_session
     - tests/unit/test_tcp_multi_peer.py::test_inbound_passthrough_keeps_mux_shaped_secure_link_payloads_unmodified
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK
 
 REQ-AUT-005:
   # Multi-peer SecureLink coverage waits for authenticated peer state before
@@ -388,6 +389,7 @@ REQ-AUT-008:
     - tests/unit/test_secure_link_psk.py::test_client_local_secure_link_auth_times_out_without_peer_confirmation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_reconnect_edge_reprimes_after_authenticated_failure_like_python
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimePublishesBoundedRetryWindow
 REQ-AUT-009:
   # The supported admin surface for SecureLink remains the peer-scoped summary
   # contract; a changed session id is not recovered health until the new row is
@@ -419,6 +421,7 @@ REQ-AUT-009:
     - tests/unit/test_secure_link_psk.py::test_wrong_psk_prevents_authenticated_session
     - tests/unit/test_secure_link_psk.py::test_authenticated_client_failure_waits_for_channelmux_rotation
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_queues_first_payload_until_handshake_completes
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK
 REQ-AUT-010:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold

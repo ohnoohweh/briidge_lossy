@@ -627,6 +627,8 @@ struct ObstacleBridgeCryptoTests {
             authenticated: true,
             pendingRekeySessionID: 0,
             applicationSendingBlocked: false,
+            protectedFramesSentTotal: 1,
+            protectedFramesReceivedTotal: 0,
             authenticatedGenerationsTotal: 2,
             rekeysCompletedTotal: 1
         ))
@@ -637,6 +639,8 @@ struct ObstacleBridgeCryptoTests {
             authenticated: true,
             pendingRekeySessionID: 0,
             applicationSendingBlocked: false,
+            protectedFramesSentTotal: 0,
+            protectedFramesReceivedTotal: 2,
             authenticatedGenerationsTotal: 2,
             rekeysCompletedTotal: 1
         ))

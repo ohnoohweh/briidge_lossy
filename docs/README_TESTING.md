@@ -207,6 +207,7 @@ swift test --filter ObstacleBridgeCryptoTests
 swift test --filter ObstacleBridgeLinuxReceiveWorkerTests
 swift test --filter ObstacleBridgeLinuxOverlayTransportTests
 swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+swift test --filter ObstacleBridgeLinuxAdminServerTests
 ./scripts/build_linux_app.sh
 pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secure_link_psk_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k myudp_runtime_probe_recovers_repeated_dropped_application_data
@@ -235,6 +236,10 @@ briefly after every protected reply so the Linux runner can drain it without a
 port-close ICMP failure; its fixture-level timing regression runs without a
 Linux Swift toolchain. Coverage includes candidate
 rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The Admin probe verifies that the Linux peer row is one Core/adapter-derived
+redacted projection: lifecycle/readiness, epoch/session diagnostics, retry
+window, and protected frame counters/totals are published without a PSK,
+nonce, key, or plaintext.
 The fixture additionally proves the independent myUDP transport-counter sequence
 through the SecureLink handshake, peer-first payload delivery, and a protected
 ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
