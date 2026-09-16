@@ -232,19 +232,30 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let retryPresented = DispatchSemaphore(value: 0)
         let freshReady = DispatchSemaphore(value: 0)
         let retiredEpochRejected = DispatchSemaphore(value: 0)
+        let observedStateLock = NSLock()
+        var freshReadinessWasPublished = false
         runtime.onSnapshot = { snapshot in
             if snapshot.state == "reconnecting", snapshot.nextRetryMilliseconds == 100 { retryPresented.signal() }
             if snapshot.state == "connected", runtime.configuredRuntime.connectionEpoch >= 2 {
+                observedStateLock.lock()
+                freshReadinessWasPublished = true
+                observedStateLock.unlock()
                 freshReady.signal()
             }
-            if snapshot.state == "reconnecting", runtime.configuredRuntime.connectionEpoch >= 2 {
+            observedStateLock.lock()
+            let mayReportRetiredEpochRejection = freshReadinessWasPublished
+            observedStateLock.unlock()
+            if snapshot.state == "reconnecting", runtime.configuredRuntime.connectionEpoch >= 2, mayReportRetiredEpochRejection {
                 retiredEpochRejected.signal()
             }
         }
         runtime.start()
         #expect(retryPresented.wait(timeout: .now() + 3) == .success)
         #expect(freshReady.wait(timeout: .now() + 3) == .success)
-        #expect(runtime.status().peer.ready)
+        observedStateLock.lock()
+        let published = freshReadinessWasPublished
+        observedStateLock.unlock()
+        #expect(published)
         #expect(retiredEpochRejected.wait(timeout: .now() + 3) == .success)
         #expect(!runtime.status().peer.ready)
         runtime.stop()

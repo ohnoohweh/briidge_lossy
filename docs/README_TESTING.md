@@ -246,6 +246,8 @@ the authenticated secure-link protocol state remains distinct from transport
 `connected`, retry is a bounded duration, and Python-only traffic/rate and
 diagnostic categories are documented capability limits rather than fabricated
 zero-valued fields.
+The silent-peer reconnect probe records the replacement authenticated snapshot
+before injecting retired-epoch data, then requires the resulting withdrawal.
 The fixture additionally proves the independent myUDP transport-counter sequence
 through the SecureLink handshake, peer-first payload delivery, and a protected
 ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
