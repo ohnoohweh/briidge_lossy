@@ -858,13 +858,14 @@ final class PythonOverlayPeer {
             s.sendto(data,peer); s.close()
             """
         }
-        if mode == "tcp-securelink-reconnect" || mode == "ws-securelink-reconnect" || mode == "tcp-securelink-reconnect-stale" || mode == "ws-securelink-reconnect-stale" || mode == "tcp-securelink-silent-reconnect" || mode == "ws-securelink-silent-reconnect" {
+        if mode == "tcp-securelink-reconnect" || mode == "ws-securelink-reconnect" || mode == "tcp-securelink-reconnect-stale" || mode == "ws-securelink-reconnect-stale" || mode == "tcp-securelink-silent-reconnect" || mode == "ws-securelink-silent-reconnect" || mode == "tcp-securelink-silent-reconnect-stale" || mode == "ws-securelink-silent-reconnect-stale" || mode == "tcp-securelink-stall-handshake" {
             return """
             import base64, hashlib, hmac, socket, struct, time
             from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
             WS = \(mode.hasPrefix("ws-") ? "True" : "False")
             STALE = \(mode.contains("-stale") ? "True" : "False")
             SILENT = \(mode.contains("silent") ? "True" : "False")
+            STALL_HANDSHAKE = \(mode.contains("stall-handshake") ? "True" : "False")
             s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(2); print(s.getsockname()[1], flush=True)
             def nread(c,n):
                 b=b''
@@ -891,7 +892,7 @@ final class PythonOverlayPeer {
                 out=b''; prior=b''
                 for i in range(1,(length+31)//32+1): prior=hmac.new(prk,prior+info+bytes([i]),hashlib.sha256).digest(); out+=prior
                 return out[:length]
-            stale=None
+            stale=None; retired_sid=None
             for epoch in range(2):
                 c,_=s.accept()
                 if WS:
@@ -901,10 +902,17 @@ final class PythonOverlayPeer {
                     accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
                     c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
                 hello=read(c); sid=int.from_bytes(hello[4:12],'big'); cn=hello[20:52]; sn=bytes(range(32)); psk=b'linux-swift-psk'
+                if sid == retired_sid:
+                    c.close(); continue
+                if STALL_HANDSHAKE:
+                    time.sleep(2); c.close(); break
                 proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write(c,header(2,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 client_proof=read(c); assert ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(1).to_bytes(8,'big'),client_proof[20:],client_proof[:20])==b''; ack=header(4,sid,1); write(c,ack+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(1).to_bytes(8,'big'),b'',ack))
+                if epoch == 0:
+                    stale_header=header(4,sid,2); stale=stale_header+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'retired',stale_header)
                 if SILENT and epoch == 0:
+                    retired_sid=sid
                     time.sleep(0.08); c.close(); continue
                 if STALE and epoch == 1:
                     write(c,stale); c.close(); continue

@@ -392,6 +392,9 @@ REQ-AUT-008:
     - ios/tests/test_ios_secure_link_transport_adapter.py::test_ios_secure_link_transport_adapter_times_out_unconfirmed_handshake_and_restarts
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimePublishesBoundedRetryWindow
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::peerProjectionCoversConnectedReconnectingFailedAndStoppedStates
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentProtectedPythonPeersUseDeadlineRetryFreshReadinessAndRejectRetiredEpoch
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentMyudpPeerDeliversReceiveDeadlineFailureToLiveRuntime
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::stopCancelsStalledPythonSecureLinkHandshakeWithoutWaitingForReceiveTimeout
 REQ-AUT-009:
   # The supported admin surface for SecureLink remains the peer-scoped summary
   # contract; a changed session id is not recovered health until the new row is

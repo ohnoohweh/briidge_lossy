@@ -133,7 +133,12 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     }
 
     public func close() {
-        if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 }
+        if descriptor >= 0 {
+            let active = descriptor
+            descriptor = -1
+            _ = shutdown(active, SHUT_RDWR)
+            _ = Glibc.close(active)
+        }
     }
     deinit { close() }
 

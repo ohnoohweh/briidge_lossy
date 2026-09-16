@@ -42,6 +42,7 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
     case unsupportedWebSocketTLS
     case webSocketHandshakeFailed
     case webSocketProtocolError
+    case cancelled
 
     public var errorDescription: String? {
         switch self {
@@ -53,6 +54,7 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
         case .unsupportedWebSocketTLS: return "wss is not admitted until a Linux TLS backend is qualified"
         case .webSocketHandshakeFailed: return "WebSocket upgrade was rejected"
         case .webSocketProtocolError: return "invalid WebSocket frame"
+        case .cancelled: return "overlay connection was cancelled"
         }
     }
 }
@@ -340,6 +342,7 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
 
 private final class POSIXStreamConnection {
     private var fd: Int32
+    private let descriptorLock = NSLock()
 
     init(host: String, port: Int, timeoutMilliseconds: Int = 5_000) throws {
         var hints = addrinfo()
@@ -377,17 +380,21 @@ private final class POSIXStreamConnection {
     deinit { close() }
 
     func close() {
-        if fd >= 0 {
-            _ = Glibc.close(fd)
-            fd = -1
-        }
+        descriptorLock.lock()
+        let descriptor = fd
+        fd = -1
+        descriptorLock.unlock()
+        guard descriptor >= 0 else { return }
+        _ = shutdown(descriptor, SHUT_RDWR)
+        _ = Glibc.close(descriptor)
     }
 
     func write(_ data: Data) throws {
+        let descriptor = try activeDescriptor()
         var offset = 0
         while offset < data.count {
             let sent = data.withUnsafeBytes { bytes in
-                Glibc.send(fd, bytes.baseAddress!.advanced(by: offset), data.count - offset, 0)
+                Glibc.send(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset, 0)
             }
             if sent > 0 { offset += sent; continue }
             if sent == 0 { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
@@ -397,11 +404,12 @@ private final class POSIXStreamConnection {
     }
 
     func readExactly(_ count: Int) throws -> Data {
+        let descriptor = try activeDescriptor()
         var output = Data(count: count)
         var offset = 0
         while offset < count {
             let received = output.withUnsafeMutableBytes { bytes in
-                Glibc.recv(fd, bytes.baseAddress!.advanced(by: offset), count - offset, 0)
+                Glibc.recv(descriptor, bytes.baseAddress!.advanced(by: offset), count - offset, 0)
             }
             if received > 0 { offset += received; continue }
             if received == 0 { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
@@ -429,5 +437,13 @@ private final class POSIXStreamConnection {
         _ = withUnsafePointer(to: &timeout) {
             setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, $0, socklen_t(MemoryLayout<timeval>.size))
         }
+    }
+
+    private func activeDescriptor() throws -> Int32 {
+        descriptorLock.lock()
+        let descriptor = fd
+        descriptorLock.unlock()
+        guard descriptor >= 0 else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
+        return descriptor
     }
 }

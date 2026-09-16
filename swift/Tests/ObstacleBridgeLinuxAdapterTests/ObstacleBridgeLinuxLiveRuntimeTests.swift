@@ -183,18 +183,42 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxLiveRuntime(
             configuration: .init(transport: .myudp, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: 50),
-            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 1)
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 2)
         )
-        let failed = DispatchSemaphore(value: 0)
-        runtime.onSnapshot = { if $0.state == "failed" { failed.signal() } }
+        let retrying = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "reconnecting", $0.nextRetryMilliseconds == 10 { retrying.signal() } }
         runtime.start()
-        #expect(failed.wait(timeout: .now() + 2) == .success)
-        #expect(runtime.snapshot.failureReason != nil)
+        #expect(retrying.wait(timeout: .now() + 2) == .success)
+        #expect(runtime.status().peer.lifecycleState == "reconnecting")
+        #expect(runtime.status().peer.nextRetryMilliseconds == 10)
         runtime.stop()
     }
 
-    @Test func silentProtectedPythonPeersUseDeadlineRetryAndFreshReadyEpoch() throws {
-        for (mode, transport) in [("tcp-securelink-silent-reconnect", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-silent-reconnect", .ws)] {
+    @Test func stopCancelsStalledPythonSecureLinkHandshakeWithoutWaitingForReceiveTimeout() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-stall-handshake")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .tcp, host: "127.0.0.1", port: peer.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                receiveIdleTimeoutMilliseconds: 5_000
+            ),
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 2)
+        )
+        runtime.start()
+        // The Python peer accepts the connection and withholds SERVER_HELLO,
+        // leaving the serialized queue in the SecureLink handshake receive.
+        Thread.sleep(forTimeInterval: 0.1)
+        let started = DispatchTime.now().uptimeNanoseconds
+        runtime.stop()
+        let elapsedMilliseconds = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+        #expect(elapsedMilliseconds < 500)
+        #expect(runtime.snapshot.state == "stopped")
+        #expect(runtime.status().peer.nextRetryMilliseconds == nil)
+    }
+
+    @Test func silentProtectedPythonPeersUseDeadlineRetryFreshReadinessAndRejectRetiredEpoch() throws {
+        for (mode, transport) in [("tcp-securelink-silent-reconnect-stale", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-silent-reconnect-stale", .ws)] {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxLiveRuntime(
@@ -207,15 +231,22 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         )
         let retryPresented = DispatchSemaphore(value: 0)
         let freshReady = DispatchSemaphore(value: 0)
+        let retiredEpochRejected = DispatchSemaphore(value: 0)
         runtime.onSnapshot = { snapshot in
             if snapshot.state == "reconnecting", snapshot.nextRetryMilliseconds == 100 { retryPresented.signal() }
             if snapshot.state == "connected", runtime.configuredRuntime.connectionEpoch >= 2 {
                 freshReady.signal()
             }
+            if snapshot.state == "reconnecting", runtime.configuredRuntime.connectionEpoch >= 2 {
+                retiredEpochRejected.signal()
+            }
         }
         runtime.start()
         #expect(retryPresented.wait(timeout: .now() + 3) == .success)
         #expect(freshReady.wait(timeout: .now() + 3) == .success)
+        #expect(runtime.status().peer.ready)
+        #expect(retiredEpochRejected.wait(timeout: .now() + 3) == .success)
+        #expect(!runtime.status().peer.ready)
         runtime.stop()
         }
     }

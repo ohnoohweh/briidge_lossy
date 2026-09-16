@@ -160,6 +160,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     public func stop() {
+        // A SecureLink handshake performs synchronous lower-transport I/O on
+        // `queue`.  Cancel its published session before entering that queue so
+        // shutdown cannot wait for the receive timeout.
+        configuredRuntime.cancelInFlightConnection()
         queue.sync {
             stopped = true
             cancelRetry()
@@ -256,6 +260,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             refreshStatusProjection()
             failureReason = nil
             publish(state: "connected", failureReason: nil)
+        } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
+            // `stop()` has already interrupted the in-flight lower session.
+            // Do not publish a retry that could briefly outlive shutdown.
+            return
         } catch {
             session = nil
             channelMux = nil
