@@ -1,5 +1,6 @@
 import json
 import os
+import pwd
 import signal
 import shutil
 import socket
@@ -496,12 +497,35 @@ def _proc_log_tail(procs: tuple[subprocess.Popen[str], ...], logs: tuple[Path, .
     return "\n".join(chunks)
 
 
+def _process_ids_for_executable(executable: Path) -> set[int]:
+    completed = subprocess.run(
+        ["ps", "-axo", "pid=,command="],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    result: set[int] = set()
+    for row in completed.stdout.splitlines():
+        fields = row.strip().split(maxsplit=1)
+        if len(fields) != 2:
+            continue
+        try:
+            pid = int(fields[0])
+        except ValueError:
+            continue
+        if fields[1].split(maxsplit=1)[0] == str(executable):
+            result.add(pid)
+    return result
+
+
 def _start_logged_process(
     cmd: list[str],
     *,
     name: str,
     tmp_path: Path,
     env_extra: dict[str, str] | None = None,
+    run_as_invoking_user: bool = False,
+    launch_via_launchservices: bool = False,
 ) -> tuple[subprocess.Popen[str], Path, object]:
     log_path = tmp_path / f"{name}.log"
     log_fp = log_path.open("w", encoding="utf-8")
@@ -509,6 +533,76 @@ def _start_logged_process(
     env["PYTHONUNBUFFERED"] = "1"
     if env_extra:
         env.update(env_extra)
+    preexec_fn = None
+    invoking_uid: int | None = None
+    launchservices_executable: Path | None = None
+    existing_launchservices_pids: set[int] = set()
+    if run_as_invoking_user:
+        sudo_uid = str(os.environ.get("SUDO_UID") or "").strip()
+        sudo_gid = str(os.environ.get("SUDO_GID") or "").strip()
+        if sys.platform != "darwin" or os.geteuid() != 0 or not sudo_uid or not sudo_gid:
+            raise RuntimeError("packaged macOS app tests require SUDO_UID/SUDO_GID to run HostRunner as the invoking user")
+        uid, gid = int(sudo_uid), int(sudo_gid)
+        invoking_uid = uid
+        account = pwd.getpwuid(uid)
+        env.update({"HOME": account.pw_dir, "USER": account.pw_name, "LOGNAME": account.pw_name})
+        runtime_config_index: int | None
+        runtime_config: Path | None
+        try:
+            runtime_config_index = cmd.index("--runtime-config") + 1
+            runtime_config = Path(cmd[runtime_config_index])
+        except (ValueError, IndexError):
+            runtime_config_index = None
+            configured_runtime_path = str(env.get("OBSTACLEBRIDGE_APP_RUNTIME_CONFIG") or "").strip()
+            runtime_config = Path(configured_runtime_path) if configured_runtime_path else None
+        if runtime_config is not None:
+            user_runtime_dir = Path("/private/tmp") / f"obstaclebridge-macos-swift-{uid}"
+            user_runtime_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chown(user_runtime_dir, uid, gid)
+            user_runtime_config = user_runtime_dir / f"{name}-{os.getpid()}-{time.time_ns()}.json"
+            shutil.copyfile(runtime_config, user_runtime_config)
+            os.chown(user_runtime_config, uid, gid)
+            user_runtime_config.chmod(0o600)
+            if runtime_config_index is not None:
+                cmd = [str(user_runtime_config) if index == runtime_config_index else value for index, value in enumerate(cmd)]
+            else:
+                env["OBSTACLEBRIDGE_APP_RUNTIME_CONFIG"] = str(user_runtime_config)
+
+        def demote_to_invoking_user() -> None:
+            os.setgid(gid)
+            os.setuid(uid)
+
+        preexec_fn = demote_to_invoking_user
+    if launch_via_launchservices:
+        if sys.platform != "darwin":
+            raise RuntimeError("LaunchServices application launch is macOS-only")
+        app_executable = Path(cmd[0])
+        app_bundle = app_executable.parents[2]
+        if app_bundle.suffix != ".app":
+            raise RuntimeError(f"expected primary executable inside an app bundle, got {app_executable}")
+        # Directly exec'ing Contents/MacOS/ObstacleBridge bypasses the
+        # LaunchServices context BTM uses to associate the SMAppService item
+        # with its app container.  open(1) preserves the isolated test
+        # configuration while registering that real application lifecycle.
+        launchservices_executable = app_executable
+        existing_launchservices_pids = _process_ids_for_executable(app_executable)
+        cmd = [
+            "/usr/bin/open",
+            "-n",
+            "-W",
+            "-g",
+        ]
+        for key in ("OBSTACLEBRIDGE_APP_RUNTIME_CONFIG", "NO_PROXY", "no_proxy"):
+            if env.get(key):
+                cmd.extend(["--env", f"{key}={env[key]}"])
+        cmd.append(str(app_bundle))
+        if invoking_uid is None:
+            raise RuntimeError("LaunchServices launch requires the sudo invoking user")
+        # setuid() changes credentials but leaves the root test's bootstrap
+        # namespace intact.  Ask launchd to enter the logged-in user's GUI
+        # domain instead, otherwise open(1) fails with LS error -10810.
+        cmd = ["/bin/launchctl", "asuser", str(invoking_uid), *cmd]
+        preexec_fn = None
     process = subprocess.Popen(
         cmd,
         cwd=str(ROOT),
@@ -516,7 +610,15 @@ def _start_logged_process(
         stderr=subprocess.STDOUT,
         text=True,
         env=env,
+        preexec_fn=preexec_fn,
     )
+    if launchservices_executable is not None:
+        for _ in range(30):
+            launched_pids = _process_ids_for_executable(launchservices_executable) - existing_launchservices_pids
+            if launched_pids:
+                setattr(process, "obstaclebridge_launchservices_pids", launched_pids)
+                break
+            time.sleep(0.1)
     return process, log_path, log_fp
 
 
@@ -528,6 +630,13 @@ def _stop_process(process: subprocess.Popen[str], log_path: Path, log_fp: object
     except subprocess.TimeoutExpired:
         process.kill()
         process.wait(timeout=5.0)
+    # open -W waits for the application but does not own it.  Terminate only
+    # the instance this test started, never a pre-existing user app.
+    for pid in getattr(process, "obstaclebridge_launchservices_pids", set()):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
     log_fp.close()
     if process.returncode not in (0, -15, 143):
         raise AssertionError(
@@ -596,6 +705,12 @@ def _swift_config(
         "mtu": 1400,
     }
     return {
+        # The primary macOS AppKit executable selects its app-scoped runner
+        # through the shared connector setting.  The nested HostRunner accepts
+        # this configuration directly, but omitting it here would make a
+        # packaged-XPC test exercise the packet-tunnel fallback instead of the
+        # production host-runner lifecycle.
+        "iOS_TUN_connector": {"packetflow_connector": "swift_host_runner"},
         "overlay_transport": "myudp",
         "udp_bind": "127.0.0.1",
         "udp_own_port": 0,
@@ -633,6 +748,7 @@ def _swift_config(
 
 def _swift_admin_only_config(*, admin_port: int) -> dict:
     return {
+        "iOS_TUN_connector": {"packetflow_connector": "swift_host_runner"},
         "overlay_transport": "myudp",
         "udp_bind": "127.0.0.1",
         "udp_own_port": 0,
@@ -687,7 +803,7 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
     last_admin_error = ""
     while time.time() < end:
         try:
-            status = _local_admin_json(admin_port, "/api/tun-helper/status")
+            status = _local_admin_json(admin_port, "/api/tun-helper/status", timeout=20.0)
         except (ConnectionResetError, RuntimeError, TimeoutError, OSError) as exc:
             last_admin_error = f"{type(exc).__name__}: {exc}"
             time.sleep(0.5)
@@ -727,13 +843,34 @@ def _wait_packaged_xpc_reachable(admin_port: int, *, timeout: float = 20.0) -> d
 
 
 def _activate_packaged_xpc_or_skip(admin_port: int) -> dict:
-    status = _local_admin_json(admin_port, "/api/tun-helper/status")
-    helper = dict(status.get("tun_helper") or {})
-    package = dict(helper.get("package") or {})
-    if package.get("xpc_reachable") is True:
-        return package
+    # HostRunner can accept its first Admin connection before its status
+    # snapshot is ready. Retry that narrow startup race; later XPC reachability
+    # still has the ordinary bounded failure path below.
+    initial_error = ""
+    for _ in range(3):
+        try:
+            status = _local_admin_json(admin_port, "/api/tun-helper/status", timeout=20.0)
+            helper = dict(status.get("tun_helper") or {})
+            package = dict(helper.get("package") or {})
+            if package.get("xpc_reachable") is True:
+                return package
+            break
+        except (ConnectionResetError, RuntimeError, TimeoutError, OSError) as exc:
+            initial_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.5)
 
-    result = _local_admin_post_json(admin_port, "/api/tun-helper/action", {"action": "register"})
+    try:
+        result = _local_admin_post_json(
+            admin_port,
+            "/api/tun-helper/action",
+            {"action": "register"},
+            timeout=20.0,
+        )
+    except (ConnectionResetError, RuntimeError, TimeoutError, OSError) as exc:
+        raise RuntimeError(
+            "packaged XPC helper registration Admin request failed after initial status retries; "
+            f"initial_status_error={initial_error}; registration_error={type(exc).__name__}: {exc}"
+        ) from exc
     action_status = dict(result.get("status") or {})
     if _smappservice_status(action_status) == "requires_approval":
         pytest.skip(
@@ -745,7 +882,12 @@ def _activate_packaged_xpc_or_skip(admin_port: int) -> dict:
     return _wait_packaged_xpc_reachable(admin_port)
 
 
-def _activate_packaged_xpc_before_tun_or_skip(swift_hostrunner: Path, tmp_path: Path) -> None:
+def _activate_packaged_xpc_before_tun_or_skip(
+    swift_hostrunner: Path,
+    tmp_path: Path,
+    *,
+    launches_primary_app: bool = False,
+) -> None:
     admin_port = _unused_tcp_port()
     config_path = tmp_path / "swift-xpc-preflight.json"
     config_path.write_text(
@@ -753,16 +895,16 @@ def _activate_packaged_xpc_before_tun_or_skip(swift_hostrunner: Path, tmp_path: 
         encoding="utf-8",
     )
     proc, log, log_fp = _start_logged_process(
-        [
-            str(swift_hostrunner),
-            "--runtime-config",
-            str(config_path),
-            "--hold-sec",
-            "20",
-        ],
+        [str(swift_hostrunner)] if launches_primary_app else [str(swift_hostrunner), "--runtime-config", str(config_path), "--hold-sec", "60"],
         name="swift-xpc-preflight",
         tmp_path=tmp_path,
-        env_extra={"NO_PROXY": "127.0.0.1,localhost,::1", "no_proxy": "127.0.0.1,localhost,::1"},
+        env_extra={
+            "NO_PROXY": "127.0.0.1,localhost,::1",
+            "no_proxy": "127.0.0.1,localhost,::1",
+            "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG": str(config_path) if launches_primary_app else "",
+        },
+        run_as_invoking_user=True,
+        launch_via_launchservices=launches_primary_app,
     )
     try:
         _wait_admin_up(admin_port, timeout=15.0, procs=(proc,), logs=(log,))
@@ -772,7 +914,12 @@ def _activate_packaged_xpc_before_tun_or_skip(swift_hostrunner: Path, tmp_path: 
         _stop_process(proc, log, log_fp)
 
 
-def _stop_packaged_xpc_before_tun(swift_hostrunner: Path, tmp_path: Path) -> None:
+def _stop_packaged_xpc_before_tun(
+    swift_hostrunner: Path,
+    tmp_path: Path,
+    *,
+    launches_primary_app: bool = False,
+) -> None:
     admin_port = _unused_tcp_port()
     config_path = tmp_path / "swift-xpc-cleanup.json"
     config_path.write_text(
@@ -780,16 +927,16 @@ def _stop_packaged_xpc_before_tun(swift_hostrunner: Path, tmp_path: Path) -> Non
         encoding="utf-8",
     )
     proc, log, log_fp = _start_logged_process(
-        [
-            str(swift_hostrunner),
-            "--runtime-config",
-            str(config_path),
-            "--hold-sec",
-            "20",
-        ],
+        [str(swift_hostrunner)] if launches_primary_app else [str(swift_hostrunner), "--runtime-config", str(config_path), "--hold-sec", "60"],
         name="swift-xpc-cleanup",
         tmp_path=tmp_path,
-        env_extra={"NO_PROXY": "127.0.0.1,localhost,::1", "no_proxy": "127.0.0.1,localhost,::1"},
+        env_extra={
+            "NO_PROXY": "127.0.0.1,localhost,::1",
+            "no_proxy": "127.0.0.1,localhost,::1",
+            "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG": str(config_path) if launches_primary_app else "",
+        },
+        run_as_invoking_user=True,
+        launch_via_launchservices=launches_primary_app,
     )
     try:
         _wait_admin_up(admin_port, timeout=15.0, procs=(proc,), logs=(log,))
@@ -915,10 +1062,21 @@ def _run_swift_elevated_packet_carry(
     _repair_stale_loopback_route()
     artifact = build_macos_swift_artifact()
     swift_hostrunner = artifact.app_bundle / "Contents" / "MacOS" / "ObstacleBridgeHostRunner"
+    swift_primary_app = artifact.app_bundle / "Contents" / "MacOS" / "ObstacleBridge"
     assert swift_hostrunner.exists()
-    _stop_packaged_xpc_before_tun(swift_hostrunner, tmp_path)
+    assert swift_primary_app.exists()
+    swift_runtime_executable = swift_primary_app if require_packaged_xpc else swift_hostrunner
+    _stop_packaged_xpc_before_tun(
+        swift_runtime_executable,
+        tmp_path,
+        launches_primary_app=require_packaged_xpc,
+    )
     if require_packaged_xpc:
-        _activate_packaged_xpc_before_tun_or_skip(swift_hostrunner, tmp_path)
+        _activate_packaged_xpc_before_tun_or_skip(
+            swift_runtime_executable,
+            tmp_path,
+            launches_primary_app=True,
+        )
 
     overlay_port = _unused_udp_port()
     python_admin_port = _unused_tcp_port()
@@ -959,20 +1117,17 @@ def _run_swift_elevated_packet_carry(
         tmp_path=tmp_path,
     )
     swift_proc, swift_log, swift_log_fp = _start_logged_process(
-        [
-            str(swift_hostrunner),
-            "--runtime-config",
-            str(swift_config_path),
-            "--hold-sec",
-            "60",
-        ],
+        [str(swift_runtime_executable)] if require_packaged_xpc else [str(swift_runtime_executable), "--runtime-config", str(swift_config_path), "--hold-sec", "60"],
         name="swift-hostrunner",
         tmp_path=tmp_path,
         env_extra={
             "NO_PROXY": "127.0.0.1,localhost,::1",
             "OBSTACLEBRIDGE_MACOS_TUN_HELPER_TRANSPORT": "loopback" if not require_packaged_xpc else "",
+            "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG": str(swift_config_path) if require_packaged_xpc else "",
             "no_proxy": "127.0.0.1,localhost,::1",
         },
+        run_as_invoking_user=require_packaged_xpc,
+        launch_via_launchservices=require_packaged_xpc,
     )
     swift_actual_ifname = ""
     python_actual_ifname = ""

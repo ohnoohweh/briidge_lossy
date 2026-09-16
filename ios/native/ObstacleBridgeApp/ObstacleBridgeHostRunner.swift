@@ -310,6 +310,11 @@ final class ObstacleBridgeHostRunner {
     }
 
     static func appScopedRuntimeConfigPath() throws -> String {
+        let testOverride = (ProcessInfo.processInfo.environment[ObstacleBridgeRuntimeConfig.appRuntimeConfigOverrideEnvironmentKey] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !testOverride.isEmpty {
+            return testOverride
+        }
         return try appScopedRootURL()
             .appendingPathComponent("config", isDirectory: true)
             .appendingPathComponent("ObstacleBridge.cfg", isDirectory: false)

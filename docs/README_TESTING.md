@@ -375,6 +375,19 @@ single elevated macOS Swift node without rebuilding it:
   tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
 ```
 
+To qualify one already installed app bundle without rebuilding a surrogate,
+provide its absolute path. The command runs the selected production-mechanism
+lane first; later selected nodes reuse that same bundle:
+
+```bash
+./scripts/run_macos_swift_elevated_tests.sh \
+  --app-bundle /Applications/ObstacleBridge.app \
+  tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
+```
+
+This test controls the app's shared privileged helper and can interrupt an
+active TUN session. Run the copied-app stale-package repair test separately.
+
 For an approved elevated session, `--diagnose-macos-tun-helper` prints the
 system launchd record and recent helper diagnostics without starting a test.
 Use `--codesign-identity "Apple Development: Name (TEAMID)"` before the test

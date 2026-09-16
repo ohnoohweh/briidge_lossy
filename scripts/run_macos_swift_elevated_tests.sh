@@ -42,25 +42,56 @@ if [[ "${1:-}" == "--diagnose-macos-tun-helper" ]]; then
   exit 0
 fi
 
-if [[ "${1:-}" == "--codesign-identity" ]]; then
-  if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
-    echo "[run_macos_swift_elevated_tests] --codesign-identity requires an identity" >&2
+REUSE_EXISTING_BUILD=0
+APP_BUNDLE_OVERRIDE=""
+while [[ "$#" -gt 0 ]]; do
+  case "$1" in
+    --codesign-identity)
+      if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+        echo "[run_macos_swift_elevated_tests] --codesign-identity requires an identity" >&2
+        exit 2
+      fi
+      export OBSTACLEBRIDGE_CODESIGN_IDENTITY="$2"
+      # A signing identity changes the packaged artifact even if Swift sources
+      # are unchanged; bypass source-only freshness checks for this request.
+      export OBSTACLEBRIDGE_FORCE_MACOS_BUILD=1
+      shift 2
+      ;;
+    --reuse-macos-build)
+      REUSE_EXISTING_BUILD=1
+      shift
+      ;;
+    --app-bundle)
+      if [[ "$#" -lt 2 || -z "${2:-}" ]]; then
+        echo "[run_macos_swift_elevated_tests] --app-bundle requires an absolute app-bundle path" >&2
+        exit 2
+      fi
+      APP_BUNDLE_OVERRIDE="$2"
+      shift 2
+      ;;
+    --)
+      shift
+      break
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+if [[ -n "$APP_BUNDLE_OVERRIDE" && -n "${OBSTACLEBRIDGE_CODESIGN_IDENTITY:-}" ]]; then
+  echo "[run_macos_swift_elevated_tests] --app-bundle cannot be combined with --codesign-identity" >&2
+  exit 2
+fi
+
+if [[ -n "$APP_BUNDLE_OVERRIDE" ]]; then
+  if [[ "$APP_BUNDLE_OVERRIDE" != /* ]]; then
+    echo "[run_macos_swift_elevated_tests] --app-bundle must be absolute" >&2
     exit 2
   fi
-  export OBSTACLEBRIDGE_CODESIGN_IDENTITY="$2"
-  # A signing identity changes the packaged artifact even if Swift sources are
-  # unchanged; bypass source-only freshness checks for this explicit request.
-  export OBSTACLEBRIDGE_FORCE_MACOS_BUILD=1
-  shift 2
-fi
-
-REUSE_EXISTING_BUILD=0
-if [[ "${1:-}" == "--reuse-macos-build" ]]; then
+  export OBSTACLEBRIDGE_MACOS_APP_BUNDLE="$APP_BUNDLE_OVERRIDE"
   REUSE_EXISTING_BUILD=1
-  shift
-fi
-
-if [[ "$REUSE_EXISTING_BUILD" -eq 1 ]]; then
+elif [[ "$REUSE_EXISTING_BUILD" -eq 1 ]]; then
   for required_artifact in \
     "$ROOT_DIR/ios/build/macos/ObstacleBridgeHostRunner" \
     "$ROOT_DIR/ios/build/macos/ObstacleBridge.app/Contents/MacOS/ObstacleBridgeHostRunner" \

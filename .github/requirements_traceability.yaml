@@ -846,9 +846,12 @@ REQ-LIFE-010:
   # sever the Actions control connection, while remaining required on an
   # authorized local host; the Swift packaged-XPC case may leave the helper
   # service disabled after privileged setup but the Admin diagnostics endpoint
-  # remains responsive. On macOS 26, a packaged-XPC lane reports a failure
-  # with the exact helper-specific BTM `fullPath is nil` rejection; every
-  # reachability timeout is a failure.
+  # remains responsive. On macOS 26, a packaged-XPC lane starts the primary
+  # app through LaunchServices and reports the exact helper-specific BTM
+  # `fullPath is nil` rejection; every reachability timeout is a failure. The
+  # resolution lane qualifies the same signed helper/plist contract from an
+  # installer-owned /Applications artifact rather than masking BTM container
+  # lookup failure.
   # The elevated wrapper emits unbuffered per-test progress and exit route,
   # interface, and process diagnostics so a hosted interruption identifies its
   # last active case. The hosted Python matrix runs every elevated case in an

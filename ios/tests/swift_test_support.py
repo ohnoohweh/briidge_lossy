@@ -188,6 +188,39 @@ def _macos_artifact_exists(build_dir: Path) -> bool:
     ))
 
 
+def _configured_macos_app_artifact(env: dict[str, str], *, variant: str) -> MacOSSwiftArtifact | None:
+    """Use an explicitly selected real app bundle without rebuilding it."""
+    configured_path = str(env.get("OBSTACLEBRIDGE_MACOS_APP_BUNDLE") or "").strip()
+    if not configured_path:
+        return None
+    if variant != "normal":
+        raise AssertionError("OBSTACLEBRIDGE_MACOS_APP_BUNDLE cannot be used for failure-injection artifacts")
+    app_bundle = Path(configured_path).expanduser().resolve()
+    macos_dir = app_bundle / "Contents" / "MacOS"
+    executables = (
+        macos_dir / "ObstacleBridge",
+        macos_dir / "ObstacleBridgeHostRunner",
+        macos_dir / "ObstacleBridgeTunHelper",
+    )
+    required_files = (
+        app_bundle / "Contents" / "Library" / "LaunchDaemons" / "com.obstaclebridge.macos.ObstacleBridge.TunHelper.plist",
+    )
+    missing = [str(path) for path in executables if not path.is_file() or not os.access(path, os.X_OK)]
+    missing.extend(str(path) for path in required_files if not path.is_file())
+    if missing:
+        raise AssertionError(
+            "OBSTACLEBRIDGE_MACOS_APP_BUNDLE is not a complete ObstacleBridge macOS app: "
+            + ", ".join(missing)
+        )
+    return MacOSSwiftArtifact(
+        variant=variant,
+        build_dir=app_bundle.parent,
+        binary_path=macos_dir / "ObstacleBridgeHostRunner",
+        app_bundle=app_bundle,
+        build_info_path=app_bundle / "Contents" / "Resources" / "ObstacleBridge.build-info.json",
+    )
+
+
 @lru_cache(maxsize=None)
 def build_macos_swift_artifact(*, failure_injection: bool = False) -> MacOSSwiftArtifact:
     if sys.platform != "darwin":
@@ -203,6 +236,9 @@ def build_macos_swift_artifact(*, failure_injection: bool = False) -> MacOSSwift
     env["OBSTACLEBRIDGE_MACOS_BUILD_VARIANT"] = variant
     if failure_injection:
         env["OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION"] = "1"
+    configured_artifact = _configured_macos_app_artifact(env, variant=variant)
+    if configured_artifact is not None:
+        return configured_artifact
     build_dir = IOS_DIR / "build" / ("macos" if variant == "normal" else f"macos-{variant}")
     reuse_prebuilt = str(env.get("OBSTACLEBRIDGE_REUSE_MACOS_BUILD") or "").strip() == "1"
     force_rebuild = str(env.get("OBSTACLEBRIDGE_FORCE_MACOS_BUILD") or "").strip() == "1"

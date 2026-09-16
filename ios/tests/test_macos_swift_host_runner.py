@@ -36,7 +36,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import build_macos_swift_artifact
+from swift_test_support import _configured_macos_app_artifact, build_macos_swift_artifact
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -336,6 +336,7 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     elevated = (ROOT / "tests" / "integration" / "test_macos_swift_elevated.py").read_text(encoding="utf-8")
     xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    tunnel_control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
 
     # The ordinary packet-carry lane starts the built app bundle and requires
     # an actual XPC transport.  The separate /Applications copy is only for
@@ -345,6 +346,18 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert 'transportKind: "xpc"' in (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert "'fullPath is nil'; this is a failing packaged-XPC qualification result, not an approval skip" in elevated
     assert "SMAppServiceActivationTest.app" in elevated
+    elevated_wrapper = (ROOT / "scripts" / "run_macos_swift_elevated_tests.sh").read_text(encoding="utf-8")
+    assert "--app-bundle" in elevated_wrapper
+    assert "OBSTACLEBRIDGE_MACOS_APP_BUNDLE" in elevated_wrapper
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG" in elevated
+    assert "ObstacleBridgeRuntimeConfig.appRuntimeConfigOverrideEnvironmentKey" in tunnel_control
+    assert "ObstacleBridgeRuntimeConfig.appRuntimeConfigOverrideEnvironmentKey" in (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert "appRuntimeConfigOverrideEnvironmentKey = \"OBSTACLEBRIDGE_APP_RUNTIME_CONFIG\"" in runtime_config
+    assert '"iOS_TUN_connector": {"packetflow_connector": "swift_host_runner"}' in elevated
+    assert "launch_via_launchservices" in elevated
+    assert '"/usr/bin/open"' in elevated
+    assert '"/bin/launchctl", "asuser"' in elevated
     assert "try server.handleXPCPacketPayload(raw)" in xpc_source
     assert "self?.sendPacketFromHelper(packet)" in xpc_source
     assert "self?.sendEventFromHelper(event: event, payload: payload)" in xpc_source
@@ -371,6 +384,29 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "<key>BundleProgram</key>" in build_script
     assert "Contents/MacOS/${HELPER_EXECUTABLE_NAME}" in build_script
     assert "<key>${HELPER_BUNDLE_ID}.xpc</key>" in build_script
+
+
+def test_macos_explicit_app_bundle_artifact_requires_complete_packaged_helper(tmp_path: Path) -> None:
+    app_bundle = tmp_path / "ObstacleBridge.app"
+    macos_dir = app_bundle / "Contents" / "MacOS"
+    plist_dir = app_bundle / "Contents" / "Library" / "LaunchDaemons"
+    for path in (
+        macos_dir / "ObstacleBridge",
+        macos_dir / "ObstacleBridgeHostRunner",
+        macos_dir / "ObstacleBridgeTunHelper",
+        plist_dir / "com.obstaclebridge.macos.ObstacleBridge.TunHelper.plist",
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("fixture", encoding="utf-8")
+        path.chmod(0o755)
+
+    artifact = _configured_macos_app_artifact(
+        {"OBSTACLEBRIDGE_MACOS_APP_BUNDLE": str(app_bundle)}, variant="normal"
+    )
+
+    assert artifact is not None
+    assert artifact.app_bundle == app_bundle.resolve()
+    assert artifact.binary_path == macos_dir / "ObstacleBridgeHostRunner"
 
 
 def test_macos_tun_helper_package_status_validates_bundled_helper_version(tmp_path: Path) -> None:
