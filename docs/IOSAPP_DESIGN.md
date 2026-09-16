@@ -1508,11 +1508,13 @@ The accepted device run uses the normal `ObstacleBridge` app and its bundled
    asserting that the response contains no PSK, nonce, key, plaintext, or
    unredacted secret field.
 
-The live device and host-side peer evidence already proves the first three
-items. The generated build stamp carries commit, dirty, and diff identity into
-the `IPServer` status payload; R005.4b remains open until a newly installed
-device build exposes those values instead of `unknown`. A macOS build log may
-corroborate the source revision, but cannot replace that device-visible
+The physical-device acceptance is qualified. The `IPServer` status response
+reports the embedded commit, dirty/diff identity, and build timestamp; the
+containing app and extension report the same numeric `CFBundleVersion`. The
+host-side peer independently reports the device peer as authenticated, while
+the device endpoint reports an authenticated, app-ready myUDP stack and live
+TUN traffic. These status and peer responses remain redacted. A macOS build
+log corroborates the source revision but does not replace the device-visible
 provenance field.
 
 The extension's internal WebAdmin listener deliberately remains
@@ -1524,9 +1526,14 @@ endpoint. The host-side acceptance probe must use that published service; a
 locally open port or a displayed WebView alone does not prove SecureLink,
 ChannelMux, or the redaction contract.
 
-R005.4c remains distinct: it records a signed release archive and its
-distribution identity. Device qualification of a Debug/development-signed
-bundle does not make an archive production-distribution evidence.
+Optional TestFlight release housekeeping records a signed archive and its
+distribution identity as part of the normal upload. Device qualification of a
+Debug/development-signed bundle does not make an archive
+production-distribution evidence, but TestFlight delivery does not require a
+second functional test: it distributes the exact source revision already
+qualified by R005.4b. Retain the archive size, SHA-256, signing identity,
+bundle identifiers, and TestFlight upload/build reference when making that
+release; it is not a blocker for further development.
 
 Prepare the generated project:
 

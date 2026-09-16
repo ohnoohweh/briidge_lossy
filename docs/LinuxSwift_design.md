@@ -162,6 +162,31 @@ or unsupported compressed frame fails deterministically at the Core decoder
 boundary; the authenticated session remains usable for its next valid
 protected exchange.
 
+The iOS physical-device qualification uses the normal signed app and bundled
+`IPServer` extension rather than the resource-constrained simulator lane. Its
+authenticated overlay-published WebAdmin endpoint exposes redacted status and
+peer data while the device-local WebAdmin listener remains on loopback. The
+qualified device build reports its embedded source commit, dirty/diff identity,
+and timestamp, and its containing app and extension share one numeric
+`CFBundleVersion`. This device evidence covers the functional SecureLink and
+status contract; signed release-archive distribution remains separate work.
+
+The macOS Swift-backed CI lane builds the complete normal app bundle from a
+clean checkout, verifies the nested executable signatures and both bundle
+plists, packages that exact bundle, and reuses it for the host-side tests. Its
+ZIP, SHA-256, and build-info JSON are retained together as one CI artifact.
+The successful job is the macOS build evidence; the `macos-preview` release
+workflow performs its ongoing convenience-preview publication after `main`
+updates, rather than creating a separate development gate.
+
+R005 is closed. Its applicable Linux, macOS, traceability, README, and
+ownership gates pass; the macOS bundle artifact and the physical-iPhone
+SecureLink/WebAdmin evidence qualify their platform-specific outcomes.
+Privileged-TUN and device-only results remain explicitly reported as such,
+rather than being mistaken for ordinary hosted CI coverage. TestFlight archive
+recording is optional release housekeeping and is not an R005 development
+gate.
+
 ## Engineering rules
 
 - Move shared behavior in vertical slices. A slice changes both consumers to
@@ -184,16 +209,6 @@ protected exchange.
 Only unfinished work is listed here. Completed work packages are intentionally
 absent; their durable behavior is described above and their detailed evidence
 lives in the traceability records.
-
-### R005 — SecureLink, crypto, and compression closure
-
-| Item | Platform | Remaining outcome |
-| --- | --- | --- |
-| `R005.4a` | macOS | Build the complete normal macOS app bundle from a clean checkout with the pinned Crypto package, verify and package that exact bundle once, reuse it for the Swift-backed tests, and retain the ZIP, SHA-256, and build-info evidence. Publish the successful `main` build as the replaceable `macos-preview` GitHub Release asset. The iOS-only `IPServer` target remains R005.4b/4c work rather than a macOS build prerequisite. |
-| `R005.4b` | iOS device | On a signed physical iPhone, install and launch the normal app and `IPServer` target, establish an authenticated SecureLink exchange with a host peer, and retrieve redacted status through the app's overlay-published WebAdmin TCP service. Simulator qualification is not required because the available simulator hosts cannot reliably allocate the required resources. The packet-extension build summary must embed the source commit rather than reporting `unknown` before this device row closes. |
-| `R005.4c` | iOS release archive | Produce a signed release archive from the same device-qualified source revision, record its size, SHA-256, signing identity, and bundle identifiers, then install or distribute that exact artifact through the applicable Apple release path. |
-| `R005.6a` | CI | Require the relevant Linux, macOS, traceability, README, and ownership gates for R005 changes. |
-| `R005.6b` | CI/release | Classify privileged-TUN and device-only results separately and close R005 only after every applicable row is qualified. |
 
 ### Core convergence
 
@@ -220,6 +235,11 @@ lives in the traceability records.
 
 `LSW-R010` adds Windows adapters after Linux parity closes. It is not a gate
 for Linux delivery.
+
+`R005.4c` is optional TestFlight release housekeeping: record the signed
+archive identity and upload reference for a source revision already qualified
+by R005.4b. It does not block R005 development work or repeat device
+functional qualification.
 
 ## Open platform decisions
 
