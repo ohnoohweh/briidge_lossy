@@ -647,6 +647,7 @@ ARC-CMP-005:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::compressionSnapshotCountsCompressedUncompressedAndRejectedFrames
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peersSerializesNonzeroCompressionTelemetry
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_overlay_stack_default_compress_client_matches_python
     - tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_cert_identity_and_trust_fields
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web

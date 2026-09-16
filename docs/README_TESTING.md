@@ -256,6 +256,11 @@ Core-derived telemetry is visible through Linux `/api/peers`.
 requires a Python peer to reject an uncompressed protected request and to send
 an independently recompressed protected response, proving enabled compression
 in both directions rather than only local codec round-tripping.
+`disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer` proves
+disabled uncompressed operation and the Python-compatible enabled/passive
+decoder mismatch behavior; the malformed-compressed regression then proves a
+rejected frame does not corrupt the authenticated session's next valid
+exchange.
 The silent-peer reconnect probe records the replacement authenticated snapshot
 before injecting retired-epoch data, then requires the resulting withdrawal.
 The fixture additionally proves the independent myUDP transport-counter sequence

@@ -154,7 +154,13 @@ SecureLink peer: Swift emits a protected compressed ChannelMux request, Python
 rejects any uncompressed request, independently decompresses and recompresses
 the response, and Swift restores the original response frame. This is the
 supported R005.5e-2a bidirectional contract; disabled/mismatched-policy
-qualification remains separate R005.5e-2b work.
+qualification is also explicit: disabled Swift emits and accepts uncompressed
+protected frames, while an enabled Swift client interoperates with Python's
+passive disabled-side decoder after it observes a compressed frame. This is
+the Python-compatible mismatch outcome, not a connection failure. A malformed
+or unsupported compressed frame fails deterministically at the Core decoder
+boundary; the authenticated session remains usable for its next valid
+protected exchange.
 
 ## Engineering rules
 
@@ -186,7 +192,6 @@ lives in the traceability records.
 | `R005.4a` | macOS | Generate and build the macOS Xcode product and `IPServer` target from a clean checkout with the pinned Crypto package; retain artifact evidence. |
 | `R005.4b` | iOS simulator | Run an authenticated SecureLink exchange and redacted-status scenario in the generated simulator target on a host that can boot, install, and launch it. |
 | `R005.4c` | iOS device | Produce a signed release archive, record its size, and run the SecureLink scenario on a signed physical target. |
-| `R005.5e-2b` | Linux Swift + Python peer | Qualify disabled behavior and deterministic enabled/disabled mismatch failure without session corruption. |
 | `R005.6a` | CI | Require the relevant Linux, macOS, traceability, README, and ownership gates for R005 changes. |
 | `R005.6b` | CI/release | Classify privileged-TUN and device-only results separately and close R005 only after every applicable row is qualified. |
 

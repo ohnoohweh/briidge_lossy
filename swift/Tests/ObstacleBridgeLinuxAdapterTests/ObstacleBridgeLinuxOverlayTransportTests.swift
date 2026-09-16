@@ -241,6 +241,36 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(compression.compressedOutputBytesReceivedTotal == 256)
     }
 
+    @Test func disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer() throws {
+        for enabled in [false, true] {
+            let peer = try PythonOverlayPeer(mode: "tcp-securelink-mux-passive-compression-echo")
+            defer { peer.stop() }
+            let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+                transport: .tcp, host: "127.0.0.1", port: peer.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                compressionPolicy: .init(enabled: enabled, level: 3, minimumBodyBytes: 1, allowedMessageTypes: [0])
+            ))
+            let session = try runtime.connect(sessionID: enabled ? 54 : 55, clientNonce: Data(repeating: enabled ? 7 : 8, count: 32))
+            defer { runtime.disconnect() }
+            let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: runtime, session: session)
+            let frame = ObstacleBridgeChannelMuxFrame(channelID: 4, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x42, count: 256))
+            #expect(try mux.exchange(frame) == frame)
+            let compression = runtime.status().peer.compression
+            if enabled {
+                // The passive Python side activates only after observing the
+                // compressed flag and independently returns a compressed row.
+                #expect(compression.compressedFramesSentTotal == 1)
+                #expect(compression.compressedFramesReceivedTotal == 1)
+            } else {
+                #expect(!compression.enabled)
+                #expect(compression.uncompressedFramesSentTotal == 1)
+                #expect(compression.uncompressedFramesReceivedTotal == 1)
+                #expect(compression.uncompressedBytesSentTotal == 256)
+                #expect(compression.uncompressedBytesReceivedTotal == 256)
+            }
+        }
+    }
+
     @Test func compressionSnapshotCountsCompressedUncompressedAndRejectedFrames() throws {
         let compressedPeer = try PythonOverlayPeer(mode: "tcp-securelink-mux-compressed-echo")
         defer { compressedPeer.stop() }
@@ -274,6 +304,15 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(compressed.compressedOutputBytesReceivedTotal == 256)
         #expect(compressed.rejectedFramesTotal == 1)
         #expect(compressed.rejectedBytesTotal == 4)
+        // A malformed compressed record is rejected at the Core boundary;
+        // it must not poison the authenticated lower session or its next
+        // valid protected request/reply exchange.
+        let recovery = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 2, messageType: .data, body: Data(repeating: 0x43, count: 256))
+        #expect(try compressedMux.exchange(recovery) == recovery)
+        let recovered = compressedRuntime.status().peer.compression
+        #expect(recovered.rejectedFramesTotal == 1)
+        #expect(recovered.compressedFramesSentTotal == 2)
+        #expect(recovered.compressedFramesReceivedTotal == 2)
 
         let plainPeer = try PythonOverlayPeer(mode: "tcp-secure-mux-echo")
         defer { plainPeer.stop() }
@@ -1102,6 +1141,15 @@ final class PythonOverlayPeer {
                         body=zlib.decompress(plain[8:])
                         compressed=zlib.compress(body, 3)
                         reply_plain=plain[:5]+b'\\x80'+len(compressed).to_bytes(2,'big')+compressed
+                    elif MODE == 'tcp-securelink-mux-passive-compression-echo':
+                        assert len(plain) >= 8
+                        if plain[5] == 0x80:
+                            body=zlib.decompress(plain[8:])
+                            compressed=zlib.compress(body, 3)
+                            reply_plain=plain[:5]+b'\\x80'+len(compressed).to_bytes(2,'big')+compressed
+                        else:
+                            assert plain[5] == 0x00
+                            reply_plain=plain
                     elif MODE == 'tcp-secure-mux-echo' and len(plain) >= 8 and plain[5] == 1:
                         reply_plain = plain[:5] + b'\\x00\\x00\\x00'
                     elif MODE == 'tcp-secure-mux-echo':
