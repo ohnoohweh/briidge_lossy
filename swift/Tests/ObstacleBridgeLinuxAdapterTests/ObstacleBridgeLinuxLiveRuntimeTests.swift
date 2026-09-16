@@ -265,8 +265,12 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
     private func assertProtectedReceiveFailureReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
+        // UDP has no close event.  A peer that closes after SecureLink ACK is
+        // therefore observed through the configured receive deadline, while
+        // TCP/WS still exercise their immediate EOF path.
+        let receiveDeadline = transport == .myudp ? 100 : 5_000
         let runtime = ObstacleBridgeLinuxLiveRuntime(
-            configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: receiveDeadline),
             policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2)
         )
         let failed = DispatchSemaphore(value: 0)

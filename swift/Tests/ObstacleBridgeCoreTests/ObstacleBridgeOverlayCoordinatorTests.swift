@@ -33,6 +33,17 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         #expect(coordinator.handle(.authenticated(epoch: 1)).effects.isEmpty)
     }
 
+    @Test func admittedInboundSessionGetsCoreEpochWithoutOpeningOutboundTransport() {
+        let coordinator = ObstacleBridgeOverlayCoordinator(candidateCount: 2)
+
+        let admitted = coordinator.handle(.adoptAuthenticated)
+
+        #expect(admitted.snapshot.state == .connected)
+        #expect(admitted.snapshot.epoch == 1)
+        #expect(admitted.snapshot.appReady)
+        #expect(admitted.effects == [.startReceive(epoch: 1)])
+    }
+
     @Test func staleGenerationCannotChangeReplacementEpoch() {
         let coordinator = ObstacleBridgeOverlayCoordinator(
             candidateCount: 2,

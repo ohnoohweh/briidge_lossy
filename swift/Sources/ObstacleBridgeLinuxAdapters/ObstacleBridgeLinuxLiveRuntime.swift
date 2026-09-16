@@ -26,7 +26,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
-    private let policy: ObstacleBridgeLinuxReconnectPolicy
+    private let coordinator: ObstacleBridgeOverlayCoordinator
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.live-runtime")
     private let statusLock = NSLock()
     private var statusProjection: ObstacleBridgeLinuxRuntimeStatus
@@ -40,9 +40,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private let remoteCatalogStore = ObstacleBridgeLinuxServiceCatalogStore()
     private let catalogInstanceID: UInt64
     private var stopped = true
-    private var attempts = 0
-    private var failureReason: String?
-    private var nextRetryMilliseconds: Int?
+    private var activeCoordinatorEpoch: UInt64?
     private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
     private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
 
@@ -50,7 +48,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
         self.configuredRuntime = runtime
         self.statusProjection = runtime.status()
-        self.policy = policy
+        self.coordinator = .init(candidateCount: configuration.peerCandidates.count, policy: policy)
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
     }
@@ -116,19 +114,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public func start() {
         queue.async { [weak self] in
             guard let self else { return }
-            self.cancelRetry()
-            self.session?.close()
-            self.session = nil
-            self.channelMux = nil
-            self.replaceReceiveWorker(with: nil)
-            self.stopServiceOwners()
-            self.stopRemoteServiceOwners()
-            self.configuredRuntime.disconnect()
-            self.refreshStatusProjection()
             self.stopped = false
-            self.attempts = 0
-            self.failureReason = nil
-            self.connectOrSchedule()
+            self.apply(self.coordinator.handle(.start))
         }
     }
 
@@ -139,10 +126,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public func adoptInboundSession(_ connectedSession: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
         queue.async { [weak self] in
             guard let self else { return }
-            self.cancelRetry()
+            self.apply(self.coordinator.handle(.stop))
             self.configuredRuntime.disconnect()
             self.stopped = false
-            self.attempts = 1
             self.configuredRuntime.adoptInbound(connectedSession, host: host)
             do {
                 self.session = connectedSession
@@ -150,15 +136,15 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
                 mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
                 self.channelMux = mux
-                self.startReceiveWorker(session: connectedSession, mux: mux)
                 try self.publishRemoteCatalog(); try self.startOwnServiceOwners()
-                self.refreshStatusProjection(); self.failureReason = nil
-                self.publish(state: "connected", failureReason: nil)
+                self.refreshStatusProjection()
+                self.apply(self.coordinator.handle(.adoptAuthenticated))
+                guard let epoch = self.coordinator.snapshot.epoch else { return }
+                self.activeCoordinatorEpoch = epoch
             } catch {
-                self.failureReason = error.localizedDescription
                 connectedSession.close(); self.session = nil; self.channelMux = nil
                 self.replaceReceiveWorker(with: nil); self.stopServiceOwners(); self.stopRemoteServiceOwners()
-                self.refreshStatusProjection(); self.publish(state: "failed", failureReason: self.failureReason)
+                self.refreshStatusProjection(); self.publish(state: "failed", attempts: 1, nextRetryMilliseconds: nil, failureReason: error.localizedDescription)
             }
         }
     }
@@ -170,16 +156,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         configuredRuntime.cancelInFlightConnection()
         queue.sync {
             stopped = true
-            cancelRetry()
-            session?.close()
-            session = nil
-            channelMux = nil
-            replaceReceiveWorker(with: nil)
-            stopServiceOwners()
-            stopRemoteServiceOwners()
-            configuredRuntime.disconnect()
-            refreshStatusProjection()
-            publish(state: "stopped", failureReason: nil)
+            apply(coordinator.handle(.stop))
         }
     }
 
@@ -193,14 +170,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             do {
                 return try session.send(payload)
             } catch {
-                session.close()
-                self.session = nil
-                self.channelMux = nil
-                configuredRuntime.disconnect()
-                refreshStatusProjection()
-                configuredRuntime.advanceCandidate()
-                failureReason = error.localizedDescription
-                connectOrSchedule()
+                if let epoch = activeCoordinatorEpoch {
+                    apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                }
                 throw error
             }
         }
@@ -211,17 +183,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public func reconnect() {
         queue.async { [weak self] in
             guard let self, !self.stopped else { return }
-            self.session?.close()
-            self.session = nil
-            self.channelMux = nil
-            self.replaceReceiveWorker(with: nil)
-            self.stopServiceOwners()
-            self.stopRemoteServiceOwners()
-            self.configuredRuntime.disconnect()
-            self.refreshStatusProjection()
-            self.configuredRuntime.advanceCandidate()
-            self.attempts = 0
-            self.connectOrSchedule()
+            if let epoch = self.activeCoordinatorEpoch {
+                self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: "manual reconnect")))
+            } else {
+                self.apply(self.coordinator.handle(.start))
+            }
         }
     }
 
@@ -243,9 +209,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         queue.sync { Dictionary(uniqueKeysWithValues: remoteServiceOwners.map { ($0.specification.serviceID, $0.port) }) }
     }
 
-    private func connectOrSchedule() {
-        guard !stopped else { return }
-        attempts += 1
+    private func openTransport(epoch: UInt64) {
+        guard !stopped, coordinator.snapshot.epoch == epoch else { return }
         do {
             let sessionID = freshSessionID()
             let nonce = freshNonce()
@@ -258,46 +223,36 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             mux.activateReceiveOwner()
             connectedSession.activateReceiveOwner()
             channelMux = mux
-            startReceiveWorker(session: connectedSession, mux: mux)
+            // Refresh the adapter projection before Core publishes ready so
+            // an Admin reader cannot observe a connected lifecycle paired
+            // with the preceding transport epoch.
+            refreshStatusProjection()
+            // The peer may send a post-authentication datagram immediately.
+            // Admit the Core-owned receive effect before optional service
+            // publication so the Linux socket never drops that notification.
+            activeCoordinatorEpoch = epoch
+            apply(coordinator.handle(.transportConnected(epoch: epoch)))
+            apply(coordinator.handle(.authenticated(epoch: epoch)))
             try publishRemoteCatalog()
             try startOwnServiceOwners()
-            refreshStatusProjection()
-            failureReason = nil
-            publish(state: "connected", failureReason: nil)
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
             // Do not publish a retry that could briefly outlive shutdown.
             return
         } catch {
-            session = nil
-            channelMux = nil
-            replaceReceiveWorker(with: nil)
-            stopServiceOwners()
-            stopRemoteServiceOwners()
-            configuredRuntime.disconnect()
-            refreshStatusProjection()
-            configuredRuntime.advanceCandidate()
-            failureReason = error.localizedDescription
-            guard attempts < policy.maximumAttempts else {
-                publish(state: "failed", failureReason: failureReason)
-                return
-            }
-            let delay = min(policy.maximumDelayMilliseconds, policy.initialDelayMilliseconds * (1 << min(attempts - 1, 10)))
-            scheduleRetry(afterMilliseconds: delay)
-            publish(state: "reconnecting", failureReason: failureReason)
+            apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
         }
     }
 
-    private func scheduleRetry(afterMilliseconds delay: Int) {
+    private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
         cancelRetry()
-        nextRetryMilliseconds = delay
         let timer = DispatchSource.makeTimerSource(queue: queue)
         retryTimer = timer
         timer.schedule(deadline: .now() + .milliseconds(delay))
         timer.setEventHandler { [weak self] in
             guard let self else { return }
             self.cancelRetry()
-            self.connectOrSchedule()
+            self.apply(self.coordinator.handle(.retryTimerFired(token: token)))
         }
         timer.resume()
     }
@@ -306,10 +261,53 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         retryTimer?.setEventHandler {}
         retryTimer?.cancel()
         retryTimer = nil
-        nextRetryMilliseconds = nil
     }
 
-    private func publish(state: String, failureReason: String?) {
+    /// Executes only platform mechanics requested by Core.  The coordinator
+    /// owns epoch admission, candidate selection, retry bounds, and stale
+    /// callback rejection; this adapter owns Dispatch and socket teardown.
+    private func apply(_ transition: ObstacleBridgeOverlayCoordinatorTransition) {
+        for effect in transition.effects {
+            switch effect {
+            case .openTransport(let epoch, _, _):
+                openTransport(epoch: epoch)
+            case .cancelTransport(let epoch):
+                guard activeCoordinatorEpoch == nil || activeCoordinatorEpoch == epoch else { continue }
+                session?.close()
+                session = nil
+                channelMux = nil
+                activeCoordinatorEpoch = nil
+                replaceReceiveWorker(with: nil)
+                stopServiceOwners()
+                stopRemoteServiceOwners()
+                configuredRuntime.disconnect()
+                configuredRuntime.advanceCandidate()
+                refreshStatusProjection()
+            case .startReceive(let epoch):
+                guard coordinator.snapshot.epoch == epoch, let session, let channelMux else { continue }
+                startReceiveWorker(session: session, mux: channelMux, coordinatorEpoch: epoch)
+            case .cancelReceive:
+                replaceReceiveWorker(with: nil)
+            case .scheduleRetry(let token, let delay):
+                scheduleRetry(token: token, afterMilliseconds: delay)
+            case .cancelRetry:
+                cancelRetry()
+            }
+        }
+        publishCoordinatorSnapshot()
+    }
+
+    private func publishCoordinatorSnapshot() {
+        let core = coordinator.snapshot
+        publish(
+            state: core.state.rawValue,
+            attempts: core.attempts,
+            nextRetryMilliseconds: core.nextRetryMilliseconds,
+            failureReason: core.failureReason
+        )
+    }
+
+    private func publish(state: String, attempts: Int, nextRetryMilliseconds: Int?, failureReason: String?) {
         let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason, nextRetryMilliseconds: nextRetryMilliseconds)
         statusLock.lock()
         liveSnapshotProjection = value
@@ -375,14 +373,15 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
             do { try channelMux.sendUnsolicited(frame) }
             catch {
-                failureReason = error.localizedDescription
-                reconnect()
+                if let epoch = activeCoordinatorEpoch {
+                    apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                }
                 return
             }
         }
     }
 
-    private func startReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession, mux: ObstacleBridgeLinuxChannelMuxSession) {
+    private func startReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession, mux: ObstacleBridgeLinuxChannelMuxSession, coordinatorEpoch: UInt64) {
         guard session.supportsDuplexReceive else { return }
         let epoch = configuredRuntime.connectionEpoch
         let worker = ObstacleBridgeLinuxReceiveWorker(
@@ -399,7 +398,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 mux.receive(frame)
             },
             onFailure: { [weak self] workerEpoch, reason in
-                self?.queue.async { [weak self] in self?.receiveFailed(epoch: workerEpoch, reason: reason) }
+                self?.queue.async { [weak self] in self?.receiveFailed(workerEpoch: workerEpoch, coordinatorEpoch: coordinatorEpoch, reason: reason) }
             }
         )
         replaceReceiveWorker(with: worker)
@@ -417,10 +416,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         previous?.stop()
     }
 
-    private func receiveFailed(epoch: UInt64, reason: String) {
-        guard !stopped, configuredRuntime.connectionEpoch == epoch else { return }
-        failureReason = reason
-        reconnect()
+    private func receiveFailed(workerEpoch: UInt64, coordinatorEpoch: UInt64, reason: String) {
+        guard !stopped, configuredRuntime.connectionEpoch == workerEpoch,
+              activeCoordinatorEpoch == coordinatorEpoch else { return }
+        apply(coordinator.handle(.receiveFinished(epoch: coordinatorEpoch, reason: reason)))
     }
 
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {
@@ -429,7 +428,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                   let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services),
                   install.accepted else { return }
             do { try startRemoteServiceOwners(install.installed) }
-            catch { failureReason = error.localizedDescription }
+            catch { publishCoordinatorSnapshot() }
             return
         }
         let key = channelKey(frame)

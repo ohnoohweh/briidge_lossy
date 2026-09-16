@@ -187,6 +187,33 @@ rather than being mistaken for ordinary hosted CI coverage. TestFlight archive
 recording is optional release housekeeping and is not an R005 development
 gate.
 
+### R006 overlay convergence status
+
+Core owns a deterministic overlay coordinator and logical TCP/WebSocket
+envelope decision. The Linux live runtime executes its typed effects: Core
+allocates the admitted epoch, starts and cancels the one receive owner,
+chooses bounded retry timing and candidate index, and rejects stale retry or
+receive completion. Linux retains only Dispatch scheduling and native session,
+socket, and worker operations. An already-authenticated inbound listener
+session receives a Core epoch without opening an unintended outbound
+connection.
+
+The Apple shared runtime uses the same envelope decision and publishes
+transport/authentication readiness to Core, but it does not yet execute the
+coordinator's candidate, retry, receive-cancellation, or backpressure effects.
+R006 remains open until both Apple consumers execute those effects and the
+cross-platform traceability lane proves the following work packages.
+
+| Work package | Remaining definition of done |
+| --- | --- |
+| `LSW-R006.1` | Core coordinator and envelope types are compiled by SwiftPM, macOS, and iOS build graphs; Linux and Apple consumers use them for their admitted decisions. |
+| `LSW-R006.2` | TCP and WebSocket logical application, PING, and PONG policy has one Core owner with byte-level Python/SWift characterization. |
+| `LSW-R006.3` | Every adapter reports epoch, transport, authentication, readiness, and stale completion through Core and executes the resulting lifecycle effects. |
+| `LSW-R006.4` | Candidate rotation, retry bounds, and delayed-callback invalidation have no adapter-side policy owner. |
+| `LSW-R006.5` | Exactly one receive owner per epoch is Core-admitted; replacement first cancels the old owner and stale completions cannot affect the next epoch. |
+| `LSW-R006.6` | Core owns liveness and bounded overlay backpressure decisions; adapters expose native queue and timer mechanics only. |
+| `LSW-R006.7` | Linux, macOS, and physical-iOS traceability records classify the same Python-reference behavior and make remaining platform exclusions explicit. |
+
 ## Engineering rules
 
 - Move shared behavior in vertical slices. A slice changes both consumers to

@@ -69,6 +69,9 @@ public struct ObstacleBridgeOverlayCoordinatorSnapshot: Equatable, Sendable {
 /// make delayed callbacks harmless after replacement or shutdown.
 public enum ObstacleBridgeOverlayCoordinatorInput: Equatable, Sendable {
     case start
+    /// A platform listener has already admitted and authenticated a native
+    /// session. Core still allocates its portable epoch and receive owner.
+    case adoptAuthenticated
     case transportConnected(epoch: UInt64)
     case authenticated(epoch: UInt64)
     case transportFailed(epoch: UInt64, reason: String)
@@ -130,6 +133,18 @@ public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
             candidateIndex = 0
             failureReason = nil
             effects += beginAttempt()
+            return transition(effects)
+
+        case .adoptAuthenticated:
+            var effects = stopEffects()
+            attempts = 1
+            candidateIndex = 0
+            failureReason = nil
+            let epoch = consumeEpoch()
+            activeEpoch = epoch
+            state = .connected
+            receiveActive = true
+            effects.append(.startReceive(epoch: epoch))
             return transition(effects)
 
         case .transportConnected(let epoch):
