@@ -116,6 +116,9 @@ jobs:
       - name: Build Linux Swift runner once
         run: ./scripts/build_linux_app.sh
 
+      - name: Run Linux Swift live-runtime closure tests
+        run: swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+
       - name: Run Linux Swift integration subset
         # These tests own multiple peers and network processes. Four workers
         # keep their lifecycle deadlines reliable on hosted Linux runners.
