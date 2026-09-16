@@ -272,6 +272,10 @@ Current implementation note:
 - `REQ-AUT-019`: The admin API and WebAdmin shall expose aggregate reload/apply results at the runtime level and peer-scoped enforcement/disconnect diagnostics at the peer level so operators can tell what changed, when it changed, and why a peer was dropped or re-authenticated.
 - `REQ-AUT-020`: Compression-enabled secure-link peers shall interoperate even when client and server use different local compression settings (for example different `compress_layer_min_bytes`, `compress_layer_level`, and allowed `compress_layer_types`). The peer-client setting shall control whether a peer connection actively uses compression, and client-side peer rows shall report that configured compression state even before counters are nonzero. The peer server shall keep a passive decoder, detect valid client-compressed frames from the wire-level compression signal, and expose compression only for those activated peer rows. After such activation, the peer server shall compress replies for that peer without requiring mirrored local thresholds or levels, as long as both peers support the same compression framing and decode guardrails. Compression telemetry shall be peer-scoped, and emitted output-byte totals shall account for both compressed output and uncompressed emitted payload bytes when a compression attempt is skipped because it does not reduce size.
 
+  Swift parity fixtures compile the Core compression owner with the Apple
+  wrapper, so wrapper behavior cannot be accepted from a source list that
+  omits its shared policy implementation.
+
 ## Reconnect and restart requirements
 
 - `REQ-LIFE-001`: When one side disconnects or is restarted, the remaining side shall eventually report the overlay as not connected.

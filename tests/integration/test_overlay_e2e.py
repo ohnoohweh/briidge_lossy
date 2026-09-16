@@ -7937,7 +7937,13 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         assert isinstance(layers, list)
         assert next(layer for layer in layers if layer['name'] == 'secure_link')['authenticated'] is True
         _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
-        assert peers == [{'peer_id': 'configured-peer', 'transport': overlay_transport, 'state': 'connected', 'app_ready': True, 'configured_candidates': ['listener'], 'active_host': 'listener', 'port': overlay_port, 'failure_reason': None}]
+        assert len(peers) == 1
+        assert {key: peers[0][key] for key in ('peer_id', 'transport', 'state', 'app_ready', 'configured_candidates', 'active_host', 'port', 'failure_reason')} == {
+            'peer_id': 'configured-peer', 'transport': overlay_transport,
+            'state': 'connected', 'app_ready': True,
+            'configured_candidates': ['listener'], 'active_host': 'listener',
+            'port': overlay_port, 'failure_reason': None,
+        }
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
         def assert_service_round_trip(payload: bytes) -> None:
             with socket.socket(socket.AF_INET, socket_type) as client:

@@ -546,6 +546,7 @@ REQ-AUT-020:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_keeps_passive_compress_decoder_on_listener
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_compress_layer_above_secure_link
     - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_overlay_stack_default_compress_client_matches_python
 REQ-WSP-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_overlay_uses_http_proxy_env
