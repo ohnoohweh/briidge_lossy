@@ -176,6 +176,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeControlChunkCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift" \
@@ -256,6 +257,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeControlChunkCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayRuntime.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayRuntime.swift" \
