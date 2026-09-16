@@ -854,6 +854,16 @@ def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
     assert "private func appendUInt64BE" not in runtime
 
 
+def test_shared_overlay_lifecycle_reports_to_core_coordinator() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    assert "private let coreCoordinator: ObstacleBridgeOverlayCoordinator" in runtime
+    assert "coreCoordinator.handle(.start)" in runtime
+    assert "coreCoordinator.handle(.transportConnected" in runtime
+    assert "coreCoordinator.handle(.authenticated" in runtime
+    assert "coreCoordinator.handle(.transportFailed" in runtime
+    assert "let coreReady = coreCoordinator.snapshot.appReady" in runtime
+
+
 def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeControlChunkCodec.chunk(" in codec

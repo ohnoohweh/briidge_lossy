@@ -40,6 +40,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     private let secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
     private let lifecycleTimeProvider: () -> TimeInterval
+    private let coreCoordinator: ObstacleBridgeOverlayCoordinator
     private let connectionRotationDelay: TimeInterval
     let transportDelayRotationThresholdMS: Double
     let transportDelayRotationGrace: TimeInterval
@@ -68,6 +69,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.transportDelayRotationThresholdMS = max(0.0, transportDelayRotationThresholdMS)
         self.transportDelayRotationGrace = max(0.0, transportDelayRotationGrace)
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
+        self.coreCoordinator = .init(candidateCount: 1)
         let initial = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
             epoch: 0,
@@ -77,6 +79,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.transportLifecycle = initial
         self.outerLifecycle = initial
         self.disconnectedSince = initial.changedAt
+        _ = coreCoordinator.handle(.start)
     }
 
     static func appReady(from layers: [[String: Any]]) -> Bool {
@@ -157,6 +160,10 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
 
     func lifecycleSnapshot() -> ObstacleBridgeConnectionLifecycleEvent {
         outerLifecycle
+    }
+
+    func coreLifecycleSnapshot() -> ObstacleBridgeOverlayCoordinatorSnapshot {
+        coreCoordinator.snapshot
     }
 
     func connectionRotationDue(candidateCount: Int) -> ObstacleBridgeConnectionRotationResult? {
@@ -313,6 +320,9 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
+        if let epoch = coreCoordinator.snapshot.epoch {
+            _ = coreCoordinator.handle(.transportFailed(epoch: epoch, reason: "transport_disconnected"))
+        }
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
     }
 
@@ -335,6 +345,7 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     func beginTransportEpoch(reason: String) {
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
+        _ = coreCoordinator.handle(.start)
         transportLifecycle = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
             epoch: transportLifecycle.epoch + 1,
@@ -350,6 +361,9 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
 
     func handleTransportConnected() throws -> OutboundSnapshot {
         observeTransportState(connected: true, reason: "transport_connected")
+        if let epoch = coreCoordinator.snapshot.epoch {
+            _ = coreCoordinator.handle(.transportConnected(epoch: epoch))
+        }
         var emittedFrames = peerAddressRuntime?.handleTransportConnected() ?? []
         guard let secureLinkAdapter else {
             refreshOuterLifecycle(secureLinkStatus: nil)
@@ -437,8 +451,12 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     private func refreshOuterLifecycle(secureLinkStatus: ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot?) {
         let transportReady = transportLifecycle.state == .connected
         let secureReady = secureLinkStatus?.authenticated ?? transportReady
+        if transportReady && secureReady, let epoch = coreCoordinator.snapshot.epoch {
+            _ = coreCoordinator.handle(.authenticated(epoch: epoch))
+        }
+        let coreReady = coreCoordinator.snapshot.appReady
         let compressionReady = compressionFailureEpoch != transportLifecycle.epoch
-        let connected = transportReady && secureReady && compressionReady
+        let connected = transportReady && secureReady && coreReady && compressionReady
         let nextState: ObstacleBridgeConnectionLifecycleState = connected ? .connected : .disconnected
         guard outerLifecycle.state != nextState || outerLifecycle.epoch != transportLifecycle.epoch else {
             return
