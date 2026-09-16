@@ -385,7 +385,7 @@ private final class POSIXStreamConnection {
         fd = -1
         descriptorLock.unlock()
         guard descriptor >= 0 else { return }
-        _ = shutdown(descriptor, SHUT_RDWR)
+        _ = shutdown(descriptor, Int32(SHUT_RDWR))
         _ = Glibc.close(descriptor)
     }
 
