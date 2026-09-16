@@ -849,9 +849,15 @@ REQ-LIFE-010:
   # remains responsive. On macOS 26, a packaged-XPC lane starts the primary
   # app through LaunchServices and reports the exact helper-specific BTM
   # `fullPath is nil` rejection; every reachability timeout is a failure. The
-  # resolution lane qualifies the same signed helper/plist contract from an
+  # authorized HostRunner packet-carry lane uses an explicit sudo grant
+  # corresponding to the GUI's administrator-sheet boundary
+  # and automatically selects reachable XPC or the Darwin-native loopback
+  # fallback, while still requiring real utun packet carriage. The resolution
+  # lane qualifies the same signed helper/plist contract from an
   # installer-owned /Applications artifact rather than masking BTM container
   # lookup failure.
+  # Packaged-XPC qualification is opt-in while this BTM blocker is unresolved;
+  # routine elevated coverage remains the functional fallback matrix.
   # The elevated wrapper emits unbuffered per-test progress and exit route,
   # interface, and process diagnostics so a hosted interruption identifies its
   # last active case. The hosted Python matrix runs every elevated case in an

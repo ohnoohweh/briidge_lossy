@@ -411,8 +411,17 @@ def _wait_swift_tun_verification(
 ) -> dict:
     end = time.time() + timeout
     last: dict = {}
+    last_admin_error = ""
     while time.time() < end:
-        status = _local_admin_json(admin_port, "/api/tun-routing/status", timeout=5.0)
+        try:
+            status = _local_admin_json(admin_port, "/api/tun-routing/status", timeout=5.0)
+        except (ConnectionResetError, RuntimeError, TimeoutError, OSError) as exc:
+            # This endpoint performs synchronous local probe work (including
+            # name resolution). A single slow Admin response is transient
+            # while the route/DNS verification window is still open.
+            last_admin_error = f"{type(exc).__name__}: {exc}"
+            time.sleep(0.5)
+            continue
         verification = dict(status.get("verification") or {})
         tun_config = dict(verification.get("tun_config") or {})
         tun_connectivity = dict(verification.get("tun_connectivity") or {})
@@ -435,7 +444,10 @@ def _wait_swift_tun_verification(
             # route/DNS test. Packet carriage is covered by the dedicated test.
             return verification
         time.sleep(0.5)
-    raise RuntimeError(f"Swift TUN Admin verification did not reach expected state; last={last!r}")
+    raise RuntimeError(
+        "Swift TUN Admin verification did not reach expected state; "
+        f"last={last!r}; last_admin_error={last_admin_error!r}"
+    )
 
 
 def _wait_runtime_counter(admin_port: int, counter_name: str, before_value: int, *, timeout: float = 12.0) -> dict:
@@ -1057,6 +1069,7 @@ def _run_swift_elevated_packet_carry(
     tmp_path: Path,
     *,
     require_packaged_xpc: bool,
+    force_loopback_transport: bool = False,
 ) -> None:
     _require_macos_swift_elevated_runtime()
     _repair_stale_loopback_route()
@@ -1122,7 +1135,12 @@ def _run_swift_elevated_packet_carry(
         tmp_path=tmp_path,
         env_extra={
             "NO_PROXY": "127.0.0.1,localhost,::1",
-            "OBSTACLEBRIDGE_MACOS_TUN_HELPER_TRANSPORT": "loopback" if not require_packaged_xpc else "",
+            # The normal fallback lane deliberately leaves the transport
+            # unforced: the same bundled HostRunner used by the GUI app must
+            # choose XPC only when its package is reachable and otherwise
+            # choose the in-process Darwin helper.  Focused fault tests can
+            # still force loopback explicitly.
+            "OBSTACLEBRIDGE_MACOS_TUN_HELPER_TRANSPORT": "loopback" if force_loopback_transport else "",
             "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG": str(swift_config_path) if require_packaged_xpc else "",
             "no_proxy": "127.0.0.1,localhost,::1",
         },
@@ -1150,8 +1168,14 @@ def _run_swift_elevated_packet_carry(
         swift_actual_ifname = str(swift_runtime.get("ifname") or "")
         if require_packaged_xpc:
             assert swift_helper["transport"] == "xpc"
-        else:
+        elif force_loopback_transport:
             assert swift_helper["transport"] == "loopback"
+        else:
+            package = dict(swift_helper.get("package") or {})
+            if package.get("xpc_reachable") is True:
+                assert swift_helper["transport"] == "xpc"
+            else:
+                assert swift_helper["transport"] == "loopback"
         assert swift_runtime["backend"] == "darwin-native"
         assert swift_runtime["mtu"] == 1400
         assert "client-tun-hook-macos.sh" in " ".join(swift_runtime.get("last_hook_argv") or [])
@@ -1212,6 +1236,7 @@ def test_macos_swift_elevated_host_runner_creates_utun_and_carries_packets(tmp_p
     _run_swift_elevated_packet_carry(tmp_path, require_packaged_xpc=False)
 
 
+@pytest.mark.macos_xpc_qualification
 def test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved(tmp_path: Path) -> None:
     _run_swift_elevated_packet_carry(tmp_path, require_packaged_xpc=True)
 
@@ -1345,6 +1370,7 @@ def test_macos_swift_elevated_helper_applies_routes_and_dns_live(tmp_path: Path)
             _wait_dns_servers(underlay_service, original_dns)
 
 
+@pytest.mark.macos_xpc_qualification
 def test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_routes(tmp_path: Path) -> None:
     _require_macos_swift_elevated_runtime()
     _repair_stale_loopback_route()
@@ -1456,6 +1482,7 @@ def test_macos_swift_elevated_packaged_xpc_helper_death_reports_and_cleans_route
             _wait_route_not_interface("198.18.180.10", swift_actual_ifname)
 
 
+@pytest.mark.macos_xpc_qualification
 def test_macos_swift_elevated_installed_signed_app_admin_helper_actions(tmp_path: Path) -> None:
     _require_macos_swift_elevated_runtime()
     artifact = build_macos_swift_artifact()

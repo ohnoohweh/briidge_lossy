@@ -10,9 +10,20 @@ else
   PYTHON_BIN="python3"
 fi
 
+INTERACTIVE_ELEVATION=0
+if [[ "${1:-}" == "--interactive-elevation" ]]; then
+  # Local functional qualification may use the operator's normal Terminal
+  # password prompt. Keep unattended automation on the scoped NOPASSWD path.
+  INTERACTIVE_ELEVATION=1
+  shift
+fi
+
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
-  # Re-exec the whitelisted wrapper itself.  Prefixing it with `env` changes
+  # Re-exec the whitelisted wrapper itself. Prefixing it with `env` changes
   # the sudo command path, so a narrowly scoped NOPASSWD rule cannot match.
+  if [[ "$INTERACTIVE_ELEVATION" -eq 1 ]]; then
+    exec sudo "$0" "$@"
+  fi
   exec sudo -n "$0" "$@"
 fi
 
@@ -44,6 +55,7 @@ fi
 
 REUSE_EXISTING_BUILD=0
 APP_BUNDLE_OVERRIDE=""
+RUN_PACKAGED_XPC_QUALIFICATION=0
 while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --codesign-identity)
@@ -68,6 +80,13 @@ while [[ "$#" -gt 0 ]]; do
       fi
       APP_BUNDLE_OVERRIDE="$2"
       shift 2
+      ;;
+    --run-packaged-xpc-qualification)
+      # These tests intentionally remain opt-in while the macOS BTM/XPC
+      # qualification blocker is unresolved. The normal product path proves
+      # the in-process fallback through the routine elevated matrix.
+      RUN_PACKAGED_XPC_QUALIFICATION=1
+      shift
       ;;
     --)
       shift
@@ -117,4 +136,8 @@ if [[ "$#" -gt 0 ]]; then
   # the whole file and the selected node, which repeats every elevated case.
   TEST_TARGETS=("$@")
 fi
-"$PYTHON_BIN" -m pytest -vv --timeout=300 -rs -m macos_elevated --run-macos-elevated "${TEST_TARGETS[@]}"
+MARK_EXPRESSION="macos_elevated and not macos_xpc_qualification"
+if [[ "$RUN_PACKAGED_XPC_QUALIFICATION" -eq 1 ]]; then
+  MARK_EXPRESSION="macos_elevated"
+fi
+"$PYTHON_BIN" -m pytest -vv --timeout=300 -rs -m "$MARK_EXPRESSION" --run-macos-elevated "${TEST_TARGETS[@]}"

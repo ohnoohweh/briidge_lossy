@@ -379,8 +379,14 @@ ARC-CMP-004:
   # A macOS 26 packaged-XPC test starts the primary app through LaunchServices
   # and reports the exact BTM helper-specific `fullPath is nil` rejection as
   # an architecture-contract failure; other helper reachability timeouts also
-  # fail. Resolution qualification uses the installer-owned /Applications
-  # artifact with the same signed helper/plist contract.
+  # fail. The authorized HostRunner functional lane uses an explicit sudo
+  # grant corresponding to the GUI administrator-sheet boundary and
+  # automatically selects reachable XPC or the
+  # Darwin-native loopback fallback before proving real utun packet carriage.
+  # Resolution qualification uses the installer-owned /Applications artifact
+  # with the same signed helper/plist contract.
+  # Packaged-XPC qualification is explicitly opt-in while its BTM blocker is
+  # unresolved; the routine elevated matrix covers only functional fallback.
   # myUDP connection readiness requires completed application-payload progress,
   # not merely UDP control traffic: raw-only listener peers are reaped and
   # Swift client recovery publishes its retry deadline before socket rebuild.

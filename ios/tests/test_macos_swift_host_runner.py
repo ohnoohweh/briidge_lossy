@@ -338,9 +338,11 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     tunnel_control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
 
-    # The ordinary packet-carry lane starts the built app bundle and requires
-    # an actual XPC transport.  The separate /Applications copy is only for
-    # destructive stale-package repair coverage and cannot mask this result.
+    # The strict packet-carry lane starts the built app bundle and requires an
+    # actual XPC transport. The separate HostRunner functional lane starts the
+    # same bundled executable after explicit elevation and verifies its normal
+    # XPC-or-loopback choice. The /Applications copy is only for destructive
+    # stale-package repair coverage and cannot mask either result.
     assert "def test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved" in elevated
     assert "_run_swift_elevated_packet_carry(tmp_path, require_packaged_xpc=True)" in elevated
     assert 'transportKind: "xpc"' in (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
@@ -348,6 +350,11 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "SMAppServiceActivationTest.app" in elevated
     elevated_wrapper = (ROOT / "scripts" / "run_macos_swift_elevated_tests.sh").read_text(encoding="utf-8")
     assert "--app-bundle" in elevated_wrapper
+    assert "--interactive-elevation" in elevated_wrapper
+    assert "--run-packaged-xpc-qualification" in elevated_wrapper
+    assert 'MARK_EXPRESSION="macos_elevated and not macos_xpc_qualification"' in elevated_wrapper
+    assert "exec sudo \"$0\" \"$@\"" in elevated_wrapper
+    assert "exec sudo -n \"$0\" \"$@\"" in elevated_wrapper
     assert "OBSTACLEBRIDGE_MACOS_APP_BUNDLE" in elevated_wrapper
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG" in elevated
@@ -358,6 +365,9 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "launch_via_launchservices" in elevated
     assert '"/usr/bin/open"' in elevated
     assert '"/bin/launchctl", "asuser"' in elevated
+    assert 'if package.get("xpc_reachable") is True:' in elevated
+    assert 'assert swift_helper["transport"] == "loopback"' in elevated
+    assert "force_loopback_transport: bool = False" in elevated
     assert "try server.handleXPCPacketPayload(raw)" in xpc_source
     assert "self?.sendPacketFromHelper(packet)" in xpc_source
     assert "self?.sendEventFromHelper(event: event, payload: payload)" in xpc_source
@@ -368,6 +378,12 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "final class ObstacleBridgeTunHelperXPCListenerDelegate" in xpc_source
     assert "NSXPCListenerDelegate" in xpc_source
     assert "newConnection.remoteObjectInterface = ObstacleBridgeTunHelperXPC.callbackInterface()" in xpc_source
+    assert "bundledPrivilegedHostRunnerURL()" in tunnel_control
+    assert "with administrator privileges" in tunnel_control
+    assert "privilegedHostRunnerExecutableName = \"ObstacleBridgeHostRunner\"" in tunnel_control
+    assert elevated.count("@pytest.mark.macos_xpc_qualification") == 3
+    assert 'status = _local_admin_json(admin_port, "/api/tun-routing/status", timeout=5.0)' in elevated
+    assert 'last_admin_error = f"{type(exc).__name__}: {exc}"' in elevated
 
     assert 'HELPER_BINARY_PATH="${BUILD_DIR}/ObstacleBridgeTunHelper"' in build_script
     assert 'APP_LAUNCHDAEMONS_DIR="${APP_CONTENTS_DIR}/Library/LaunchDaemons"' in build_script

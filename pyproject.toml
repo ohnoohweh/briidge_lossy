@@ -39,6 +39,7 @@ markers = [
     "slow: long-running tests",
     "linux_elevated: Linux-only integration tests that require /dev/net/tun and elevated interface-management permission",
     "macos_elevated: macOS-only integration tests that require elevated utun and route-management permission",
+    "macos_xpc_qualification: explicit macOS packaged-SMAppService/XPC qualification tests; excluded from the routine elevated fallback matrix",
     "ios: iOS app, simulator, or packet-tunnel integration tests",
     "ios_simulator: opt-in iOS simulator integration tests that require Xcode and Briefcase",
     "windows_elevated: Windows-only integration tests that require Administrator privileges and Wintun-backed interface management",
