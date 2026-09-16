@@ -1126,7 +1126,7 @@ def ensure_generated_app_build_stamp(pbxproj_path: Path) -> Path:
     generated_path.parent.mkdir(parents=True, exist_ok=True)
     if not generated_path.exists():
         generated_path.write_text(
-            "import Foundation\n\nenum ObstacleBridgeGeneratedBuildStamp {\n    static let providerBuildTimestampUTC = \"unknown\"\n}\n",
+            "import Foundation\n\nenum ObstacleBridgeGeneratedBuildStamp {\n    static let providerBuildTimestampUTC = \"unknown\"\n    static let providerBuildCommit = \"unknown\"\n    static let providerBuildDirty = false\n    static let providerBuildDiffSHA = \"\"\n}\n",
             encoding="utf-8",
         )
     return generated_path

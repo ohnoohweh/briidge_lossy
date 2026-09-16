@@ -26,7 +26,13 @@ def _git(args: list[str]) -> str:
     return str(proc.stdout or "").strip() if proc.returncode == 0 else ""
 
 
-def _write_ios_generated_build_stamp(build_timestamp_utc: str) -> None:
+def _write_ios_generated_build_stamp(
+    *,
+    commit: str,
+    dirty: bool,
+    diff_sha: str,
+    build_timestamp_utc: str,
+) -> None:
     IOS_GENERATED_BUILD_STAMP.parent.mkdir(parents=True, exist_ok=True)
     IOS_GENERATED_BUILD_STAMP.write_text(
         "\n".join(
@@ -35,6 +41,9 @@ def _write_ios_generated_build_stamp(build_timestamp_utc: str) -> None:
                 "",
                 "enum ObstacleBridgeGeneratedBuildStamp {",
                 f'    static let providerBuildTimestampUTC = "{build_timestamp_utc}"',
+                f'    static let providerBuildCommit = "{commit}"',
+                f"    static let providerBuildDirty = {'true' if dirty else 'false'}",
+                f'    static let providerBuildDiffSHA = "{diff_sha}"',
                 "}",
                 "",
             ]
@@ -116,7 +125,12 @@ def main() -> int:
         diff_sha=diff_sha,
         build_timestamp_utc=build_timestamp_utc,
     )
-    _write_ios_generated_build_stamp(build_timestamp_utc)
+    _write_ios_generated_build_stamp(
+        commit=commit,
+        dirty=dirty,
+        diff_sha=diff_sha,
+        build_timestamp_utc=build_timestamp_utc,
+    )
     print(
         f"wrote {PY_GENERATED_TARGET} commit={commit} dirty={dirty} diff_sha={diff_sha or '-'} "
         f"build_timestamp_utc={build_timestamp_utc}"

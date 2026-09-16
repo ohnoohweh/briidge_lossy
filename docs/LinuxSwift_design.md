@@ -190,8 +190,8 @@ lives in the traceability records.
 | Item | Platform | Remaining outcome |
 | --- | --- | --- |
 | `R005.4a` | macOS | Build the complete normal macOS app bundle from a clean checkout with the pinned Crypto package, verify and package that exact bundle once, reuse it for the Swift-backed tests, and retain the ZIP, SHA-256, and build-info evidence. Publish the successful `main` build as the replaceable `macos-preview` GitHub Release asset. The iOS-only `IPServer` target remains R005.4b/4c work rather than a macOS build prerequisite. |
-| `R005.4b` | iOS simulator | Run an authenticated SecureLink exchange and redacted-status scenario in the generated simulator target on a host that can boot, install, and launch it. |
-| `R005.4c` | iOS device | Produce a signed release archive, record its size, and run the SecureLink scenario on a signed physical target. |
+| `R005.4b` | iOS device | On a signed physical iPhone, install and launch the normal app and `IPServer` target, establish an authenticated SecureLink exchange with a host peer, and retrieve redacted status through the app's overlay-published WebAdmin TCP service. Simulator qualification is not required because the available simulator hosts cannot reliably allocate the required resources. The packet-extension build summary must embed the source commit rather than reporting `unknown` before this device row closes. |
+| `R005.4c` | iOS release archive | Produce a signed release archive from the same device-qualified source revision, record its size, SHA-256, signing identity, and bundle identifiers, then install or distribute that exact artifact through the applicable Apple release path. |
 | `R005.6a` | CI | Require the relevant Linux, macOS, traceability, README, and ownership gates for R005 changes. |
 | `R005.6b` | CI/release | Classify privileged-TUN and device-only results separately and close R005 only after every applicable row is qualified. |
 

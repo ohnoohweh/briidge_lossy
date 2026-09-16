@@ -578,14 +578,22 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
 
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    build_script = (ROOT / "ios" / "scripts" / "build_ios_app.sh").read_text(encoding="utf-8")
     support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
     packet_tunnel_probe_tests = (ROOT / "ios" / "tests" / "test_ios_packet_tunnel_provider_probe.py").read_text(encoding="utf-8")
 
     assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
     assert 'static let providerBuildTimestampUTC = "unknown"' in provider
+    assert 'static let providerBuildCommit = "unknown"' in provider
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in provider
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildDirty" in provider
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildDiffSHA" in provider
     assert 'private func buildSummary() -> [String: Any]' in provider
     assert '"source": "embedded-build-info"' in provider
+    assert '"commit": commit' in provider
+    assert '"diff_sha": diffSHA' in provider
     assert '"build_timestamp_utc": timestamp' in provider
+    assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
     assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
     assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider
@@ -732,6 +740,8 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert 'env["EXCLUDED_ROUTES"]' in runtime
     assert 'env["EXCLUDED_ROUTES6"]' in runtime
     assert '"swift_host_runner"' in runtime
+    assert 'env["OBSTACLEBRIDGE_BUILD_TIMESTAMP_UTC"]' in runtime
+    assert '"build_timestamp_utc": timestamp' in runtime
     assert "let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
     assert "let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
     assert "self.lifecycleHooks = sharedSpec.lifecycleHooks" in native_spec

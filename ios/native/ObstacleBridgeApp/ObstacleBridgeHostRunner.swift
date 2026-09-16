@@ -1936,6 +1936,7 @@ final class ObstacleBridgeHostRunner {
         let commit = (env["OBSTACLEBRIDGE_BUILD_COMMIT"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let source = (env["OBSTACLEBRIDGE_BUILD_SOURCE"] ?? "environment").trimmingCharacters(in: .whitespacesAndNewlines)
         let diffSHA = (env["OBSTACLEBRIDGE_BUILD_DIFF_SHA"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let timestamp = (env["OBSTACLEBRIDGE_BUILD_TIMESTAMP_UTC"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let tainted = Self.boolValue(from: env["OBSTACLEBRIDGE_BUILD_DIRTY"]) ?? false
         if !commit.isEmpty {
             return [
@@ -1947,6 +1948,7 @@ final class ObstacleBridgeHostRunner {
                 "untracked_changes": 0,
                 "available": true,
                 "diff_sha": diffSHA,
+                "build_timestamp_utc": timestamp,
             ]
         }
 
@@ -1959,6 +1961,7 @@ final class ObstacleBridgeHostRunner {
             "untracked_changes": 0,
             "available": false,
             "diff_sha": "",
+            "build_timestamp_utc": "",
         ]
     }
 
@@ -1975,6 +1978,7 @@ final class ObstacleBridgeHostRunner {
         let commit = Self.stringValue(from: payload["commit"] ?? payload["build_commit"]) ?? "unknown"
         let source = Self.stringValue(from: payload["source"] ?? payload["build_source"]) ?? "embedded"
         let diffSHA = Self.stringValue(from: payload["diff_sha"] ?? payload["build_diff_sha"]) ?? ""
+        let timestamp = Self.stringValue(from: payload["build_timestamp_utc"]) ?? ""
         let repoRoot = Self.stringValue(from: payload["repo_root"]) ?? ""
         let available = Self.boolValue(from: payload["available"])
             ?? !(commit.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || commit == "unknown")
@@ -1990,6 +1994,7 @@ final class ObstacleBridgeHostRunner {
             "untracked_changes": untrackedChanges,
             "available": available,
             "diff_sha": diffSHA,
+            "build_timestamp_utc": timestamp,
         ]
     }
 

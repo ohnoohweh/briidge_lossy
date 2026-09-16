@@ -262,6 +262,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeHostRunner.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in IPServer Sources" in patched
+    assert "CURRENT_PROJECT_VERSION = 1;" in patched
     assert "ObstacleBridgeMacOSTunAdapter.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperContract.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperXPCTransport.swift in Sources" in patched
@@ -301,7 +302,12 @@ def test_patch_pbxproj_file_generates_packet_tunnel_provider_copy(tmp_path, monk
     changed = patch_pbxproj_file(pbxproj)
 
     generated_provider = project_root / patcher.GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE
+    generated_build_stamp = (project_root / patcher.GENERATED_APP_BUILD_STAMP_RELATIVE).resolve()
     assert changed is True
     assert generated_provider.read_text(encoding="utf-8") == source_provider.read_text(encoding="utf-8")
+    build_stamp = generated_build_stamp.read_text(encoding="utf-8")
+    assert 'static let providerBuildCommit = "unknown"' in build_stamp
+    assert "static let providerBuildDirty = false" in build_stamp
+    assert 'static let providerBuildDiffSHA = ""' in build_stamp
     patched = pbxproj.read_text(encoding="utf-8")
     assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched
