@@ -1,17 +1,10 @@
 import Dispatch
 import Foundation
+import ObstacleBridgeCore
 
-public struct ObstacleBridgeLinuxReconnectPolicy: Equatable, Sendable {
-    public let initialDelayMilliseconds: Int
-    public let maximumDelayMilliseconds: Int
-    public let maximumAttempts: Int
-
-    public init(initialDelayMilliseconds: Int = 250, maximumDelayMilliseconds: Int = 5_000, maximumAttempts: Int = 5) {
-        self.initialDelayMilliseconds = max(1, initialDelayMilliseconds)
-        self.maximumDelayMilliseconds = max(self.initialDelayMilliseconds, maximumDelayMilliseconds)
-        self.maximumAttempts = max(1, maximumAttempts)
-    }
-}
+/// Compatibility name for the Linux adapter. Retry bounds and delay arithmetic
+/// are Core policy so Apple and future adapters cannot diverge.
+public typealias ObstacleBridgeLinuxReconnectPolicy = ObstacleBridgeOverlayReconnectPolicy
 
 public struct ObstacleBridgeLinuxReconnectSnapshot: Equatable, Sendable {
     public let state: String
@@ -97,7 +90,7 @@ public final class ObstacleBridgeLinuxReconnectSupervisor: @unchecked Sendable {
                 publish(state: "failed", nextRetryMilliseconds: nil, failureReason: error.localizedDescription)
                 return
             }
-            let delay = min(policy.maximumDelayMilliseconds, policy.initialDelayMilliseconds * (1 << min(attempts - 1, 10)))
+            let delay = policy.delayMilliseconds(afterAttempt: attempts)
             publish(state: "reconnecting", nextRetryMilliseconds: delay, failureReason: error.localizedDescription)
             scheduleAttempt(afterMilliseconds: delay)
         }
