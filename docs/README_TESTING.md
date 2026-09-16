@@ -240,6 +240,12 @@ The Admin probe verifies that the Linux peer row is one Core/adapter-derived
 redacted projection: lifecycle/readiness, epoch/session diagnostics, retry
 window, and protected frame counters/totals are published without a PSK,
 nonce, key, or plaintext.
+`peerProjectionCoversConnectedReconnectingFailedAndStoppedStates` additionally
+pins the supported Python-to-Linux mapping for all four outer lifecycle states:
+the authenticated secure-link protocol state remains distinct from transport
+`connected`, retry is a bounded duration, and Python-only traffic/rate and
+diagnostic categories are documented capability limits rather than fabricated
+zero-valued fields.
 The fixture additionally proves the independent myUDP transport-counter sequence
 through the SecureLink handshake, peer-first payload delivery, and a protected
 ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports

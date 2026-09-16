@@ -155,7 +155,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "connection_epoch": peer.connectionEpoch,
             "app_ready": peer.ready,
             "secure_link": [
-                "state": peer.lifecycleState,
+                "state": peer.secureLinkState,
                 "authenticated": peer.authenticated,
                 "session_id": peer.sessionID ?? NSNull(),
                 "pending_rekey_session_id": peer.pendingRekeySessionID ?? NSNull(),

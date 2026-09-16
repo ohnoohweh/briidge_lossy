@@ -8,6 +8,10 @@ import ObstacleBridgeCore
 public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
     public let transport: String
     public let lifecycleState: String
+    /// SecureLink's protocol state is deliberately distinct from the outer
+    /// transport lifecycle: an admitted protected epoch is `connected` while
+    /// SecureLink itself is `authenticated`.
+    public let secureLinkState: String
     public let connectionEpoch: UInt64
     public let sessionID: UInt64?
     public let pendingRekeySessionID: UInt64?
@@ -325,6 +329,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             peer: .init(
                 transport: configuration.transport.rawValue,
                 lifecycleState: snapshot.state,
+                secureLinkState: secureLinkState,
                 connectionEpoch: connectionEpoch,
                 sessionID: coreState.map { $0.sessionID == 0 ? nil : $0.sessionID } ?? nil,
                 pendingRekeySessionID: coreState.map { $0.pendingRekeySessionID == 0 ? nil : $0.pendingRekeySessionID } ?? nil,

@@ -78,6 +78,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(row["connection_epoch"] as? Int == 1)
         #expect(row["app_ready"] as? Bool == true)
         #expect(secureLink["authenticated"] as? Bool == true)
+        #expect(secureLink["state"] as? String == "authenticated")
         #expect(secureLink["session_id"] as? UInt64 == 77)
         #expect(secureLink["protected_tx_counter"] as? UInt64 == 3)
         #expect(secureLink["protected_rx_counter"] as? UInt64 == 2)

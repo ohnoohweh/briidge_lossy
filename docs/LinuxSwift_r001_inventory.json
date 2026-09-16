@@ -267,11 +267,11 @@
     {
       "requirement": "REQ-AUT-004",
       "status": "partial",
-      "gap": "Linux Swift publishes one Core/adapter-derived redacted peer projection with lifecycle/readiness, epoch/session identifiers, protected counters, and transport ownership, but has not qualified every Python peer-scoped passed/dropped category, failure category, or myUDP listener statistic.",
+      "gap": "Linux Swift qualifies its supported redacted peer lifecycle projection across stopped, reconnecting, failed, and connected states, but deliberately does not publish Python peer-scoped passed/dropped categories, byte/rate traffic, failure diagnostics, or myUDP listener statistics; those remain explicit capability limits.",
       "python_implementations": ["src/obstacle_bridge/bridge_securelink.py", "src/obstacle_bridge/bridge_webadmin.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
       "python_tests": ["tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows"],
-      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::peerProjectionCoversConnectedReconnectingFailedAndStoppedStates"],
       "mixed_runtime_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle"]
     },
     {
@@ -317,11 +317,11 @@
     {
       "requirement": "REQ-AUT-009",
       "status": "partial",
-      "gap": "Linux Swift status/peer snapshots publish a redacted Core/adapter-derived lifecycle, epoch/session, retry, and protected-counter projection, but do not yet demonstrate the complete Python lifecycle-event, peer-traffic/rate, and passed/dropped-frame admin contract.",
+      "gap": "Linux Swift qualifies the supported redacted lifecycle, readiness, retry, and protected-counter projection across stopped, reconnecting, failed, and connected states. Python lifecycle-event timestamps, peer byte/rate traffic, passed/dropped categories, certificate diagnostics, and restart-watchdog fields remain explicit Linux capability limits.",
       "python_implementations": ["src/obstacle_bridge/bridge_securelink.py", "src/obstacle_bridge/bridge_webadmin.py"],
       "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeCore.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift"],
       "python_tests": ["tests/unit/test_admin_web_payloads.py::test_build_peers_payload_includes_secure_link_rows"],
-      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK"],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::peerProjectionUsesCoreCountersAndNeverSerializesPSK", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::peerProjectionCoversConnectedReconnectingFailedAndStoppedStates"],
       "mixed_runtime_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle"]
     },
     {

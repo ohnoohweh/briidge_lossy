@@ -193,6 +193,38 @@ only source-text similarity.
 closed-world feature inventory and per-product traceability gate defined below
 to have no applicable missing, partial, unsupported, unknown, or skipped row.
 
+### Linux peer-snapshot contract
+
+R005.5d-2 publishes one redacted configured-peer row through both
+`/api/status.peer` and `/api/peers[0]`.  It is deliberately a smaller,
+typed subset of the Python peer snapshot, rather than a second reconstruction
+of SecureLink state in the HTTP layer.  The supported cross-runtime mapping is:
+
+| Outer lifecycle | Linux `state` / `app_ready` | Linux `secure_link.state` | Retry/session/counter rule |
+| --- | --- | --- | --- |
+| stopped | `stopped` / `false` | `disconnected` for PSK, `off` otherwise | no retry or session; protected counters/totals are zero for an unadmitted epoch |
+| reconnecting | `reconnecting` / `false` | `disconnected` when the lower transport never admitted SecureLink | bounded `next_retry_milliseconds`; no current session or authenticated state |
+| failed | `failed` / `false` | `disconnected` when the lower transport failed before a SecureLink exchange | no retry, no current session; row-level `failure_reason` is populated |
+| connected | `connected` / `true` after PSK admission | `authenticated` for PSK, `off` otherwise | no retry; current session ID, directional protected counters, protected-frame totals, authenticated-generation total, and completed-rekey total are supplied by Core |
+
+Python's fuller vocabulary uses such values as `waiting_transport`,
+`handshaking`, and `authenticated` for SecureLink state and publishes a
+wall-clock retry deadline.  Linux intentionally publishes `disconnected` for
+a pre-SecureLink lower-transport failure and a bounded monotonic-duration
+`next_retry_milliseconds`; neither representation asserts an authenticated
+session. `ObstacleBridgeLinuxLiveRuntimeTests.peerProjectionCoversConnectedReconnectingFailedAndStoppedStates`
+and `ObstacleBridgeLinuxAdminServerTests.peerProjectionUsesCoreCountersAndNeverSerializesPSK`
+prove these mappings against Python fixture peers.
+
+The following Python peer fields are explicit Linux Swift capability limits,
+not zero-valued equivalents: byte totals/rates, SecureLink
+passed/dropped-frame categories, handshake/failure timestamps and diagnostic
+codes, certificate/trust metadata, listener multi-peer rows and myUDP listener
+statistics, and runner restart-watchdog countdown.  A future Linux work
+package must implement and independently qualify each category before it can
+be advertised; the redacted protected-frame counters above do not stand in
+for that traffic contract.
+
 ## Current implementation state
 
 The checked-in [Linux Swift source map](./LinuxSwift_source_map.md) inventories every Swift
@@ -773,7 +805,7 @@ evidence.
 | `R005.5c-3` Reconnect/fresh epoch | Complete | TCP, WebSocket, and myUDP reconnect to independent Python peers with new SecureLink sessions and reject retired-session protected data at the configured-session adapter boundary. |
 | `R005.5c-4` Counter boundaries | Complete | Core covers SecureLink exhaustion and epoch reset; independent Python peers observe TCP/WebSocket protected progression and myUDP `65535 -> 1` rollover. Reconnect probes confirm a fresh epoch on every admitted transport. |
 | `R005.5d-1` Lifecycle/retry | In progress | The Swift live snapshot exposes the bounded next-retry delay; TCP/WebSocket prove silent-peer retry and fresh authenticated epochs, and myUDP proves its receive deadline reaches live epoch failure. A bounded myUDP probe exposed that synchronous stop waits behind reconnect handshake I/O on the serialized runtime queue. Make in-progress connection attempts cancellation-safe before completing myUDP fresh-reconnect evidence. |
-| `R005.5d-2` | Operator state | In progress | A single redacted Core/adapter-derived peer projection is served through Linux `/api/status` and `/api/peers`, with lifecycle/readiness, epoch/session diagnostics, retry state, protected counters/totals, and transport ownership. Remaining work is the Python contract comparison for connected, reconnecting, failed, and stopped states, including explicit platform omissions. |
+| `R005.5d-2` | Operator state | Complete | A single redacted Core/adapter-derived peer projection is served through Linux `/api/status` and `/api/peers`, with lifecycle/readiness, distinct SecureLink protocol state, epoch/session diagnostics, retry state, protected counters/totals, and transport ownership. The supported Python mapping for connected, reconnecting, failed, and stopped states, plus the explicit capability limits, is defined above. |
 | `R005.5e-1` Generic compression layer | In progress | Core owns portable bounded zlib plus the mux compressed-flag policy, eligible-type gate, and no-gain fallback. Linux admits typed policy configuration and routes request/reply and receive-owner records through Core. Apple delegation remains open. |
 | `R005.5e-2` Compression interoperability | Open | Prove enabled, disabled, and mismatched compression settings plus required telemetry against the Python peer on Swift. |
 
@@ -794,7 +826,6 @@ row.
 | `R005.5d-1c` | Linux Swift + Python peer | In progress | TCP and WebSocket prove the connected publication occurs only after a fresh authenticated epoch. myUDP separately proves its silent receive deadline reaches the live failure/retry boundary. Remaining implementation: allow `stop()` to cancel a reconnect handshake without waiting behind blocking I/O on the serialized queue, then run a peer probe that filters retired-session handshakes and proves fresh readiness plus old-epoch rejection. |
 | `R005.5d-2a` | Linux Swift | Complete | `ObstacleBridgeLinuxPeerSnapshot` combines Core’s redacted SecureLink state with adapter-owned lifecycle, epoch, readiness, and retry state. Core supplies lifetime protected-frame totals across rekeys; the projection contains no PSK, nonce, key, or plaintext. `ObstacleBridgeLinuxAdminServerTests.peerProjectionUsesCoreCountersAndNeverSerializesPSK` proves the authenticated Core counters/totals and redaction. |
 | `R005.5d-2b` | Linux Swift | Complete | Linux `/api/status` and `/api/peers` serialize that one projection; the same test proves PSK absence plus distinct configured-peer identity and transport ownership. |
-| `R005.5d-2c` | Linux Swift + Python reference | Open | Compare the supported lifecycle, retry, and traffic/counter fields with the Python snapshot contract for connected, reconnecting, failed, and stopped states. Document deliberate platform omissions as capability limits. |
 | `R005.5e-1a` | Linux Swift | Complete | Typed runtime configuration admits the Apple-compatible default-disabled zlib policy, clamps level and minimum-body bounds like the Python wrapper, selects known ChannelMux types, and rejects an unsupported algorithm before networking. |
 | `R005.5e-1b` | Linux Swift | Complete | Every Linux ChannelMux outbound frame traverses the Core policy; request/reply and receive-owner inbound records are unwrapped by Core before decoding. Python-peer probes prove compressed protected request/reply and compressed unsolicited receive delivery, including no independent Linux zlib/mux parser. |
 | `R005.5e-1c` | macOS/iOS | Open | Replace the Apple zlib/mux parsing path with delegation to the common Core compression policy while keeping Apple-specific I/O and configuration persistence in its wrapper. |

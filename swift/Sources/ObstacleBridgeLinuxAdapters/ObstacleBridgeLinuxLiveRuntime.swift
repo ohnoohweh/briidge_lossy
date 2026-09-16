@@ -90,6 +90,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             peer: .init(
                 transport: base.peer.transport,
                 lifecycleState: live.state,
+                secureLinkState: base.peer.secureLinkState,
                 connectionEpoch: base.peer.connectionEpoch,
                 sessionID: base.peer.sessionID,
                 pendingRekeySessionID: base.peer.pendingRekeySessionID,

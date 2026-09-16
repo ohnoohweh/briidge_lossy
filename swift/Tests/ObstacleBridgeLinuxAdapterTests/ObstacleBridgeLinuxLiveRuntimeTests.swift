@@ -8,6 +8,83 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    /// Pins the subset of Python's peer lifecycle contract supported by the
+    /// Linux Swift foreground runtime.  In particular, transport lifecycle
+    /// and SecureLink protocol state are separate fields: an authenticated
+    /// protected epoch is transport-connected, not SecureLink-connected.
+    @Test func peerProjectionCoversConnectedReconnectingFailedAndStoppedStates() throws {
+        let initial = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 2)
+        )
+        let initiallyStopped = initial.status().peer
+        #expect(initiallyStopped.lifecycleState == "stopped")
+        #expect(initiallyStopped.secureLinkState == "disconnected")
+        #expect(!initiallyStopped.ready)
+        #expect(!initiallyStopped.authenticated)
+        #expect(initiallyStopped.sessionID == nil)
+        #expect(initiallyStopped.nextRetryMilliseconds == nil)
+        #expect(initiallyStopped.protectedFramesSentTotal == 0)
+        #expect(initiallyStopped.protectedFramesReceivedTotal == 0)
+
+        let reconnecting = DispatchSemaphore(value: 0)
+        initial.onSnapshot = { snapshot in
+            if snapshot.state == "reconnecting", snapshot.nextRetryMilliseconds == 250 { reconnecting.signal() }
+        }
+        initial.start()
+        #expect(reconnecting.wait(timeout: .now() + 3) == .success)
+        let retrying = initial.status().peer
+        #expect(retrying.lifecycleState == "reconnecting")
+        // A lower TCP connection failure occurs before SecureLink can start;
+        // Python calls this `waiting_transport`, while the Linux adapter's
+        // intentionally smaller vocabulary reports `disconnected`.
+        #expect(retrying.secureLinkState == "disconnected")
+        #expect(!retrying.ready)
+        #expect(!retrying.authenticated)
+        #expect(retrying.sessionID == nil)
+        #expect(retrying.nextRetryMilliseconds == 250)
+        initial.stop()
+        let stopped = initial.status().peer
+        #expect(stopped.lifecycleState == "stopped")
+        #expect(stopped.nextRetryMilliseconds == nil)
+        #expect(!stopped.ready)
+
+        let terminal = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            policy: .init(initialDelayMilliseconds: 1, maximumDelayMilliseconds: 1, maximumAttempts: 1)
+        )
+        let failed = DispatchSemaphore(value: 0)
+        terminal.onSnapshot = { if $0.state == "failed" { failed.signal() } }
+        terminal.start()
+        #expect(failed.wait(timeout: .now() + 3) == .success)
+        let terminalPeer = terminal.status().peer
+        #expect(terminalPeer.lifecycleState == "failed")
+        #expect(terminalPeer.secureLinkState == "disconnected")
+        #expect(!terminalPeer.ready)
+        #expect(terminalPeer.nextRetryMilliseconds == nil)
+        #expect(terminal.snapshot.failureReason != nil)
+        terminal.stop()
+
+        let pythonPeer = try PythonOverlayPeer(mode: "tcp-securelink")
+        defer { pythonPeer.stop() }
+        let connected = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: pythonPeer.port, secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let ready = DispatchSemaphore(value: 0)
+        connected.onSnapshot = { if $0.state == "connected" { ready.signal() } }
+        connected.start()
+        #expect(ready.wait(timeout: .now() + 3) == .success)
+        let connectedPeer = connected.status().peer
+        #expect(connectedPeer.lifecycleState == "connected")
+        #expect(connectedPeer.secureLinkState == "authenticated")
+        #expect(connectedPeer.ready)
+        #expect(connectedPeer.authenticated)
+        #expect(connectedPeer.sessionID != nil)
+        #expect(connectedPeer.nextRetryMilliseconds == nil)
+        #expect(connectedPeer.authenticatedGenerationsTotal == 1)
+        connected.stop()
+    }
+
     @Test func liveRuntimePublishesBoundedRetryWindow() {
         let runtime = ObstacleBridgeLinuxLiveRuntime(
             configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1),
