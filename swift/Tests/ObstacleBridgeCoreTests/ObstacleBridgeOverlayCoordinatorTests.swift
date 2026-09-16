@@ -1,7 +1,18 @@
+import Foundation
 import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeOverlayCoordinatorTests {
+    @Test func logicalEnvelopeUsesOneAppPingPongPolicyForTCPAndWebSocket() throws {
+        let application = ObstacleBridgeOverlayFrame(kind: .application, payload: Data("payload".utf8))
+        #expect(try ObstacleBridgeOverlayEnvelope.decodeTCP(ObstacleBridgeOverlayEnvelope.encodeTCP(application)) == .application(Data("payload".utf8)))
+
+        let ping = ObstacleBridgeOverlayFrame(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: 7, echoNS: 3))
+        let websocket = try ObstacleBridgeOverlayEnvelope.encodeWebSocket(ping, mode: .base64)
+        #expect(try ObstacleBridgeOverlayEnvelope.decodeWebSocket(websocket, mode: .base64) == .reply(.init(kind: .pong, payload: ObstacleBridgeOverlayFrameCodec.pongPayload(echoTxNS: 7))))
+        #expect(try ObstacleBridgeOverlayEnvelope.consume(.init(kind: .pong, payload: Data())) == .ignore)
+    }
+
     @Test func authenticatedEpochStartsExactlyOneReceiveOwner() {
         let coordinator = ObstacleBridgeOverlayCoordinator(
             candidateCount: 2,
