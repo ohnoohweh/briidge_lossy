@@ -286,9 +286,29 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[test]
 
+      # This is the normal desktop product build, not a source-only probe.
+      # The test helper below reuses this exact bundle so the compile evidence,
+      # CI artifact, and exercised HostRunner cannot silently diverge.
+      - name: Build and package macOS application evidence
+        run: |
+          ios/scripts/build_macos_app.sh
+          ios/scripts/package_macos_app.sh
+
+      - name: Retain macOS application evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: ObstacleBridge-macos-app-${{ github.sha }}
+          path: |
+            ios/build/macos/release/ObstacleBridge-macos-preview.zip
+            ios/build/macos/release/ObstacleBridge-macos-preview.zip.sha256
+            ios/build/macos/release/ObstacleBridge-macos-preview-build-info.json
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Run Swift-backed host-side suites
         env:
           PYTHONPATH: src:ios/src
+          OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
         # Host-runner product E2E tests start complete app processes and wait on
         # network lifecycle deadlines.  They are qualification tests, not a
         # useful per-change signal for Core/adapter work, and run in their own

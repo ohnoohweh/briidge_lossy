@@ -752,6 +752,9 @@ def test_shared_admin_api_exposes_status_and_bootstrap_routes() -> None:
 def test_macos_app_main_source_exists() -> None:
     app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    package_script = (ROOT / "ios" / "scripts" / "package_macos_app.sh").read_text(encoding="utf-8")
+    integration_workflow = (ROOT / ".github" / "workflows" / "bridge-py-integration-gate.yml").read_text(encoding="utf-8")
+    release_workflow = (ROOT / ".github" / "workflows" / "publish-macos-preview.yml").read_text(encoding="utf-8")
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
@@ -807,6 +810,17 @@ def test_macos_app_main_source_exists() -> None:
     assert "tunServiceSpec: tunService?.toChannelMuxServiceSpec()" in runner
     assert 'case openTun = "OPEN_TUN"' in tun_helper_contract
     assert "iOSUsesNetworkExtensionBoundary = true" in tun_helper_contract
+    assert "codesign --verify --strict" in package_script
+    assert "plutil -lint" in package_script
+    assert "ditto -c -k --keepParent" in package_script
+    assert 'shasum -a 256 "${ARCHIVE_NAME}"' in package_script
+    assert "ios/scripts/build_macos_app.sh" in integration_workflow
+    assert "ios/scripts/package_macos_app.sh" in integration_workflow
+    assert "OBSTACLEBRIDGE_REUSE_MACOS_BUILD" in integration_workflow
+    assert "actions/upload-artifact@v4" in integration_workflow
+    assert "branches: [main]" in release_workflow
+    assert "gh release upload macos-preview" in release_workflow
+    assert "--prerelease" in release_workflow
 
 
 def test_websocket_payload_codec_has_one_core_owner() -> None:

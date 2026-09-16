@@ -189,7 +189,7 @@ lives in the traceability records.
 
 | Item | Platform | Remaining outcome |
 | --- | --- | --- |
-| `R005.4a` | macOS | Generate and build the macOS Xcode product and `IPServer` target from a clean checkout with the pinned Crypto package; retain artifact evidence. |
+| `R005.4a` | macOS | Build the complete normal macOS app bundle from a clean checkout with the pinned Crypto package, verify and package that exact bundle once, reuse it for the Swift-backed tests, and retain the ZIP, SHA-256, and build-info evidence. Publish the successful `main` build as the replaceable `macos-preview` GitHub Release asset. The iOS-only `IPServer` target remains R005.4b/4c work rather than a macOS build prerequisite. |
 | `R005.4b` | iOS simulator | Run an authenticated SecureLink exchange and redacted-status scenario in the generated simulator target on a host that can boot, install, and launch it. |
 | `R005.4c` | iOS device | Produce a signed release archive, record its size, and run the SecureLink scenario on a signed physical target. |
 | `R005.6a` | CI | Require the relevant Linux, macOS, traceability, README, and ownership gates for R005 changes. |

@@ -306,6 +306,23 @@ The signing key must be available to the interactive user/keychain session.
 Non-interactive SSH signing can fail with `errSecInternalComponent` even when
 the identity is listed by `security find-identity`.
 
+### CI build evidence and preview distribution
+
+The macOS Swift-backed CI lane builds the same complete normal `.app` bundle
+that its HostRunner tests reuse. It validates the outer app and each nested
+executable with `codesign --verify --strict`, validates both plists, and stores
+one ZIP together with its SHA-256 and embedded build-info JSON as a CI
+artifact. This makes the artifact evidence refer to the exact bundle compiled
+for the tests rather than to a second, untested build.
+
+On successful `main` builds, the release workflow replaces the assets on the
+`macos-preview` GitHub Release. This provides a toolchain-free download for
+evaluation. Hosted CI does not have the product Team ID signing key or a
+notarization credential, so this preview is ad-hoc signed and is not evidence
+for Gatekeeper acceptance, installer ownership, or the packaged SMAppService
+path. Users must verify its published SHA-256; a team-signed and notarized
+release remains the required production distribution path.
+
 ### Required test execution shape
 
 - Run the elevated wrapper with an absolute `--app-bundle` path to test that
