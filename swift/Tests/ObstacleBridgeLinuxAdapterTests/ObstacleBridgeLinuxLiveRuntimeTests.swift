@@ -4,9 +4,168 @@ import Testing
 #if os(Linux)
 import Glibc
 #endif
+import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    /// Pins the subset of Python's peer lifecycle contract supported by the
+    /// Linux Swift foreground runtime.  In particular, transport lifecycle
+    /// and SecureLink protocol state are separate fields: an authenticated
+    /// protected epoch is transport-connected, not SecureLink-connected.
+    @Test func peerProjectionCoversConnectedReconnectingFailedAndStoppedStates() throws {
+        let initial = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 2)
+        )
+        let initiallyStopped = initial.status().peer
+        #expect(initiallyStopped.lifecycleState == "stopped")
+        #expect(initiallyStopped.secureLinkState == "disconnected")
+        #expect(!initiallyStopped.ready)
+        #expect(!initiallyStopped.authenticated)
+        #expect(initiallyStopped.sessionID == nil)
+        #expect(initiallyStopped.nextRetryMilliseconds == nil)
+        #expect(initiallyStopped.protectedFramesSentTotal == 0)
+        #expect(initiallyStopped.protectedFramesReceivedTotal == 0)
+
+        let reconnecting = DispatchSemaphore(value: 0)
+        initial.onSnapshot = { snapshot in
+            if snapshot.state == "reconnecting", snapshot.nextRetryMilliseconds == 250 { reconnecting.signal() }
+        }
+        initial.start()
+        #expect(reconnecting.wait(timeout: .now() + 3) == .success)
+        let retrying = initial.status().peer
+        #expect(retrying.lifecycleState == "reconnecting")
+        // A lower TCP connection failure occurs before SecureLink can start;
+        // Python calls this `waiting_transport`, while the Linux adapter's
+        // intentionally smaller vocabulary reports `disconnected`.
+        #expect(retrying.secureLinkState == "disconnected")
+        #expect(!retrying.ready)
+        #expect(!retrying.authenticated)
+        #expect(retrying.sessionID == nil)
+        #expect(retrying.nextRetryMilliseconds == 250)
+        initial.stop()
+        let stopped = initial.status().peer
+        #expect(stopped.lifecycleState == "stopped")
+        #expect(stopped.nextRetryMilliseconds == nil)
+        #expect(!stopped.ready)
+
+        let terminal = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            policy: .init(initialDelayMilliseconds: 1, maximumDelayMilliseconds: 1, maximumAttempts: 1)
+        )
+        let failed = DispatchSemaphore(value: 0)
+        terminal.onSnapshot = { if $0.state == "failed" { failed.signal() } }
+        terminal.start()
+        #expect(failed.wait(timeout: .now() + 3) == .success)
+        let terminalPeer = terminal.status().peer
+        #expect(terminalPeer.lifecycleState == "failed")
+        #expect(terminalPeer.secureLinkState == "disconnected")
+        #expect(!terminalPeer.ready)
+        #expect(terminalPeer.nextRetryMilliseconds == nil)
+        #expect(terminal.snapshot.failureReason != nil)
+        terminal.stop()
+
+        let pythonPeer = try PythonOverlayPeer(mode: "tcp-securelink")
+        defer { pythonPeer.stop() }
+        let connected = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: pythonPeer.port, secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let ready = DispatchSemaphore(value: 0)
+        connected.onSnapshot = { if $0.state == "connected" { ready.signal() } }
+        connected.start()
+        #expect(ready.wait(timeout: .now() + 3) == .success)
+        let connectedPeer = connected.status().peer
+        #expect(connectedPeer.lifecycleState == "connected")
+        #expect(connectedPeer.secureLinkState == "authenticated")
+        #expect(connectedPeer.ready)
+        #expect(connectedPeer.authenticated)
+        #expect(connectedPeer.sessionID != nil)
+        #expect(connectedPeer.nextRetryMilliseconds == nil)
+        #expect(connectedPeer.authenticatedGenerationsTotal == 1)
+        connected.stop()
+    }
+
+    @Test func liveRuntimePublishesBoundedRetryWindow() {
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 500, maximumAttempts: 2)
+        )
+        let reconnecting = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "reconnecting", $0.nextRetryMilliseconds == 250 { reconnecting.signal() } }
+        runtime.start()
+        #expect(reconnecting.wait(timeout: .now() + 3) == .success)
+        let peer = runtime.status().peer
+        #expect(peer.lifecycleState == "reconnecting")
+        #expect(peer.nextRetryMilliseconds == 250)
+        #expect(!peer.ready)
+        #expect(peer.sessionID == nil)
+        runtime.stop()
+    }
+
+    @Test func myudpRegistryListenerKeepsTwoUdpPeersIsolated() throws {
+        let listener = try ObstacleBridgeLinuxMyUDPListener(port: 0, bindHost: "127.0.0.1")
+        let first = try connectUDP(port: listener.port)
+        let second = try connectUDP(port: listener.port)
+        defer { _ = close(first); _ = close(second) }
+
+        let firstWire = try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("first-peer".utf8)),
+            counter: 1,
+            transmittedNanoseconds: 1
+        )
+        let secondWire = try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("second-peer".utf8)),
+            counter: 1,
+            transmittedNanoseconds: 2
+        )
+        #expect(firstWire.withUnsafeBytes { send(first, $0.baseAddress, firstWire.count, 0) } == firstWire.count)
+        #expect(secondWire.withUnsafeBytes { send(second, $0.baseAddress, secondWire.count, 0) } == secondWire.count)
+
+        let firstReceived = try listener.receive()
+        let secondReceived = try listener.receive()
+        let received = [try #require(firstReceived), try #require(secondReceived)]
+        #expect(Set(received.map(\.payload)) == Set([Data("first-peer".utf8), Data("second-peer".utf8)]))
+        #expect(Set(received.map(\.peerIdentity)).count == 2)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(first)).type == ObstacleBridgeMyUDPCodec.controlType)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(second)).type == ObstacleBridgeMyUDPCodec.controlType)
+        #expect(try listener.serviceTimers() == 2)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(first)).type == ObstacleBridgeMyUDPCodec.idleType)
+        #expect(try ObstacleBridgeMyUDPCodec.decodeWire(receiveUDPWire(second)).type == ObstacleBridgeMyUDPCodec.idleType)
+        #expect(listener.activePeerCount == 2)
+        #expect(Set(listener.expireIdlePeers(nowNanoseconds: .max, idleTimeoutNanoseconds: 1)) == Set(received.map(\.peerIdentity)))
+        #expect(listener.activePeerCount == 0)
+        listener.close()
+        listener.close()
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EBADF)) { try listener.receive() }
+    }
+
+    @Test func myudpListenerRejectsDelayedStaleEpochForSameEndpoint() throws {
+        let listener = try ObstacleBridgeLinuxMyUDPListener(port: 0, bindHost: "127.0.0.1")
+        let peer = try connectUDP(port: listener.port)
+        defer { _ = close(peer); listener.close() }
+        func sendRecord(_ payload: String, counter: UInt16, epoch: UInt64) throws -> ObstacleBridgeLinuxMyUDPListener.ReceivedRecord? {
+            let wire = try ObstacleBridgeMyUDPCodec.encodeData(
+                payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data(payload.utf8)),
+                counter: counter,
+                transmittedNanoseconds: epoch
+            )
+            #expect(wire.withUnsafeBytes { send(peer, $0.baseAddress, wire.count, 0) } == wire.count)
+            return try listener.receive(epoch: epoch)
+        }
+        #expect(try sendRecord("old", counter: 1, epoch: 1)?.payload == Data("old".utf8))
+        _ = try receiveUDPWire(peer)
+        #expect(try sendRecord("fresh", counter: 1, epoch: 2)?.payload == Data("fresh".utf8))
+        _ = try receiveUDPWire(peer)
+        let staleWire = try ObstacleBridgeMyUDPCodec.encodeData(
+            payload: try ObstacleBridgeMyUDPCodec.encodeStreamRecord(Data("stale".utf8)),
+            counter: 2,
+            transmittedNanoseconds: 1
+        )
+        #expect(staleWire.withUnsafeBytes { send(peer, $0.baseAddress, staleWire.count, 0) } == staleWire.count)
+        #expect(throws: ObstacleBridgeLinuxMyUDPError.invalidReply) { try listener.receive(epoch: 1) }
+        #expect(listener.activePeerCount == 1)
+    }
+
     @Test func protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
         try assertProtectedReceiveFailureReconnects(mode: "tcp-securelink-close-after-ack", transport: .tcp)
     }
@@ -17,6 +176,90 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
 
     @Test func protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
         try assertProtectedReceiveFailureReconnects(mode: "myudp-securelink-close-after-ack", transport: .myudp)
+    }
+
+    @Test func silentMyudpPeerDeliversReceiveDeadlineFailureToLiveRuntime() throws {
+        let peer = try PythonOverlayPeer(mode: "myudp-securelink-silent")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .myudp, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: 50),
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 2)
+        )
+        let retrying = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "reconnecting", $0.nextRetryMilliseconds == 10 { retrying.signal() } }
+        runtime.start()
+        #expect(retrying.wait(timeout: .now() + 2) == .success)
+        #expect(runtime.status().peer.lifecycleState == "reconnecting")
+        #expect(runtime.status().peer.nextRetryMilliseconds == 10)
+        runtime.stop()
+    }
+
+    @Test func stopCancelsStalledPythonSecureLinkHandshakeWithoutWaitingForReceiveTimeout() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-stall-handshake")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .tcp, host: "127.0.0.1", port: peer.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                receiveIdleTimeoutMilliseconds: 5_000
+            ),
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 2)
+        )
+        runtime.start()
+        // The Python peer accepts the connection and withholds SERVER_HELLO,
+        // leaving the serialized queue in the SecureLink handshake receive.
+        Thread.sleep(forTimeInterval: 0.1)
+        let started = DispatchTime.now().uptimeNanoseconds
+        runtime.stop()
+        let elapsedMilliseconds = (DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
+        #expect(elapsedMilliseconds < 500)
+        #expect(runtime.snapshot.state == "stopped")
+        #expect(runtime.status().peer.nextRetryMilliseconds == nil)
+    }
+
+    @Test func silentProtectedPythonPeersUseDeadlineRetryFreshReadinessAndRejectRetiredEpoch() throws {
+        for (mode, transport) in [("tcp-securelink-silent-reconnect-stale", ObstacleBridgeLinuxTransport.tcp), ("ws-securelink-silent-reconnect-stale", .ws)] {
+        let peer = try PythonOverlayPeer(mode: mode)
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: transport, host: "127.0.0.1", port: peer.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                receiveIdleTimeoutMilliseconds: 50
+            ),
+            policy: .init(initialDelayMilliseconds: 100, maximumDelayMilliseconds: 200, maximumAttempts: 3)
+        )
+        let retryPresented = DispatchSemaphore(value: 0)
+        let freshReady = DispatchSemaphore(value: 0)
+        let retiredEpochRejected = DispatchSemaphore(value: 0)
+        let observedStateLock = NSLock()
+        var freshReadinessWasPublished = false
+        runtime.onSnapshot = { snapshot in
+            if snapshot.state == "reconnecting", snapshot.nextRetryMilliseconds == 100 { retryPresented.signal() }
+            if snapshot.state == "connected", runtime.configuredRuntime.connectionEpoch >= 2 {
+                observedStateLock.lock()
+                freshReadinessWasPublished = true
+                observedStateLock.unlock()
+                freshReady.signal()
+            }
+            observedStateLock.lock()
+            let mayReportRetiredEpochRejection = freshReadinessWasPublished
+            observedStateLock.unlock()
+            if snapshot.state == "reconnecting", runtime.configuredRuntime.connectionEpoch >= 2, mayReportRetiredEpochRejection {
+                retiredEpochRejected.signal()
+            }
+        }
+        runtime.start()
+        #expect(retryPresented.wait(timeout: .now() + 3) == .success)
+        #expect(freshReady.wait(timeout: .now() + 3) == .success)
+        observedStateLock.lock()
+        let published = freshReadinessWasPublished
+        observedStateLock.unlock()
+        #expect(published)
+        #expect(retiredEpochRejected.wait(timeout: .now() + 3) == .success)
+        #expect(!runtime.status().peer.ready)
+        runtime.stop()
+        }
     }
 
     private func assertProtectedReceiveFailureReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
@@ -224,6 +467,13 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Glibc.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
         guard result == 0 else { _ = close(fd); throw SocketError.failure }
         return fd
+    }
+
+    private func receiveUDPWire(_ fd: Int32) throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: 1_452)
+        let count = recv(fd, &bytes, bytes.count, 0)
+        guard count > 0 else { throw SocketError.failure }
+        return Data(bytes.prefix(Int(count)))
     }
 
     private enum SocketError: Error { case failure }

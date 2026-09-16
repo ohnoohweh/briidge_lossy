@@ -13,7 +13,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import require_swift_module
+from swift_test_support import require_swift_module, swift_core_crypto_compile_flags
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,14 +28,22 @@ def _compile_swift_secure_link_probe(source_path: Path, binary_path: Path) -> No
     )
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-o",
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
         str(source_path),
     ]
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
+    completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=120)
     if completed.returncode != 0:
         raise AssertionError(
             f"swiftc failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"

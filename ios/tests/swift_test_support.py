@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import contextlib
 import os
+import signal
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -32,6 +35,31 @@ def require_swift_modules(*module_names: str, missing_swiftc_reason: str, missin
 
 
 @lru_cache(maxsize=None)
+def swift_core_crypto_compile_flags() -> tuple[str, ...]:
+    """Expose the pinned SwiftPM Crypto product to raw-source macOS probes."""
+    if sys.platform != "darwin":
+        return ()
+    module_dirs = sorted(ROOT.glob(".build/*/debug/Modules"))
+    if not module_dirs:
+        completed = subprocess.run(
+            ["swift", "build", "--target", "ObstacleBridgeCore"],
+            cwd=str(ROOT), capture_output=True, text=True, check=False,
+        )
+        if completed.returncode != 0:
+            raise AssertionError(
+                f"swift build --target ObstacleBridgeCore failed:\n{completed.stdout}\n{completed.stderr}"
+            )
+        module_dirs = sorted(ROOT.glob(".build/*/debug/Modules"))
+    if not module_dirs:
+        raise AssertionError("pinned Swift Crypto module directory was not produced")
+    module_dir = module_dirs[0]
+    # On Apple platforms swift-crypto's `Crypto` module forwards to CryptoKit.
+    # SwiftPM emits the module but no standalone libCrypto artifact, so raw
+    # source probes must import the module without inventing a linker input.
+    return ("-I", str(module_dir))
+
+
+@lru_cache(maxsize=None)
 def _swift_module_available(swiftc: str, module_name: str) -> bool:
     with tempfile.TemporaryDirectory(prefix="swift-module-probe-") as tmpdir:
         source_path = Path(tmpdir) / "probe.swift"
@@ -48,6 +76,9 @@ def _swift_module_available(swiftc: str, module_name: str) -> bool:
 ROOT = Path(__file__).resolve().parents[2]
 IOS_DIR = ROOT / "ios"
 BUILD_MACOS_APP_SCRIPT = IOS_DIR / "scripts" / "build_macos_app.sh"
+MACOS_BUILD_IDLE_TIMEOUT_S = 120.0
+MACOS_BUILD_ACTIVITY_POLL_S = 2.0
+MACOS_BUILD_MIN_CPU_PERCENT = 0.1
 
 
 @dataclass(frozen=True)
@@ -57,6 +88,137 @@ class MacOSSwiftArtifact:
     binary_path: Path
     app_bundle: Path
     build_info_path: Path
+
+
+def _process_tree_cpu_percent(pid: int) -> float:
+    """Return aggregate CPU use for a process and descendants."""
+    try:
+        listing = subprocess.run(
+            ["ps", "-axo", "pid=,ppid=,%cpu="],
+            capture_output=True, text=True, check=False, timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return 0.0
+    children: dict[int, list[tuple[int, float]]] = {}
+    for line in str(listing.stdout or "").splitlines():
+        fields = line.split()
+        if len(fields) != 3:
+            continue
+        try:
+            child_pid, parent_pid, cpu = int(fields[0]), int(fields[1]), float(fields[2])
+        except ValueError:
+            continue
+        children.setdefault(parent_pid, []).append((child_pid, cpu))
+    total = 0.0
+    pending = [int(pid)]
+    seen: set[int] = set()
+    while pending:
+        parent = pending.pop()
+        if parent in seen:
+            continue
+        seen.add(parent)
+        for child_pid, cpu in children.get(parent, []):
+            total += max(0.0, cpu)
+            pending.append(child_pid)
+    return total
+
+
+def _build_macos_app_with_activity_monitor(env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    """Permit slow compiles; fail only after sustained process-tree inactivity."""
+    process = subprocess.Popen(
+        [str(BUILD_MACOS_APP_SCRIPT)], cwd=str(ROOT), env=env,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        start_new_session=True,
+    )
+    last_active = time.monotonic()
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=MACOS_BUILD_ACTIVITY_POLL_S)
+            return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            if _process_tree_cpu_percent(process.pid) >= MACOS_BUILD_MIN_CPU_PERCENT:
+                last_active = time.monotonic()
+            if time.monotonic() - last_active < MACOS_BUILD_IDLE_TIMEOUT_S:
+                continue
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            stdout, stderr = process.communicate()
+            raise AssertionError(
+                "build_macos_app.sh had no compiler/process-tree CPU activity for "
+                f"{MACOS_BUILD_IDLE_TIMEOUT_S:.0f}s and was terminated.\n"
+                f"STDOUT:\n{stdout or ''}\nSTDERR:\n{stderr or ''}"
+            )
+
+
+def _macos_artifact_is_fresh(build_dir: Path) -> bool:
+    """Reuse a complete shared artifact only when its declared inputs are older."""
+    required = (
+        build_dir / "ObstacleBridgeHostRunner",
+        build_dir / "ObstacleBridgeTunHelper",
+        build_dir / "ObstacleBridgeHostRunner.build-info.json",
+        build_dir / "ObstacleBridge.app" / "Contents" / "MacOS" / "ObstacleBridge",
+        build_dir / "ObstacleBridge.app" / "Contents" / "MacOS" / "ObstacleBridgeHostRunner",
+    )
+    try:
+        oldest_artifact = min(path.stat().st_mtime for path in required)
+    except OSError:
+        return False
+    for root in (
+        IOS_DIR / "native",
+        BUILD_MACOS_APP_SCRIPT,
+        ROOT / "scripts" / "client-tun-hook-macos.sh",
+        ROOT / "scripts" / "server-tun-hook-macos.sh",
+        ROOT / "swift" / "Sources",
+        ROOT / "Package.swift",
+    ):
+        paths = root.rglob("*") if root.is_dir() else (root,)
+        for path in paths:
+            if path.is_file() and path.stat().st_mtime > oldest_artifact:
+                return False
+    return True
+
+
+def _macos_artifact_exists(build_dir: Path) -> bool:
+    return all(path.is_file() for path in (
+        build_dir / "ObstacleBridgeHostRunner",
+        build_dir / "ObstacleBridgeTunHelper",
+        build_dir / "ObstacleBridgeHostRunner.build-info.json",
+        build_dir / "ObstacleBridge.app" / "Contents" / "MacOS" / "ObstacleBridge",
+        build_dir / "ObstacleBridge.app" / "Contents" / "MacOS" / "ObstacleBridgeHostRunner",
+    ))
+
+
+def _configured_macos_app_artifact(env: dict[str, str], *, variant: str) -> MacOSSwiftArtifact | None:
+    """Use an explicitly selected real app bundle without rebuilding it."""
+    configured_path = str(env.get("OBSTACLEBRIDGE_MACOS_APP_BUNDLE") or "").strip()
+    if not configured_path:
+        return None
+    if variant != "normal":
+        raise AssertionError("OBSTACLEBRIDGE_MACOS_APP_BUNDLE cannot be used for failure-injection artifacts")
+    app_bundle = Path(configured_path).expanduser().resolve()
+    macos_dir = app_bundle / "Contents" / "MacOS"
+    executables = (
+        macos_dir / "ObstacleBridge",
+        macos_dir / "ObstacleBridgeHostRunner",
+        macos_dir / "ObstacleBridgeTunHelper",
+    )
+    required_files = (
+        app_bundle / "Contents" / "Library" / "LaunchDaemons" / "com.obstaclebridge.macos.ObstacleBridge.TunHelper.plist",
+    )
+    missing = [str(path) for path in executables if not path.is_file() or not os.access(path, os.X_OK)]
+    missing.extend(str(path) for path in required_files if not path.is_file())
+    if missing:
+        raise AssertionError(
+            "OBSTACLEBRIDGE_MACOS_APP_BUNDLE is not a complete ObstacleBridge macOS app: "
+            + ", ".join(missing)
+        )
+    return MacOSSwiftArtifact(
+        variant=variant,
+        build_dir=app_bundle.parent,
+        binary_path=macos_dir / "ObstacleBridgeHostRunner",
+        app_bundle=app_bundle,
+        build_info_path=app_bundle / "Contents" / "Resources" / "ObstacleBridge.build-info.json",
+    )
 
 
 @lru_cache(maxsize=None)
@@ -74,20 +236,21 @@ def build_macos_swift_artifact(*, failure_injection: bool = False) -> MacOSSwift
     env["OBSTACLEBRIDGE_MACOS_BUILD_VARIANT"] = variant
     if failure_injection:
         env["OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION"] = "1"
-    completed = subprocess.run(
-        [str(BUILD_MACOS_APP_SCRIPT)],
-        cwd=str(ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        raise AssertionError(
-            "build_macos_app.sh failed with exit code "
-            f"{completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
-        )
+    configured_artifact = _configured_macos_app_artifact(env, variant=variant)
+    if configured_artifact is not None:
+        return configured_artifact
     build_dir = IOS_DIR / "build" / ("macos" if variant == "normal" else f"macos-{variant}")
+    reuse_prebuilt = str(env.get("OBSTACLEBRIDGE_REUSE_MACOS_BUILD") or "").strip() == "1"
+    force_rebuild = str(env.get("OBSTACLEBRIDGE_FORCE_MACOS_BUILD") or "").strip() == "1"
+    if reuse_prebuilt and not _macos_artifact_exists(build_dir):
+        raise AssertionError(f"requested shared macOS artifact is incomplete: {build_dir}")
+    if not reuse_prebuilt and (force_rebuild or not _macos_artifact_is_fresh(build_dir)):
+        completed = _build_macos_app_with_activity_monitor(env)
+        if completed.returncode != 0:
+            raise AssertionError(
+                "build_macos_app.sh failed with exit code "
+                f"{completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+            )
     return MacOSSwiftArtifact(
         variant=variant,
         build_dir=build_dir,

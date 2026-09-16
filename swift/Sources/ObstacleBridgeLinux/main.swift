@@ -1,6 +1,6 @@
 import Foundation
 import ObstacleBridgeLinuxAdapters
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 #if os(Linux)
 import Glibc
 #endif
@@ -17,7 +17,7 @@ enum ObstacleBridgeLinuxMain {
         case ["--help"], ["-h"]:
             printHelp()
         case ["--version"]:
-            print("\(ObstacleBridgePortableRuntime.productName) build baseline (\(ObstacleBridgeLinuxAdapters.platform))")
+            print("\(ObstacleBridgeCoreRuntime.productName) build baseline (\(ObstacleBridgeLinuxAdapters.platform))")
         case let values where values.count == 5 && values[0] == "--transport-probe":
             runTransportProbe(transportName: values[1], host: values[2], portText: values[3], payloadBase64: values[4])
         case let values where values.count == 3 && values[0] == "--tcp-psk-echo-listener":

@@ -40,5 +40,11 @@ diagnose_exit() {
 trap diagnose_exit EXIT
 
 cd "$ROOT_DIR"
+TEST_TARGETS=("$TEST_TARGET")
+if [[ "$#" -gt 0 ]]; then
+  # A supplied node id replaces the default file target. Passing both causes
+  # pytest to run the whole matrix and then the selected test again.
+  TEST_TARGETS=("$@")
+fi
 "$PYTHON_BIN" -m pytest -vv -s -rs --durations=20 \
-  "$TEST_TARGET" -m macos_elevated --run-macos-elevated "$@"
+  "${TEST_TARGETS[@]}" -m macos_elevated --run-macos-elevated

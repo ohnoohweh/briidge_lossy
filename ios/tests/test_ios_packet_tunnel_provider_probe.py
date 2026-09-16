@@ -21,7 +21,13 @@ TESTS_DIR = Path(__file__).resolve().parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
-from swift_test_support import require_swift_modules
+from swift_test_support import require_swift_modules, swift_core_crypto_compile_flags
+
+
+# Each scenario builds and runs a complete packet-tunnel host probe. Keep this
+# coverage opt-in so focused Swift/Core and ordinary host-side PR runs do not
+# serialize network-runtime shutdown waits.
+pytestmark = pytest.mark.slow
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -148,6 +154,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
     )
     command = [
         swiftc,
+        *swift_core_crypto_compile_flags(),
         "-DOB_IPSERVER_SWIFT_SMOKE",
         "-DOB_IPSERVER_SWIFT_PROBE",
         "-o",
@@ -160,6 +167,9 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminWebSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
@@ -178,7 +188,6 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTunPing.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
@@ -188,7 +197,14 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),

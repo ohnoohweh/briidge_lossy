@@ -211,14 +211,20 @@ def test_ipserver_extension_plist_and_entitlements_exist() -> None:
 def test_native_crypto_bridge_source_exists() -> None:
     bridge = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift").read_text(encoding="utf-8")
 
-    assert "CryptoKit" in bridge
-    assert "CommonCrypto" in bridge
+    assert "CryptoKit" not in bridge
+    assert "CommonCrypto" not in bridge
     assert "@objc(ObstacleBridgeNativeCrypto)" in bridge
     assert "aesGCMEncryptKey" in bridge
     assert "chaCha20Poly1305EncryptKey" in bridge
     assert "generateEd25519PrivateKey" in bridge
     assert "generateX25519PrivateKey" in bridge
-    assert "sealed.ciphertext + sealed.tag" in bridge
+    assert "ObstacleBridgeCrypto.hkdfSHA256" in bridge
+    assert "ObstacleBridgeCrypto.pbkdf2SHA256" in bridge
+    assert "ObstacleBridgeCrypto.aesGCMSeal" in bridge
+    assert "ObstacleBridgeCrypto.chaChaPolySeal" in bridge
+    assert "ObstacleBridgeCrypto.ed25519Sign" in bridge
+    assert "ObstacleBridgeCrypto.x25519SharedSecret" in bridge
+    assert "Curve25519." not in bridge
 
 
 def test_channel_mux_codec_source_exists() -> None:
@@ -235,6 +241,11 @@ def test_channel_mux_codec_source_exists() -> None:
     assert "decodeRemoteServicesSetV2(" in codec
     assert "chunkControlPayload(" in codec
     assert "ControlChunkReassembler" in codec
+    assert "ObstacleBridgeChannelMuxFrameCodec.encode(" in codec
+    assert "ObstacleBridgeChannelMuxFrameCodec.decode(" in codec
+    assert "parseOpenV5" not in codec
+    assert "decodeRemoteServicesRS3" not in codec
+    assert "readUInt64(from" not in codec
 
 
 def test_channel_mux_tun_runtime_source_exists() -> None:
@@ -377,14 +388,26 @@ def test_compress_layer_runtime_source_exists() -> None:
     assert "struct StatusSnapshot" in runtime
     assert "struct SendSnapshot" in runtime
     assert "struct ReceiveSnapshot" in runtime
+    assert "ObstacleBridgeChannelMuxFrameCodec.decode(" in runtime
+    assert "ObstacleBridgeMuxCompression.protect(" in runtime
+    assert "ObstacleBridgeMuxCompression.unprotect(" in runtime
+    assert "readUInt16BE" not in runtime
+    assert "appendUInt16BE" not in runtime
     assert "parseAllowedMTypes(" in runtime
     assert "handleInboundPayload(" in runtime
     assert "handleSendPayload(" in runtime
     assert "statusSnapshot(peerID:" in runtime
-    assert "safeCompress(" in runtime
-    assert "safeDecompress(" in runtime
-    assert "compress2" in runtime
-    assert "inflateInit_" in runtime
+    assert "import zlib" not in runtime
+    assert "safeCompress(" not in runtime
+    assert "safeDecompress(" not in runtime
+    assert "compress2" not in runtime
+    assert "inflateInit_" not in runtime
+
+
+def test_core_import_guard_allows_only_the_common_compression_binding() -> None:
+    guard = (ROOT / "scripts" / "check_obstaclebridge_core_imports.py").read_text(encoding="utf-8")
+
+    assert 'module == "zlib" and path.name == "ObstacleBridgeCompression.swift"' in guard
 
 
 def test_overlay_stack_planner_source_exists() -> None:
@@ -555,14 +578,22 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
 
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    build_script = (ROOT / "ios" / "scripts" / "build_ios_app.sh").read_text(encoding="utf-8")
     support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
     packet_tunnel_probe_tests = (ROOT / "ios" / "tests" / "test_ios_packet_tunnel_provider_probe.py").read_text(encoding="utf-8")
 
     assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
     assert 'static let providerBuildTimestampUTC = "unknown"' in provider
+    assert 'static let providerBuildCommit = "unknown"' in provider
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in provider
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildDirty" in provider
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildDiffSHA" in provider
     assert 'private func buildSummary() -> [String: Any]' in provider
     assert '"source": "embedded-build-info"' in provider
+    assert '"commit": commit' in provider
+    assert '"diff_sha": diffSHA' in provider
     assert '"build_timestamp_utc": timestamp' in provider
+    assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
     assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
     assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider
@@ -709,6 +740,8 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert 'env["EXCLUDED_ROUTES"]' in runtime
     assert 'env["EXCLUDED_ROUTES6"]' in runtime
     assert '"swift_host_runner"' in runtime
+    assert 'env["OBSTACLEBRIDGE_BUILD_TIMESTAMP_UTC"]' in runtime
+    assert '"build_timestamp_utc": timestamp' in runtime
     assert "let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
     assert "let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
     assert "self.lifecycleHooks = sharedSpec.lifecycleHooks" in native_spec
@@ -729,6 +762,9 @@ def test_shared_admin_api_exposes_status_and_bootstrap_routes() -> None:
 def test_macos_app_main_source_exists() -> None:
     app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    package_script = (ROOT / "ios" / "scripts" / "package_macos_app.sh").read_text(encoding="utf-8")
+    integration_workflow = (ROOT / ".github" / "workflows" / "bridge-py-integration-gate.yml").read_text(encoding="utf-8")
+    release_workflow = (ROOT / ".github" / "workflows" / "publish-macos-preview.yml").read_text(encoding="utf-8")
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
@@ -771,30 +807,68 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridgeMacOSTunHelperService.swift" in build_script
     assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
     assert "ObstacleBridgeTunHelper" in build_script
-    assert "Library/LaunchServices" in build_script
+    assert "Contents/MacOS/${HELPER_EXECUTABLE_NAME}" in build_script
     assert "Library/LaunchDaemons" in build_script
     assert 'cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"' in build_script
     assert "codesign" in build_script
     assert 'APP_ENTITLEMENTS="${OBSTACLEBRIDGE_CODESIGN_ENTITLEMENTS:-}"' in build_script
     assert 'BUILD_VARIANT="${OBSTACLEBRIDGE_MACOS_BUILD_VARIANT:-normal}"' in build_script
     assert 'OBSTACLEBRIDGE_SWIFT_FAILURE_INJECTION' in build_script
+    assert 'SWIFT_EXTRA_FLAGS+=("-I" "${CORE_CRYPTO_MODULE_DIR}")' in build_script
+    assert '"-lCrypto"' not in build_script
     assert 'SWIFT_EXTRA_FLAGS+=("-DOBSTACLEBRIDGE_FAILURE_INJECTION")' in build_script
     assert "tunServiceSpec: tunService?.toChannelMuxServiceSpec()" in runner
     assert 'case openTun = "OPEN_TUN"' in tun_helper_contract
     assert "iOSUsesNetworkExtensionBoundary = true" in tun_helper_contract
+    assert "codesign --verify --strict" in package_script
+    assert "plutil -lint" in package_script
+    assert "ditto -c -k --keepParent" in package_script
+    assert 'shasum -a 256 "${ARCHIVE_NAME}"' in package_script
+    assert "ios/scripts/build_macos_app.sh" in integration_workflow
+    assert "ios/scripts/package_macos_app.sh" in integration_workflow
+    assert "OBSTACLEBRIDGE_REUSE_MACOS_BUILD" in integration_workflow
+    assert "actions/upload-artifact@v4" in integration_workflow
+    assert "branches: [main]" in release_workflow
+    assert "gh release upload macos-preview" in release_workflow
+    assert "--prerelease" in release_workflow
 
 
-def test_websocket_payload_codec_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift").read_text(encoding="utf-8")
+def test_websocket_payload_codec_has_one_core_owner() -> None:
+    core = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift").read_text(encoding="utf-8")
 
-    assert "protocol ObstacleBridgeWebSocketPayloadCodec" in runtime
-    assert "enum ObstacleBridgeWebSocketPayloadCodecFactory" in runtime
-    assert "struct ObstacleBridgeWebSocketBinaryPayloadCodec" in runtime
-    assert "struct ObstacleBridgeWebSocketBase64PayloadCodec" in runtime
-    assert "struct ObstacleBridgeWebSocketJsonBase64PayloadCodec" in runtime
-    assert "struct ObstacleBridgeWebSocketSemiTextShapePayloadCodec" in runtime
-    assert "maxEncodedSize(" in runtime
-    assert "invalidSemiTextShapeTrailingPadding" in runtime
+    assert "public enum ObstacleBridgeWebSocketPayloadCodec" in core
+    assert "public enum ObstacleBridgeWebSocketPayloadMode" in core
+    assert "maximumEncodedSize(" in core
+    assert not (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketPayloadCodec.swift").exists()
+
+
+def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeWebSocketPayloadCodec.decode(" in runtime
+    assert "ObstacleBridgeWebSocketPayloadCodec.encode(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.decodeBody(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.pingPayload(" in runtime
+    assert "ObstacleBridgeWebSocketPayloadCodecFactory" not in runtime
+    assert "private static let appKind" not in runtime
+    assert "private func appendUInt64BE" not in runtime
+
+
+def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeControlChunkCodec.chunk(" in codec
+    assert "ObstacleBridgeControlChunkCodec.nextTransactionID(" in codec
+    assert "ObstacleBridgeControlChunkReassembler" in codec
+    assert "private var states: [ControlChunkKey: ControlChunkState]" not in codec
+
+
+def test_shared_channelmux_codec_uses_core_service_catalog_owner() -> None:
+    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeServiceCodec.encodeRemoteServices(" in codec
+    assert "ObstacleBridgeServiceCodec.encodeOpen(" in codec
+    assert "ObstacleBridgeServiceCodec.decodeRemoteServices(" in codec
+    assert "ObstacleBridgeServiceCodec.decodeOpen(" in codec
+    assert "(0...Int(UInt16.max)).contains(value.svcID)" in codec
+    assert "let rows = services.map" not in codec
 
 
 def test_websocket_overlay_runtime_source_exists() -> None:
@@ -852,7 +926,10 @@ def test_tcp_overlay_runtime_source_exists() -> None:
     assert "acceptServerPeer(" in runtime
     assert "closeServerPeer(" in runtime
     assert "backpressureSnapshot(" in runtime
-
+    assert "ObstacleBridgeOverlayFrameCodec.encodeTCP(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.decodeTCPBodyLength(" in runtime
+    assert "ObstacleBridgeOverlayFrameCodec.decodeTCP(" in runtime
+    assert "readUInt32" not in runtime
 
 def test_tcp_overlay_transport_owner_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
@@ -893,9 +970,11 @@ def test_secure_link_psk_codec_source_exists() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeSecureLinkPskCodec" in codec
+    assert "ObstacleBridgeSecureLinkPSKCrypto" not in codec
+    assert "CryptoKit" not in codec
     assert "buildFrame(" in codec
     assert "parseFrame(" in codec
-    assert "deriveKeys(" in codec
+    assert "deriveKeys(" not in codec
     assert "nonce(counter:" in codec
     assert "buildJSONPayload(" in codec
     assert "parseJSONPayload(" in codec
@@ -908,19 +987,70 @@ def test_secure_link_psk_runtime_source_exists() -> None:
     assert "beginClientHandshake(" in runtime
     assert "handleInboundFrame(" in runtime
     assert "sendApp(" in runtime
-    assert "serverProof(" in runtime
-    assert "ChaChaPoly" in runtime
-    assert "typeClientHello" in runtime
-    assert "typeServerHello" in runtime
-    assert "typeAuthFail" in runtime
-    assert "typeData" in runtime
-    assert "authenticated && peerConfirmedAuthenticated" in runtime
+    assert "ObstacleBridgeSecureLinkPskCodec.buildFrame" in runtime
+    assert "ObstacleBridgeCrypto.chaChaPolySeal" not in runtime
+    assert "ObstacleBridgeCrypto.chaChaPolyOpen" not in runtime
+    assert "serverProof(" not in runtime
+    assert "CryptoKit" not in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.clientHello" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.serverHello" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.authFail" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.authenticatedData" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyHello" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyReply" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyCommit" in runtime
+    assert "ObstacleBridgeSecureLinkPSKFrameType.rekeyDone" in runtime
+    assert "Int(ObstacleBridgeSecureLinkPSKFrameType.clientHello)" in runtime
+    assert "Int(ObstacleBridgeSecureLinkPSKFrameType.capabilityPSKV1)" in runtime
+    assert "private var coreClient: ObstacleBridgeSecureLinkPSKClient?" in runtime
+    assert "c.handleServerHello(wire)" in runtime
+    assert "c.handleServerAcknowledgement(wire)" in runtime
+    assert "coreClient.protect(payload)" in runtime
+    assert "c.handleRekeyReply(wire)" in runtime
+    assert "c.handleRekeyDone(wire)" in runtime
+    assert "c.expireHandshakeIfNeeded()" in runtime
+    assert "private var coreServer: ObstacleBridgeSecureLinkPSKServer?" in runtime
+    assert "s.handleClientHello(wire" in runtime
+    assert "s.handleClientProof(wire)" in runtime
+    assert "s.unprotect(wire)" in runtime
+    assert "coreServer.protect(payload)" in runtime
+    assert "s.handleRekeyHello(wire" in runtime
+    assert "s.handleRekeyCommit(wire)" in runtime
+    assert "s.expireHandshakeIfNeeded()" in runtime
+    assert "var isAuthenticated: Bool { coreState?.authenticated ?? false }" in runtime
+    assert "private var authenticated = false" not in runtime
+    assert "private var peerConfirmedAuthenticated = false" not in runtime
+    assert "private var txCounter: UInt64 =" not in runtime
+    assert "private var rxCounter: UInt64 =" not in runtime
+    assert "private var pendingSessionID: UInt64 =" not in runtime
+    assert "private var clientRekeyHoldAfterCommit =" not in runtime
+    assert "private var sessionID: UInt64 { coreState?.sessionID ?? failedSessionID }" in runtime
     assert "authenticated: isAuthenticated" in runtime
+    assert "private var coreState: ObstacleBridgeSecureLinkPSKState?" in runtime
+    assert "state?.authenticatedGenerationsTotal" in runtime
+    assert "state?.rekeysCompletedTotal" in runtime
+    assert "authenticatedSessionsTotal &+=" not in runtime
+    assert "rekeysCompletedTotal &+=" not in runtime
     assert "framesFromClientPassedTotal" in runtime
     assert "framesFromClientDroppedTotal" in runtime
     assert "framesToClientPassedTotal" in runtime
-    assert "private var pendingRekeyStartedAt: TimeInterval?" in runtime
-    assert "(timeProvider() - pendingRekeyStartedAt) >= Self.handshakeTimeoutSeconds" in runtime
+    assert "pendingRekeyStartedAt" not in runtime
+    assert "handshakeTimeoutSeconds" not in runtime
+    for removed_fallback in (
+        "private func handleClientHello(",
+        "private func handleServerHello(",
+        "private func handleData(",
+        "private func handleRekeyHello(",
+        "private func handleRekeyReply(",
+        "private func handleRekeyCommit(",
+        "private func handleRekeyDone(",
+        "private func serverProof(",
+        "private func clientRekeyCommitProof(",
+        "private func seal(",
+        "private func open(",
+        "private func startClientRekey(",
+    ):
+        assert removed_fallback not in runtime
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:
@@ -931,6 +1061,13 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
     assert "handleInboundFrame(" in runtime
     assert "flushPendingPayloads(" in runtime
     assert "beginClientHandshake(" in runtime
+    assert "ObstacleBridgeSecureLinkPSKRetryState" in runtime
+    assert "retryState.recordUnauthenticatedFailure" in runtime
+    assert "retryState.isDue" in runtime
+    assert "retryBackoffInitialSec" not in runtime
+    assert "retryBackoffMaxSec" not in runtime
+    assert "authenticatedSessionsTotal &+=" not in runtime
+    assert "rekeysCompletedTotal &+=" not in runtime
 
 
 def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:
@@ -1000,6 +1137,17 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "parseProtocolFrame(" in codec
     assert "buildControlFrame(" in codec
     assert "parseControlFrame(" in codec
+    assert "ObstacleBridgeMyUDPCodec.encodeControl(" in codec
+    assert "ObstacleBridgeMyUDPCodec.decodeControl(" in codec
+    assert "ObstacleBridgeMyUDPCodec.encodeDataBatchPayload(" in codec
+    assert "ObstacleBridgeMyUDPCodec.decodeDataBatchPayload(" in codec
+    assert "ObstacleBridgeMyUDPCodec.encodeWire(" in codec
+    assert "ObstacleBridgeMyUDPCodec.decodeWire(" in codec
+    assert "batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize" in codec
+    assert "batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize" in codec
+    assert "chunkHeaderSize = ObstacleBridgeMyUDPCodec.chunkHeaderSize" in codec
+    assert "maxBatchPayloadBytes = ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize" in codec
+
     assert "encodeStreamRecord(" in codec
     assert "encodeDataBatch(" in codec
     assert "decodeDataBatch(" in codec
@@ -1008,8 +1156,17 @@ def test_udp_overlay_codec_source_exists() -> None:
     assert "struct DataPacket" not in codec
 
 
+def test_secure_link_frame_codec_source_delegates_to_core() -> None:
+    secure_link = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeSecureLinkFrameCodec.header(" in secure_link
+    assert "ObstacleBridgeSecureLinkFrameCodec.encode(" in secure_link
+    assert "ObstacleBridgeSecureLinkFrameCodec.decode(" in secure_link
+
+
 def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeMyUDPEchoPolicy.echoedNanoseconds(" in owner
 
     assert "private func rebuildSocketForPeerRotation() -> Bool" in owner
     assert "Darwin.close(socketFD)" in owner
@@ -1018,24 +1175,33 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     assert "guard rebuildSocketForPeerRotation() else" in owner
 
 
-def test_udp_overlay_session_codec_source_exists() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").read_text(encoding="utf-8")
-
-    assert "struct ObstacleBridgeUdpOverlaySessionCodec" in codec
-    assert "final class StreamReceiveState" in codec
-    assert "segmentApplicationPayload(" not in codec
-    assert "final class ReceiveState" not in codec
-    assert "struct Reassembly" not in codec
+def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:
+    assert not (ROOT / "tests" / "fixtures" / "ObstacleBridgeUdpOverlaySessionCodec.swift").exists()
+    assert not (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlaySessionCodec.swift").exists()
 
 
 def test_udp_overlay_peer_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeUdpOverlayPeerRuntime" in runtime
+    assert "private let peerEngine: ObstacleBridgeMyUDPPeerEngine" in runtime
+    assert "heartbeat: .init(" in runtime
+    assert "lastSentLastInOrder: UInt16(exactly: lastSentLastInOrder) ?? 0" in runtime
+    assert "peerEngine.receiveWire(" in runtime
+    assert "private let receiverEngine" not in runtime
+    assert "ObstacleBridgeUdpOverlaySessionCodec" not in runtime
+    assert "ObstacleBridgeMyUDPConfirmationMetricsPolicy" not in runtime
+    assert "recordTransmitDelaySample(" not in runtime
+    assert "tallyConfirmedCounter(" not in runtime
     assert "struct InboundControlSnapshot" in runtime
     assert "struct InboundIdleSnapshot" in runtime
     assert "struct InboundDataSnapshot" in runtime
     assert "struct ControlTimerSnapshot" in runtime
+    assert "private var sendMeta" not in runtime
+    assert "private var sendTXNS" not in runtime
+    assert "private var sendBuffer" not in runtime
+    assert "waitQueue" not in runtime
+    assert "waitQueueStartNS" not in runtime
     assert "struct RetransmitTimerSnapshot" in runtime
     assert "struct OutboundDataSnapshot" in runtime
     assert "struct OutboundControlSnapshot" in runtime

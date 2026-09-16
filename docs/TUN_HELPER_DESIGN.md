@@ -1477,7 +1477,7 @@ Done in this branch:
   and app builds, with Xcode/source-list tests guarding that inclusion.
 - The first helper package skeleton is present: the macOS app build compiles a
   standalone `ObstacleBridgeTunHelper` executable, bundles it under
-  `Contents/Library/LaunchServices`, writes a LaunchDaemon plist skeleton under
+  `Contents/MacOS`, writes a LaunchDaemon plist under
   `Contents/Library/LaunchDaemons`, and exposes app-side package status plus
   register/start/stop lifecycle results. The app-side lifecycle now uses
   `SMAppService.daemon(plistName:)` for real register/unregister calls when
@@ -1610,10 +1610,10 @@ Done in this branch:
 - Live signed helper activation from an installed macOS app is now covered by
   `test_macos_swift_elevated_installed_signed_app_admin_helper_actions`. The
   test copies the built app bundle into
-  `/Applications/ObstacleBridgeSMAppServiceActivationTest.app`, ad-hoc signs
-  the installed bundle, launches `ObstacleBridgeHostRunner` from that installed
-  app path, and exercises `/api/tun-helper/status` plus `stop`, `register`,
-  `start`, and `unregister` Admin helper actions. It verifies the package
+  `/Applications/ObstacleBridgeSMAppServiceActivationTest.app`, preserves its
+  production Team signing, launches `ObstacleBridgeHostRunner` from that
+  installed app path, and exercises `/api/tun-helper/status` plus `stop`,
+  `register`, `start`, and `unregister` Admin helper actions. It verifies the package
   snapshot points at the installed app, is accepted by `SMAppService`, reports
   a valid bundled helper and launch-daemon plist, and proves registered,
   running, and XPC-reachable state when the host has approved the helper. The
@@ -1626,10 +1626,21 @@ Done in this branch:
   skips with the exact System Settings action instead of treating an unapproved
   helper as a runtime failure.
 
-No functional Swift/macOS parity work packages remain open in this helper
-design. Future release work can still add separate notarization/stapling proof
-for the shipping artifact, but the helper behavior itself is now covered by
-local signed live tests and focused Swift source/package probes.
+macOS 26 residual: on hosts where Background Task Management logs the exact
+`ObstacleBridge.TunHelper` rejection `FATAL ERROR - fullPath is nil`, the
+production-mechanism packaged-XPC test fails after its ordinary reachability
+timeout and includes that diagnosis. This is deliberately narrow: it requires
+both the helper identifier and the `fullPath is nil` record; any other XPC
+timeout also remains a test failure. The observed package has a Team-signed host and helper, an
+`AssociatedBundleIdentifiers` entry for the host, the required helper location
+`Contents/MacOS/ObstacleBridgeTunHelper`, and a LaunchDaemon plist with the
+matching `BundleProgram`. Thus this residual does not establish XPC packet-carry
+parity on affected macOS 26 machines. Re-run these live lanes on a macOS release
+where BTM accepts the daemon before closing that platform validation.
+
+No Linux work remains in this helper design. The macOS 26 BTM residual above
+remains open for packaged-XPC live validation; separate notarization/stapling
+proof is also future release work.
 
 iOS remains intentionally out of this desktop helper split. The iOS Network
 Extension already runs as the platform-owned privileged packet boundary, so iOS

@@ -59,6 +59,17 @@ if [ -d "${SIM_APP_PACKAGES_DIR}" ]; then
   rm -rf "${SIM_APP_PACKAGES_DIR}"
 fi
 
+# Briefcase's generated container plist can carry a literal build number while
+# IPServer expands CURRENT_PROJECT_VERSION.  Xcode requires an embedded app
+# extension's CFBundleVersion to exactly match its container, so make both
+# targets consume the one numeric version supplied to xcodebuild below.
+APP_INFO_PLIST="${PROJECT_FILE%/*.xcodeproj}/ObstacleBridge/ObstacleBridge-Info.plist"
+if [ ! -f "${APP_INFO_PLIST}" ]; then
+  echo "[build_ios_app] generated container Info.plist is missing: ${APP_INFO_PLIST}" >&2
+  exit 1
+fi
+/usr/libexec/PlistBuddy -c 'Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)' "${APP_INFO_PLIST}"
+
 RESOLVED_APPLE_TEAM_ID="${OB_APPLE_TEAM_ID:-}"
 if [ -z "${RESOLVED_APPLE_TEAM_ID}" ] && [ -f "${PROJECT_PBXPROJ}" ]; then
   RESOLVED_APPLE_TEAM_ID="$({

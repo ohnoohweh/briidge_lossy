@@ -642,7 +642,20 @@ add_included_routes_v4() {
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     route -n add -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || \
-      route -n change -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || true
+      route -n change -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+        # A previous interrupted elevated run can leave an incompatible route
+        # entry.  Replace that owned included route once; do not silently
+        # report a successful network apply when no route reaches the utun.
+        route -n delete -net "$route_spec" >/dev/null 2>&1 || true
+        route -n add -net "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+          log "failed to install included IPv4 route=${route_spec} interface=${IFNAME}"
+          return 1
+        }
+      }
+    if ! has_route_v4_on_if "$route_spec"; then
+      log "failed to verify included IPv4 route=${route_spec} interface=${IFNAME}"
+      return 1
+    fi
     printf '%s\n' "$route_spec" >> "$STATE_ROUTES4"
   done < <(expand_included_routes_v4)
 }
@@ -652,7 +665,17 @@ add_included_routes_v6() {
   while IFS= read -r route_spec; do
     [[ -z "$route_spec" ]] && continue
     route -n add -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || \
-      route -n change -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || true
+      route -n change -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+        route -n delete -inet6 "$route_spec" >/dev/null 2>&1 || true
+        route -n add -inet6 "$route_spec" -interface "$IFNAME" >/dev/null 2>&1 || {
+          log "failed to install included IPv6 route=${route_spec} interface=${IFNAME}"
+          return 1
+        }
+      }
+    if ! has_route_v6_on_if "$route_spec"; then
+      log "failed to verify included IPv6 route=${route_spec} interface=${IFNAME}"
+      return 1
+    fi
     printf '%s\n' "$route_spec" >> "$STATE_ROUTES6"
   done < <(expand_included_routes_v6)
 }
@@ -1043,7 +1066,11 @@ case "$ACTION" in
     if [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* && -n "$local_underlay_gw" ]] && ! is_loopback_host_v4 "$normalized_overlay_peer_ip"; then
       route_add_or_change_v4 "${normalized_overlay_peer_ip}/32" "$local_underlay_gw" "$local_underlay_if"
     elif [[ "$normalized_overlay_peer_ip" == *.* && "$normalized_overlay_peer_ip" != *:* ]]; then
-      log "skip direct overlay peer route protect for loopback peer ${normalized_overlay_peer_ip}"
+      if is_loopback_host_v4 "$normalized_overlay_peer_ip"; then
+        log "skip direct overlay peer route protect for loopback peer ${normalized_overlay_peer_ip}"
+      else
+        log "skip direct overlay peer route protect: no IPv4 underlay route is available for peer ${normalized_overlay_peer_ip}"
+      fi
     fi
     log_route_snapshot "after-overlay-peer-protect"
 
@@ -1053,9 +1080,13 @@ case "$ACTION" in
     add_excluded_routes_v6 "$local_underlay_gw6" "$local_underlay_if6"
     log_route_snapshot "after-route-install"
     if ! enforce_overlay_peer_underlay_v4 "$local_underlay_gw" "$local_underlay_if"; then
-      log "failed to preserve IPv4 overlay peer route; reverting IPv4 full-tunnel route install on $IFNAME"
-      delete_included_routes_v4
-      log_route_snapshot "after-ipv4-revert"
+      if should_switch_default_v4; then
+        log "failed to preserve IPv4 overlay peer route; reverting IPv4 full-tunnel route install on $IFNAME"
+        delete_included_routes_v4
+        log_route_snapshot "after-ipv4-revert"
+      else
+        log "unable to preserve IPv4 overlay peer route; retaining scoped included routes on $IFNAME"
+      fi
     fi
 
     if should_switch_default_v4 && ! wait_for_full_tunnel_v4_routes; then

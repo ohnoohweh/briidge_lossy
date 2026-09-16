@@ -1486,6 +1486,55 @@ export OB_IOS_DEVICE_NAME="<YOUR_LOCAL_IPHONE_NAME>"
 
 These values should be set only in your local shell profile, a local helper script outside version control, or an interactive terminal session.
 
+### R005.4b physical-device acceptance
+
+The available simulator hosts do not reliably have the resources needed to
+build, boot, install, and run the complete app-plus-packet-tunnel scenario.
+R005.4b is consequently qualified on one signed physical iPhone instead of
+waiting for simulator capacity. A successful build and installation is useful
+compile and signing evidence, but is not by itself functional qualification.
+
+The accepted device run uses the normal `ObstacleBridge` app and its bundled
+`IPServer` extension, not the separate simulator E2E app. It must:
+
+1. build the app and extension for the selected device with the same local
+   team, install the resulting app, and launch it normally;
+2. provision the normal runtime/profile configuration, start the tunnel, and
+   establish an authenticated SecureLink session with a host-side peer;
+3. query `/api/status` and `/api/peers` through the device application's
+   overlay-published WebAdmin TCP service, after authentication, and preserve
+   the redacted JSON response as evidence; and
+4. confirm the reported authenticated lifecycle and build identity while
+   asserting that the response contains no PSK, nonce, key, plaintext, or
+   unredacted secret field.
+
+The physical-device acceptance is qualified. The `IPServer` status response
+reports the embedded commit, dirty/diff identity, and build timestamp; the
+containing app and extension report the same numeric `CFBundleVersion`. The
+host-side peer independently reports the device peer as authenticated, while
+the device endpoint reports an authenticated, app-ready myUDP stack and live
+TUN traffic. These status and peer responses remain redacted. A macOS build
+log corroborates the source revision but does not replace the device-visible
+provenance field.
+
+The extension's internal WebAdmin listener deliberately remains
+`127.0.0.1:18080` on the phone. A host cannot use the phone's Wi-Fi address to
+reach that loopback listener. With `admin_web_remote_publish=true`, the app
+instead publishes a ChannelMux TCP service named `WebAdmin iphone`, defaulting
+to port `13081`, which forwards over the authenticated overlay to that local
+endpoint. The host-side acceptance probe must use that published service; a
+locally open port or a displayed WebView alone does not prove SecureLink,
+ChannelMux, or the redaction contract.
+
+Optional TestFlight release housekeeping records a signed archive and its
+distribution identity as part of the normal upload. Device qualification of a
+Debug/development-signed bundle does not make an archive
+production-distribution evidence, but TestFlight delivery does not require a
+second functional test: it distributes the exact source revision already
+qualified by R005.4b. Retain the archive size, SHA-256, signing identity,
+bundle identifiers, and TestFlight upload/build reference when making that
+release; it is not a blocker for further development.
+
 Prepare the generated project:
 
 ```bash

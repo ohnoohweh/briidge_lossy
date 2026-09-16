@@ -129,13 +129,70 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "queue_depth": status.receiveQueueDepth,
                 "failure_reason": status.receiveFailureReason as Any,
             ],
+            "peer": peerPayload(status.peer),
         ]
         return json(payload)
     }
 
     private func peersData() -> Data {
         let status = statusProvider()
-        return json([["peer_id": "configured-peer", "transport": status.transport, "state": status.state, "app_ready": status.appReady, "configured_candidates": status.configuredCandidates, "active_host": status.activeHost as Any, "port": status.port, "failure_reason": status.failureReason as Any]])
+        var peer = peerPayload(status.peer)
+        peer["configured_candidates"] = status.configuredCandidates
+        peer["active_host"] = status.activeHost as Any
+        peer["port"] = status.port
+        peer["failure_reason"] = status.failureReason as Any
+        return json([peer])
+    }
+
+    /// Serialize the one Core/adapter-derived peer projection. Do not read
+    /// configuration secrets or construct protocol counters in this HTTP
+    /// adapter: all SecureLink fields arrive through `status.peer`.
+    private func peerPayload(_ peer: ObstacleBridgeLinuxPeerSnapshot) -> [String: Any] {
+        [
+            "peer_id": "configured-peer",
+            "transport": peer.transport,
+            "state": peer.lifecycleState,
+            "connection_epoch": peer.connectionEpoch,
+            "app_ready": peer.ready,
+            "secure_link": [
+                "state": peer.secureLinkState,
+                "authenticated": peer.authenticated,
+                "session_id": peer.sessionID ?? NSNull(),
+                "pending_rekey_session_id": peer.pendingRekeySessionID ?? NSNull(),
+                "application_sending_blocked": peer.applicationSendingBlocked,
+                "attempts": peer.attempts,
+                "next_retry_milliseconds": peer.nextRetryMilliseconds ?? NSNull(),
+                "protected_tx_counter": peer.protectedTxCounter,
+                "protected_rx_counter": peer.protectedRxCounter,
+                "protected_frames_sent_total": peer.protectedFramesSentTotal,
+                "protected_frames_received_total": peer.protectedFramesReceivedTotal,
+                "authenticated_generations_total": peer.authenticatedGenerationsTotal,
+                "rekeys_completed_total": peer.rekeysCompletedTotal,
+            ],
+            "compression_layer": [
+                "enabled": peer.compression.enabled,
+                "algorithm": peer.compression.algorithm,
+                "level": peer.compression.level,
+                "min_bytes": peer.compression.minimumBodyBytes,
+                "compress_attempts_total": peer.compression.compressAttemptsTotal,
+                "compress_applied_total": peer.compression.compressAppliedTotal,
+                "compress_skipped_no_gain_total": peer.compression.compressSkippedNoGainTotal,
+                "compress_input_bytes_total": peer.compression.compressInputBytesTotal,
+                "compress_output_bytes_total": peer.compression.compressOutputBytesTotal,
+                "compressed_frames_sent_total": peer.compression.compressedFramesSentTotal,
+                "compressed_frames_received_total": peer.compression.compressedFramesReceivedTotal,
+                "compressed_input_bytes_sent_total": peer.compression.compressedInputBytesSentTotal,
+                "compressed_output_bytes_sent_total": peer.compression.compressedOutputBytesSentTotal,
+                "compressed_input_bytes_received_total": peer.compression.compressedInputBytesReceivedTotal,
+                "compressed_output_bytes_received_total": peer.compression.compressedOutputBytesReceivedTotal,
+                "uncompressed_frames_sent_total": peer.compression.uncompressedFramesSentTotal,
+                "uncompressed_frames_received_total": peer.compression.uncompressedFramesReceivedTotal,
+                "uncompressed_bytes_sent_total": peer.compression.uncompressedBytesSentTotal,
+                "uncompressed_bytes_received_total": peer.compression.uncompressedBytesReceivedTotal,
+                "rejected_frames_total": peer.compression.rejectedFramesTotal,
+                "rejected_bytes_total": peer.compression.rejectedBytesTotal,
+            ],
+        ]
     }
 
     private func json(_ object: Any) -> Data { (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8) }

@@ -3,6 +3,11 @@ name: Swift Shared Parity Guard
 on:
   pull_request:
   push:
+    branches: [main]
+
+concurrency:
+  group: swift-shared-parity-guard-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   swift-shared-parity-guard:

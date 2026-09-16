@@ -2,398 +2,252 @@
 
 ## Purpose
 
-This document defines the target Linux-native Swift client for ObstacleBridge
-and the work needed to deliver it. The product is a foreground command-line
-client that reads an existing ObstacleBridge runtime configuration, starts the
-overlay entirely in Swift, exposes the existing Admin Web/API vocabulary, and
-can own a Linux TUN interface when started with the required privileges.
+ObstacleBridgeLinux is a foreground Swift command-line client for Linux. It
+reads the established runtime configuration, runs the overlay without Python at
+runtime, serves the established local Admin vocabulary, and can own a Linux TUN
+device when the operator supplies the required privilege.
 
-The supported build entry point shall be:
+Python is the functional reference. A Swift feature is accepted only when its
+observable configuration, wire behavior, lifecycle, and redacted operator
+state are compatible with the applicable Python feature and have executable
+evidence. Requirements and traceability records, not this document, carry the
+complete evidence matrix.
+
+Build the product with:
 
 ```bash
 ./scripts/build_linux_app.sh
 ```
 
-The target host has Swift installed. The build must use that local toolchain;
-the resulting client must not need Xcode, a macOS SDK, or Python at runtime.
-Python remains the reference implementation and a development/test peer.
+The build uses the host Swift toolchain and produces `ObstacleBridgeLinux` plus
+a build-information sidecar under `build/linux/`. It requires neither Xcode
+nor Python at runtime.
 
-## Current starting point
+## Product boundary
 
-The repository has a substantial Swift runtime in
-`ios/native/ObstacleBridgeShared/` and a runnable macOS host runner in
-`ios/native/ObstacleBridgeApp/`. It already implements much of the overlay,
-SecureLink, ChannelMux, Admin API, config, and service behavior in Swift. The
-macOS build is currently an explicit `swiftc` source list in
-`ios/scripts/build_macos_app.sh`.
+The Linux product provides one foreground executable with the established
+runtime-config, bind-host, status-port, and bounded diagnostic controls. It
+supports non-TUN operation without elevation. TUN operation is explicit: a
+missing privilege produces a specific failure and never invokes `sudo` or
+persists credentials.
 
-The Apple targets remain the source material for later portability work:
+The first product surface is deliberately narrow. GUI, package management,
+system service ownership, updater behavior, and a privileged daemon are not
+part of it. QUIC and TLS WebSocket are capability-gated until maintained Linux
+backends are selected and qualified; they are rejected before a partial session
+is created.
 
-- the host runner owns a Darwin `utun` adapter and macOS helper/XPC paths;
-- some Swift files import Apple-only frameworks, including `CommonCrypto`,
-  `CryptoKit`, `Network`, and Darwin APIs;
-- the Linux Swift package and foreground executable are separate from the
-  Apple build graph, while the Linux TUN adapter and elevated integration lane
-  remain pending; and
-- Linux routing and DNS lifecycle are currently expressed by
-  `scripts/client-tun-hook.sh` and proven through Python.
-
-Linux must be a deliberate portability effort, not a renamed macOS build.
-Implemented observable behavior must remain interoperable with Python, macOS
-Swift, and iOS Swift. Platform-specific code belongs below a narrow native OS
-adapter boundary.
-
-## Product contract
-
-The first distributable Linux Swift client shall provide:
-
-- one executable, `ObstacleBridgeLinux`;
-- `--runtime-config <path>` and the established runner controls for bind host,
-  status port, and bounded test holds;
-- parsing of supported existing configuration shapes without using Python as a
-  runtime bridge;
-- Swift-owned overlay, SecureLink, compression, ChannelMux, service catalog,
-  config/onboarding, and Admin behavior for supported features;
-- `tun -> tun` client operation through `/dev/net/tun`, exchanging raw IPv4 and
-  IPv6 packets through the Swift ChannelMux runtime;
-- lifecycle-hook compatibility with `scripts/client-tun-hook.sh` for addresses,
-  routes, DNS, underlay preservation, and cleanup;
-- unprivileged operation for non-TUN configurations and a specific privilege
-  failure for TUN configurations; and
-- deterministic build output plus a revision, dirty-state, and build-time
-  sidecar.
-
-The first release is a foreground CLI. A GUI, package, systemd service,
-privileged daemon, updater, and automatic Linux QUIC support are out of scope.
-
-## Architecture
+## Shared architecture
 
 ```text
-runtime configuration / CLI
-            |
-            v
-ObstacleBridgeLinux executable
-            |
-            +-- portable Swift runtime
-            |     config, overlay, SecureLink, compression, ChannelMux,
-            |     service catalog, Admin API/Web state
-            |
-            +-- Linux adapters
-                  POSIX sockets and timers
-                  Linux crypto implementation
-                  /dev/net/tun packet adapter
-                  process and hook runner
-                  route/DNS lifecycle through existing hook
+iOS extension    macOS app/runner    Linux CLI    future Windows host
+      \                 |                /                  /
+       +----------------+---------------+------------------+
+                                |
+                       ObstacleBridgeCore
+                  protocol, state, policy, models
+                                |
+        +-----------------------+-----------------------+
+        |                       |                       |
+   Apple adapters          Linux adapters         Windows adapters
 ```
 
-### Source ownership
+`ObstacleBridgeCore` is the canonical SwiftPM library for wire codecs, typed
+models, SecureLink, ChannelMux, myudp reliability, compression policy, and
+portable lifecycle decisions. It uses Foundation and the pinned `Crypto`
+product, but does not import OS socket, packet-device, UI, key-store, or Apple
+framework APIs. Common state receives clocks and entropy through contracts so
+that transitions can be tested deterministically.
 
-Portable Swift targets must not import Darwin, `Network`, XPC, `CommonCrypto`,
-`CryptoKit`, or Apple UI/Network Extension frameworks. If a current shared file
-cannot meet that boundary, split its contract from its implementation rather
-than adding broad conditional compilation around unrelated runtime logic.
+Platform adapters execute Core effects. They own descriptors and callbacks,
+not protocol decisions, serializers, counters, or alternate retry policies.
+Common APIs expose typed data rather than `NWConnection`, file descriptors,
+`sockaddr`, Darwin structures, or Windows handles.
 
-Linux code may use Foundation, Dispatch, Glibc, POSIX descriptors, and narrowly
-scoped C bindings. The macOS `utun`, Linux `/dev/net/tun`, and iOS packet-flow
-implementations must conform to one packet-adapter contract and must not be
-compiled into each other's product.
+| Area | Core owns | Platform adapter owns |
+| --- | --- | --- |
+| Crypto and SecureLink | Handshake, protected records, rekey, replay/counter rules, redacted protocol snapshot | Key-store integration and transport-frame delivery |
+| Overlay transports | Envelopes, liveness/retry decisions, epoch/readiness state | TCP, WebSocket, datagram, QUIC, TLS, trust, and socket I/O |
+| ChannelMux and services | Frame/service models, catalog state, packet policy, queue/backpressure decisions | Local socket or packet-device execution |
+| Compression | Zlib policy, eligible-frame rules, no-gain fallback | Configuration storage and platform status presentation |
+| Configuration and Admin | Typed configuration, capability admission, routing, redaction | HTTP serving, DNS, persistence, secret acquisition, assets |
+| Lifecycle | Ordered effects and cancellation semantics | Signals, scheduling, process/hooks, OS cleanup |
 
-Swift Package Manager manifests and targets become the source-of-truth build
-graph. `scripts/build_linux_app.sh` invokes `swift build` and installs the
-requested executable and build-info sidecar in the ignored `build/linux/`
-directory. The macOS script may migrate later; Linux delivery must not wait for
-that migration.
+## Platform specialties
 
-### TUN and privilege boundary
+### Linux
 
-The Linux adapter opens `/dev/net/tun` with `IFF_TUN | IFF_NO_PI`, drains and
-writes packets without blocking the overlay event loop, and reports actual
-interface name, MTU, and counters through existing snapshot vocabulary. It
-exchanges raw IP packets: it must not add the four-byte Darwin `utun` header.
+`ObstacleBridgeLinuxAdapters` uses Foundation, Dispatch, Glibc, POSIX sockets,
+and narrow C bindings. It owns connected TCP, cleartext WebSocket, and myudp
+I/O; descriptor cancellation; signals; resolver calls; process execution; and
+capability reporting. The live runtime serializes adapter execution around Core
+state, publishes redacted status, and cancels a lower session before waiting
+for a blocked reconnect handshake.
 
-The client runs the checked-in Linux hook for `on_created`,
-`on_channel_connected`, and `on_stopped`. The hook stays the owner of host
-route and DNS mutation during the initial delivery. Swift supplies compatible
-environment such as `TUN_ADDR`, `TUN_GW`, route lists, DNS servers, and resolved
-overlay-peer route data; it must not independently duplicate part of that
-policy.
+The Linux packet adapter uses `/dev/net/tun` with `IFF_TUN | IFF_NO_PI` and
+exchanges raw IPv4/IPv6 packets. The checked-in `scripts/client-tun-hook.sh`
+remains the owner of address, route, DNS, underlay-preservation, and cleanup
+policy. Swift supplies the compatible lifecycle action and environment; it
+does not duplicate host-network policy.
 
-The client must never silently invoke `sudo` or persist credentials. It may be
-run as root or with an operator-selected, narrowly scoped capability/deployment
-method. A privileged service is a future, separately reviewed design.
+Linux support is intentionally capability-based. A missing TUN privilege,
+QUIC provider, TLS WebSocket provider, or other optional mechanism is an
+explicit admission result, never an implied protocol fallback.
 
-### Crypto and transports
+### macOS and iOS
 
-Wire formats and security invariants are shared requirements. Linux needs a
-maintained available crypto backend proven byte-compatible for the required
-SHA-256/HMAC/HKDF/PBKDF2, AES-GCM, ChaCha20-Poly1305, Ed25519, and X25519 paths.
-No key material may appear in logs or errors.
+Apple products consume the Core contract while retaining Apple-only
+mechanisms: `Network.framework` and URLSession transport integration, Darwin
+`utun`, Network Extension packet flow/settings, XPC and service-management
+paths, and Apple secret storage. Apple wrappers retain product configuration,
+peer accounting, and status presentation, but delegate wire, SecureLink, and
+ChannelMux compression policy to Core.
 
-Transport implementations are admitted one at a time. `myudp`, TCP, and
-WebSocket form the first qualification set only when their POSIX dependencies
-and mixed-runtime tests pass. The current Network.framework QUIC owner is not
-Linux portable. QUIC remains rejected during configuration validation until a
-selected Linux-capable backend passes equivalent wire and end-to-end tests.
+The macOS host runner and iOS extension are distinct product surfaces. Their
+build and runtime qualification cannot be substituted with a Linux build or
+source inspection.
 
-## Compatibility and observability
+### Future Windows
 
-For supported features, the Linux client preserves configuration/service
-definitions, SecureLink and ChannelMux bytes, readiness state, Admin paths and
-payload vocabulary, lifecycle-hook arguments, cleanup behavior, and bounded
-failure reporting. Python is the parity oracle. Tests compare concrete codec
-vectors, configuration results, Admin payloads, transitions, and packets—not
-only source-text similarity.
+Windows is a portability sentinel rather than a Linux-parity prerequisite. A
+future Windows product will provide WinSock, packet-device, routing, service,
+and credential adapters through the same Core ports. It must not introduce a
+second protocol or runtime-policy implementation.
 
-## Current implementation state
+## Current supported runtime shape
 
-The checked-in [Linux Swift source map](./LinuxSwift_source_map.md) inventories every Swift
-source selected by the macOS build, assigns its Linux portability action, and
-defines the Linux v1 support and rejection matrix. It also identifies the
-parity evidence required before portable code or Linux adapters may be admitted.
+The Linux executable starts configured TCP, cleartext WebSocket, or myudp
+client sessions with PSK SecureLink, ChannelMux, bounded reconnect, ordered
+signal shutdown, and local redacted `/api/status` and `/api/peers` endpoints.
+TCP and cleartext WebSocket listener mode are also admitted. Local TCP/UDP
+services start only after an authenticated overlay epoch and are replaced or
+withdrawn from received catalogs without a reconnect.
 
-[Package.swift](../Package.swift) defines separate
-portable-runtime, Linux-adapter, and executable targets. The executable is
-currently a foreground diagnostic/runtime baseline: it reports `--help`,
-`--version`, transport/config validation, runtime status, and bounded runtime
-probes.
+The core layer provides the shared binary/JSON codecs, SecureLink client and
+server roles, ChannelMux service/catalog formats, myudp peer engine, and
+bounded zlib policy. Linux and Apple code use those owners rather than
+independent wire serializers or compression parsers.
 
-Build it from the repository root:
+The Linux peer projection is a deliberately small, redacted capability
+contract. It reports lifecycle/readiness, SecureLink state, session and
+protected-frame counters, bounded retry information, failure reason, and
+transport ownership. It never reports PSKs, nonces, keys, plaintext, or
+Python-only diagnostic/traffic fields that Linux has not qualified.
 
-```bash
-./scripts/build_linux_app.sh
-```
+| Linux lifecycle | `state` / `app_ready` | SecureLink state | Snapshot rule |
+| --- | --- | --- | --- |
+| stopped | `stopped` / `false` | `disconnected` for PSK, otherwise `off` | no current session or retry |
+| reconnecting | `reconnecting` / `false` | `disconnected` before SecureLink admission | bounded retry duration only |
+| failed | `failed` / `false` | `disconnected` before SecureLink admission | failure reason, no current session |
+| connected | `connected` / `true` after PSK admission | `authenticated` for PSK, otherwise `off` | current session and Core counters |
 
-The script selects a release build by default, writes
-`build/linux/ObstacleBridgeLinux` and its build-info JSON sidecar, and supports
-`--debug`, `--output-dir <directory>`, and the documented
-`OBSTACLEBRIDGE_LINUX_*` environment overrides. Both `/build/` and SwiftPM
-scratch output are ignored. The build graph contains no macOS SDK or Xcode
-dependency.
+Each peer row also carries a redacted `compression_layer` object derived from
+the Core compression policy and the Linux ChannelMux boundary. It publishes
+the effective zlib policy plus attempted/applied/no-gain counts and bytes,
+dedicated compressed TX/RX counts and bytes, uncompressed TX/RX counts and bytes, and
+rejected compressed-frame counts and bytes. It records no payload bytes,
+keys, or zlib state. Core classifies the compression decision and decoder
+outcome; the Linux Admin adapter only serializes that snapshot.
 
-The portable target has an explicit `ObstacleBridgeCrypto` contract backed by
-the pinned `apple/swift-crypto` 4.5.1
-`Crypto` product. It requires caller-supplied 256-bit keys and 96-bit AEAD
-nonces, returns generic authentication failures rather than plaintext, and
-does not log secret data. Its tests cover known-answer vectors for SHA-256,
-HMAC-SHA-256, HKDF-SHA-256, PBKDF2-HMAC-SHA-256, AES-256-GCM,
-ChaCha20-Poly1305, Ed25519, and X25519, plus a Python-derived SecureLink PSK
-transcript vector. Existing Apple runtime sources are unchanged; platform
-adoption remains a later parity-preserving refactor.
+Enabled compression is qualified end-to-end with an independent Python TCP
+SecureLink peer: Swift emits a protected compressed ChannelMux request, Python
+rejects any uncompressed request, independently decompresses and recompresses
+the response, and Swift restores the original response frame. This is the
+supported R005.5e-2a bidirectional contract; disabled/mismatched-policy
+qualification is also explicit: disabled Swift emits and accepts uncompressed
+protected frames, while an enabled Swift client interoperates with Python's
+passive disabled-side decoder after it observes a compressed frame. This is
+the Python-compatible mismatch outcome, not a connection failure. A malformed
+or unsupported compressed frame fails deterministically at the Core decoder
+boundary; the authenticated session remains usable for its next valid
+protected exchange.
 
-Run the focused portable crypto qualification on Linux with:
+The iOS physical-device qualification uses the normal signed app and bundled
+`IPServer` extension rather than the resource-constrained simulator lane. Its
+authenticated overlay-published WebAdmin endpoint exposes redacted status and
+peer data while the device-local WebAdmin listener remains on loopback. The
+qualified device build reports its embedded source commit, dirty/diff identity,
+and timestamp, and its containing app and extension share one numeric
+`CFBundleVersion`. This device evidence covers the functional SecureLink and
+status contract; signed release-archive distribution remains separate work.
 
-```bash
-swift test --filter ObstacleBridgeCryptoTests
-```
+The macOS Swift-backed CI lane builds the complete normal app bundle from a
+clean checkout, verifies the nested executable signatures and both bundle
+plists, packages that exact bundle, and reuses it for the host-side tests. Its
+ZIP, SHA-256, and build-info JSON are retained together as one CI artifact.
+The successful job is the macOS build evidence; the `macos-preview` release
+workflow performs its ongoing convenience-preview publication after `main`
+updates, rather than creating a separate development gate.
 
-The Linux adapter target has POSIX TCP framing and cleartext
-WebSocket upgrade/binary-frame clients, bounded read/write timeouts, connection
-attempt snapshots, and a `--transport-probe` executable diagnostic. Mixed
-Swift/Python fixture tests cover authenticated SecureLink PSK handshake and
-protected application-data exchanges over both admitted lower transports. The
-overlay E2E suite also runs the built Linux executable against a Python
-reference peer over TCP, cleartext WebSocket, and myudp.
-The executable also validates the existing sectioned JSON runtime-config shape
-for those endpoints and PSK mode without exposing secrets. Its bounded
-`--runtime-probe` transaction opens the configured transport and performs the
-same PSK handshake/protected-data exchange when configured; the adapter also
-owns an explicit multi-message configured session with deterministic close.
-`--runtime-config <path> --run` starts a foreground live-runtime owner that
-serializes the admitted transport, SecureLink, ChannelMux binding, bounded
-reconnect timer, and shutdown. It exposes redacted `/api/status` and
-`/api/peers` on its local Admin listener and handles SIGINT/SIGTERM with an
-ordered stop. Process E2E coverage starts that built executable with a Python
-peer over TCP, cleartext WebSocket, and myudp, verifies application readiness,
-and verifies clean signal-driven shutdown.
-The portable crypto target also owns the reciprocal PSK server handshake and
-protected-data state machine, pinned by a deterministic Swift client/server
-exchange. The foreground TCP and cleartext WebSocket listeners accept Python
-clients into that server state and hand authenticated epochs to the live
-ChannelMux, service-owner, receive-worker, and Admin lifecycle.
-`runner.listener_mode` currently admits TCP and cleartext WebSocket PSK listeners without an outbound
-peer configuration and starts its local Admin endpoint before accepting the
-first peer. Myudp listener mode remains unadmitted.
-For TCP and cleartext WebSocket it rotates through comma-separated configured
-peer candidates on connection failure and provides an explicit fresh-epoch
-reconnect operation plus a bounded fresh-epoch retry for a failed one-shot
-transaction. A serialized reconnect supervisor adds bounded exponential delay,
-fresh SecureLink material per epoch, observable reconnect state, retry
-exhaustion, and timer cancellation on stop. A redacted runtime-status payload
-and `--status` diagnostic expose
-transport state, attempts, configured candidates, active endpoint, failure
-reason, SecureLink mode/state, and application readiness without exposing the
-PSK. QUIC and TLS WebSocket are rejected specifically before a partial session
-is created; they are not advertised as Linux runtime features.
-The portable ChannelMux header codec and Linux mux binding admit only
-`app_ready` sessions, bound one synchronous frame in flight, replay supplied
-startup/catalog frames on each fresh binding, and reject stale reconnect epochs.
-The Linux configuration reader represents supported structured TCP and UDP
-`own_servers` and `remote_servers` entries directly. Its service layer has
-Python-compatible RS3 catalog encoding plus deterministic epoch replacement
-and withdrawal state, and POSIX TCP/UDP listener owners that create local
-ChannelMux OPEN/DATA/CLOSE frames with bounded queues. The foreground runtime
-starts configured local listeners only after its authenticated overlay epoch is
-ready and exposes aggregate service channel, queue, malformed-frame, drop, and
-failure counters on the redacted Admin status response. Received RS3 catalogs
-atomically replace or withdraw remote listener owners and the public
-authenticated-frame handoff routes matching OPEN/DATA/CLOSE frames into them.
-Each cleartext lower transport session exposes independent send and receive
-operations. The live runtime attaches one epoch-tagged receive worker, with a
-bounded handoff queue, to TCP, cleartext WebSocket, and myudp sessions; stop
-and reconnect cancel that worker before a replacement epoch becomes visible.
-Redacted Admin status exposes its state, epoch, frame/drop totals, queue depth,
-and final receive failure. SecureLink PSK keeps independent serialized transmit
-and receive counter/key ownership; the same receive worker authenticates each
-inbound protected record once before ChannelMux dispatch. ChannelMux routes
-peer-initiated control frames without a local request, and a protected receive
-failure withdraws its epoch before the bounded reconnect owner exposes a
-replacement. Process-level mixed-runtime service qualification establishes the
-current service-owning endpoint boundary. The Linux process E2E lane proves local TCP
-and UDP listener round trips through the built foreground executable over TCP,
-cleartext WebSocket, and myudp against the Python SecureLink/ChannelMux
-reference endpoint. A full Python runtime qualifies SecureLink authentication,
-bidirectional TCP/UDP service traffic, opt-in reverse-direction catalog
-delivery, and recovery after a Python peer-process restart on all three
-admitted lower transports. TCP consumes Python RTT PING/PONG lower-transport
-control; cleartext WebSocket consumes the Python APP/PING/PONG subframe
-envelope; myudp consumes DATA_BATCH stream records and ignores transport-only
-CONTROL/IDLE frames while acknowledging ordered inbound chunks. The Linux
-myudp owner exchanges v2 DATA batches over connected POSIX UDP, preserves
-ordered stream-record reassembly across chunk boundaries, advances candidates
-after a failed live epoch, recovers after a silent-peer timeout, and carries
-SecureLink PSK plus ChannelMux frames against Python peers. The authenticated
-Python Admin catalog operation publishes a newer RS3 catalog, including an
-empty withdrawal, and Swift replaces or stops its remote listener owners
-without a reconnect. The Linux Admin HTTP server serves redacted `/api/status` and `/api/peers`
-payloads from that runtime state on a listener isolated from transport and
-reconnect execution. TUN service routing is deferred to later work packages.
+R005 is closed. Its applicable Linux, macOS, traceability, README, and
+ownership gates pass; the macOS bundle artifact and the physical-iPhone
+SecureLink/WebAdmin evidence qualify their platform-specific outcomes.
+Privileged-TUN and device-only results remain explicitly reported as such,
+rather than being mistaken for ordinary hosted CI coverage. TestFlight archive
+recording is optional release housekeeping and is not an R005 development
+gate.
 
-## Delivery work packages
+## Engineering rules
 
-Work packages are ordered by dependency. A package is complete only when every
-Definition of Done item is met; compiling alone is not completion.
+- Move shared behavior in vertical slices. A slice changes both consumers to
+  Core and removes the duplicate owner; a forwarding facade may not acquire
+  protocol logic.
+- Core transitions are deterministic and serialization-safe. Queues, locks,
+  callbacks, polling, and OS timers remain adapter mechanics.
+- Characterization compares bytes, effects, state, counters, errors, and
+  redacted snapshots. Source guards enforce ownership boundaries but do not
+  establish behavioral parity by themselves.
+- Every change keeps Python and Swift evidence, requirement ownership, and
+  product applicability aligned. A capability rejection remains a parity gap
+  until its Linux mechanism is implemented or a requirement scopes it to a
+  different product.
+- SwiftPM package targets are the common-source authority. Apple build graphs
+  consume package products rather than maintaining another common source list.
 
-### LSW-005 — Linux TUN packet adapter
+## Future TODO
 
-Implement the raw-packet Linux TUN adapter for the established ChannelMux
-integration. Interface configuration stays outside the adapter.
+Only unfinished work is listed here. Completed work packages are intentionally
+absent; their durable behavior is described above and their detailed evidence
+lives in the traceability records.
 
-Definition of Done:
+### Core convergence
 
-- `/dev/net/tun` creation uses `IFF_TUN | IFF_NO_PI`, reads/writes raw IPv4/IPv6
-  packets, and closes descriptors exactly once;
-- bounded queues/backpressure prevent TUN I/O from blocking overlay processing
-  or growing memory without bound;
-- TUN OPEN/DATA/DATA_FRAG, reconnect epochs, stale binding removal, counters,
-  and drop diagnostics match the ChannelMux contract;
-- a privileged Linux test with a Python peer proves bidirectional packet flow
-  and counter updates; and
-- malformed packets or creation failure leak no descriptor or running adapter.
+| Item | Remaining outcome |
+| --- | --- |
+| `LSW-R006` | Move the overlay coordinator, stream/WebSocket logical framing, epoch/readiness, reconnect, receive ownership, cancellation, and backpressure decisions into Core; adapters execute transport effects only. |
+| `LSW-R007` | Move ChannelMux TCP/UDP/TUN state, service/catalog lifecycle, packet policy, and portable IP handling into Core; retain platform socket and packet-device execution below it. |
+| `LSW-R008` | Consolidate typed configuration, capability admission, Admin routing/redaction, onboarding, and secret transformation in Core while retaining platform storage and HTTP services. |
+| `LSW-R009` | Finish package-product adoption, remove duplicate shared source ownership, and make Linux/macOS/Core/Windows-sentinel validation and traceability required CI behavior. |
 
-### LSW-005A — Linux myudp listener admission
+### Linux product mechanisms
 
-Add server-side myudp ownership after the TUN adapter milestone, preserving the
-already admitted peer-client wire contract.
+| Item | Remaining outcome |
+| --- | --- |
+| `LSW-005` | Qualify the Linux TUN adapter with privileged bidirectional packet, queue-bound, and cleanup evidence. |
+| `LSW-005A` | Add authenticated multi-peer myudp listener admission around the Core peer registry. |
+| `LSW-005B` | Select and qualify a maintained Linux QUIC backend, including mixed-runtime and privileged-TUN behavior. |
+| `LSW-005C` | Select and qualify a maintained TLS WebSocket backend with fail-closed trust and certificate behavior. |
+| `LSW-006` | Integrate hook, route, DNS, underlay-preservation, and teardown lifecycle evidence without duplicating hook policy. |
+| `LSW-007` | Complete CLI, Admin, operational documentation, signal handling, diagnostics, and capability guidance for the admitted Linux feature set. |
+| `LSW-008` | Run the final Linux product parity gate: clean build, common and mixed-runtime suites, privileged TUN/route/DNS/hook qualification, and a zero-gap applicable feature inventory. |
 
-Definition of Done:
+### Optional follow-on
 
-- one bound UDP socket demultiplexes peer epochs without handing the shared
-  descriptor to a single session;
-- peer-scoped reliable-stream counters, CONTROL/IDLE handling, inactivity
-  expiry, cancellation, and reconnect cleanup match the Python listener;
-- SecureLink, ChannelMux, TCP/UDP services, Admin peer rows, and bounded queues
-  remain isolated per accepted peer; and
-- built-process Python-client/Linux-Swift-listener E2E tests cover service
-  traffic, concurrency, withdrawal, and reconnect without socket leakage.
+`LSW-R010` adds Windows adapters after Linux parity closes. It is not a gate
+for Linux delivery.
 
-### LSW-005B — Linux QUIC transport admission
+`R005.4c` is optional TestFlight release housekeeping: record the signed
+archive identity and upload reference for a source revision already qualified
+by R005.4b. It does not block R005 development work or repeat device
+functional qualification.
 
-Select, isolate, and qualify a maintained Linux QUIC backend after the TUN and
-common lifecycle paths are proven.
+## Open platform decisions
 
-Definition of Done:
+- supported Linux distributions and deployment model;
+- DNS backend expectations for the existing hook;
+- maintained Linux TLS WebSocket and QUIC providers; and
+- Windows socket, packet-device, route/DNS, service, and secret providers.
 
-- the backend has an explicit dependency, license, distribution, and security
-  update plan;
-- QUIC configuration, certificate/PSK behavior, layered readiness, and
-  reconnect semantics match the portable contract; and
-- mixed-runtime SecureLink and privileged TUN packet tests pass, including
-  deterministic failure when the qualified backend is unavailable.
-
-### LSW-005C — TLS WebSocket transport admission
-
-Add `wss` only after a maintained Linux TLS backend and certificate lifecycle
-are available.
-
-Definition of Done:
-
-- hostname verification, trust configuration, certificate failures, and
-  redacted diagnostics fail closed;
-- WebSocket upgrade, binary framing, SecureLink, and reconnect behavior remain
-  compatible with the cleartext WS contract where TLS is not relevant; and
-- mixed-runtime tests cover trusted success and untrusted/expired/wrong-host
-  rejection without leaking key or certificate secret material.
-
-### LSW-006 — Hook, route, DNS, and teardown integration
-
-Integrate the existing lifecycle-hook contract without reimplementing its
-routing/DNS policy in Swift.
-
-Definition of Done:
-
-- Swift invokes `scripts/client-tun-hook.sh` with compatible actions,
-  environment, working directory, timeout, and redacted captured diagnostics;
-- creation, connected state, reconnect, stop, and startup failure invoke the
-  compatible lifecycle contract;
-- elevated tests prove IPv4/IPv6 route apply/remove, overlay-peer underlay
-  preservation, supported DNS apply/remove, and idempotent cleanup;
-- hook failure exposes a failed state, rolls back owned resources, and never
-  claims the tunnel connected; and
-- unprivileged TUN startup exits nonzero with guidance and no route mutation.
-
-### LSW-007 — CLI, Admin, and operational documentation
-
-Finish the user-facing foreground client surface and safe-operation guidance.
-
-Definition of Done:
-
-- `--help`, invalid configuration errors, logs, signals, and exit status are
-  stable and automated-tested;
-- supported Admin Web/API status, peers, TUN routing, build info, and
-  diagnostics retain Python-compatible semantics;
-- SIGINT/SIGTERM performs bounded ordered overlay stop, hook teardown, TUN
-  close, and Admin shutdown;
-- documentation covers build, config, privileges, recovery, artifacts, and
-  unsupported features; and
-- documentation does not imply service, GUI, package, or QUIC support.
-
-### LSW-008 — Release qualification and parity gate
-
-Make Linux Swift delivery continuously verifiable and define release acceptance.
-
-Definition of Done:
-
-- CI builds from a clean checkout and runs portable unit, codec, config, and
-  mixed-runtime integration tests;
-- a privileged/self-hosted Linux lane runs real `/dev/net/tun` and routing
-  tests; restricted hosted CI reports a clear skip, not a false pass;
-- requirements, architecture, testing traceability, and generated statistics
-  are refreshed for delivered coverage;
-- Python/Swift drift and shared-source parity guards pass for shared changes;
-- a release candidate passes documented mixed-runtime smoke runs for each
-  supported transport and a privileged full TUN path; and
-- deferred Linux QUIC, packaged service/daemon, GUI, and elevated helper work
-  are explicitly listed as unsupported.
-
-## Suggested sequence and open decisions
-
-The admitted TCP, cleartext WebSocket, and myudp transports and foreground
-runtime provide the duplex lower-transport and protected receive-owner
-baseline. The service-owning TCP and cleartext WebSocket endpoint is delivered
-before the LSW-005 TUN milestone. Myudp listener ownership follows in LSW-005A;
-QUIC and TLS WebSocket remain gated by LSW-005B and LSW-005C.
-LSW-006 through LSW-008 make the result supportable.
-
-Before implementation, select and pin the Linux crypto dependency strategy;
-define the supported Linux distribution matrix; confirm DNS backend expectations
-against the existing hook; and keep privilege elevation operator-controlled.
+The admitted TCP, cleartext WebSocket, and myudp clients remain the
+interoperability baseline while these decisions are resolved. Privilege
+elevation remains operator-controlled on every platform.

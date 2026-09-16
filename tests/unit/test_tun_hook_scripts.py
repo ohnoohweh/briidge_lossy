@@ -217,6 +217,12 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'printf \'%s\' "1.0.0.1"' in script
     assert 'printf \'%s\' "1.1.1.1"' not in script
     assert 'route -n get "$probe"' in script
+    assert 'add_included_routes_v4() {' in script
+    assert 'route -n delete -net "$route_spec"' in script
+    assert 'failed to install included IPv4 route=${route_spec} interface=${IFNAME}' in script
+    assert 'add_included_routes_v6() {' in script
+    assert 'route -n delete -inet6 "$route_spec"' in script
+    assert 'failed to install included IPv6 route=${route_spec} interface=${IFNAME}' in script
     assert 'failed to install IPv4 split full-tunnel routes via $IFNAME; keeping underlay defaults' in script
     assert 'expand_included_routes_v6() {' in script
     assert 'full_tunnel_v6_matches() {' in script
@@ -239,10 +245,12 @@ def test_macos_client_tun_hook_configures_point_to_point_utun_and_default_route(
     assert 'skip explicit IPv6 loopback excluded route snapshot for ${route_spec}; kernel loopback routes already cover it' in script
     assert 'skip overlay peer underlay preservation for loopback peer ${normalized_ip}; lo0 route already covers it' in script
     assert 'skip direct overlay peer route protect for loopback peer ${normalized_overlay_peer_ip}' in script
+    assert 'skip direct overlay peer route protect: no IPv4 underlay route is available for peer ${normalized_overlay_peer_ip}' in script
     assert 'route_add_or_change_v4() {' in script
     assert 'route_add_or_change_v6() {' in script
     assert 'overlay_peer_route_matches_underlay_v4() {' in script
     assert 'enforce_overlay_peer_underlay_v4() {' in script
+    assert 'unable to preserve IPv4 overlay peer route; retaining scoped included routes on $IFNAME' in script
     assert 'is_ipv4_mapped_host_route_v6() {' in script
     assert 'route_spec_addr "$route_spec")" =~ ^::ffff:' in script
     assert 'is_ipv4_mapped_host_route_v6 "$route_spec"' in script

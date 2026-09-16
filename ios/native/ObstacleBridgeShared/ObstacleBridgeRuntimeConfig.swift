@@ -289,6 +289,12 @@ struct ObstacleBridgeAdminUIBootstrapState {
 }
 
 enum ObstacleBridgeRuntimeConfig {
+    // Packaged-host qualification may provide an isolated runtime config
+    // without changing either platform's durable app-scoped configuration.
+    // The macOS primary app and host runner consume this shared vocabulary;
+    // iOS deliberately has no process-environment override at runtime.
+    static let appRuntimeConfigOverrideEnvironmentKey = "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG"
+
     private static let knownGroupedSections = [
         "runner",
         "udp_session",

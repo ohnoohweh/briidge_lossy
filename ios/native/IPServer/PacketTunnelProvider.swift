@@ -6,6 +6,9 @@ import Darwin
 #if OB_IPSERVER_SWIFT_SMOKE || OB_IPSERVER_SWIFT_PROBE
 private enum ObstacleBridgeGeneratedBuildStamp {
     static let providerBuildTimestampUTC = "unknown"
+    static let providerBuildCommit = "unknown"
+    static let providerBuildDirty = false
+    static let providerBuildDiffSHA = ""
 }
 #endif
 
@@ -1539,16 +1542,20 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     private func buildSummary() -> [String: Any] {
         let timestamp = ObstacleBridgeGeneratedBuildStamp.providerBuildTimestampUTC
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let available = !timestamp.isEmpty && timestamp != "unknown"
+        let commit = ObstacleBridgeGeneratedBuildStamp.providerBuildCommit
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let diffSHA = ObstacleBridgeGeneratedBuildStamp.providerBuildDiffSHA
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let available = !commit.isEmpty && commit != "unknown"
         return [
-            "commit": "unknown",
+            "commit": commit,
             "source": "embedded-build-info",
             "repo_root": "",
-            "tainted": false,
+            "tainted": ObstacleBridgeGeneratedBuildStamp.providerBuildDirty,
             "tracked_changes": 0,
             "untracked_changes": 0,
             "available": available,
-            "diff_sha": "",
+            "diff_sha": diffSHA,
             "build_timestamp_utc": timestamp,
         ]
     }

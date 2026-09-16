@@ -49,6 +49,8 @@ class DarwinTunHelperBackend:
         self._last_failure: dict[str, Any] = {}
         self._last_hook_argv: list[str] = []
         self._last_hook_env: dict[str, str] = {}
+        self._last_hook_stdout = ""
+        self._last_hook_stderr = ""
         self._last_hook_action = ""
         self._hook_history: list[dict[str, Any]] = []
 
@@ -186,6 +188,8 @@ class DarwinTunHelperBackend:
             "last_remove_payload": dict(self._last_remove_payload),
             "last_hook_argv": list(self._last_hook_argv),
             "last_hook_env": dict(self._last_hook_env),
+            "last_hook_stdout": self._last_hook_stdout,
+            "last_hook_stderr": self._last_hook_stderr,
             "last_hook_action": self._last_hook_action,
             "hook_history": [dict(entry) for entry in self._hook_history],
             "last_failure": dict(self._last_failure),
@@ -205,13 +209,21 @@ class DarwinTunHelperBackend:
         env = self._hook_env(payload, server_side=server_side)
         argv = [hook_path, "up", ifname]
         try:
-            self._run_hook(argv, env)
+            result = self._run_hook(argv, env)
         except Exception as exc:
+            if isinstance(exc, subprocess.CalledProcessError):
+                self._last_hook_stdout = str(exc.stdout or exc.output or "")
+                self._last_hook_stderr = str(exc.stderr or "")
             self._network_applied = False
             self._record_failure(operation="apply_network", stage="hook_up", exc=exc)
-            raise
+            raise RuntimeError(
+                f"Darwin TUN hook failed argv={argv!r}; stdout={self._last_hook_stdout!r}; "
+                f"stderr={self._last_hook_stderr!r}"
+            ) from exc
         self._last_hook_argv = list(argv)
         self._last_hook_env = dict(env)
+        self._last_hook_stdout = str(result.stdout or "")
+        self._last_hook_stderr = str(result.stderr or "")
         self._last_hook_action = "up"
         self._record_hook(action="up", argv=argv, env=env)
         snapshot = self.local_snapshot()
@@ -238,12 +250,20 @@ class DarwinTunHelperBackend:
         env = self._hook_env(payload, server_side=server_side)
         argv = [hook_path, "down", ifname]
         try:
-            self._run_hook(argv, env)
+            result = self._run_hook(argv, env)
         except Exception as exc:
+            if isinstance(exc, subprocess.CalledProcessError):
+                self._last_hook_stdout = str(exc.stdout or exc.output or "")
+                self._last_hook_stderr = str(exc.stderr or "")
             self._record_failure(operation="remove_network", stage="hook_down", exc=exc)
-            raise
+            raise RuntimeError(
+                f"Darwin TUN hook failed argv={argv!r}; stdout={self._last_hook_stdout!r}; "
+                f"stderr={self._last_hook_stderr!r}"
+            ) from exc
         self._last_hook_argv = list(argv)
         self._last_hook_env = dict(env)
+        self._last_hook_stdout = str(result.stdout or "")
+        self._last_hook_stderr = str(result.stderr or "")
         self._last_hook_action = "down"
         self._record_hook(action="down", argv=argv, env=env)
         snapshot = self.local_snapshot()

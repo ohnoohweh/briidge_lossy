@@ -49,6 +49,14 @@ The active testing focus on this branch is:
 - WebAdmin peer ownership grouping for connection, protocol, ChannelMux, and TUN diagnostics, including ChannelMux-owned candidate/restart timers and persistent visibility for enabled SecureLink and Compression layers
 - shared-TUN routing, ownership, anti-spoofing, throttling, and elevated Linux validation
 - WebAdmin parity across Python, macOS Swift, and iOS Swift-backed runtimes
+- the macOS Swift parity runner's WebSocket payload-size assertions call the
+  portable Core codec, alongside its existing Core wire-codec compilation set
+- the macOS Swift myUDP parity fixture replays seeded payloads through the
+  Core-backed peer runtime and covers heartbeat/control initialization, idle,
+  acknowledgement, and retransmission transitions without Apple-only sender
+  state; its retired SessionCodec companion is absent from all compile lists
+- Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
+  after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints
@@ -71,7 +79,7 @@ Representative anchors for those areas:
   - [ios/tests/test_macos_swift_host_runner.py](../ios/tests/test_macos_swift_host_runner.py)
 - current shared-TUN coverage also pins the server-side virtual-peer probe path so internally generated ICMP verification traffic is routed through the shared-TUN dispatcher, bound to explicit local-virtual ownership, and consumed locally on reply instead of surfacing as unknown-destination traffic
 - current overlay failover coverage pins ordered-peer rotation, completed candidate cycles, reset-on-connected behavior, and fresh-socket rotation for Python `myudp` clients and the native Swift UDP owner through [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py), [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py), and [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
-- the native Swift overlay-owner source guard pins a fresh shared-TUN epoch, authenticated-readiness local TUN `OPEN`, and ChannelMux remote-service catalog regeneration for UDP, TCP, WebSocket, and QUIC; it requires the regenerated catalog to precede that OPEN in the same ordered mux batch, while the Python listener-mode regression pins the authenticated-readiness `OPEN` for every configured local TUN listener before its first packet
+- the native Swift overlay-owner source guard pins a fresh shared-TUN epoch, authenticated-readiness local TUN `OPEN`, and ChannelMux remote-service catalog regeneration for UDP, TCP, WebSocket, and QUIC; it requires the regenerated catalog to precede that OPEN in the same ordered mux batch, preserves the reserved local-TUN service identifier `0` through the Core facade, while the Python listener-mode regression pins the authenticated-readiness `OPEN` for every configured local TUN listener before its first packet
 - the stream reconnect regression also closes suspended Python TCP, QUIC, and WebSocket reconnect coroutines after their event loops stop, ensuring shutdown cleanup uses the task identity captured while the loop was active and emits no secondary `no running event loop` exception
 - current coverage includes Linux hook assertions for IPv4-mapped IPv6 overlay exclusions, exact-route snapshotting for excluded routes, and preserving excluded local subnets on their original interfaces during full-tunnel route installation
 - current Linux elevated coverage now also includes helper-backed native TUN packet carry with `tun_execution.mode=helper`, plus a second elevated helper lane for excluded-route and full-tunnel policy install/cleanup, proving that the separate native helper subprocess can own the real TUN fd and its critical route mutations while the overlay path still forwards packets end to end
@@ -98,6 +106,21 @@ Representative anchors for those areas:
 - current peer snapshot coverage also pins the wrapped Python `myudp` client case so `/api/peers` continues to show the configured target endpoint while SecureLink/compression wrappers are still connecting and no live learned socket exists yet
 - listener peer snapshot coverage ensures an accepted peer with no owned ChannelMux channels reports zero UDP/TCP/TUN open channels rather than inheriting unrelated local services
 - SecureLink Python/Swift parity probes cover a one-way pending-rekey exchange: both client and listener/server roles must fail closed after the 60-second deadline even while lower myUDP RTT control frames continue arriving
+- Core Swift SecureLink coverage completes the portable PSK rekey hello/reply/commit/done exchange, retransmits cached commit/done frames for equivalent reply/commit inputs, holds client application sends between authenticated commit and done, verifies the new session starts both directional protected-data counters at `1`, and rejects a protected frame retained from the replaced generation
+- The same Core rekey test admits an already-in-flight higher-counter old-generation client frame through the bounded server overlap after commit, while retaining replay rejection for a frame already received before cutover
+- Core Swift SecureLink coverage also binds pending rekey on both portable roles to the injected deadline, proves timeout clears authenticated state, and proves a listener's equivalent rekey-hello retransmit cannot extend that deadline
+- Core Swift SecureLink coverage injects session-id, random-byte, and monotonic-time sources to prove the portable client emits no automatic-rekey hello before its configured protected-frame/time threshold and emits the deterministic pending generation when either threshold becomes due
+- Apple SecureLink runtime probes compile the CryptoKit-free Core source with the shared targets and source-guard the Apple frame/JSON codec's absence of transcript/proof/key-derivation wrappers plus the runtime's use of the complete PSK frame namespace and delegated Core client/listener lifecycle, so byte-level protocol ownership cannot silently fork again
+- Apple SecureLink runtime probes also verify that both established readiness status names derive from Core's peer-confirmed authenticated state, with no adapter-local authentication flags
+- The same runtime boundary projects Core session/counter, pending-rekey, and send-hold values directly, retaining only the failed session identifier required after Core clears a failed peer
+- The Objective-C Apple crypto selector bridge is source-guarded as a Core-only facade, while Core vector tests cover its shared HKDF, PBKDF2, AEAD, Ed25519, and X25519 backend including Core-owned private-key generation
+- Packet-tunnel provider probes are marked `slow`: they construct complete host runtimes and may wait for network-runtime shutdown. Routine Swift/Core validation uses `pytest -q -m "not slow" ios/tests`; run `pytest -q -m slow ios/tests/test_ios_packet_tunnel_provider_probe.py` explicitly when changing packet-tunnel behavior
+- Linux myUDP SecureLink reference peers retain a completed reply until the post-reply Core CONTROL/IDLE acknowledgement, avoiding UDP connection refusal under parallel qualification; deliberate repeated-loss recovery uses a test-subprocess-bounded initial receive window, and owner-requested socket closure during drain is normal teardown rather than a false `Bad file descriptor` failure
+- Host-side raw-source probes reuse the existing SwiftPM Core/Crypto module build, so the routine pytest suite does not repeat the Core package build that its CI job already performed
+- The raw ChannelMux parity compile includes the Core SecureLink transcript; its CI lanes use verbose test names, bounded pytest timeouts, and 15-minute job limits so an idle compiler or probe reports the owning test instead of silently consuming the default Actions allowance
+- SecureLink runtime raw-probe compilation has its own 120-second subprocess timeout in addition to the CI suite watchdog
+- Apple raw-source host builds import the pinned `Crypto` module without linking a nonexistent `libCrypto` artifact; the module forwards to CryptoKit on that platform
+- Core Swift tests pin bounded monotonic SecureLink authentication retry backoff; Apple transport probes consume that Core retry state while presenting their platform wall-clock deadline
 - current peer snapshot coverage also pins the applied-endpoint handoff for stream transports so `/api/peers` switches from a configured multi-host candidate string to the concrete resolved peer host and port once `ws` or `quic` has selected a live target, keeping the reported address family aligned with the actual connection in use
 - current Admin Web source-level coverage also pins the service-catalog remove flow so deleting one structured `own_servers` or `remote_servers` entry neither replays stale modal state nor forces the operator to reopen the popup before continuing with the next remaining entry
 - current onboarding invite coverage includes Python and Swift parity for carrying admin web port, compression, TUN routing, mux TCP backpressure knobs, proxy-provider settings, service catalogs, and secure-link PSK material while masking the PSK in preview output
@@ -135,7 +158,7 @@ Use these when you want a product-specific view instead of the blended shared re
 
 ```bash
 pytest -q tests/unit
-pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
 pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
 
@@ -150,6 +173,7 @@ macOS Swift-backed rule of thumb:
 
 - treat the host runner and app bundle as built products, not per-test source snippets
 - the primary macOS Swift-backed suite should build the normal host-runner artifact once per test session via [ios/scripts/build_macos_app.sh](../ios/scripts/build_macos_app.sh) and then reuse that binary across test cases
+- the hosted macOS Swift-backed CI lane builds that complete app bundle once from its clean checkout, validates its nested executable signatures and plists, packages it with [package_macos_app.sh](../ios/scripts/package_macos_app.sh), and reuses the same bundle for its tests; its ZIP, SHA-256, and embedded build-info JSON are retained as the build-evidence artifact
 - if a test truly needs hooks that the normal product build should not carry, add them behind one dedicated `failure-injection` build variant instead of compiling bespoke Swift binaries for each test
 - tiny runtime contract probes can still compile focused one-file helpers when they are explicitly testing a low-level shared runtime in isolation, but the host-runner E2E surface should exercise the built artifact
 
@@ -161,15 +185,42 @@ The build script now supports that split explicitly:
 
 This keeps Swift-backed regression time reasonable as we add more macOS/iOS parity cases.
 
+The successful `main` build is also published as the replaceable `macos-preview`
+GitHub Release asset. It is a convenience download for users who do not want a
+local Swift toolchain, not a notarized production release: it is ad-hoc signed,
+must be checksum-verified against the attached SHA-256 file, and does not
+qualify the team-signed SMAppService/XPC installation path.
+
+- `macos-portable-core`
+
+```bash
+swift test --filter 'ObstacleBridgeCoreTests.ObstacleBridgeCoreCodecTests/sharedPythonWireCorpusAcceptsCoreAndRejectsMalformedRecords\(\)'
+swift test --filter ObstacleBridgeApplePackageProbeTests
+```
+
+The package manifest exposes only portable Core targets on macOS; Linux adapter
+and executable targets remain available when the manifest is evaluated on Linux.
+The shared corpus verifies Python and Core agree on exact binary and text
+WebSocket payload forms, including strict malformed text rejection. The Apple
+probe executes every shared wire-codec owner through its imported Core module.
+
 - `linux-swift`
 
 ```bash
+swift build --target ObstacleBridgeCore
+swift build --target ObstacleBridgeApplePackageProbe
+swift test --filter ObstacleBridgeCoreTests
 swift test --filter ObstacleBridgeCryptoTests
 swift test --filter ObstacleBridgeLinuxReceiveWorkerTests
 swift test --filter ObstacleBridgeLinuxOverlayTransportTests
 swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+swift test --filter ObstacleBridgeLinuxAdminServerTests
 ./scripts/build_linux_app.sh
 pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_secure_link_psk_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k myudp_runtime_probe_recovers_repeated_dropped_application_data
+pytest -q tests/integration/test_overlay_e2e.py -k myudp_runtime_probe_reassembles_reordered_reply
+pytest -q tests/integration/test_overlay_e2e.py -k myudp_runtime_probe_survives_delayed_reply
+pytest -q tests/integration/test_overlay_e2e.py -k myudp_runtime_probe_recovers_composed_faults_and_control_idle
 pytest -q tests/integration/test_overlay_e2e.py -k foreground_runtime_lifecycle
 pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_service_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k python_runtime_linux_swift_service_round_trip
@@ -187,11 +238,77 @@ transcript vectors. It also exercises authenticated SecureLink PSK handshake
 and protected-data round trips over POSIX TCP, cleartext WebSocket, and myudp
 peers implemented in local Python fixtures. The myudp fixture consumes the
 length-prefixed reliable byte stream, orders/deduplicates DATA_BATCH chunks,
-and emits cumulative CONTROL acknowledgements. Coverage includes candidate
+emits cumulative CONTROL acknowledgements, and keeps its UDP endpoint bound
+briefly after every protected reply so the Linux runner can drain it without a
+port-close ICMP failure; its fixture-level timing regression runs without a
+Linux Swift toolchain. Coverage includes candidate
 rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
-The portable suite also pairs the Swift PSK client and server state machines in
-one deterministic protected-data exchange, while the adapter suite exercises
-the one-connection loopback TCP listener over real Linux framing. The built
+The Admin probe verifies that the Linux peer row is one Core/adapter-derived
+redacted projection: lifecycle/readiness, epoch/session diagnostics, retry
+window, and protected frame counters/totals are published without a PSK,
+nonce, key, or plaintext.
+`peerProjectionCoversConnectedReconnectingFailedAndStoppedStates` additionally
+pins the supported Python-to-Linux mapping for all four outer lifecycle states:
+the authenticated secure-link protocol state remains distinct from transport
+`connected`, retry is a bounded duration, and Python-only traffic/rate and
+diagnostic categories are documented capability limits rather than fabricated
+zero-valued fields.
+`compressionSnapshotCountsCompressedUncompressedAndRejectedFrames` uses Python
+peers for compressed and uncompressed ChannelMux exchanges, injects a malformed
+compressed record at the shared Core decoder boundary, and verifies the
+redacted Linux snapshot records the corresponding count and byte telemetry.
+`peersSerializesNonzeroCompressionTelemetry` then confirms the same nonzero
+Core-derived telemetry is visible through Linux `/api/peers`.
+`enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer`
+requires a Python peer to reject an uncompressed protected request and to send
+an independently recompressed protected response, proving enabled compression
+in both directions rather than only local codec round-tripping.
+`disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer` proves
+disabled uncompressed operation and the Python-compatible enabled/passive
+decoder mismatch behavior; the malformed-compressed regression then proves a
+rejected frame does not corrupt the authenticated session's next valid
+exchange.
+The silent-peer reconnect probe records the replacement authenticated snapshot
+before injecting retired-epoch data, then requires the resulting withdrawal.
+The fixture additionally proves the independent myUDP transport-counter sequence
+through the SecureLink handshake, peer-first payload delivery, and a protected
+ChannelMux exchange. The raw Apple ChannelMux source-parity suite imports
+`CryptoKit`; it runs on macOS through the
+`bridge-py-integration-macos-swift-probe` CI job and is not a Linux SwiftPM
+parity result.
+The `ObstacleBridgeCore` suite also pairs the Swift PSK client and server state machines in
+one deterministic protected-data exchange, deterministically expires
+unconfirmed client and server handshakes through their injected monotonic
+clocks, rejects wrong-PSK proof, pre-peer-confirmation application I/O,
+reserved counter reuse after exhaustion, and stale transport-epoch ciphertext,
+serializes concurrent server sends into distinct protected counters,
+and compiles the complete PSK frame-type namespace, then covers the bounded binary, CKV1
+control-chunk, TCP/WebSocket APP/PING/PONG, O4/O5, and RS2/RS3 service-codec
+contracts. A shared Python-derived fixture pins TCP malformed records, myUDP
+DATA_BATCH envelope and malformed records, WebSocket binary payload-mode and
+malformed records, SecureLink PSK transcript/key/proof and handshake-envelope
+vectors, CKV1 chunk bytes, O4/O5 OPEN, and RS2/RS3 catalog bytes for the Core
+suite, including Python/Swift agreement on O4/O5 and RS2/RS3 truncation and
+trailing-byte rejection. Linux WebSocket tests also negotiate and round-trip
+all shared text payload modes against a Python peer. The shared corpus also
+pins Python-compatible myUDP CONTROL bytes and malformed rejection; direct
+Core and Apple-probe tests pin the payload-derived 713-counter missing-list
+boundary. Linux TCP and WebSocket adapter probes additionally make independent
+Python peers send malformed and duplicate protected frames after authentication;
+both must fail closed. Direct Core tests also cover portable ChannelMux reply admission. The
+macOS build-source
+guard and generated-iOS-project patch test ensure each Apple target compiles
+the WebSocket payload, binary, full myUDP, SecureLink envelope, ChannelMux header, and TCP/WebSocket APP/PING/PONG codecs from Core rather than a
+parallel shared-runtime source; the iOS packet-tunnel compile probe uses those
+same sources. The macOS parity runner explicitly compiles the myUDP, ChannelMux,
+SecureLink, and service Core sources, while Apple myUDP peer-runtime budget
+tests require its layout constants to remain Core-backed. Apple CKV1 chunking uses the Core raw-value bridge; O4/O5 OPEN and
+RS2/RS3 service-catalog encoding/decoding use the Core type-neutral codec. The adapter suite exercises
+the one-connection loopback TCP listener and Linux Core control-chunk delivery
+over real Linux framing. The Linux TCP and UDP service-socket tests also prove
+that an ephemeral listener publishes the kernel-assigned port in its O5 OPEN
+record; their Python-overlay peer harness bounds concurrent child processes so
+the complete SwiftPM lane remains reproducible. The built
 Linux executable E2E lane admits a full Python TCP client, including its
 PING/PONG and peer-address controls, then proves Swift-owned TCP and UDP
 services through the adopted live runtime and replaces that Python client to
@@ -199,8 +316,10 @@ check the next Admin-visible epoch; two simultaneous TCP/UDP local service
 channels are also carried before replacement. Its Swift and Python process
 ports are partitioned per `xdist` worker, including the Python Admin listener,
 so the matrix remains valid under the 16-worker Linux gate. TCP and cleartext
-WebSocket use the same process lane; myudp listener admission is deferred to LSW-005A after
-the Linux TUN adapter milestone.
+WebSocket use the same process lane. The Linux myudp shared-socket seam has a
+two-client endpoint-isolation test backed by the Core peer registry; full
+LiveRuntime admission and authenticated mixed-runtime listener qualification
+remain gated by R004D and LSW-005A.
 Runtime-configuration tests also require unsupported QUIC, TLS WebSocket, TUN,
 proxy-provider, and package/service-manager modes to fail before networking.
 The lower-transport tests require a Python peer to send TCP, cleartext
@@ -261,9 +380,13 @@ pytest -q -n 16 tests/integration/test_overlay_e2e.py
 For CI-aligned OS splitting, use:
 
 ```bash
-pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"
+pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
 pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
+
+The full non-Windows overlay lifecycle matrix remains an explicit manual
+qualification command: `pytest -vv --timeout=90 -n 4
+tests/integration/test_overlay_e2e.py -m "not windows_only"`.
 
 For the local elevated TUN slices, use:
 
@@ -278,6 +401,33 @@ For the local elevated TUN slices, use:
 ```bash
 ./scripts/run_macos_swift_elevated_tests.sh
 ```
+
+When a prior invocation has already built the same Swift artifact, rerun a
+single elevated macOS Swift node without rebuilding it:
+
+```bash
+./scripts/run_macos_swift_elevated_tests.sh --reuse-macos-build \
+  tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
+```
+
+To qualify one already installed app bundle without rebuilding a surrogate,
+provide its absolute path. The command runs the selected production-mechanism
+lane first; later selected nodes reuse that same bundle:
+
+```bash
+./scripts/run_macos_swift_elevated_tests.sh \
+  --app-bundle /Applications/ObstacleBridge.app \
+  tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
+```
+
+This test controls the app's shared privileged helper and can interrupt an
+active TUN session. Run the copied-app stale-package repair test separately.
+
+For an approved elevated session, `--diagnose-macos-tun-helper` prints the
+system launchd record and recent helper diagnostics without starting a test.
+Use `--codesign-identity "Apple Development: Name (TEAMID)"` before the test
+node when qualifying the packaged `SMAppService` daemon; ad-hoc signatures do
+not provide a Team ID for that system service.
 
 ```powershell
 $env:WINTUN_DIR="C:\path\to\wintun\bin\amd64"
@@ -296,9 +446,12 @@ Notes for those commands:
 - the native Darwin helper uses an extended local control timeout while `utun` is created and brought up, so `APPLY_NETWORK` follows a completed `OPEN_TUN` rather than being abandoned by the generic IPC timeout
 - Darwin helper snapshots retain a bounded lifecycle-hook history; elevated tests assert required hook execution from that history because a shared helper can perform more than one TUN lifecycle operation before status is polled
 - Darwin packet-carry probes derive each `utun` source address from the local `ifconfig` endpoint, rather than matching either side of the point-to-point address display
-- the macOS Swift elevated slice requires macOS, `swiftc`, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it builds the macOS app bundle, launches `ObstacleBridgeHostRunner` from inside the app bundle so the bundled Darwin hook scripts are used, pairs it with a Python `darwin-native` helper peer, verifies real Swift-owned `utun` creation plus packet-counter movement, verifies live route/DNS hook apply/remove effects plus Swift Admin TUN config/peer/global verification parity with Linux/Python, exercises the packaged XPC helper path when macOS reports `SMAppService` approval/reachability for the bundled helper, and runs Admin helper activation, unregister/re-register, and stale-version repair actions from a locally signed app installed under `/Applications`
+- the macOS Swift elevated slice requires macOS, `swiftc`, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it builds the macOS app bundle, launches `ObstacleBridgeHostRunner` from inside the app bundle so the bundled Darwin hook scripts are used, pairs it with a Python `darwin-native` helper peer, verifies real Swift-owned `utun` creation plus packet-counter movement, verifies live route/DNS hook apply/remove effects plus Swift Admin TUN config/peer/global verification parity with Linux/Python, exercises the packaged XPC helper path when macOS reports `SMAppService` approval/reachability for the bundled helper, and runs Admin helper activation, unregister/re-register, and stale-version repair actions from a locally signed app installed under `/Applications`. The production-mechanism packet-carry lane uses the built app bundle and requires `transport=xpc`; an exact helper-specific Background Task Management `fullPath is nil` record is reported as a failing qualification result, not skipped. The wrapper grants 300 seconds per test: this includes the separately enforced 180-second cold-build qualification plus live elevated execution, and avoids killing a valid build at the former 120-second outer pytest deadline.
+- the macOS Swift elevated slice requires macOS, `swiftc`, `ifconfig`, `networksetup`, `route`, and permission to create/configure `utun` interfaces; it builds the macOS app bundle, launches `ObstacleBridgeHostRunner` from inside the app bundle so the bundled Darwin hook scripts are used, pairs it with a Python `darwin-native` helper peer, verifies real Swift-owned `utun` creation plus packet-counter movement, verifies live route/DNS hook apply/remove effects plus Swift Admin TUN config/peer/global verification parity with Linux/Python, and proves the supported functional fallback. The local operator may use `--interactive-elevation` for a Terminal password prompt, or unattended CI use its scoped passwordless `sudo` rule; the bundled executable then selects reachable XPC or its Darwin-native in-process loopback fallback and still proves real `utun` packet carriage. Packaged-XPC activation, installed-artifact lifecycle, and helper-death cases carry the `macos_xpc_qualification` marker and are excluded by default while the known BTM `fullPath is nil` blocker remains unresolved; run them only with `--run-packaged-xpc-qualification` for focused resolution evidence. The wrapper grants 300 seconds per test: this includes the separately enforced 180-second cold-build qualification plus live elevated execution, and avoids killing a valid build at the former 120-second outer pytest deadline.
+- the Swift route/DNS verification endpoint performs synchronous local probe and name-resolution work. Its elevated wait loop retries an individual Admin read timeout within the bounded verification window, and reports the final Admin error only if the requested TUN state never converges.
+- the Darwin client hook retries a stale conflicting included IPv4/IPv6 route by replacing it once, then fails the apply operation with an explicit diagnostic if the route still cannot be installed; it never silently records a missing route as applied
 - the GitHub integration gate runs each Python macOS elevated case in its own `macos-latest` job; each job verifies passwordless `sudo` first because hosted CI cannot answer an interactive password prompt, preserves the GitHub Actions marker through sudo, and treats hosted-runner refusal of privileged Darwin route/address/ping/helper-approval side effects as diagnostic while still requiring the Admin status payload to report the attempted TUN interface and verification state when the runner exposes the `utun` row; if hosted macOS leaves the inline TUN list empty after privileged setup, the job confirms the Admin diagnostics endpoint is responsive and skips that environment-only assertion. Independent job names identify the affected case even if the hosted runner loses its log connection.
-- the GitHub integration gate also runs the macOS Swift elevated slice when Swift-relevant files changed, with the same passwordless `sudo` preflight and the same distinction between real-machine route/DNS/ping proof and hosted-runner diagnostic verification; packaged XPC assertions are skipped only when hosted macOS leaves the helper `not_registered` with `helper service is not enabled`, or resets the Admin status connection, after registration preflight
+- the GitHub integration gate runs the focused macOS Swift elevated matrix when Swift-relevant files changed. The complete app-process/XPC slice is workflow-dispatch qualification because its approval and shutdown waits are not useful routine PR feedback; it retains the same passwordless `sudo` preflight and the same distinction between real-machine route/DNS/ping proof and hosted-runner diagnostic verification. Packaged XPC assertions are skipped only when hosted macOS leaves the helper `not_registered` with `helper service is not enabled`, or resets the Admin status connection, after registration preflight
 - the Windows slice requires a usable WinTun installation and `WINTUN_DIR` pointing at the directory that contains the matching-architecture `wintun.dll`; the normal runtime now self-relaunches through a UAC prompt for local TUN sessions, but the elevated integration slice still needs to run under an Administrator token so pytest can create adapters directly
 
 ## Test patterns
@@ -327,6 +480,9 @@ Current iOS lanes:
 - [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py): host-side integration for the M3 packet-flow contract. It starts a loopback TCP packet-frame peer on macOS and runs a simulated `NEPacketTunnelFlow` adapter in Python. It also starts a host-side ObstacleBridge WS listener plus stimulation targets, then runs the standalone iOS E2E harness code to validate both WS-overlay UDP carriage and WS SecureLink PSK authentication against the host listener. These cases prove app/native provider configuration and iOS-harness bridge behavior without requiring Apple Network Extension entitlements.
 - [tests/integration/test_ios_e2e.py](../tests/integration/test_ios_e2e.py): host-side integration for the M3 packet-flow contract. It starts a loopback TCP packet-frame peer on macOS and runs a simulated `NEPacketTunnelFlow` adapter in Python. It also starts a host-side ObstacleBridge WS listener plus stimulation targets, then runs the standalone iOS E2E harness code to validate both WS-overlay UDP carriage and WS SecureLink PSK authentication against the host listener. These cases also pin forwarded iOS remote-admin HTTP plus `/api/live` behavior on the myUDP packet-tunnel path so the admin TCP publish surface stays reachable while the packet-tunnel runtime serves live status.
 - [tests/integration/test_ios_simulator_e2e.py](../tests/integration/test_ios_simulator_e2e.py): opt-in simulator integration. Pytest starts host-side stimulation services on macOS, builds/updates the standalone Briefcase iOS E2E app, installs that test application into the simulator, launches it, and reads the probe report from the E2E app data container. The implemented simulator probes are host WebSocket reachability, WS overlay UDP service to host UDP echo, and WS SecureLink PSK authentication that is confirmed through the host WebAdmin API.
+- R005.4b device acceptance is qualified with the signed normal app plus `IPServer` extension on a physical iPhone. It authenticates to a host-side peer and is inspected through its overlay-published WebAdmin TCP service. This replaces simulator acceptance because the available simulator hosts cannot reliably supply the required resources; the simulator test remains an optional, narrower smoke.
+- The device status build object is generated at build time and carries commit, dirty, diff, and timestamp provenance into the `IPServer` response. The container app and embedded `IPServer` extension share the same numeric `CFBundleVersion`; device build warnings about mismatched versions are failures to fix before qualifying the run.
+- Optional TestFlight release housekeeping records the signed archive's identity and upload reference for the R005.4b-qualified source revision; it is not a development blocker and does not repeat the device SecureLink/WebAdmin scenario.
 
 The current simulator smoke uses a separate Briefcase-built test application, `com.obstaclebridge.obstacle-bridge-ios-e2e`. macOS-side pytest owns the echo/stimulation services. The simulator E2E app is the client that reaches back to the macOS host over loopback networking. When the Packet Tunnel Provider is wired into Xcode, it should be a Network Extension target inside the ObstacleBridge iOS app product, while the E2E app remains a test harness outside that product.
 
@@ -348,10 +504,10 @@ TODO:
 Target iOS E2E shape:
 
 - macOS pytest starts one or more real host-side ObstacleBridge peers plus echo/stimulation services, as the Linux suite does.
-- The simulator contains the ObstacleBridge iOS app when testing product behavior, and may also contain the standalone E2E app when the lane needs test-only probes. Future packet-tunnel coverage will include the ObstacleBridge app's embedded Network Extension target.
+- A signed physical iPhone contains the normal ObstacleBridge iOS app and its embedded Network Extension target for R005.4b product qualification. The simulator may still contain the standalone E2E app when the lane needs test-only probes.
 - The test provisions the iOS profile through normal app/profile storage or UI automation.
 - The test starts the iOS app or tunnel through normal iOS APIs.
-- Assertions come from external effects: host peer connection state, WebSocket/TCP traffic crossing, app/tunnel status snapshots, and simulator container logs/reports that the normal app would produce.
+- Assertions come from external effects: host peer connection state, WebSocket/TCP traffic crossing, and redacted `/api/status` plus `/api/peers` JSON read through the authenticated overlay-published device WebAdmin service. The phone's internal `127.0.0.1:18080` listener is not host-reachable and is not used as acceptance evidence.
 
 Run the current simulator smoke explicitly:
 
@@ -386,9 +542,13 @@ The `myudp` delay/loss coverage is part of the main integration harness. A loopb
 - delay selected DATA_BATCH datagrams to force deterministic reordering
 - retain sanitized DATA_BATCH framing metadata for E2E assertions
 
-`tc5a_small_records_batched_and_recovered` and
-`tc5b_small_records_reordered_and_duplicated` also run in both Swift/Python
-directions through `test_overlay_e2e_mixed_runtime_myudp_delay_loss`.
+`tc1a_drop_first_data_client_to_server`,
+`tc5a_small_records_batched_and_recovered`,
+`tc5b_small_records_reordered_and_duplicated`, and
+`tc10_full_missed_list_pressure` also run in both Swift/Python directions
+through `test_overlay_e2e_mixed_runtime_myudp_delay_loss`. The full-pressure
+case verifies that one maximum-size CONTROL missing list becomes multiple
+wire-valid retransmission DATA batches.
 
 This gives controlled reproduction of retransmission and missed-frame behavior using the real bridge processes instead of an in-memory simulator.
 
@@ -415,12 +575,13 @@ Unit tests cover narrowly scoped logic that is easier and faster to validate wit
   arbitrary prefix splits, empty records, malformed lengths, and the MTU budget
 - Python myUDP2 batch scheduling and loss recovery, including coalesced records,
   final-space chunk splitting, reorder, duplicate suppression, counter rollover,
-  and fresh per-chunk retransmit envelopes after a lost multi-chunk datagram
+  full missing-list pressure, and fresh per-chunk retransmit envelopes after a
+  lost multi-chunk datagram
 - myUDP2 upper-layer stream-record budgets through SecureLink, Compression, and
   ChannelMux, plus peer-status diagnostics for batch, stream-byte, queue, retry,
   malformed-batch, and malformed-stream counters
-- shared Swift myUDP2 batch vectors and reordered stream delivery through a
-  compiled probe of the macOS/iOS codec and peer-runtime sources
+- shared Swift myUDP2 batch vectors, payload-derived CONTROL missing-list capacity,
+  and reordered stream delivery through a compiled probe of the macOS/iOS codec and peer-runtime sources
 
 ## Test catalog
 
@@ -463,7 +624,7 @@ The supporting project-level intent documents are:
 | `pytest -m "windows_only"` | Windows-specific CI subset | Run integration scenarios that require Windows system proxy behavior or Windows Negotiate proxy auth | `pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"` |
 | `scripts/run_linux_elevated_tests.sh` | Local Linux elevated subset | Run privileged TUN end-to-end coverage that requires `/dev/net/tun` and interface-management permission, including wrapped TUN fragmentation under WS+SecureLink | `./scripts/run_linux_elevated_tests.sh` |
 | `scripts/run_macos_elevated_tests.sh` | Local macOS elevated subset | Run privileged helper-backed `darwin-native` TUN coverage that requires macOS `utun` and route-management permission, including helper-owned Darwin hook apply/remove, live packet carry, route/DNS hook effects, and helper-death warning coverage when helper-owned network state may survive process loss | `./scripts/run_macos_elevated_tests.sh` |
-| `scripts/run_macos_swift_elevated_tests.sh` | Local macOS Swift elevated subset | Run privileged Swift host-runner TUN coverage from the built macOS app bundle, pairing it with a Python `darwin-native` helper peer to prove real Swift-owned `utun` creation, bundled Darwin hook apply/remove, live route/DNS effects and restoration, Swift Admin TUN config/peer/global verification parity with Linux/Python, Admin helper runtime reporting, packet-counter movement across the overlay, packaged-XPC packet carry whenever `SMAppService` approval makes the helper reachable, installed signed app Admin helper activation through `/Applications`, live unregister/re-register stale-helper repair guidance, and packaged-helper death reporting plus interface/route cleanup | `./scripts/run_macos_swift_elevated_tests.sh` |
+| `scripts/run_macos_swift_elevated_tests.sh` | Local macOS Swift elevated functional subset | Run privileged Swift host-runner fallback coverage from the built macOS app bundle, pairing it with a Python `darwin-native` helper peer to prove real Swift-owned `utun` creation, bundled Darwin hook apply/remove, live route/DNS effects and restoration, Swift Admin TUN config/peer/global verification parity with Linux/Python, Admin helper runtime reporting, and packet-counter movement across the overlay. Known-blocked packaged-SMAppService/XPC cases are excluded; use `--run-packaged-xpc-qualification` only for focused BTM-resolution qualification. | `./scripts/run_macos_swift_elevated_tests.sh` |
 | `pytest -m "windows_elevated"` | Local Windows elevated subset | Run privileged WinTun-backed TUN end-to-end coverage that requires Administrator rights and a usable `wintun.dll`, including inline MyUDP and WS+PSK SecureLink channel-open validation plus helper-mode `windows-native` runtime bring-up, helper-owned IPv4 route/address application, helper packet carry, helper-death manual-cleanup warning coverage, and live `/api/tun-helper/repair` cleanup proof after helper loss for route, address, and DNS state; helper-owned Windows firewall lifecycle is currently unit-covered but not yet exercised by a real elevated Windows integration lane | `python -m pytest tests/integration/test_windows_elevated.py -m "windows_elevated" -rs -q` |
 
 ### Failure-injection policy for integration tests
@@ -490,6 +651,10 @@ This first mapping is intentionally coarse. It links current integration entrypo
 | `test_overlay_e2e_listener_two_clients` | `REQ-LST-001`, `REQ-LST-005`, `REQ-ADM-006` | First multi-client listener proof for WS listener behavior and peer reporting |
 | `test_overlay_e2e_concurrent_tcp_channels` | `REQ-LST-001`, `REQ-LST-002`, `REQ-LST-003`, `REQ-LST-004`, `REQ-LST-005`, `REQ-LST-006`, `REQ-LST-007`, `REQ-MUX-001`, `REQ-MUX-002`, `REQ-MUX-003`, `REQ-MUX-004`, `REQ-MUX-005`, `REQ-ADM-006` | Covers mixed-service concurrency, multi-client listener behavior, distinct peer visibility, and the baseline peer-independence model for WS/myudp/TCP/QUIC listeners |
 | `test_overlay_e2e_myudp_delay_loss` | `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-003`, `REQ-MYU-004`, `REQ-MYU-005`, `REQ-MYU-006` | Covers delayed path, dropped DATA/CONTROL frames, large payloads, bidirectional loss behavior, and exact-once recovery after an observed multi-record batch drop |
+| `test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data` | `REQ-MYU-002`, `ARC-CMP-001` | The built foreground Linux Swift client retransmits a protected myUDP application datagram after an independent Python peer drops its first two post-SecureLink copies |
+| `test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply` | `REQ-MYU-005`, `REQ-MYU-006`, `ARC-CMP-001` | The built foreground Linux Swift client reassembles a multi-chunk protected reply sent in reverse myUDP datagram order by an independent Python peer |
+| `test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply` | `REQ-MYU-001`, `ARC-CMP-001` | The built foreground Linux Swift client completes a protected myUDP exchange after an independent Python peer delays the application reply |
+| `test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle` | `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-005`, `REQ-MYU-006`, `ARC-CMP-001` | The built foreground Linux Swift client recovers when an independent Python peer composes repeated DATA loss with delayed, duplicated, reverse-ordered multi-datagram replies, then observes the resulting Core CONTROL and IDLE effects |
 | `test_overlay_e2e_server_restart_closes_tcp_preserves_udp` | `REQ-LIFE-004`, `REQ-MUX-001`, `REQ-MUX-002` | Special restart regression for the concurrent WS case |
 | `test_overlay_e2e_structured_own_servers_lifecycle_hooks_execute` and `test_overlay_e2e_structured_remote_servers_udp_forwarding`, plus [tests/unit/test_channel_mux_listener_mode.py](../tests/unit/test_channel_mux_listener_mode.py) checks `test_parse_remote_servers_accepts_structured_specs`, `test_tcp_target_connection_defaults_to_system_proxy_egress_on_linux`, `test_tcp_target_connection_default_system_honors_no_proxy_on_linux`, `test_tcp_target_connection_uses_system_proxy_egress`, `test_select_hook_argv_uses_platform_specific_mapping`, `test_render_hook_value_replaces_known_placeholders`, `test_hook_context_exposes_resolved_overlay_peer`, `test_open_payload_roundtrip_preserves_hook_metadata`, `test_remote_services_roundtrip_preserves_hook_metadata`, `test_chunked_remote_services_transfer_reassembles_metadata`, `test_chunked_open_transfer_reassembles_metadata`, and `test_peer_installed_tun_stop_runs_listener_on_stopped_before_close` | `REQ-MUX-009` | Verifies structured JSON service-definition coverage for both `own_servers` and `remote_servers`, listener lifecycle-hook execution for structured `own_servers`, ChannelMux TCP target egress through the shared system-proxy CONNECT path including Linux/POSIX env proxy and `NO_PROXY` behavior, overlay peer context exposure for route-preserving hook scripts, deterministic `listener.on_stopped` execution for peer-installed TUN teardown, metadata preservation (`name`/`lifecycle_hooks`/`options`) across OPEN and remote-catalog transfer, and chunked control reassembly when one control message exceeds a single mux frame budget |
 | `test_overlay_e2e_admin_api_available_when_auth_disabled` | `REQ-ADM-002` | Auth-disabled API accessibility |
@@ -727,7 +892,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 
 | Unit test file | Architectural component | Related requirement/supporting IDs | Defended invariant or contract | How to start |
 |---|---|---|---|---|
-| `tests/unit/test_channel_mux_listener_mode.py`, `tests/unit/test_channel_mux_swift_parity.py`, `tests/unit/test_swift_layer_readiness_parity.py`, `ios/tests/test_m3_native_sources.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `REQ-MUX-005`, `REQ-MUX-009`, `REQ-MUX-011`, `PROC-TST-002` | Listener mode must ignore ambiguous local publishing, parse service specs consistently, install, replace, clean up, and single-flight-start remote catalog listeners without listener-global shortcuts or duplicate binds; authenticated inbound peers instantiate and accept their own TCP/UDP listeners even while the parent transport remains in listening state. Keep DEBUG-only UDP path diagnostics available for service-traffic troubleshooting, route TCP target dials through shared system-proxy CONNECT egress when configured, recover or explicitly report shared-TUN inbound ownership loss, and clear stale Swift TUN channel state plus advance its ChannelMux connection sequence at every overlay transport epoch so the next local packet reopens the channel. ChannelMux delay shedding and sustained-delay rotation must use the configured 5000 ms / 30000 ms defaults in Python and Swift; a rejected lower-layer rotation must clear its pending-epoch guard and be retried rather than latching a disconnected path. | `pytest -q tests/unit/test_channel_mux_listener_mode.py tests/unit/test_channel_mux_swift_parity.py tests/unit/test_swift_layer_readiness_parity.py ios/tests/test_m3_native_sources.py` |
+| `tests/unit/test_channel_mux_listener_mode.py`, `tests/unit/test_channel_mux_swift_parity.py`, `tests/unit/test_swift_layer_readiness_parity.py`, `ios/tests/test_m3_native_sources.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `REQ-MUX-005`, `REQ-MUX-009`, `REQ-MUX-011`, `REQ-AUT-020`, `PROC-TST-002` | Listener mode must ignore ambiguous local publishing, parse service specs consistently, install, replace, clean up, and single-flight-start remote catalog listeners without listener-global shortcuts or duplicate binds; authenticated inbound peers instantiate and accept their own TCP/UDP listeners even while the parent transport remains in listening state. Keep DEBUG-only UDP path diagnostics available for service-traffic troubleshooting, route TCP target dials through shared system-proxy CONNECT egress when configured, recover or explicitly report shared-TUN inbound ownership loss, and clear stale Swift TUN channel state plus advance its ChannelMux connection sequence at every overlay transport epoch so the next local packet reopens the channel. The Swift parity fixture compiles the Core compression owner with the Apple wrapper. ChannelMux delay shedding and sustained-delay rotation must use the configured 5000 ms / 30000 ms defaults in Python and Swift; a rejected lower-layer rotation must clear its pending-epoch guard and be retried rather than latching a disconnected path. | `pytest -q tests/unit/test_channel_mux_listener_mode.py tests/unit/test_channel_mux_swift_parity.py tests/unit/test_swift_layer_readiness_parity.py ios/tests/test_m3_native_sources.py` |
 | `tests/unit/test_channel_mux_peer_catalog.py` | `ARC-CMP-003` | `REQ-MUX-003`, `REQ-MUX-004`, `REQ-MUX-005`, `PROC-TST-002` | Peer-scoped remote service state must remain isolated and must be cleaned up per disconnected peer rather than by process-global replacement | `pytest -q tests/unit/test_channel_mux_peer_catalog.py` |
 | `tests/unit/test_connection_snapshots.py` | `ARC-CMP-005` | `REQ-LST-006`, `REQ-ADM-006`, `REQ-AUT-004`, `PROC-TST-002` | Snapshot rendering must distinguish passive listeners from active connections, keep passive listener rows zeroed, expose requested `remote_servers` TCP/UDP listeners as client-role listening rows while connected, expose configured service names on UDP/TCP/TUN rows, expose per-peer session stats and `last_incoming_age_seconds` correctly on active peer rows, preserve peer-authenticated SecureLink and compression layer state when accepted `myudp` rows use raw child sessions for metrics, and keep the configured Python `myudp` target visible while wrapper layers are still connecting and no live peer socket has been learned yet | `pytest -q tests/unit/test_connection_snapshots.py` |
 | `tests/unit/test_connection_lifecycle.py`, `ios/tests/test_macos_swift_host_runner.py` | `ARC-CMP-004` | `REQ-AUT-009`, `REQ-LIFE-010`, `PROC-TST-002` | A myUDP listener peer that only exchanges lower-layer control traffic must be reaped after the bounded pre-auth application-payload deadline; Swift myUDP recovery must expose its pending app-readiness retry/restart deadline and rebuild a sole peer socket before a fresh SecureLink attempt | `pytest -q tests/unit/test_connection_lifecycle.py ios/tests/test_macos_swift_host_runner.py` |
@@ -742,7 +907,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/unit/test_runner_config_persistence.py` | `ARC-CMP-004` | `REQ-ADM-009`, `PROC-TST-002` | Runtime config updates must persist registered sections, discard the retired `misc` section, and protect saved secrets | `pytest -q tests/unit/test_runner_config_persistence.py` |
 | `tests/unit/test_runner_events.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010` | Restart and shutdown events must bind to the active event loop correctly, inline desktop TUN entrypoints must re-enter the same runner path with elevation plus operator-facing privilege notices when required, and Linux helper mode must avoid that whole-process re-exec so only the helper subprocess is elevated | `pytest -q tests/unit/test_runner_events.py` |
 | `tests/unit/test_runner_overlay_transports.py` | `ARC-CMP-004`, `ARC-CMP-001`, `ARC-CMP-007` | `REQ-OVL-003`, `REQ-OVL-004`, `REQ-OVL-005`, `REQ-AUT-011`, `REQ-AUT-015`, `REQ-AUT-017`, `REQ-AUT-019`, `REQ-LIFE-006`, `PROC-TST-002` | Overlay transport parsing, secure-link wrapping, default-on compression wrapping, startup validation, and peer-targeted operator control routing must remain consistent with supported transport and cert-mode runtime rules, including per-peer reconnect targeting and the `myudp` restart-based reconnect fallback when no transport-local reconnect hook exists | `pytest -q tests/unit/test_runner_overlay_transports.py` |
-| `tests/unit/test_compress_layer.py` | `ARC-CMP-007` | `PROC-TST-002` | Compression wrapper must preserve mux framing semantics, forward SecureLink peer diagnostics, apply strict no-gain bypass on send, fail closed for malformed or over-cap compressed payloads, and activate peer-server reply compression only after a peer sends a valid compressed frame while keeping decode counters consistent | `pytest -q tests/unit/test_compress_layer.py` |
+| `tests/unit/test_compress_layer.py`, `ios/tests/test_ios_overlay_layer_transport_adapter.py` | `ARC-CMP-007` | `REQ-AUT-020`, `PROC-TST-002` | Compression wrappers must preserve mux framing semantics, forward SecureLink peer diagnostics, apply strict no-gain bypass on send, fail closed for malformed or over-cap compressed payloads, and activate peer-server reply compression only after a peer sends a valid compressed frame while keeping decode counters consistent. The Apple adapter compiles with the Core compression source and applies it before SecureLink on send and after SecureLink on receive. | `pytest -q tests/unit/test_compress_layer.py ios/tests/test_ios_overlay_layer_transport_adapter.py` |
 | `tests/unit/test_launcher_entrypoint.py` | `ARC-CMP-004` | `REQ-LIFE-002`, `REQ-LIFE-005`, `REQ-LIFE-008`, `REQ-LIFE-009`, `PROC-TST-002` | The default module entrypoint launcher must preserve restart-loop behavior (`75` immediate retry and `77` delayed retry), keep the delayed-restart WebAdmin bind/port occupied with a temporary countdown response, forward non-launcher CLI options to `bridge.py` consistently, print the effective WebAdmin entrypoint promptly, keep wildcard-bind reachability hints advisory and deferred until after the supervised bridge process has started, replay hidden child stderr when redirected startup exits nonzero, and guide interactive first-run users through missing dependency installation without blocking non-interactive startup | `pytest -q tests/unit/test_launcher_entrypoint.py` |
 | `tests/unit/test_config_bootstrap_cli.py` | `ARC-CMP-004` | `REQ-LIFE-007`, `PROC-TST-002` | Config bootstrap must continue with defaults when a configured file is missing, treat an empty config file as a valid first-start state, and raise clear errors for malformed JSON | `pytest -q tests/unit/test_config_bootstrap_cli.py` |
 | `tests/unit/test_embeddable_core.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-PRX-001`, `REQ-MUX-009`, `REQ-ADM-009` | Embeddable runtime helpers must build runtime arguments from registered in-memory configuration sections without the CLI process entrypoint, ignore unsectioned values, preserve the `tun_execution` helper-topology section through the shared parser/config surface, expose the proxy-provider config schema used by WebAdmin, start configured proxy-provider listeners, expose proxy runtime status snapshots, expose a stable `ObstacleBridgeClient` lifecycle facade, and preserve packet boundaries through the `PacketIO` abstraction used by future platform TUN adapters | `pytest -q tests/unit/test_embeddable_core.py` |
@@ -756,7 +921,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/unit/test_runner_tun_helper.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010`, `REQ-RUN-002` | Runner helper mode must launch the helper module as a subprocess, hand off its effective launch config through a short-lived private JSON file, support package-prestarted helper attach via `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG`, reap stale helper launch records whose authenticated client count shows they are orphaned, prefer direct native-helper launch when the Python executable or current Linux process already carries `CAP_NET_ADMIN` / `CAP_SYS_ADMIN`, honor an explicit helper-executable override for package-managed helper-interpreter prototypes, connect the authenticated helper client, export helper state to the mux startup path, elevate only the native Linux or macOS helper subprocess when that privilege path is unavailable, skip whole-runtime macOS reexec when helper mode is selected, keep a longer helper-socket readiness window while a sudo password prompt or package handoff is active, expose helper status through runtime snapshots including lifecycle phase and effective process identity, fall back to the main runtime identity in inline mode, report post-start helper disconnects through helper `connected` / `server_started` state plus connection error and process return code, surface a manual-cleanup recovery warning when the last cached helper runtime snapshot still suggests stale privileged state, record whether a later Linux-native or Windows-native repair plus post-repair verification cleared or may still leave stale helper-owned state behind, trigger backend-native repair from that cached snapshot when the helper is already dead, and reject helper mode cleanly on unsupported desktop platforms | `pytest -q tests/unit/test_runner_tun_helper.py` |
 | `tests/unit/test_channel_mux_tun_helper.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010` | Helper-mode ChannelMux wiring must open helper-managed TUN devices, support both in-process backend and client-only helper paths, update helper-managed device state from the actual ifname reported by an external helper before helper-owned apply/remove, write peer-to-local packets through helper-backed TUN adapters, automatically issue scaffolded helper apply/remove network calls when `helper_apply_network=true`, merge auto-excluded overlay-peer routes into helper-managed routing payloads, forward listener-side hook env such as `WAN_IF` into the helper payload for server-firewall ownership, suppress runtime listener-side TUN `on_created` / `on_stopped` host-network hooks when the helper owns that lifecycle, refresh the helper runtime snapshot after asynchronous helper apply failures, surface a runtime warning when the local TUN device exists but is missing its configured tunnel address, and deliver helper-fed local packets back into mux ingress handling without touching the inline platform adapters | `pytest -q tests/unit/test_channel_mux_tun_helper.py` |
 | `tests/integration/test_linux_elevated.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010`, `REQ-MUX-006`, `REQ-MUX-009` | Linux elevated integration must prove both helper-backed native TUN packet carry and helper-managed route-policy ownership, including excluded-route install, full-tunnel policy-rule install, rollback after a native helper-side `apply_network` failure that happens after partial route/address programming, helper-owned server-firewall apply/remove for the real peer-instantiated server TUN path, post-start native helper-loss status reporting that preserves the last known helper runtime snapshot for diagnostics, operator-triggered stale-state repair that removes real helper-owned firewall plus surviving underlay-route state after helper loss, helper death during `remove_network` after earlier cleanup steps have already run, and teardown cleanup on a real `/dev/net/tun` helper path | `pytest -q tests/integration/test_linux_elevated.py -k 'tun_helper_native' -m linux_elevated --run-linux-elevated` |
-| `tests/integration/test_macos_elevated.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010`, `REQ-MUX-006`, `REQ-MUX-009` | macOS elevated integration must prove Python inline mode can create real `utun` interfaces, run bundled Darwin lifecycle hooks for route/DNS apply/remove, report Admin TUN config/peer/global verification, and carry packets, and must prove the Python helper can launch the `darwin-native` backend on the privileged path, report helper runtime state through Admin Web, carry real packets through the helper-backed overlay path, invoke helper-owned Darwin apply/remove hook actions for routes and DNS, report helper death, raise a manual-cleanup warning when helper-owned route or DNS state may remain after helper loss, and tear down inline/helper-owned interfaces/routes after shutdown or helper loss; the macOS wrapper emits unbuffered per-test progress and exit route/interface/process diagnostics, while the hosted GitHub matrix runs each case independently so the job name identifies a runner interruption | `./scripts/run_macos_elevated_tests.sh` |
+| `tests/integration/test_macos_elevated.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010`, `REQ-MUX-006`, `REQ-MUX-009` | macOS elevated integration must prove Python inline mode can create real `utun` interfaces, run bundled Darwin lifecycle hooks for route/DNS apply/remove, report Admin TUN config/peer/global verification, and carry packets, and must prove the Python helper can launch the `darwin-native` backend on the privileged path, report helper runtime state through Admin Web, carry real packets through the helper-backed overlay path, invoke helper-owned Darwin apply/remove hook actions for routes and DNS, report helper death, raise a manual-cleanup warning when helper-owned route or DNS state may remain after helper loss, and tear down inline/helper-owned interfaces/routes after shutdown or helper loss. The runtime-health test accepts the remote-hook gateway address for peer-installed/server-side TUN listeners rather than incorrectly checking the configured client address; the macOS wrapper emits unbuffered per-test progress and exit route/interface/process diagnostics, while the hosted GitHub matrix runs each case independently so the job name identifies a runner interruption | `./scripts/run_macos_elevated_tests.sh` |
 | `tests/integration/test_macos_swift_elevated.py` | `ARC-CMP-004` | `PROC-TST-002`, `REQ-LIFE-010`, `REQ-MUX-006`, `REQ-MUX-009` | macOS Swift elevated integration must build the macOS app bundle, launch the Swift host runner from inside that bundle, create a real Swift-owned `utun`, apply/remove the bundled Darwin hook scripts, prove live IPv4/IPv6 route and DNS apply/remove effects, report Python-shaped helper runtime state and TUN config/peer/global verification through Admin Web, carry packets to a Python `darwin-native` helper peer with packet counters moving in both directions, require `transport=xpc` packet carry when the packaged helper is approved and reachable, exercise Admin helper activation plus unregister/re-register stale-version repair from a locally signed app installed in `/Applications`, and report packaged-helper death while proving interface/route cleanup; on hosted GitHub macOS, the host-runner packet-injection lane is skipped because its required TUN permission cannot be granted, and packaged-XPC assertions are skipped when registration preflight leaves the helper service disabled | `pytest -q tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated` |
 | `tests/unit/test_tcp_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003`, `ARC-CMP-006` | `REQ-AUT-001`, `REQ-AUT-004`, `REQ-AUT-005`, `PROC-TST-002` | TCP listener mux rewriting must remain active for normal multi-peer payloads while secure-link passthrough keeps mux-shaped encrypted/authentication frames byte-for-byte intact before AEAD validation | `pytest -q tests/unit/test_tcp_multi_peer.py` |
 | `tests/unit/test_ws_multi_peer.py` | `ARC-CMP-001`, `ARC-CMP-003` | `REQ-LST-001`, `REQ-LST-006`, `REQ-LST-007`, `REQ-ADM-006`, `REQ-MUX-001`, `REQ-MUX-003`, `PROC-TST-002`, `PROC-TST-003` | WS multi-peer mux rewriting, peer-scoped outbound routing, listener-side peer RTT plus `last_incoming_age_seconds` reporting, and independent stale-peer closure after absent or lost RTT liveness must remain peer-safe and operator-visible for regression diagnosis | `pytest -q tests/unit/test_ws_multi_peer.py` |
@@ -790,7 +955,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/unit/test_tun_helper_server_entrypoint.py` | TUN helper module entrypoint | Verify helper CLI parsing, backend-name rejection, authenticated-client idle-timeout handoff, and the async helper serve contract behind `python -m obstacle_bridge.bridge_tun_helper_server` | `pytest -q tests/unit/test_tun_helper_server_entrypoint.py` |
 | `tests/unit/test_tun_helper_linux_backend.py` | Native Linux helper backend | Verify Linux-only gating plus mocked real-TUN open/read/write/stop flow and helper-owned tunnel-address plus non-default included-route apply/remove for the selectable native backend | `pytest -q tests/unit/test_tun_helper_linux_backend.py` |
 | `tests/unit/test_tun_helper_macos_backend.py` | Native Darwin helper backend | Verify macOS-only gating plus mocked `utun` open/read/write/stop flow, utun frame adaptation, and helper-owned client/server Darwin hook apply/remove payloads for the selectable native backend | `pytest -q tests/unit/test_tun_helper_macos_backend.py` |
-| `tests/integration/test_macos_elevated.py` | Python macOS inline and native Darwin helper elevated paths | Verify inline mode and the privileged Python helper subprocess can create real `utun` devices, apply/remove Darwin hook-managed route/DNS host state, expose Admin Web TUN/helper status, carry packets through inline stats and helper counters, report helper death, surface the manual-cleanup warning when helper-owned route/DNS state may remain after process loss, and clean up inline/helper-owned interfaces/routes; hosted GitHub macOS skips the inline route/DNS mutation case before setup because it can sever runner connectivity, while authorized local macOS retains that required live-host proof | `pytest -q tests/integration/test_macos_elevated.py -m macos_elevated --run-macos-elevated` |
+| `tests/integration/test_macos_elevated.py` | Python macOS inline and native Darwin helper elevated paths | Verify inline mode and the privileged Python helper subprocess can create real `utun` devices, apply/remove Darwin hook-managed route/DNS host state, retain a valid scoped included route when no underlay route exists for a non-loopback overlay peer, expose Admin Web TUN/helper status, carry packets through inline stats and helper counters, report helper death, surface the manual-cleanup warning when helper-owned route/DNS state may remain after process loss, and clean up inline/helper-owned interfaces/routes; hosted GitHub macOS skips the inline route/DNS mutation case before setup because it can sever runner connectivity, while authorized local macOS retains that required live-host proof | `pytest -q tests/integration/test_macos_elevated.py -m macos_elevated --run-macos-elevated` |
 | `tests/integration/test_macos_swift_elevated.py` | Native Swift/macOS helper backend, elevated path | Verify the built macOS app bundle's Swift host runner can create a real `utun`, apply/remove bundled Darwin hook state, expose helper runtime status and TUN config/peer/global verification, carry packets to a Python `darwin-native` peer, prove live route/DNS effects and restoration, exercise Admin helper activation and stale-helper repair from an installed signed app bundle, report packaged-helper death, and clean up helper-owned interfaces/routes; hosted GitHub macOS skips the host-runner packet-injection lane because it cannot grant the required TUN permission and may skip packaged-XPC assertions when the runner leaves the helper service disabled after registration preflight | `pytest -q tests/integration/test_macos_swift_elevated.py -m macos_elevated --run-macos-elevated` |
 | `tests/unit/test_runner_tun_helper.py` | Runner helper-mode lifecycle | Verify helper mode launches the helper module as a subprocess, supports package-prestarted helper attach, exports the helper references needed by mux startup, can elevate only the native helper subprocess on Linux, can target a package-provided helper executable override, exposes helper state and effective process identity in `/api/status`-style snapshots, falls back to the main runtime identity in inline mode, and rejects unsupported platforms early | `pytest -q tests/unit/test_runner_tun_helper.py` |
 | `tests/unit/test_channel_mux_tun_helper.py` | Helper-backed ChannelMux TUN path | Verify helper mode swaps ChannelMux local TUN open/read/write over to helper-backed paths for both in-process backend and client-only external-helper scaffolds, applies and removes scaffolded helper-network state around helper-managed TUN lifecycle using the actual helper-reported interface name, and leaves the normal inline platform path untouched when helper mode is off | `pytest -q tests/unit/test_channel_mux_tun_helper.py` |

@@ -1,11 +1,12 @@
 import Dispatch
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
 
 public struct ObstacleBridgeLinuxLiveRuntimeSnapshot: Equatable, Sendable {
     public let state: String
     public let attempts: Int
     public let failureReason: String?
+    public let nextRetryMilliseconds: Int?
 }
 
 public enum ObstacleBridgeLinuxLiveRuntimeError: Error, Equatable, LocalizedError {
@@ -41,7 +42,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var stopped = true
     private var attempts = 0
     private var failureReason: String?
-    private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil)
+    private var nextRetryMilliseconds: Int?
+    private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
+    private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil)
 
     public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init()) {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
@@ -67,6 +70,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let openedTCPChannels = summaries.reduce(0) { $0 + $1.openedTCPChannels }
         let openedUDPChannels = summaries.reduce(0) { $0 + $1.openedUDPChannels }
         let base = statusProjection
+        let live = liveSnapshotProjection
         statusLock.unlock()
         return .init(
             transport: base.transport, state: base.state, attempts: base.attempts,
@@ -82,7 +86,30 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             receivedFrames: receive?.receivedFrames ?? 0,
             droppedReceiveFrames: receive?.droppedFrames ?? 0,
             receiveQueueDepth: receive?.queueDepth ?? 0,
-            receiveFailureReason: receive?.failureReason
+            receiveFailureReason: receive?.failureReason,
+            peer: .init(
+                transport: base.peer.transport,
+                lifecycleState: live.state,
+                secureLinkState: base.peer.secureLinkState,
+                connectionEpoch: base.peer.connectionEpoch,
+                sessionID: base.peer.sessionID,
+                pendingRekeySessionID: base.peer.pendingRekeySessionID,
+                ready: live.state == "connected" && base.peer.ready,
+                authenticated: base.peer.authenticated,
+                applicationSendingBlocked: base.peer.applicationSendingBlocked,
+                attempts: live.attempts,
+                nextRetryMilliseconds: live.nextRetryMilliseconds,
+                protectedTxCounter: base.peer.protectedTxCounter,
+                protectedRxCounter: base.peer.protectedRxCounter,
+                protectedFramesSentTotal: base.peer.protectedFramesSentTotal,
+                protectedFramesReceivedTotal: base.peer.protectedFramesReceivedTotal,
+                authenticatedGenerationsTotal: base.peer.authenticatedGenerationsTotal,
+                rekeysCompletedTotal: base.peer.rekeysCompletedTotal,
+                // Compression telemetry changes on the live ChannelMux data
+                // path, so do not reuse the connection-start status cache.
+                // Core remains the single counter owner.
+                compression: configuredRuntime.compressionTelemetry.snapshot()
+            )
         )
     }
 
@@ -137,6 +164,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     public func stop() {
+        // A SecureLink handshake performs synchronous lower-transport I/O on
+        // `queue`.  Cancel its published session before entering that queue so
+        // shutdown cannot wait for the receive timeout.
+        configuredRuntime.cancelInFlightConnection()
         queue.sync {
             stopped = true
             cancelRetry()
@@ -233,6 +264,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             refreshStatusProjection()
             failureReason = nil
             publish(state: "connected", failureReason: nil)
+        } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
+            // `stop()` has already interrupted the in-flight lower session.
+            // Do not publish a retry that could briefly outlive shutdown.
+            return
         } catch {
             session = nil
             channelMux = nil
@@ -248,13 +283,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 return
             }
             let delay = min(policy.maximumDelayMilliseconds, policy.initialDelayMilliseconds * (1 << min(attempts - 1, 10)))
-            publish(state: "reconnecting", failureReason: failureReason)
             scheduleRetry(afterMilliseconds: delay)
+            publish(state: "reconnecting", failureReason: failureReason)
         }
     }
 
     private func scheduleRetry(afterMilliseconds delay: Int) {
         cancelRetry()
+        nextRetryMilliseconds = delay
         let timer = DispatchSource.makeTimerSource(queue: queue)
         retryTimer = timer
         timer.schedule(deadline: .now() + .milliseconds(delay))
@@ -270,10 +306,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         retryTimer?.setEventHandler {}
         retryTimer?.cancel()
         retryTimer = nil
+        nextRetryMilliseconds = nil
     }
 
     private func publish(state: String, failureReason: String?) {
-        let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason)
+        let value = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: state, attempts: attempts, failureReason: failureReason, nextRetryMilliseconds: nextRetryMilliseconds)
+        statusLock.lock()
+        liveSnapshotProjection = value
+        statusLock.unlock()
         snapshot = value
         onSnapshot?(value)
     }
@@ -355,7 +395,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             cancelReceive: { session.cancelReceive() },
             sink: { [weak self] workerEpoch, payload in
                 guard let self, self.configuredRuntime.connectionEpoch == workerEpoch,
-                      let frame = try? ObstacleBridgeChannelMuxCodec.decode(payload) else { return }
+                      let frame = try? mux.decodeInbound(payload) else { return }
                 mux.receive(frame)
             },
             onFailure: { [weak self] workerEpoch, reason in

@@ -143,11 +143,30 @@ class MyudpDelayLossCase:
 class LinuxSwiftSecureLinkPeer:
     """Small Python reference endpoint for the Linux Swift process E2E lane."""
 
-    def __init__(self, transport: str, psk: bytes, *, keep_open: bool = False, mux_echo: bool = False) -> None:
+    def __init__(
+        self,
+        transport: str,
+        psk: bytes,
+        *,
+        keep_open: bool = False,
+        mux_echo: bool = False,
+        drop_myudp_application_data_count: int = 0,
+        reorder_myudp_application_reply: bool = False,
+        duplicate_myudp_application_reply: bool = False,
+        send_myudp_idle_before_application_reply: bool = False,
+        delay_myudp_application_reply_seconds: float = 0.0,
+    ) -> None:
         self.transport = transport
         self.psk = bytes(psk)
         self.keep_open = keep_open
         self.mux_echo = mux_echo
+        self.drop_myudp_application_data_count = max(0, drop_myudp_application_data_count)
+        self.reorder_myudp_application_reply = reorder_myudp_application_reply
+        self.duplicate_myudp_application_reply = duplicate_myudp_application_reply
+        self.send_myudp_idle_before_application_reply = send_myudp_idle_before_application_reply
+        self.delay_myudp_application_reply_seconds = max(0.0, delay_myudp_application_reply_seconds)
+        self.myudp_control_frames_received = 0
+        self.myudp_idle_frames_received = 0
         self._closing = threading.Event()
         self.error: Optional[BaseException] = None
         self._ready = threading.Event()
@@ -206,7 +225,12 @@ class LinuxSwiftSecureLinkPeer:
                 listener.bind(('127.0.0.1', 0))
                 if sock_type == socket.SOCK_STREAM:
                     listener.listen(1)
-                listener.settimeout(0.25 if self.keep_open else 5.0)
+                # Repeated myUDP loss deliberately delays the first protected
+                # application record beyond the ordinary reference-peer idle
+                # window. Its test-owned subprocess still bounds this case.
+                listener.settimeout(
+                    0.25 if self.keep_open else 15.0 if self.drop_myudp_application_data_count else 5.0
+                )
                 self._socket = listener
                 self.port = int(listener.getsockname()[1])
                 self._ready.set()
@@ -273,6 +297,7 @@ class LinuxSwiftSecureLinkPeer:
         stream = bytearray()
         completed: list[bytes] = []
         highest_received = 0
+        drop_next_application_data = False
 
         def increment(counter: int) -> int:
             return 1 if counter == 0xffff else counter + 1
@@ -299,15 +324,22 @@ class LinuxSwiftSecureLinkPeer:
             listener.sendto(bytes([PTYPE_CONTROL]) + struct.pack('!HQQ', len(payload), 0, 0) + payload, peer)
 
         def receive() -> bytes:
-            nonlocal peer, next_receive_counter, highest_received
+            nonlocal peer, next_receive_counter, highest_received, drop_next_application_data
             while not completed:
                 wire, peer = listener.recvfrom(65535)
                 if len(wire) < 19 or len(wire) != 19 + int.from_bytes(wire[1:3], 'big'):
                     raise RuntimeError('Linux Swift myudp framing mismatch')
-                if wire[0] in (0, PTYPE_CONTROL):
+                if wire[0] == PTYPE_CONTROL:
+                    self.myudp_control_frames_received += 1
+                    continue
+                if wire[0] == 0:
+                    self.myudp_idle_frames_received += 1
                     continue
                 if wire[0] != PTYPE_DATA or len(wire) < 27 or wire[19] != 1:
                     raise RuntimeError('Linux Swift myudp framing mismatch')
+                if drop_next_application_data > 0:
+                    drop_next_application_data -= 1
+                    continue
                 chunk_count = wire[20]
                 offset = 21
                 for _ in range(chunk_count):
@@ -343,16 +375,82 @@ class LinuxSwiftSecureLinkPeer:
             return completed.pop(0)
 
         def send(payload: bytes) -> None:
-            nonlocal next_send_counter
+            nonlocal next_send_counter, drop_next_application_data
             assert peer is not None
             record = struct.pack('!I', len(payload)) + payload
+            if payload[1] == 4 and int.from_bytes(payload[12:20], 'big') == 2:
+                time.sleep(self.delay_myudp_application_reply_seconds)
+                if self.send_myudp_idle_before_application_reply:
+                    listener.sendto(bytes([0]) + struct.pack('!HQQ', 0, 7, 0), peer)
+            datagrams: list[bytes] = []
             for offset in range(0, len(record), 1425):
                 chunk = record[offset:offset + 1425]
                 batch = b'\x01\x01' + struct.pack('!H', len(chunk) + 4) + struct.pack('!HH', next_send_counter, len(chunk)) + chunk
-                listener.sendto(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch, peer)
+                datagrams.append(bytes([PTYPE_DATA]) + struct.pack('!HQQ', len(batch), 0, 0) + batch)
                 next_send_counter = increment(next_send_counter)
+            if (
+                self.reorder_myudp_application_reply
+                and payload[1] == 4
+                and int.from_bytes(payload[12:20], 'big') == 2
+                and len(datagrams) > 1
+            ):
+                datagrams.reverse()
+            if (
+                self.duplicate_myudp_application_reply
+                and payload[1] == 4
+                and int.from_bytes(payload[12:20], 'big') == 2
+                and datagrams
+            ):
+                datagrams.insert(1 if len(datagrams) > 1 else 0, datagrams[0])
+            for datagram in datagrams:
+                listener.sendto(datagram, peer)
+            if (
+                self.drop_myudp_application_data_count > 0
+                and len(payload) == 36
+                and payload[1] == 4
+                and int.from_bytes(payload[12:20], 'big') == 1
+            ):
+                drop_next_application_data = self.drop_myudp_application_data_count
 
         self._secure_link_transaction(receive, send)
+        if self._closing.is_set():
+            return
+        # Keep the UDP endpoint alive long enough for a loaded Linux runner to
+        # drain every response and return its CONTROL/IDLE effects. Closing
+        # immediately after an ordinary reply races the client's receive and
+        # can surface as an ICMP port-unreachable instead of that reply.
+        try:
+            listener.settimeout(0.1)
+        except OSError:
+            if self._closing.is_set():
+                return
+            raise
+        # A connected UDP sender receives ECONNREFUSED if the peer disappears
+        # before it drains the reply and emits its Core CONTROL/IDLE effect.
+        # A real client owns the test reference peer's lifetime through
+        # close(). Once an acknowledgement is observed, do not apply a second
+        # short shutdown deadline: the shared myUDP Core can still emit a
+        # follow-up control/timer effect while it drains the same reply.
+        # Under a parallel CI host, a fixed post-reply deadline can expire
+        # while the Swift process still drains its datagrams and turn a valid
+        # reply into an ICMP port-unreachable.  The no-peer unit test retains
+        # its short completion deadline.
+        deadline = time.monotonic() + 1.0 if peer is None else None
+        while not self._closing.is_set():
+            if deadline is not None and time.monotonic() >= deadline:
+                return
+            try:
+                wire, _peer = listener.recvfrom(65535)
+            except TimeoutError:
+                continue
+            except OSError:
+                if self._closing.is_set():
+                    return
+                raise
+            if wire[:1] == bytes([PTYPE_CONTROL]):
+                self.myudp_control_frames_received += 1
+            elif wire[:1] == bytes([0]):
+                self.myudp_idle_frames_received += 1
 
     def _secure_link_transaction(self, receive: Callable[[], bytes], send: Callable[[bytes], None]) -> None:
         hello = receive()
@@ -421,6 +519,20 @@ class LinuxSwiftSecureLinkPeer:
         plaintext = ChaCha20Poly1305(client_to_server).decrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), application[20:], application[:20])
         response = self._header(4, session_id, 2)
         send(response + ChaCha20Poly1305(server_to_client).encrypt(b'\0' * 4 + (2).to_bytes(8, 'big'), b'python-e2e:' + plaintext, response))
+
+
+def test_linux_swift_myudp_reference_peer_waits_for_response_drain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reference peer does not close its reply port before a client can drain it."""
+    monkeypatch.setattr(LinuxSwiftSecureLinkPeer, '_secure_link_transaction', lambda self, receive, send: None)
+    peer = LinuxSwiftSecureLinkPeer('myudp', b'linux-swift-reference-peer-drain-psk')
+    try:
+        assert not peer._done.wait(0.15)
+        peer._thread.join(timeout=2.0)
+        assert peer._done.is_set()
+        assert peer.error is None
+    finally:
+        if not peer._done.is_set():
+            peer.close()
 
 
 @contextlib.contextmanager
@@ -2177,7 +2289,6 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTunRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTCPTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlaySessionCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeCompressLayerRuntime.swift'),
@@ -2188,7 +2299,14 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayConnectionSupport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayStackPlanner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressResolver.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketPayloadCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeBinaryCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxFrameCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayFrameCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeControlChunkCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeServiceCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeMyUDPCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkFrameCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeWebSocketPayloadCodec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayTransportOwner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayRuntime.swift'),
@@ -7089,6 +7207,7 @@ MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
     'tc1a_drop_first_data_client_to_server',
     'tc5a_small_records_batched_and_recovered',
     'tc5b_small_records_reordered_and_duplicated',
+    'tc10_full_missed_list_pressure',
 ]
 
 
@@ -7221,6 +7340,132 @@ def test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip(
         )
         assert completed.returncode == 0, completed.stderr
         assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data(tmp_path: Path) -> None:
+    """The foreground Linux executable drives Core retransmission after repeated loss."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-loss-psk'
+    payload = b'linux-swift-myudp-runtime-loss-recovery'
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, drop_myudp_application_data_count=2)
+    try:
+        runtime_config = {
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }
+        config_path = tmp_path / 'linux_swift_myudp_loss_runtime.json'
+        config_path.write_text(json.dumps(runtime_config), encoding='utf-8')
+        completed = subprocess.run(
+            [
+                str(binary_path),
+                '--runtime-config', str(config_path),
+                '--runtime-probe', base64.b64encode(payload).decode('ascii'),
+            ],
+            cwd=str(ROOT),
+            capture_output=True,
+            text=True,
+            timeout=15.0,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_reassembles_reordered_reply(tmp_path: Path) -> None:
+    """The foreground Linux executable reassembles a reordered Core DATA stream."""
+    if not sys.platform.startswith('linux') or not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-reorder-psk'
+    payload = b'r' * 3_000
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, reorder_myudp_application_reply=True)
+    try:
+        config_path = tmp_path / 'linux_swift_myudp_reorder_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        completed = subprocess.run([str(binary_path), '--runtime-config', str(config_path), '--runtime-probe', base64.b64encode(payload).decode('ascii')], cwd=str(ROOT), capture_output=True, text=True, timeout=15.0, check=False)
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply(tmp_path: Path) -> None:
+    """The foreground Linux executable accepts delayed Core myUDP delivery."""
+    if not sys.platform.startswith('linux') or not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-delay-psk'
+    payload = b'linux-swift-myudp-delayed-reply'
+    peer = LinuxSwiftSecureLinkPeer('myudp', psk, delay_myudp_application_reply_seconds=0.25)
+    try:
+        config_path = tmp_path / 'linux_swift_myudp_delay_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        completed = subprocess.run([str(binary_path), '--runtime-config', str(config_path), '--runtime-probe', base64.b64encode(payload).decode('ascii')], cwd=str(ROOT), capture_output=True, text=True, timeout=15.0, check=False)
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+    finally:
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle(tmp_path: Path) -> None:
+    """The foreground Linux client preserves a Core stream through composed faults."""
+    if not sys.platform.startswith('linux') or not shutil.which('swift'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux and swift on PATH')
+    binary_path = _linux_swift_runner_binary()
+    psk = b'linux-swift-myudp-composed-faults-psk'
+    payload = b'c' * 3_000
+    peer = LinuxSwiftSecureLinkPeer(
+        'myudp',
+        psk,
+        drop_myudp_application_data_count=2,
+        reorder_myudp_application_reply=True,
+        duplicate_myudp_application_reply=True,
+        send_myudp_idle_before_application_reply=True,
+        delay_myudp_application_reply_seconds=0.25,
+    )
+    try:
+        config_path = tmp_path / 'linux_swift_myudp_composed_faults_runtime.json'
+        config_path.write_text(json.dumps({
+            'runner': {'overlay_transport': 'myudp'},
+            'udp_session': {'udp_peer': '127.0.0.1', 'udp_peer_port': peer.port},
+            'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': psk.decode('ascii')},
+        }), encoding='utf-8')
+        completed = subprocess.run(
+            [
+                str(binary_path), '--runtime-config', str(config_path),
+                '--runtime-probe', base64.b64encode(payload).decode('ascii'),
+            ],
+            cwd=str(ROOT), capture_output=True, text=True, timeout=20.0, check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert base64.b64decode(completed.stdout.strip()) == b'python-e2e:' + payload
+        assert peer.myudp_control_frames_received >= 1
+        assert peer.myudp_idle_frames_received >= 1
     finally:
         peer.close()
 
@@ -7692,7 +7937,13 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         assert isinstance(layers, list)
         assert next(layer for layer in layers if layer['name'] == 'secure_link')['authenticated'] is True
         _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
-        assert peers == [{'peer_id': 'configured-peer', 'transport': overlay_transport, 'state': 'connected', 'app_ready': True, 'configured_candidates': ['listener'], 'active_host': 'listener', 'port': overlay_port, 'failure_reason': None}]
+        assert len(peers) == 1
+        assert {key: peers[0][key] for key in ('peer_id', 'transport', 'state', 'app_ready', 'configured_candidates', 'active_host', 'port', 'failure_reason')} == {
+            'peer_id': 'configured-peer', 'transport': overlay_transport,
+            'state': 'connected', 'app_ready': True,
+            'configured_candidates': ['listener'], 'active_host': 'listener',
+            'port': overlay_port, 'failure_reason': None,
+        }
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
         def assert_service_round_trip(payload: bytes) -> None:
             with socket.socket(socket.AF_INET, socket_type) as client:

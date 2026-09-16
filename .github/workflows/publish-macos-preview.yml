@@ -1,0 +1,59 @@
+name: Publish macOS preview
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-macos-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish macOS preview
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify Swift toolchain
+        run: |
+          swift --version
+          swift build --target ObstacleBridgeCore
+
+      - name: Build the macOS application bundle
+        run: ios/scripts/build_macos_app.sh
+
+      - name: Package and verify the bundle
+        run: ios/scripts/package_macos_app.sh
+
+      - name: Publish the latest preview release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh release view macos-preview >/dev/null 2>&1; then
+            gh release edit macos-preview \
+              --target "$TARGET" \
+              --title "macOS preview (latest main)" \
+              --notes "Built from ${TARGET}. This is an ad-hoc-signed preview build, not a notarized production release. Verify the attached SHA-256 before use."
+          else
+            gh release create macos-preview \
+              --target "$TARGET" \
+              --title "macOS preview (latest main)" \
+              --prerelease \
+              --notes "Built from ${TARGET}. This is an ad-hoc-signed preview build, not a notarized production release. Verify the attached SHA-256 before use."
+          fi
+          gh release upload macos-preview \
+            ios/build/macos/release/ObstacleBridge-macos-preview.zip \
+            ios/build/macos/release/ObstacleBridge-macos-preview.zip.sha256 \
+            ios/build/macos/release/ObstacleBridge-macos-preview-build-info.json \
+            --clobber

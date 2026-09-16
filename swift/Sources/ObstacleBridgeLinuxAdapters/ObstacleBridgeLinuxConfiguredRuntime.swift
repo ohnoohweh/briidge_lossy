@@ -1,5 +1,33 @@
 import Foundation
-import ObstacleBridgePortable
+import ObstacleBridgeCore
+
+/// One redacted peer projection assembled from the Core SecureLink state and
+/// the adapter-owned transport lifecycle. It deliberately has no PSK, nonce,
+/// key, or raw frame material, so the Linux Admin surface can publish one
+/// authoritative peer row without independently rebuilding protocol fields.
+public struct ObstacleBridgeLinuxPeerSnapshot: Codable, Equatable, Sendable {
+    public let transport: String
+    public let lifecycleState: String
+    /// SecureLink's protocol state is deliberately distinct from the outer
+    /// transport lifecycle: an admitted protected epoch is `connected` while
+    /// SecureLink itself is `authenticated`.
+    public let secureLinkState: String
+    public let connectionEpoch: UInt64
+    public let sessionID: UInt64?
+    public let pendingRekeySessionID: UInt64?
+    public let ready: Bool
+    public let authenticated: Bool
+    public let applicationSendingBlocked: Bool
+    public let attempts: Int
+    public let nextRetryMilliseconds: Int?
+    public let protectedTxCounter: UInt64
+    public let protectedRxCounter: UInt64
+    public let protectedFramesSentTotal: UInt64
+    public let protectedFramesReceivedTotal: UInt64
+    public let authenticatedGenerationsTotal: UInt64
+    public let rekeysCompletedTotal: UInt64
+    public let compression: ObstacleBridgeMuxCompressionSnapshot
+}
 
 public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
     public let transport: String
@@ -26,6 +54,7 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
     public let droppedReceiveFrames: Int
     public let receiveQueueDepth: Int
     public let receiveFailureReason: String?
+    public let peer: ObstacleBridgeLinuxPeerSnapshot
 }
 
 /// Config-driven lower transport plus optional SecureLink PSK state. The
@@ -91,6 +120,22 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
     }
 
+    /// Rotates the authenticated PSK generation while preserving this lower
+    /// transport epoch. The role-neutral SecureLink Core owns transcript
+    /// validation and atomic key cutover; this adapter only performs the
+    /// request/response exchanges required by its platform transport.
+    public func rekey(sessionID: UInt64, clientNonce: Data) throws {
+        guard let secureLink else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+        do {
+            let reply = try lowerSession.exchange(secureLink.beginRekey(sessionID: sessionID, clientNonce: clientNonce))
+            let commit = try secureLink.handleRekeyReply(reply)
+            try secureLink.handleRekeyDone(lowerSession.exchange(commit))
+        } catch {
+            fail(error)
+            throw error
+        }
+    }
+
     /// Used exclusively by the epoch's receive worker. Compatibility request
     /// replies are consumed here, so an older diagnostic caller cannot create
     /// a second descriptor reader beside ChannelMux dispatch.
@@ -111,6 +156,12 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         requestLock.lock(); receiveOwnerActive = true; requestLock.unlock()
     }
     public func cancelReceive() { lowerSession.close() }
+
+    /// Redacted Core-owned SecureLink state for the current adapter epoch.
+    /// Neither role exposes its PSK, nonces, or traffic plaintext here.
+    public var secureLinkProtocolState: ObstacleBridgeSecureLinkPSKState? {
+        secureLink?.state ?? secureLinkServer?.state
+    }
 
     public func close() {
         lowerSession.close()
@@ -160,16 +211,26 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     private var activeSession: ObstacleBridgeLinuxConfiguredSession?
     private var activeHost: String?
     private var secureLinkState: String
+    let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
     private(set) public var connectionEpoch: UInt64 = 0
     private var candidateStartIndex = 0
+    // `connect` runs on the live runtime's serialized queue, but `stop` must
+    // be able to interrupt an authenticated-handshake read from another
+    // caller.  This slot is deliberately separate from `activeSession`: an
+    // epoch becomes active only after peer confirmation succeeds.
+    private let inFlightConnectionLock = NSLock()
+    private var inFlightConnection: ObstacleBridgeLinuxConfiguredSession?
+    private var inFlightConnectionCancelled = false
 
     public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration) {
         self.configuration = configuration
         self.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
         self.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
+        self.compressionTelemetry = .init(policy: configuration.compressionPolicy)
     }
 
     public func connect(sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
+        beginInFlightConnection()
         activeSession?.close()
         activeSession = nil
         var lastError: Error?
@@ -178,28 +239,35 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             let host = configuration.peerCandidates[index]
             let lower: ObstacleBridgeLinuxOverlayTransportClient
             do {
-                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath)
+                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode, receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds)
                 let lowerSession = try lower.openSession()
-                let secureLink: ObstacleBridgeSecureLinkPSKClient?
+                let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
                     let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
+                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: client, transport: configuration.transport)
+                    guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     let hello = try client.begin(sessionID: sessionID, clientNonce: clientNonce)
                     let clientProof = try client.handleServerHello(lowerSession.exchange(hello))
                     try client.handleServerAcknowledgement(lowerSession.exchange(clientProof))
-                    secureLink = client
                     secureLinkState = "authenticated"
+                    clearInFlightConnection(session)
                 } else {
-                    secureLink = nil
+                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
+                    guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     secureLinkState = "off"
+                    clearInFlightConnection(session)
                 }
                 snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
                 connectionEpoch &+= 1
                 activeHost = host
                 candidateStartIndex = index
-                let session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: secureLink, transport: configuration.transport)
                 activeSession = session
                 return session
             } catch {
+                if isInFlightConnectionCancelled {
+                    clearInFlightConnection()
+                    throw ObstacleBridgeLinuxOverlayTransportError.cancelled
+                }
                 lastError = error
                 activeHost = nil
                 secureLinkState = configuration.secureLinkPSK == nil ? "off" : "failed"
@@ -207,6 +275,46 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             }
         }
         throw lastError ?? ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+    }
+
+    /// Interrupts an in-progress lower transport or SecureLink handshake
+    /// without waiting for the live-runtime queue.  The next explicit
+    /// connection attempt resets this cancellation state.
+    public func cancelInFlightConnection() {
+        inFlightConnectionLock.lock()
+        inFlightConnectionCancelled = true
+        let pending = inFlightConnection
+        inFlightConnectionLock.unlock()
+        pending?.close()
+    }
+
+    private func beginInFlightConnection() {
+        inFlightConnectionLock.lock()
+        inFlightConnectionCancelled = false
+        inFlightConnection = nil
+        inFlightConnectionLock.unlock()
+    }
+
+    private var isInFlightConnectionCancelled: Bool {
+        inFlightConnectionLock.lock()
+        let cancelled = inFlightConnectionCancelled
+        inFlightConnectionLock.unlock()
+        return cancelled
+    }
+
+    private func installInFlightConnection(_ pending: ObstacleBridgeLinuxConfiguredSession) -> Bool {
+        inFlightConnectionLock.lock()
+        inFlightConnection = pending
+        let cancelled = inFlightConnectionCancelled
+        inFlightConnectionLock.unlock()
+        if cancelled { pending.close() }
+        return !cancelled
+    }
+
+    private func clearInFlightConnection(_ pending: ObstacleBridgeLinuxConfiguredSession? = nil) {
+        inFlightConnectionLock.lock()
+        if pending == nil || inFlightConnection === pending { inFlightConnection = nil }
+        inFlightConnectionLock.unlock()
     }
 
     /// Ends the current transport epoch and establishes a fresh one. A caller
@@ -249,7 +357,9 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// Redacted state suitable for an Admin/API adapter. It deliberately
     /// identifies only the configured secure-link mode, never its secret.
     public func status() -> ObstacleBridgeLinuxRuntimeStatus {
-        .init(
+        let coreState = activeSession?.secureLinkProtocolState
+        let appReady = snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated")
+        return .init(
             transport: configuration.transport.rawValue,
             state: snapshot.state,
             attempts: snapshot.attempts,
@@ -259,7 +369,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             port: configuration.port,
             secureLinkMode: configuration.secureLinkPSK == nil ? "off" : "psk",
             secureLinkState: secureLinkState,
-            appReady: snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated"),
+            appReady: appReady,
             activeTCPChannels: 0,
             activeUDPChannels: 0,
             queuedServiceFrames: 0,
@@ -273,7 +383,27 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             receivedFrames: 0,
             droppedReceiveFrames: 0,
             receiveQueueDepth: 0,
-            receiveFailureReason: nil
+            receiveFailureReason: nil,
+            peer: .init(
+                transport: configuration.transport.rawValue,
+                lifecycleState: snapshot.state,
+                secureLinkState: secureLinkState,
+                connectionEpoch: connectionEpoch,
+                sessionID: coreState.map { $0.sessionID == 0 ? nil : $0.sessionID } ?? nil,
+                pendingRekeySessionID: coreState.map { $0.pendingRekeySessionID == 0 ? nil : $0.pendingRekeySessionID } ?? nil,
+                ready: appReady,
+                authenticated: coreState?.authenticated ?? false,
+                applicationSendingBlocked: coreState?.applicationSendingBlocked ?? false,
+                attempts: snapshot.attempts,
+                nextRetryMilliseconds: nil,
+                protectedTxCounter: coreState?.txCounter ?? 0,
+                protectedRxCounter: coreState?.rxCounter ?? 0,
+                protectedFramesSentTotal: coreState?.protectedFramesSentTotal ?? 0,
+                protectedFramesReceivedTotal: coreState?.protectedFramesReceivedTotal ?? 0,
+                authenticatedGenerationsTotal: coreState?.authenticatedGenerationsTotal ?? 0,
+                rekeysCompletedTotal: coreState?.rekeysCompletedTotal ?? 0,
+                compression: compressionTelemetry.snapshot()
+            )
         )
     }
 

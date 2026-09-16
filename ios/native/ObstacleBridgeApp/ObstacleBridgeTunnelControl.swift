@@ -683,6 +683,17 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func loadRuntimeConfigJSON() -> [String: Any] {
+        // The packaged-XPC qualification harness launches the primary AppKit
+        // executable with an isolated, invoking-user-owned configuration.
+        // Keep the override test-only: ordinary application launches retain
+        // the app-scoped configuration contract below.
+        let testOverride = (ProcessInfo.processInfo.environment[ObstacleBridgeRuntimeConfig.appRuntimeConfigOverrideEnvironmentKey] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !testOverride.isEmpty,
+           let data = try? Data(contentsOf: URL(fileURLWithPath: testOverride)),
+           let payload = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            return applyingRemoteAdminDefaultsToGroupedPayload(payload)
+        }
 #if os(macOS)
         guard let root = appRuntimeRootURL() else {
             return [:]
