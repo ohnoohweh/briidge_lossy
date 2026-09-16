@@ -389,17 +389,25 @@ def test_compress_layer_runtime_source_exists() -> None:
     assert "struct SendSnapshot" in runtime
     assert "struct ReceiveSnapshot" in runtime
     assert "ObstacleBridgeChannelMuxFrameCodec.decode(" in runtime
-    assert "ObstacleBridgeChannelMuxFrameCodec.encode(" in runtime
+    assert "ObstacleBridgeMuxCompression.protect(" in runtime
+    assert "ObstacleBridgeMuxCompression.unprotect(" in runtime
     assert "readUInt16BE" not in runtime
     assert "appendUInt16BE" not in runtime
     assert "parseAllowedMTypes(" in runtime
     assert "handleInboundPayload(" in runtime
     assert "handleSendPayload(" in runtime
     assert "statusSnapshot(peerID:" in runtime
-    assert "safeCompress(" in runtime
-    assert "safeDecompress(" in runtime
-    assert "compress2" in runtime
-    assert "inflateInit_" in runtime
+    assert "import zlib" not in runtime
+    assert "safeCompress(" not in runtime
+    assert "safeDecompress(" not in runtime
+    assert "compress2" not in runtime
+    assert "inflateInit_" not in runtime
+
+
+def test_core_import_guard_allows_only_the_common_compression_binding() -> None:
+    guard = (ROOT / "scripts" / "check_obstaclebridge_core_imports.py").read_text(encoding="utf-8")
+
+    assert 'module == "zlib" and path.name == "ObstacleBridgeCompression.swift"' in guard
 
 
 def test_overlay_stack_planner_source_exists() -> None:

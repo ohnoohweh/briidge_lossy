@@ -168,6 +168,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminWebSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),

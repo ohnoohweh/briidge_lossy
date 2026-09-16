@@ -33,6 +33,11 @@ def validate() -> list[str]:
     for path in sorted(CORE_ROOT.glob("*.swift")):
         imports = IMPORT_RE.findall(path.read_text(encoding="utf-8"))
         for module in imports:
+            # Core owns the one portable zlib binding used by the common mux
+            # compression policy.  Adapters must continue to have no direct
+            # zlib implementation or import.
+            if module == "zlib" and path.name == "ObstacleBridgeCompression.swift":
+                continue
             if module in FORBIDDEN_IMPORTS:
                 errors.append(f"{path.relative_to(ROOT)} imports forbidden core module {module}")
     return errors

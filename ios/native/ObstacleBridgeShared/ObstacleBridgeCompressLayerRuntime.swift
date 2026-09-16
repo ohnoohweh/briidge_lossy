@@ -1,6 +1,8 @@
 import Foundation
-import zlib
 
+/// Apple configuration, peer accounting, and status publication around the
+/// common Core mux-compression policy.  The wrapper deliberately has no zlib
+/// or ChannelMux wire implementation of its own.
 final class ObstacleBridgeCompressLayerRuntime {
     private static let muxHeaderSize = 8
 
@@ -43,18 +45,8 @@ final class ObstacleBridgeCompressLayerRuntime {
         var decompressFailTotal = 0
     }
 
-    private struct ParsedMuxFrame {
-        var chanID: Int
-        var proto: Int
-        var counter: Int
-        var mtype: Int
-        var body: Data
-    }
-
-    static let compressedFlag = 0x80
     static let defaultAllowedMTypeNames = "data,data_frag"
-    static let knownBaseMTypes: Set<Int> = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07]
-    static let mtypeNameToID: [String: Int] = [
+    static let mtypeNameToID: [String: UInt8] = [
         "data": 0x00,
         "open": 0x01,
         "close": 0x02,
@@ -71,10 +63,10 @@ final class ObstacleBridgeCompressLayerRuntime {
     private let transportName: String
     private let level: Int
     private let minBytes: Int
-    private let allowedMTypes: Set<Int>
+    private let allowedMTypes: Set<UInt8>
     private let peerSelectedLevel: Int
     private let peerSelectedMinBytes: Int
-    private let peerSelectedAllowedMTypes: Set<Int>
+    private let peerSelectedAllowedMTypes: Set<UInt8>
     private let maxAppPayload: Int
     private let maxMuxPayload: Int
 
@@ -115,45 +107,25 @@ final class ObstacleBridgeCompressLayerRuntime {
     }
 
     func handleInboundPayload(_ payload: Data, peerID: Int? = nil) -> ReceiveSnapshot {
-        guard let parsed = Self.parseMuxFrame(payload) else {
+        guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else {
             return ReceiveSnapshot(deliveredPayload: payload, deliveredPeerID: peerID, dropped: false, decompressed: false)
         }
-        guard parsed.mtype >= Self.compressedFlag else {
+        guard frame.messageType >= ObstacleBridgeMuxCompression.compressedFlag else {
             return ReceiveSnapshot(deliveredPayload: payload, deliveredPeerID: peerID, dropped: false, decompressed: false)
         }
-
-        let baseMType = parsed.mtype - Self.compressedFlag
-        guard Self.knownBaseMTypes.contains(baseMType) else {
+        guard let result = try? ObstacleBridgeMuxCompression.unprotect(payload, maximumBodyBytes: maxMuxPayload) else {
             decompressFailTotal += 1
             addPeerCounter(peerID: peerID, field: \PeerStats.decompressFailTotal, value: 1)
             return ReceiveSnapshot(deliveredPayload: nil, deliveredPeerID: peerID, dropped: true, decompressed: false)
         }
-
-        guard let decoded = Self.safeDecompress(parsed.body, maxOut: maxMuxPayload) else {
-            decompressFailTotal += 1
-            addPeerCounter(peerID: peerID, field: \PeerStats.decompressFailTotal, value: 1)
-            return ReceiveSnapshot(deliveredPayload: nil, deliveredPeerID: peerID, dropped: true, decompressed: false)
-        }
-
         decompressOKTotal += 1
         markPeerActive(peerID: peerID)
         addPeerCounter(peerID: peerID, field: \PeerStats.decompressOKTotal, value: 1)
-        guard let wire = Self.buildMuxFrame(
-            chanID: parsed.chanID,
-            proto: parsed.proto,
-            counter: parsed.counter,
-            mtype: baseMType,
-            body: decoded
-        ) else {
-            decompressFailTotal += 1
-            addPeerCounter(peerID: peerID, field: \PeerStats.decompressFailTotal, value: 1)
-            return ReceiveSnapshot(deliveredPayload: nil, deliveredPeerID: peerID, dropped: true, decompressed: false)
-        }
-        return ReceiveSnapshot(deliveredPayload: wire, deliveredPeerID: peerID, dropped: false, decompressed: true)
+        return ReceiveSnapshot(deliveredPayload: result.wire, deliveredPeerID: peerID, dropped: false, decompressed: result.decompressed)
     }
 
     func handleSendPayload(_ payload: Data, peerID: Int? = nil) -> SendSnapshot {
-        guard let parsed = Self.parseMuxFrame(payload) else {
+        guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else {
             return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
         }
 
@@ -161,41 +133,32 @@ final class ObstacleBridgeCompressLayerRuntime {
         let policy = sendPolicy(peerID: statsPeerID)
         if algorithm != "zlib"
             || !peerSendEnabled(peerID: statsPeerID)
-            || parsed.mtype >= Self.compressedFlag
-            || !Self.knownBaseMTypes.contains(parsed.mtype)
-            || !policy.allowedMTypes.contains(parsed.mtype)
-            || parsed.body.count < policy.minBytes {
+            || frame.messageType >= ObstacleBridgeMuxCompression.compressedFlag
+            || !ObstacleBridgeMuxCompression.knownBaseMessageTypes.contains(frame.messageType)
+            || !policy.allowedMessageTypes.contains(frame.messageType)
+            || frame.body.count < policy.minimumBodyBytes {
             return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
         }
 
         compressAttemptsTotal += 1
-        compressInputBytesTotal += parsed.body.count
+        compressInputBytesTotal += frame.body.count
         addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressAttemptsTotal, value: 1)
-        addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressInputBytesTotal, value: parsed.body.count)
+        addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressInputBytesTotal, value: frame.body.count)
 
-        guard let compressed = Self.safeCompress(parsed.body, level: policy.level), !compressed.isEmpty, compressed.count < parsed.body.count else {
+        guard let result = try? ObstacleBridgeMuxCompression.protect(payload, policy: policy), result.compressed else {
             compressSkippedNoGainTotal += 1
-            compressOutputBytesTotal += parsed.body.count
+            compressOutputBytesTotal += frame.body.count
             addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressSkippedNoGainTotal, value: 1)
-            addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressOutputBytesTotal, value: parsed.body.count)
+            addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressOutputBytesTotal, value: frame.body.count)
             return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
         }
 
         compressAppliedTotal += 1
-        compressOutputBytesTotal += compressed.count
+        let compressedBodyBytes = result.wire.count - ObstacleBridgeChannelMuxFrameCodec.headerSize
+        compressOutputBytesTotal += compressedBodyBytes
         addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressAppliedTotal, value: 1)
-        addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressOutputBytesTotal, value: compressed.count)
-
-        guard let wire = Self.buildMuxFrame(
-            chanID: parsed.chanID,
-            proto: parsed.proto,
-            counter: parsed.counter,
-            mtype: parsed.mtype + Self.compressedFlag,
-            body: compressed
-        ) else {
-            return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
-        }
-        return SendSnapshot(wirePayload: wire, sentBytes: payload.count, compressed: true)
+        addPeerCounter(peerID: statsPeerID, field: \PeerStats.compressOutputBytesTotal, value: compressedBodyBytes)
+        return SendSnapshot(wirePayload: result.wire, sentBytes: payload.count, compressed: true)
     }
 
     func statusSnapshot(peerID: Int? = nil) -> StatusSnapshot {
@@ -270,11 +233,11 @@ final class ObstacleBridgeCompressLayerRuntime {
         return peerStats(peerID).active
     }
 
-    private func sendPolicy(peerID: Int?) -> (level: Int, minBytes: Int, allowedMTypes: Set<Int>) {
+    private func sendPolicy(peerID: Int?) -> ObstacleBridgeMuxCompressionPolicy {
         if !isPeerClient, peerID != nil, peerSendEnabled(peerID: peerID) {
-            return (peerSelectedLevel, peerSelectedMinBytes, peerSelectedAllowedMTypes)
+            return .init(enabled: true, level: peerSelectedLevel, minimumBodyBytes: peerSelectedMinBytes, allowedMessageTypes: peerSelectedAllowedMTypes)
         }
-        return (level, minBytes, allowedMTypes)
+        return .init(enabled: true, level: level, minimumBodyBytes: minBytes, allowedMessageTypes: allowedMTypes)
     }
 
     private func statsPeerIDForSend(peerID: Int?) -> Int? {
@@ -305,12 +268,12 @@ final class ObstacleBridgeCompressLayerRuntime {
         setPeerStats(stats, peerID: peerID)
     }
 
-    static func parseAllowedMTypes(_ raw: String) -> Set<Int> {
+    static func parseAllowedMTypes(_ raw: String) -> Set<UInt8> {
         var normalized = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if normalized.isEmpty {
             normalized = defaultAllowedMTypeNames
         }
-        var out: Set<Int> = []
+        var out: Set<UInt8> = []
         for token in normalized.split(separator: ",").map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) }) {
             if let value = mtypeNameToID[token] {
                 out.insert(value)
@@ -322,79 +285,4 @@ final class ObstacleBridgeCompressLayerRuntime {
         return out
     }
 
-    private static func parseMuxFrame(_ payload: Data) -> ParsedMuxFrame? {
-        guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else { return nil }
-        return ParsedMuxFrame(
-            chanID: Int(frame.channelID),
-            proto: Int(frame.protocolType),
-            counter: Int(frame.counter),
-            mtype: Int(frame.messageType),
-            body: frame.body
-        )
-    }
-
-    private static func buildMuxFrame(chanID: Int, proto: Int, counter: Int, mtype: Int, body: Data) -> Data? {
-        try? ObstacleBridgeChannelMuxFrameCodec.encode(
-            channelID: UInt16(clamping: chanID),
-            protocolType: UInt8(clamping: proto),
-            counter: UInt16(clamping: counter),
-            messageType: UInt8(clamping: mtype),
-            body: body
-        )
-    }
-
-    private static func safeCompress(_ payload: Data, level: Int) -> Data? {
-        let bound = compressBound(uLong(payload.count))
-        var output = Data(count: Int(bound))
-        var outputLength = bound
-        let result = payload.withUnsafeBytes { inputBuffer in
-            output.withUnsafeMutableBytes { outputBuffer in
-                guard
-                    let inputBase = inputBuffer.bindMemory(to: Bytef.self).baseAddress,
-                    let outputBase = outputBuffer.bindMemory(to: Bytef.self).baseAddress
-                else {
-                    return Z_BUF_ERROR
-                }
-                return compress2(outputBase, &outputLength, inputBase, uLong(payload.count), Int32(level))
-            }
-        }
-        guard result == Z_OK else {
-            return nil
-        }
-        output.count = Int(outputLength)
-        return output
-    }
-
-    private static func safeDecompress(_ payload: Data, maxOut: Int) -> Data? {
-        guard maxOut >= 0 else {
-            return nil
-        }
-        let outputCapacity = max(1, maxOut + 1)
-        var output = Data(count: outputCapacity)
-        var stream = z_stream()
-        let initResult = inflateInit_(&stream, ZLIB_VERSION, Int32(MemoryLayout<z_stream>.size))
-        guard initResult == Z_OK else {
-            return nil
-        }
-        defer { inflateEnd(&stream) }
-
-        let status = payload.withUnsafeBytes { inputBuffer in
-            output.withUnsafeMutableBytes { outputBuffer in
-                stream.next_in = UnsafeMutablePointer<Bytef>(mutating: inputBuffer.bindMemory(to: Bytef.self).baseAddress)
-                stream.avail_in = uInt(payload.count)
-                stream.next_out = outputBuffer.bindMemory(to: Bytef.self).baseAddress
-                stream.avail_out = uInt(outputCapacity)
-                return inflate(&stream, Z_FINISH)
-            }
-        }
-        guard status == Z_STREAM_END, stream.avail_in == 0 else {
-            return nil
-        }
-        let outputLength = Int(stream.total_out)
-        guard outputLength <= maxOut else {
-            return nil
-        }
-        output.count = outputLength
-        return output
-    }
 }

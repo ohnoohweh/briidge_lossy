@@ -1,4 +1,8 @@
+#if canImport(CZlib)
 import CZlib
+#elseif canImport(zlib)
+import zlib
+#endif
 import Foundation
 
 /// Portable zlib primitive shared by mux-aware compression wrappers. Platform
