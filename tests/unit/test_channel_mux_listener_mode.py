@@ -2354,6 +2354,29 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(normalized[8:24], ipaddress.IPv6Address("fd20:106::2").packed)
         self.assertEqual(normalized[24:40], ipaddress.IPv6Address("ff02::16").packed)
 
+    async def test_local_tun_packet_source_normalizes_ipv6_destination_options_udp(self):
+        self.mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address6": "fd20:106::2",
+                "shared_tun_disable_outgoing_normalization": False,
+            }
+        )
+        spec = ChannelMux.ServiceSpec(6, "tun", "obtun0", 1600, "tun", "obtun0", 1600)
+        svc_key = ("local", 0, 6)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        packet = bytearray(b"\x60\x00\x00\x00\x00\x1c\x3c\x40")
+        packet += ipaddress.IPv6Address("fe80::5982:73cb:ba81:e36c").packed
+        packet += ipaddress.IPv6Address("2606:4700:4700::1111").packed
+        packet += b"\x11\x00\x00\x00\x00\x00\x00\x00"  # Destination Options -> UDP
+        packet += b"\x00\x01\x00\x02\x00\x14\x00\x00" + (b"\xa5" * 12)
+        self.mux._local_services[svc_key] = spec
+
+        normalized = self.mux._normalize_local_tun_packet_source(dev, bytes(packet))
+
+        self.assertEqual(normalized[8:24], ipaddress.IPv6Address("fd20:106::2").packed)
+        pseudo = normalized[8:24] + normalized[24:40] + (20).to_bytes(4, "big") + b"\x00\x00\x00\x11"
+        self.assertEqual(ChannelMux._checksum16(pseudo + normalized[48:68]), 0)
+
     async def test_local_tun_packet_source_normalization_can_be_disabled(self):
         self.mux.args = argparse.Namespace(
             TUN_routing={

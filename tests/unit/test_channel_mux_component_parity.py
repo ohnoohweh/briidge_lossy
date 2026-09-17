@@ -13,7 +13,12 @@ from tests.unit.test_channel_mux_listener_mode import _FakeSession, _ipv4_packet
 from tests.unit.test_channel_mux_swift_parity import (
     ROOT,
     SWIFT_CODEC_SOURCE,
+    SWIFT_BINARY_CODEC_SOURCE,
     SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE,
+    SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE,
+    SWIFT_CONTROL_CHUNK_CODEC_SOURCE,
+    SWIFT_PACKET_MODEL_SOURCE,
+    SWIFT_SERVICE_CODEC_SOURCE,
     _python_channelmux_inbound_tun_fragment_sequence_summary,
     _python_channelmux_local_tun_packet_summary,
     _python_channelmux_tun_close_then_local_packet_summary,
@@ -36,7 +41,12 @@ def swift_channelmux_component_runner(tmp_path_factory: pytest.TempPathFactory) 
         "-o",
         str(binary),
         str(SWIFT_CODEC_SOURCE),
+        str(SWIFT_BINARY_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE),
+        str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
+        str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
+        str(SWIFT_PACKET_MODEL_SOURCE),
+        str(SWIFT_SERVICE_CODEC_SOURCE),
         str(SWIFT_COMPONENT_RUNNER_SOURCE),
     ]
     completed = subprocess.run(command, check=False, capture_output=True, text=True)
@@ -427,6 +437,30 @@ def test_swift_component_normalizes_local_shared_tun_ipv6_source(
     normalized = bytes.fromhex(swift["normalized_packet_hex"])
     assert normalized[8:24] == bytes.fromhex("fd200106000000000000000000000003")
     assert normalized[24:40] == bytes.fromhex("26064700470000000000000000001111")
+
+
+def test_swift_component_normalizes_ipv6_destination_options_udp_like_python(
+    swift_channelmux_component_runner: Path,
+) -> None:
+    packet = (
+        b"\x60\x00\x00\x00\x00\x1c\x3c\x40"
+        + bytes.fromhex("fe80000000000000598273cbba81e36c")
+        + bytes.fromhex("26064700470000000000000000001111")
+        + b"\x11\x00\x00\x00\x00\x00\x00\x00"
+        + b"\x00\x01\x00\x02\x00\x14\x00\x00" + (b"\xa5" * 12)
+    )
+    python = ChannelMux._rewrite_ipv6_source(packet, "fd20:106::3")
+    swift = _run_swift_component(
+        swift_channelmux_component_runner,
+        {
+            "action": "normalize_local_tun_packet_source",
+            "packet_hex": packet.hex(),
+            "instance_id": 0x1122334455667788,
+            "connection_seq": 0x10203040,
+            "local_tunnel_address6": "fd20:106::3",
+        },
+    )
+    assert bytes.fromhex(swift["normalized_packet_hex"]) == python
 
 
 def test_swift_component_can_disable_local_shared_tun_normalization(

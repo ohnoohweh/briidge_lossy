@@ -30,6 +30,11 @@ struct ObstacleBridgeServiceCatalogTests {
         #expect(replacement.removed == [first])
         #expect(replacement.installed == [second])
         #expect(store.withdraw().removed == [second])
+
+        let reconnected = try store.install(instanceID: 7, connectionSequence: 2, services: [second])
+        #expect(reconnected.accepted)
+        #expect(reconnected.removed.isEmpty)
+        #expect(reconnected.installed == [second])
     }
 
     @Test func catalogValidationIsPortable() {

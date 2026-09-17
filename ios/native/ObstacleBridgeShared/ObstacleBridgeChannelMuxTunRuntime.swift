@@ -133,17 +133,6 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var boundChanIDs: [Int]
     }
 
-    private struct FragmentKey: Hashable {
-        var chanID: Int
-        var datagramID: Int
-    }
-
-    private struct FragmentState {
-        var totalLen: Int
-        var parts: [Int: Data]
-        var receivedBytes: Int
-    }
-
     private struct TunInflowScopeState {
         var windowStartNS: UInt64?
         var previousBytes: Int
@@ -174,9 +163,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     private var nextFragmentDatagramID: UInt32
     private var controlChunkNextTxID: UInt32
     private var counters: [Int: Int]
-    private var boundTunChanIDs: Set<Int>
-    private var preferredTunChanID: Int?
-    private var fragmentStates: [FragmentKey: FragmentState]
+    private let channelState: ObstacleBridgeTunChannelState
+    private let packetReassembler: ObstacleBridgePacketReassembler
     private var tunInflowScopeStates: [String: TunInflowScopeState]
     private var sharedTunScopeMetadata: [String: SharedTunScopeMetadata]
     private var sharedTunRuntimeByPeer: [Int: SharedTunPeerBindingState]
@@ -225,9 +213,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.nextFragmentDatagramID = 1
         self.controlChunkNextTxID = 1
         self.counters = [:]
-        self.boundTunChanIDs = []
-        self.preferredTunChanID = nil
-        self.fragmentStates = [:]
+        self.channelState = ObstacleBridgeTunChannelState()
+        self.packetReassembler = ObstacleBridgePacketReassembler()
         self.tunInflowScopeStates = [:]
         self.sharedTunScopeMetadata = [:]
         self.sharedTunRuntimeByPeer = [:]
@@ -429,15 +416,14 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     /// Drop channel state that belongs to the previous overlay transport epoch.
     ///
     /// A peer restart loses its ChannelMux channel table even when the local
-    /// tunnel interface remains open.  Retaining `preferredTunChanID` would
+    /// tunnel interface remains open. Retaining its preferred channel would
     /// make the next local packet send DATA on that stale channel without a
     /// replacement OPEN.
     func resetTransportEpoch() {
         connectionSeq &+= 1
         counters.removeAll(keepingCapacity: true)
-        boundTunChanIDs.removeAll(keepingCapacity: true)
-        preferredTunChanID = nil
-        fragmentStates.removeAll(keepingCapacity: true)
+        channelState.reset()
+        packetReassembler.reset()
         controlChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
         sharedTunRuntimeByPeer.removeAll(keepingCapacity: true)
         sharedTunPeerRefByPeer.removeAll(keepingCapacity: true)
@@ -458,15 +444,14 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     func openLocalTunChannelIfNeeded(
         spec: ObstacleBridgeChannelMuxCodec.ServiceSpec
     ) throws -> LocalTunOpenSnapshot? {
-        guard preferredTunChanID == nil else {
+        guard channelState.preferredChannel == nil else {
             return nil
         }
         let chanID = allocateTunID()
         guard let frames = try buildOpenFrames(chanID: chanID, spec: spec) else {
             return nil
         }
-        boundTunChanIDs.insert(chanID)
-        preferredTunChanID = chanID
+        channelState.bind(chanID)
         return LocalTunOpenSnapshot(
             chanID: chanID,
             frames: frames,
@@ -499,7 +484,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         let normalizedPacket = normalizedLocalPacketForTunnel(packet: packet)
 
         var frames: [Data] = []
-        let preferredChanID = existingChanID ?? preferredTunChanID
+        let preferredChanID = existingChanID ?? channelState.preferredChannel
         let allocatedChannel = preferredChanID == nil
         let chanID = preferredChanID ?? allocateTunID()
         if allocatedChannel {
@@ -508,10 +493,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             }
             frames.append(contentsOf: openFrames)
         }
-        boundTunChanIDs.insert(chanID)
-        if preferredTunChanID == nil {
-            preferredTunChanID = chanID
-        }
+        channelState.bind(chanID)
 
         guard let dataFrames = try buildDataFrames(chanID: chanID, packet: normalizedPacket) else {
             return nil
@@ -852,7 +834,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return InboundTunOpenSnapshot(
                 accepted: false,
                 chanID: chanID,
-                preferredChanID: preferredTunChanID,
+                preferredChanID: channelState.preferredChannel,
                 remoteSpec: nil
             )
         }
@@ -861,18 +843,15 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return InboundTunOpenSnapshot(
                 accepted: false,
                 chanID: chanID,
-                preferredChanID: preferredTunChanID,
+                preferredChanID: channelState.preferredChannel,
                 remoteSpec: parsed.spec
             )
         }
-        boundTunChanIDs.insert(chanID)
-        if preferredTunChanID == nil {
-            preferredTunChanID = chanID
-        }
+        channelState.bind(chanID)
         return InboundTunOpenSnapshot(
             accepted: true,
             chanID: chanID,
-            preferredChanID: preferredTunChanID,
+            preferredChanID: channelState.preferredChannel,
             remoteSpec: parsed.spec
         )
     }
@@ -968,7 +947,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
                 assembled: false,
                 accepted: false,
                 chanID: chanID,
-                preferredChanID: preferredTunChanID,
+                preferredChanID: channelState.preferredChannel,
                 remoteSpec: nil
             )
         }
@@ -992,7 +971,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         if let boundChanID {
             isBound = boundChanID == chanID
         } else {
-            isBound = boundTunChanIDs.contains(chanID)
+            isBound = channelState.isBound(chanID)
         }
         guard isBound, body.count <= mtu else {
             return InboundTunDataSnapshot(delivered: false, packet: nil)
@@ -1304,48 +1283,14 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         initialBindings: [SharedTunPeerBindingState],
         operations: [(peerID: Int, chanID: Int, drop: Bool)]
     ) -> [SharedTunPeerBindingState] {
-        var states: [Int: SharedTunPeerBindingState] = [:]
-        for binding in initialBindings {
-            let uniqueBound = Array(Set(binding.boundChanIDs)).sorted()
-            let preferredChanID = uniqueBound.contains(binding.preferredChanID ?? -1)
-                ? binding.preferredChanID
-                : uniqueBound.first
-            states[binding.peerID] = SharedTunPeerBindingState(
-                peerID: binding.peerID,
-                preferredChanID: preferredChanID,
-                boundChanIDs: uniqueBound
-            )
+        ObstacleBridgeTunPeerBindingPolicy.apply(
+            initialBindings: initialBindings.map {
+                .init(peerID: $0.peerID, preferredChannelID: $0.preferredChanID, channelIDs: $0.boundChanIDs)
+            },
+            operations: operations.map { (peerID: $0.peerID, channelID: $0.chanID, drop: $0.drop) }
+        ).map {
+            .init(peerID: $0.peerID, preferredChanID: $0.preferredChannelID, boundChanIDs: $0.channelIDs)
         }
-        for operation in operations {
-            if operation.drop {
-                guard var state = states[operation.peerID] else {
-                    continue
-                }
-                let remaining = state.boundChanIDs.filter { $0 != operation.chanID }
-                if remaining.isEmpty {
-                    states.removeValue(forKey: operation.peerID)
-                    continue
-                }
-                state.boundChanIDs = remaining
-                if !remaining.contains(state.preferredChanID ?? -1) {
-                    state.preferredChanID = remaining.first
-                }
-                states[operation.peerID] = state
-                continue
-            }
-            var state = states[operation.peerID] ?? SharedTunPeerBindingState(
-                peerID: operation.peerID,
-                preferredChanID: nil,
-                boundChanIDs: []
-            )
-            let merged = Array(Set(state.boundChanIDs + [operation.chanID])).sorted()
-            state.boundChanIDs = merged
-            if state.preferredChanID == nil || !merged.contains(state.preferredChanID ?? -1) {
-                state.preferredChanID = merged.first
-            }
-            states[operation.peerID] = state
-        }
-        return states.values.sorted { lhs, rhs in lhs.peerID < rhs.peerID }
     }
 
     static func cleanupSharedTunPeerStateOnDisconnect(
@@ -1354,20 +1299,20 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         peerIDByRef: [String: Int],
         disconnectedPeerID: Int
     ) -> SharedTunDisconnectCleanupSnapshot {
-        let remainingBindings = activePeerBindings
-            .filter { $0.peerID != disconnectedPeerID }
-            .sorted { lhs, rhs in lhs.peerID < rhs.peerID }
-        let remainingPeerRefByPeer = peerRefByPeer.filter { $0.key != disconnectedPeerID }
-        var remainingPeerIDByRef = peerIDByRef
-        for (peerID, peerRef) in peerRefByPeer where peerID == disconnectedPeerID {
-            if remainingPeerIDByRef[peerRef] == disconnectedPeerID {
-                remainingPeerIDByRef.removeValue(forKey: peerRef)
-            }
-        }
+        let cleanup = ObstacleBridgeTunPeerBindingPolicy.cleanup(
+            bindings: activePeerBindings.map {
+                .init(peerID: $0.peerID, preferredChannelID: $0.preferredChanID, channelIDs: $0.boundChanIDs)
+            },
+            peerReferenceByID: peerRefByPeer,
+            peerIDByReference: peerIDByRef,
+            disconnectedPeerID: disconnectedPeerID
+        )
         return SharedTunDisconnectCleanupSnapshot(
-            activePeerBindings: remainingBindings,
-            peerRefByPeer: remainingPeerRefByPeer,
-            peerIDByRef: remainingPeerIDByRef
+            activePeerBindings: cleanup.bindings.map {
+                .init(peerID: $0.peerID, preferredChanID: $0.preferredChannelID, boundChanIDs: $0.channelIDs)
+            },
+            peerRefByPeer: cleanup.peerReferenceByID,
+            peerIDByRef: cleanup.peerIDByReference
         )
     }
 
@@ -1388,120 +1333,49 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         if let boundChanID {
             isBound = boundChanID == chanID
         } else {
-            isBound = boundTunChanIDs.contains(chanID)
+            isBound = channelState.isBound(chanID)
         }
         guard isBound else {
             return empty
         }
-        guard payload.count >= Self.tunFragmentHeaderSize else {
-            return empty
-        }
-        let datagramID = Self.readUInt32(payload, offset: 0)
-        let totalLen = Int(Self.readUInt16(payload, offset: 4))
-        let offset = Int(Self.readUInt16(payload, offset: 6))
-        let chunk = payload.subdata(in: Self.tunFragmentHeaderSize..<payload.count)
-        let key = FragmentKey(chanID: chanID, datagramID: Int(datagramID))
-        guard totalLen > 0, totalLen <= mtu else {
-            fragmentStates.removeValue(forKey: key)
-            return InboundTunFragmentSnapshot(
+        guard let fragment = try? ObstacleBridgePacketFragment(wire: payload),
+              fragment.totalLength <= UInt16(clamping: mtu),
+              let coreChannelID = UInt16(exactly: chanID) else { return empty }
+        let datagramID = Int(fragment.datagramID)
+        let totalLen = Int(fragment.totalLength)
+        switch packetReassembler.consume(channelID: coreChannelID, wire: payload) {
+        case .pending:
+            return .init(
                 delivered: false,
                 packet: nil,
-                datagramID: Int(datagramID),
+                datagramID: datagramID,
                 totalLen: totalLen,
-                receivedBytes: 0
+                receivedBytes: packetReassembler.receivedBytes(channelID: coreChannelID, datagramID: fragment.datagramID)
             )
-        }
-        guard offset <= totalLen, (offset + chunk.count) <= totalLen, !chunk.isEmpty else {
-            return InboundTunFragmentSnapshot(
-                delivered: false,
-                packet: nil,
-                datagramID: Int(datagramID),
+        case .complete(let assembled):
+            let dataSnapshot = handleInboundTunData(chanID: chanID, body: assembled, mtu: mtu, boundChanID: boundChanID)
+            return .init(
+                delivered: dataSnapshot.delivered,
+                packet: dataSnapshot.packet,
+                datagramID: datagramID,
                 totalLen: totalLen,
-                receivedBytes: fragmentStates[key]?.receivedBytes ?? 0
+                receivedBytes: totalLen
             )
+        case .rejected:
+            return .init(delivered: false, packet: nil, datagramID: datagramID, totalLen: totalLen, receivedBytes: 0)
         }
-        var state = fragmentStates[key] ?? FragmentState(totalLen: totalLen, parts: [:], receivedBytes: 0)
-        if state.totalLen != totalLen {
-            fragmentStates.removeValue(forKey: key)
-            return InboundTunFragmentSnapshot(
-                delivered: false,
-                packet: nil,
-                datagramID: Int(datagramID),
-                totalLen: totalLen,
-                receivedBytes: 0
-            )
-        }
-        if state.parts[offset] == nil {
-            state.parts[offset] = chunk
-            state.receivedBytes += chunk.count
-        }
-        fragmentStates[key] = state
-        guard state.receivedBytes >= totalLen else {
-            return InboundTunFragmentSnapshot(
-                delivered: false,
-                packet: nil,
-                datagramID: Int(datagramID),
-                totalLen: totalLen,
-                receivedBytes: state.receivedBytes
-            )
-        }
-        var assembled = Data(count: totalLen)
-        var cursor = 0
-        for partOffset in state.parts.keys.sorted() {
-            guard let part = state.parts[partOffset], partOffset == cursor else {
-                return InboundTunFragmentSnapshot(
-                    delivered: false,
-                    packet: nil,
-                    datagramID: Int(datagramID),
-                    totalLen: totalLen,
-                    receivedBytes: state.receivedBytes
-                )
-            }
-            let nextCursor = partOffset + part.count
-            guard nextCursor <= totalLen else {
-                fragmentStates.removeValue(forKey: key)
-                return InboundTunFragmentSnapshot(
-                    delivered: false,
-                    packet: nil,
-                    datagramID: Int(datagramID),
-                    totalLen: totalLen,
-                    receivedBytes: state.receivedBytes
-                )
-            }
-            assembled.replaceSubrange(partOffset..<nextCursor, with: part)
-            cursor = nextCursor
-        }
-        guard cursor == totalLen else {
-            return InboundTunFragmentSnapshot(
-                delivered: false,
-                packet: nil,
-                datagramID: Int(datagramID),
-                totalLen: totalLen,
-                receivedBytes: state.receivedBytes
-            )
-        }
-        fragmentStates.removeValue(forKey: key)
-        let dataSnapshot = handleInboundTunData(chanID: chanID, body: assembled, mtu: mtu, boundChanID: boundChanID)
-        return InboundTunFragmentSnapshot(
-            delivered: dataSnapshot.delivered,
-            packet: dataSnapshot.packet,
-            datagramID: Int(datagramID),
-            totalLen: totalLen,
-            receivedBytes: state.receivedBytes
-        )
     }
 
     func handleInboundTunClose(chanID: Int) -> CloseSnapshot {
-        let closed = boundTunChanIDs.remove(chanID) != nil
-        fragmentStates = fragmentStates.filter { $0.key.chanID != chanID }
-        if preferredTunChanID == chanID {
-            preferredTunChanID = boundTunChanIDs.sorted().first
+        let closed = channelState.close(chanID)
+        if let coreChannelID = UInt16(exactly: chanID) {
+            packetReassembler.withdraw(channelID: coreChannelID)
         }
         return CloseSnapshot(
             closed: closed,
             chanID: chanID,
-            preferredChanID: preferredTunChanID,
-            boundChanIDs: boundTunChanIDs.sorted()
+            preferredChanID: channelState.preferredChannel,
+            boundChanIDs: channelState.channels
         )
     }
 
@@ -1585,26 +1459,20 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             return nil
         }
         let datagramID = nextTunFragmentDatagramID()
-        var frames: [Data] = []
-        for offset in stride(from: 0, to: packet.count, by: fragmentPayloadLimit) {
-            let end = min(offset + fragmentPayloadLimit, packet.count)
-            let part = packet.subdata(in: offset..<end)
-            var body = Data()
-            body.appendUInt32(datagramID)
-            body.appendUInt16(UInt16(packet.count & 0xFFFF))
-            body.appendUInt16(UInt16(offset & 0xFFFF))
-            body.append(part)
-            frames.append(
-                try ObstacleBridgeChannelMuxCodec.packMux(
-                    chanID: chanID,
-                    proto: .tun,
-                    counter: nextCounter(chanID: chanID, mtype: .dataFrag),
-                    mtype: .dataFrag,
-                    body: body
-                )
+        let fragments = try ObstacleBridgePacketFragment.fragment(
+            packet,
+            datagramID: datagramID,
+            maximumPayload: fragmentPayloadLimit
+        )
+        return try fragments.map { fragment in
+            try ObstacleBridgeChannelMuxCodec.packMux(
+                chanID: chanID,
+                proto: .tun,
+                counter: nextCounter(chanID: chanID, mtype: .dataFrag),
+                mtype: .dataFrag,
+                body: fragment.wire
             )
         }
-        return frames
     }
 
     private func nextTunFragmentDatagramID() -> UInt32 {
@@ -1616,70 +1484,40 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         return datagramID
     }
 
-    private static func readUInt16(_ data: Data, offset: Int) -> UInt16 {
-        let bytes = [UInt8](data[offset..<(offset + 2)])
-        return (UInt16(bytes[0]) << 8) | UInt16(bytes[1])
-    }
-
-    private static func readUInt32(_ data: Data, offset: Int) -> UInt32 {
-        let bytes = [UInt8](data[offset..<(offset + 4)])
-        return
-            (UInt32(bytes[0]) << 24) |
-            (UInt32(bytes[1]) << 16) |
-            (UInt32(bytes[2]) << 8) |
-            UInt32(bytes[3])
-    }
-
     private static func parsePacketDropReason(_ packet: Data) -> String {
-        guard !packet.isEmpty else {
-            return "empty"
-        }
-        let version = Int((packet[packet.startIndex] >> 4) & 0x0F)
-        switch version {
-        case 4:
-            if packet.count < 20 {
-                return "ipv4_too_short"
-            }
-            let ihl = Int(packet[packet.startIndex] & 0x0F) * 4
-            if ihl < 20 || packet.count < ihl {
-                return "ipv4_header_truncated"
-            }
+        do {
+            _ = try ObstacleBridgeIPPacket.parse(packet)
             return "unknown"
-        case 6:
-            return packet.count < 40 ? "ipv6_too_short" : "unknown"
-        default:
+        } catch ObstacleBridgePacketModelError.emptyPacket {
+            return "empty"
+        } catch ObstacleBridgePacketModelError.malformedIPv4 {
+            return packet.count < 20 ? "ipv4_too_short" : "ipv4_header_truncated"
+        } catch ObstacleBridgePacketModelError.malformedIPv6 {
+            return "ipv6_too_short"
+        } catch ObstacleBridgePacketModelError.unsupportedVersion {
             return "unsupported_ip_version"
+        } catch {
+            return "unknown"
         }
     }
 
     private static func parsePacketEndpoints(_ packet: Data) -> (ipVersion: Int, sourceIP: String, destinationIP: String)? {
-        guard !packet.isEmpty else {
+        guard let parsed = try? ObstacleBridgeIPPacket.parse(packet) else {
             return nil
         }
-        let version = Int((packet[packet.startIndex] >> 4) & 0x0F)
-        switch version {
-        case 4:
-            guard packet.count >= 20 else {
-                return nil
-            }
-            let ihl = Int(packet[packet.startIndex] & 0x0F) * 4
-            guard ihl >= 20, packet.count >= ihl else {
-                return nil
-            }
-            let source = packet.subdata(in: 12..<16).map(String.init).joined(separator: ".")
-            let destination = packet.subdata(in: 16..<20).map(String.init).joined(separator: ".")
-            return (4, source, destination)
-        case 6:
-            guard packet.count >= 40 else {
-                return nil
-            }
+        switch parsed.version {
+        case .ipv4:
             return (
-                6,
-                ipv6String(from: packet.subdata(in: 8..<24)),
-                ipv6String(from: packet.subdata(in: 24..<40))
+                Int(ObstacleBridgeIPVersion.ipv4.rawValue),
+                parsed.sourceAddress.map(String.init).joined(separator: "."),
+                parsed.destinationAddress.map(String.init).joined(separator: ".")
             )
-        default:
-            return nil
+        case .ipv6:
+            return (
+                Int(ObstacleBridgeIPVersion.ipv6.rawValue),
+                ipv6String(from: parsed.sourceAddress),
+                ipv6String(from: parsed.destinationAddress)
+            )
         }
     }
 
@@ -1719,81 +1557,25 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private static func normalizeLocalPacketSource(_ packet: Data, ipv4Source: String?, ipv6Source: String?) -> Data? {
-        guard !packet.isEmpty else { return nil }
-        let version = Int((packet[packet.startIndex] >> 4) & 0x0F)
-        switch version {
-        case 4:
+        guard let parsed = try? ObstacleBridgeIPPacket.parse(packet) else { return nil }
+        switch parsed.version {
+        case .ipv4:
             guard let ipv4Source else { return nil }
             return normalizeIPv4PacketSource(packet, sourceIP: ipv4Source)
-        case 6:
+        case .ipv6:
             guard let ipv6Source else { return nil }
             return normalizeIPv6PacketSource(packet, sourceIP: ipv6Source)
-        default:
-            return nil
         }
     }
 
     private static func normalizeIPv4PacketSource(_ packet: Data, sourceIP: String) -> Data? {
-        guard packet.count >= 20 else { return nil }
-        let ihl = Int(packet[packet.startIndex] & 0x0F) * 4
-        guard ihl >= 20, packet.count >= ihl else { return nil }
         guard let sourceBytes = ipv4Bytes(sourceIP) else { return nil }
-        if Array(packet[12..<16]) == sourceBytes {
-            return packet
-        }
-        var bytes = [UInt8](packet)
-        for (index, value) in sourceBytes.enumerated() {
-            bytes[12 + index] = value
-        }
-        bytes[10] = 0
-        bytes[11] = 0
-        let headerChecksum = internetChecksum(bytes, start: 0, count: ihl)
-        bytes[10] = UInt8((headerChecksum >> 8) & 0xFF)
-        bytes[11] = UInt8(headerChecksum & 0xFF)
-
-        let protocolNumber = bytes[9]
-        switch protocolNumber {
-        case 1:
-            let payloadStart = ihl
-            guard bytes.count >= payloadStart + 4 else { break }
-            bytes[payloadStart + 2] = 0
-            bytes[payloadStart + 3] = 0
-            let checksum = internetChecksum(bytes, start: payloadStart, count: bytes.count - payloadStart)
-            bytes[payloadStart + 2] = UInt8((checksum >> 8) & 0xFF)
-            bytes[payloadStart + 3] = UInt8(checksum & 0xFF)
-        case 6:
-            recomputeIPv4TransportChecksum(&bytes, headerLength: ihl, checksumOffset: 16, protocolNumber: protocolNumber)
-        case 17:
-            recomputeIPv4TransportChecksum(&bytes, headerLength: ihl, checksumOffset: 6, protocolNumber: protocolNumber, zeroMeansFFFF: true)
-        default:
-            break
-        }
-        return Data(bytes)
+        return try? ObstacleBridgeIPPacket.replacingSourceAndRepairingChecksums(in: packet, with: Data(sourceBytes))
     }
 
     private static func normalizeIPv6PacketSource(_ packet: Data, sourceIP: String) -> Data? {
-        guard packet.count >= 40 else { return nil }
         guard let sourceBytes = ipv6Bytes(sourceIP) else { return nil }
-        if Array(packet[8..<24]) == sourceBytes {
-            return packet
-        }
-        var bytes = [UInt8](packet)
-        for (index, value) in sourceBytes.enumerated() {
-            bytes[8 + index] = value
-        }
-        let nextHeader = bytes[6]
-        let payloadStart = 40
-        switch nextHeader {
-        case 6:
-            recomputeIPv6TransportChecksum(&bytes, payloadStart: payloadStart, checksumOffset: 16, nextHeader: nextHeader)
-        case 17:
-            recomputeIPv6TransportChecksum(&bytes, payloadStart: payloadStart, checksumOffset: 6, nextHeader: nextHeader, zeroMeansFFFF: true)
-        case 58:
-            recomputeIPv6TransportChecksum(&bytes, payloadStart: payloadStart, checksumOffset: 2, nextHeader: nextHeader)
-        default:
-            break
-        }
-        return Data(bytes)
+        return try? ObstacleBridgeIPPacket.replacingSourceAndRepairingChecksums(in: packet, with: Data(sourceBytes))
     }
 
     private static func ipv4Bytes(_ address: String) -> [UInt8]? {
@@ -1810,81 +1592,4 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         return withUnsafeBytes(of: &storage) { Array($0) }
     }
 
-    private static func recomputeIPv4TransportChecksum(
-        _ bytes: inout [UInt8],
-        headerLength: Int,
-        checksumOffset: Int,
-        protocolNumber: UInt8,
-        zeroMeansFFFF: Bool = false
-    ) {
-        let payloadLength = bytes.count - headerLength
-        guard payloadLength > checksumOffset + 1 else { return }
-        let checksumIndex = headerLength + checksumOffset
-        bytes[checksumIndex] = 0
-        bytes[checksumIndex + 1] = 0
-        var pseudoHeader = [UInt8]()
-        pseudoHeader.append(contentsOf: bytes[12..<16])
-        pseudoHeader.append(contentsOf: bytes[16..<20])
-        pseudoHeader.append(0)
-        pseudoHeader.append(protocolNumber)
-        pseudoHeader.append(UInt8((payloadLength >> 8) & 0xFF))
-        pseudoHeader.append(UInt8(payloadLength & 0xFF))
-        pseudoHeader.append(contentsOf: bytes[headerLength...])
-        var checksum = internetChecksum(pseudoHeader, start: 0, count: pseudoHeader.count)
-        if zeroMeansFFFF && checksum == 0 {
-            checksum = 0xFFFF
-        }
-        bytes[checksumIndex] = UInt8((checksum >> 8) & 0xFF)
-        bytes[checksumIndex + 1] = UInt8(checksum & 0xFF)
-    }
-
-    private static func recomputeIPv6TransportChecksum(
-        _ bytes: inout [UInt8],
-        payloadStart: Int,
-        checksumOffset: Int,
-        nextHeader: UInt8,
-        zeroMeansFFFF: Bool = false
-    ) {
-        let payloadLength = bytes.count - payloadStart
-        guard payloadLength > checksumOffset + 1 else { return }
-        let checksumIndex = payloadStart + checksumOffset
-        bytes[checksumIndex] = 0
-        bytes[checksumIndex + 1] = 0
-        var pseudoHeader = [UInt8]()
-        pseudoHeader.append(contentsOf: bytes[8..<24])
-        pseudoHeader.append(contentsOf: bytes[24..<40])
-        pseudoHeader.append(UInt8((payloadLength >> 24) & 0xFF))
-        pseudoHeader.append(UInt8((payloadLength >> 16) & 0xFF))
-        pseudoHeader.append(UInt8((payloadLength >> 8) & 0xFF))
-        pseudoHeader.append(UInt8(payloadLength & 0xFF))
-        pseudoHeader.append(0)
-        pseudoHeader.append(0)
-        pseudoHeader.append(0)
-        pseudoHeader.append(nextHeader)
-        pseudoHeader.append(contentsOf: bytes[payloadStart...])
-        var checksum = internetChecksum(pseudoHeader, start: 0, count: pseudoHeader.count)
-        if zeroMeansFFFF && checksum == 0 {
-            checksum = 0xFFFF
-        }
-        bytes[checksumIndex] = UInt8((checksum >> 8) & 0xFF)
-        bytes[checksumIndex + 1] = UInt8(checksum & 0xFF)
-    }
-
-    private static func internetChecksum(_ bytes: [UInt8], start: Int, count: Int) -> UInt16 {
-        var sum: UInt32 = 0
-        var index = start
-        let end = start + count
-        while index + 1 < end {
-            let word = (UInt32(bytes[index]) << 8) | UInt32(bytes[index + 1])
-            sum &+= word
-            index += 2
-        }
-        if index < end {
-            sum &+= UInt32(bytes[index]) << 8
-        }
-        while (sum >> 16) != 0 {
-            sum = (sum & 0xFFFF) &+ (sum >> 16)
-        }
-        return UInt16(~sum & 0xFFFF)
-    }
 }

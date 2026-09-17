@@ -6,6 +6,7 @@ import Darwin
 final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
@@ -27,6 +28,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
+    private let serviceCatalogSink: ServiceCatalogSink?
     private let serviceNameByID: [Int: String]
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
@@ -42,6 +44,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let muxConnectionSeq: UInt32
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
+    private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private var websocketSession: URLSession?
     private var websocketTask: URLSessionWebSocketTask?
@@ -138,7 +141,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
-        eventSink: EventSink? = nil
+        eventSink: EventSink? = nil,
+        serviceCatalogSink: ServiceCatalogSink? = nil
     ) {
         self.peerHost = peerHost
         self.peerAddresses = peerAddresses
@@ -170,6 +174,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.serviceCatalogSink = serviceCatalogSink
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
@@ -985,6 +990,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func resetOverlayTransportEpoch(notifyCore: Bool = true) {
+        withdrawRemoteServiceCatalog()
         if notifyCore { overlayLayerTransportAdapter?.handleTransportDisconnected() }
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
@@ -1000,6 +1006,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         lastPeerPingTxNS = 0
         lastRttOkNS = 0
         rttEstMS = nil
+    }
+
+    private func withdrawRemoteServiceCatalog() {
+        serviceCatalogSink?(serviceCatalog.withdraw())
     }
 
     private func updateLowerLayerFallback() {
@@ -1433,6 +1443,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
             return
         }
+        if let install = serviceCatalog.receive(frame) {
+            serviceCatalogSink?(install)
+            return
+        }
         switch frame.proto {
         case .tun:
             handleInboundTunMuxFrame(frame)
@@ -1457,7 +1471,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .dataFrag:
-                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body)
+                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
@@ -1476,9 +1490,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
         switch frame.mtype {
         case .open:
-            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body)
+            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
         case .data:
-            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body)
+            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1486,7 +1500,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
             }
         case .dataFrag:
-            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body)
+            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1494,7 +1508,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
             }
         case .close:
-            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID)
+            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 closeUDPClientConnection(chanID: frame.chanID)
             }
@@ -1546,11 +1560,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         )
     }
 
-    private func handleInboundUDPClientOpen(chanID: Int, payload: Data) {
+    private func handleInboundUDPClientOpen(chanID: Int, payload: Data, counter: Int) {
         guard let parsed = ObstacleBridgeChannelMuxCodec.parseOpenPayload(payload) else {
             return
         }
-        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload)
+        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
         guard snapshot.accepted else {
             return
         }

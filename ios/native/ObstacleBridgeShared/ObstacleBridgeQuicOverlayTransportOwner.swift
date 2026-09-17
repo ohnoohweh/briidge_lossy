@@ -5,6 +5,7 @@ import Network
 final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
@@ -33,6 +34,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
+    private let serviceCatalogSink: ServiceCatalogSink?
     private let serviceNameByID: [Int: String]
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
@@ -47,6 +49,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
     private var overlayConnection: NWConnection?
+    private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var overlayConnected = false
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
@@ -131,7 +134,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
-        eventSink: EventSink? = nil
+        eventSink: EventSink? = nil,
+        serviceCatalogSink: ServiceCatalogSink? = nil
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
@@ -148,6 +152,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.eventSink = eventSink
+        self.serviceCatalogSink = serviceCatalogSink
         self.serviceNameByID = serviceNameByID
         self.tunServiceSpec = tunServiceSpec
         self.tunIfname = tunIfname?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -199,6 +204,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     func stop() {
         guard started else { return }
         started = false
+        withdrawRemoteServiceCatalog()
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         tunRuntime?.resetTransportEpoch()
         overlayConnected = false
@@ -591,6 +597,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func handleDisconnected(schedule: Bool) {
+        withdrawRemoteServiceCatalog()
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
@@ -612,6 +619,10 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         if schedule, overlayLayerTransportAdapter == nil {
             scheduleReconnect()
         }
+    }
+
+    private func withdrawRemoteServiceCatalog() {
+        serviceCatalogSink?(serviceCatalog.withdraw())
     }
 
     private func startSecureLinkDueTimer() {
@@ -747,6 +758,10 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private func handleInboundMuxPayload(_ payload: Data) {
         guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
             eventSink?("quic_overlay_invalid_mux_frame", ["bytes": payload.count])
+            return
+        }
+        if let install = serviceCatalog.receive(frame) {
+            serviceCatalogSink?(install)
             return
         }
         if frame.proto == .tun {

@@ -5,6 +5,7 @@ import Darwin
 final class ObstacleBridgeUdpOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
 
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
@@ -28,6 +29,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let maxInFlight: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
+    private let serviceCatalogSink: ServiceCatalogSink?
     private let serviceNameByID: [Int: String]
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
@@ -43,6 +45,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private let muxConnectionSeq: UInt32
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
+    private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private let overlayRuntime: ObstacleBridgeUdpOverlayPeerRuntime
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private lazy var tcpTransportOwner = ObstacleBridgeChannelMuxTCPTransportOwner(
@@ -126,7 +129,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
-        eventSink: EventSink? = nil
+        eventSink: EventSink? = nil,
+        serviceCatalogSink: ServiceCatalogSink? = nil
     ) {
         self.bindHost = bindHost
         self.bindPort = bindPort
@@ -154,6 +158,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.serviceCatalogSink = serviceCatalogSink
         self.overlayRuntime = ObstacleBridgeUdpOverlayPeerRuntime(maxInFlight: self.maxInFlight)
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
@@ -247,6 +252,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 currentPeerSelectedAtNS = monotonicNowNS()
                 sendInitialIdleProbe()
             case .cancelTransport:
+                withdrawRemoteServiceCatalog()
                 overlayRuntime.resetTransportEpoch()
                 tunRuntime?.resetTransportEpoch()
                 secureLinkHandshakePrimed = false
@@ -327,6 +333,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             return
         }
         started = false
+        withdrawRemoteServiceCatalog()
         overlayLayerTransportAdapter?.stopCoreLifecycle()
         controlTimer?.cancel()
         controlTimer = nil
@@ -935,6 +942,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func resetOverlayTransportEpoch(reason: String) {
+        withdrawRemoteServiceCatalog()
         overlayRuntime.resetTransportEpoch()
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
@@ -948,6 +956,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
         }
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
+    }
+
+    private func withdrawRemoteServiceCatalog() {
+        serviceCatalogSink?(serviceCatalog.withdraw())
     }
 
     private func handleLifecycleRotationIfDue(nowNS: UInt64) {
@@ -1058,6 +1070,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
             return
         }
+        if let install = serviceCatalog.receive(frame) {
+            serviceCatalogSink?(install)
+            return
+        }
         switch frame.proto {
         case .tun:
             handleInboundTunMuxFrame(frame)
@@ -1106,7 +1122,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .dataFrag:
-                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body)
+                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
@@ -1126,9 +1142,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
 
         switch frame.mtype {
         case .open:
-            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body)
+            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
         case .data:
-            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body)
+            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1136,7 +1152,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 }
             }
         case .dataFrag:
-            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body)
+            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1144,7 +1160,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 }
             }
         case .close:
-            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID)
+            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 closeUDPClientConnection(chanID: frame.chanID)
             }
@@ -1153,11 +1169,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
     }
 
-    private func handleInboundUDPClientOpen(chanID: Int, payload: Data) {
+    private func handleInboundUDPClientOpen(chanID: Int, payload: Data, counter: Int) {
         guard let parsed = ObstacleBridgeChannelMuxCodec.parseOpenPayload(payload) else {
             return
         }
-        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload)
+        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
         guard snapshot.accepted else {
             return
         }

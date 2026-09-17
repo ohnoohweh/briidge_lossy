@@ -152,9 +152,12 @@ final class ObstacleBridgeHostRunner {
     private var sharedChannelMuxUdpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
     private var sharedChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime()
     private var udpServiceListeners: [Int: NWListener] = [:]
+    private var catalogUDPServiceListeners: [Int: NWListener] = [:]
     private var udpConnectionStates: [Int: [String: Any]] = [:]
     private var udpConnectionObjects: [ObjectIdentifier: ObstacleBridgeUDPProxyConnection] = [:]
     private var tcpServiceListeners: [Int: NWListener] = [:]
+    private var catalogTCPServiceListeners: [Int: NWListener] = [:]
+    private var catalogServiceSpecs: [Int: ObstacleBridgeNativeServiceSpec] = [:]
     private var tcpConnectionStates: [Int: [String: Any]] = [:]
     private var tcpConnectionObjects: [Int: ObstacleBridgeTCPProxyConnection] = [:]
     private var sharedCompressLayerRuntime: ObstacleBridgeCompressLayerRuntime?
@@ -2029,7 +2032,83 @@ final class ObstacleBridgeHostRunner {
                 listener.cancel()
             }
             udpServiceListeners.removeAll()
+            for listener in catalogUDPServiceListeners.values {
+                listener.cancel()
+            }
+            catalogUDPServiceListeners.removeAll()
+            for listener in catalogTCPServiceListeners.values {
+                listener.cancel()
+            }
+            catalogTCPServiceListeners.removeAll()
+            catalogServiceSpecs.removeAll()
         }
+    }
+
+    private func applyRemoteServiceCatalog(_ install: ObstacleBridgeAppleServiceCatalog.Install) {
+        guard install.accepted else { return }
+        serviceStateQueue.async { [weak self] in
+            guard let self else { return }
+            for spec in install.removed {
+                let id = spec.svcID
+                self.catalogTCPServiceListeners.removeValue(forKey: id)?.cancel()
+                self.catalogUDPServiceListeners.removeValue(forKey: id)?.cancel()
+                self.catalogServiceSpecs.removeValue(forKey: id)
+            }
+            for spec in install.installed {
+                let native = ObstacleBridgeNativeServiceSpec(channelMuxSpec: spec)
+                guard native.listenProtocol == native.targetProtocol,
+                      native.listenProtocol == "tcp" || native.listenProtocol == "udp",
+                      native.listenPort > 0, native.targetPort > 0,
+                      self.ownServerSpecs.contains(where: { $0.svcID == native.svcID }) == false
+                else { continue }
+                self.catalogTCPServiceListeners.removeValue(forKey: native.svcID)?.cancel()
+                self.catalogUDPServiceListeners.removeValue(forKey: native.svcID)?.cancel()
+                do {
+                    if native.listenProtocol == "tcp" {
+                        try self.startCatalogTCPService(native)
+                    } else {
+                        try self.startCatalogUDPService(native)
+                    }
+                    self.catalogServiceSpecs[native.svcID] = native
+                } catch {
+                    self.handleSharedOverlayOwnerEvent(event: "remote_catalog_listener_failed", fields: [
+                        "service_id": native.svcID,
+                        "protocol": native.listenProtocol,
+                        "error": error.localizedDescription,
+                    ])
+                }
+            }
+        }
+    }
+
+    private func startCatalogUDPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
+        guard let port = NWEndpoint.Port(rawValue: UInt16(spec.listenPort)) else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid catalog udp listen port: \(spec.listenPort)")
+        }
+        let params = NWParameters.udp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
+        let listener = try NWListener(using: params)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.acceptUDPConnection(connection, spec: spec)
+        }
+        listener.start(queue: serviceStateQueue)
+        catalogUDPServiceListeners[spec.svcID] = listener
+    }
+
+    private func startCatalogTCPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
+        guard let port = NWEndpoint.Port(rawValue: UInt16(spec.listenPort)) else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid catalog tcp listen port: \(spec.listenPort)")
+        }
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
+        let listener = try NWListener(using: params)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.acceptTCPConnection(connection, spec: spec)
+        }
+        listener.start(queue: serviceStateQueue)
+        catalogTCPServiceListeners[spec.svcID] = listener
     }
 
     private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool) {
@@ -2228,7 +2307,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func listeningRows(protocol protocolName: String) -> [[String: Any]] {
-        ownServerSpecs
+        (ownServerSpecs + Array(catalogServiceSpecs.values))
             .filter { $0.listenProtocol == protocolName && $0.targetProtocol == protocolName }
             .map { listeningRow(for: $0, protocol: protocolName) }
     }
@@ -2714,6 +2793,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedWebSocketOverlayTransportOwner = owner
@@ -2777,6 +2859,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedTcpOverlayTransportOwner = owner
@@ -2850,6 +2935,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedQuicOverlayTransportOwner = owner
@@ -2910,6 +2998,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedUdpOverlayTransportOwner = owner

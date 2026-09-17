@@ -19,6 +19,7 @@ import textwrap
 import urllib.error
 import urllib.request
 import zlib
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 
@@ -556,6 +557,27 @@ def test_macos_swift_host_runner_routes_tun_and_local_accepts_through_active_ove
     assert "currentOverlayOwner()?.owner.sendLocalTunPacket(packet)" in source
     assert "private func overlayCurrentlyConnected() -> Bool?" in source
     assert "currentOverlayOwner()?.owner.appReady()" in source
+
+
+def test_macos_host_runner_applies_core_catalog_listener_replacements() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    for owner in (
+        "ObstacleBridgeTcpOverlayTransportOwner",
+        "ObstacleBridgeUdpOverlayTransportOwner",
+        "ObstacleBridgeWebSocketOverlayTransportOwner",
+        "ObstacleBridgeQuicOverlayTransportOwner",
+    ):
+        owner_source = (SHARED_NATIVE_DIR / f"{owner}.swift").read_text(encoding="utf-8")
+        assert "ObstacleBridgeAppleServiceCatalog" in owner_source
+        assert "serviceCatalogSink?(install)" in owner_source
+        assert "withdrawRemoteServiceCatalog" in owner_source
+
+    assert "private func applyRemoteServiceCatalog(_ install: ObstacleBridgeAppleServiceCatalog.Install)" in source
+    assert "catalogTCPServiceListeners" in source
+    assert "catalogUDPServiceListeners" in source
+    assert "startCatalogTCPService(native)" in source
+    assert "startCatalogUDPService(native)" in source
+    assert "serviceCatalogSink: { [weak self] install in" in source
 
 
 def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> None:
@@ -1474,6 +1496,18 @@ def _wait_http_json(url: str, *, timeout_sec: float = 10.0) -> dict:
     raise AssertionError(f"timed out waiting for {url}: {last_error}")
 
 
+def _wait_for_condition(condition: Callable[[], bool], *, timeout: float) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            if condition():
+                return
+        except Exception:
+            pass
+        time.sleep(0.05)
+    assert condition(), "timed out waiting for condition"
+
+
 def _wait_snapshot_condition(snapshot_getter, predicate, *, timeout_sec: float = 12.0):
     deadline = time.time() + timeout_sec
     last_snapshot = None
@@ -1746,12 +1780,16 @@ class _TCPOverlayPeer:
 
     def stop(self) -> None:
         self._stop.set()
-        if self._conn is not None:
-            with contextlib.suppress(OSError):
-                self._conn.close()
+        self.disconnect()
         with contextlib.suppress(OSError):
             self._server.close()
         self._thread.join(timeout=2.0)
+
+    def disconnect(self) -> None:
+        if self._conn is not None:
+            with contextlib.suppress(OSError):
+                self._conn.close()
+            self._conn = None
 
     def wait_connected(self, *, timeout_sec: float = 5.0) -> socket.socket:
         if not self._accepted.wait(timeout=timeout_sec):
@@ -5382,6 +5420,98 @@ def test_macos_swift_host_runner_pushes_remote_service_catalog_after_secure_link
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_installs_and_replaces_inbound_remote_catalog(tmp_path: Path) -> None:
+    artifact = build_macos_swift_artifact()
+    overlay_port = _unused_tcp_port()
+    status_port = _unused_tcp_port()
+    first_port = _unused_tcp_port()
+    replacement_port = _unused_tcp_port()
+    peer = _TCPOverlayPeer("127.0.0.1", overlay_port)
+    peer.start()
+
+    def catalog(instance_id: int, sequence: int, service_port: int) -> bytes:
+        rows = [{
+            "svc_id": 71,
+            "l_proto": "tcp",
+            "l_bind": "127.0.0.1",
+            "l_port": service_port,
+            "r_proto": "tcp",
+            "r_host": "127.0.0.1",
+            "r_port": 7,
+            "name": "Peer catalog echo",
+            "lifecycle_hooks": None,
+            "options": None,
+        }]
+        body = json.dumps(rows, separators=(",", ":")).encode("utf-8")
+        return b"RS3" + struct.pack(">QII", instance_id, sequence, len(body)) + body
+
+    config_path = tmp_path / "inbound_remote_catalog.json"
+    config_path.write_text(json.dumps({
+        "overlay_transport": "tcp",
+        "tcp_peer": "127.0.0.1",
+        "tcp_peer_port": overlay_port,
+        "admin_web": True,
+        "admin_web_bind": "127.0.0.1",
+        "admin_web_port": status_port,
+    }), encoding="utf-8")
+    process = subprocess.Popen(
+        [str(artifact.binary_path), "--runtime-config", str(config_path), "--hold-sec", "20"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        _wait_http_json(f"http://127.0.0.1:{status_port}/api/status")
+        peer.wait_connected()
+        peer.start_mux_echo_loop()
+        peer.send_mux(0, 0, 0, 4, catalog(9, 1, first_port))
+
+        _wait_for_condition(
+            lambda: any(
+                row.get("local", {}).get("port") == first_port
+                for row in _http_json(f"http://127.0.0.1:{status_port}/api/connections")["tcp"]
+            ),
+            timeout=5.0,
+        )
+        with socket.create_connection(("127.0.0.1", first_port), timeout=2.0) as client:
+            client.settimeout(2.0)
+            client.sendall(b"catalog-one")
+            assert client.recv(32) == b"catalog-one"
+
+        peer.send_mux(0, 0, 1, 4, catalog(9, 2, replacement_port))
+        _wait_for_condition(
+            lambda: any(
+                row.get("local", {}).get("port") == replacement_port
+                for row in _http_json(f"http://127.0.0.1:{status_port}/api/connections")["tcp"]
+            ),
+            timeout=5.0,
+        )
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", first_port), timeout=0.4)
+        with socket.create_connection(("127.0.0.1", replacement_port), timeout=2.0) as client:
+            client.settimeout(2.0)
+            client.sendall(b"catalog-two")
+            assert client.recv(32) == b"catalog-two"
+
+        peer.disconnect()
+        _wait_for_condition(
+            lambda: not any(
+                row.get("local", {}).get("port") == replacement_port
+                for row in _http_json(f"http://127.0.0.1:{status_port}/api/connections")["tcp"]
+            ),
+            timeout=5.0,
+        )
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", replacement_port), timeout=0.4)
+    finally:
+        peer.stop()
+        if process.poll() is None:
+            process.terminate()
+        stdout, stderr = process.communicate(timeout=5.0)
         if process.returncode not in (0, -15):
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"

@@ -46,6 +46,11 @@ struct ObstacleBridgeLinuxServiceCatalogTests {
         let withdrawn = store.withdraw()
         #expect(withdrawn.removed == [first])
         #expect(withdrawn.installed.isEmpty)
+
+        let reconnected = try store.install(instanceID: 10, connectionSequence: 1, services: [first])
+        #expect(reconnected.accepted)
+        #expect(reconnected.removed.isEmpty)
+        #expect(reconnected.installed == [first])
     }
 
     private func service(id: UInt16, port: Int) -> ObstacleBridgeLinuxServiceSpec {

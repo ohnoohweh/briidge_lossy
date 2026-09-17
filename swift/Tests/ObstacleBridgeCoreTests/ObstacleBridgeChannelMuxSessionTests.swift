@@ -138,4 +138,21 @@ struct ObstacleBridgeChannelMuxSessionTests {
             try staleEpoch.receive(tcpFrame)
         }
     }
+
+    @Test func fragmentsShareThePortableChannelCounterSequence() throws {
+        let sender = ObstacleBridgeChannelMuxSession()
+        let open = try #require(sender.acceptLocal(service: service).first)
+        guard case .outbound(let openFrame) = open else { Issue.record("missing OPEN"); return }
+        let fragment = try #require(sender.localDataFragment(channelID: openFrame.channelID, payload: Data([1, 2, 3])).first)
+        guard case .outbound(let fragmentFrame) = fragment else { Issue.record("missing fragment"); return }
+        #expect(fragmentFrame.messageType == ObstacleBridgeChannelMuxSessionMessageType.dataFragment.rawValue)
+        #expect(fragmentFrame.counter == 1)
+
+        let receiver = ObstacleBridgeChannelMuxSession()
+        _ = try receiver.receive(openFrame)
+        #expect(try receiver.receive(fragmentFrame) == [.writeLocalFragment(channelID: openFrame.channelID, payload: Data([1, 2, 3]))])
+        #expect(throws: ObstacleBridgeChannelMuxSessionError.invalidCounter) {
+            try receiver.receive(fragmentFrame)
+        }
+    }
 }

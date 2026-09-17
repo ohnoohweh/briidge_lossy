@@ -18,7 +18,7 @@ public struct ObstacleBridgeLinuxServiceCatalogInstall: Equatable, Sendable {
 /// Serial catalog state for one peer. A replacement is atomic from the
 /// listener owner's point of view: it gets the old rows to withdraw before it
 /// activates the new rows. Replays of an equal or older sequence from the
-/// same instance are ignored; a new instance begins a new peer epoch.
+/// same instance are ignored while that transport epoch remains active.
 public final class ObstacleBridgeLinuxServiceCatalogStore {
     private let core = ObstacleBridgeServiceCatalogStore()
 

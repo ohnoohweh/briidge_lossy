@@ -4868,27 +4868,64 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         except Exception:
             return packet
         payload[8:24] = src_bytes
+        declared_payload_length = (int(payload[4]) << 8) | int(payload[5])
+        total_length = 40 + declared_payload_length
+        if total_length > len(payload):
+            return packet
         next_header = int(payload[6])
-        l4 = payload[40:]
+        l4_start = 40
+        for _ in range(8):
+            if next_header in (0, 43, 60):
+                if l4_start + 2 > total_length:
+                    return packet
+                extension_length = (int(payload[l4_start + 1]) + 1) * 8
+                if extension_length < 8 or l4_start + extension_length > total_length:
+                    return packet
+                next_header = int(payload[l4_start])
+                l4_start += extension_length
+            elif next_header == 51:
+                if l4_start + 2 > total_length:
+                    return packet
+                extension_length = (int(payload[l4_start + 1]) + 2) * 4
+                if extension_length < 8 or l4_start + extension_length > total_length:
+                    return packet
+                next_header = int(payload[l4_start])
+                l4_start += extension_length
+            elif next_header == 44:
+                if l4_start + 8 > total_length:
+                    return packet
+                fragment_bits = (int(payload[l4_start + 2]) << 8) | int(payload[l4_start + 3])
+                if fragment_bits & 0xFFF9:
+                    return bytes(payload)
+                next_header = int(payload[l4_start])
+                l4_start += 8
+                break
+            elif next_header in (50, 59):
+                return bytes(payload)
+            else:
+                break
+        else:
+            return bytes(payload)
+        l4 = payload[l4_start:total_length]
         if next_header == 6 and len(l4) >= 20:
             l4 = bytearray(l4)
             l4[16:18] = b"\x00\x00"
             pseudo = bytes(payload[8:24]) + bytes(payload[24:40]) + len(l4).to_bytes(4, "big") + b"\x00" * 3 + bytes([next_header])
             l4[16:18] = cls._checksum16(pseudo + bytes(l4)).to_bytes(2, "big")
-            payload[40:] = l4
+            payload[l4_start:total_length] = l4
         elif next_header == 17 and len(l4) >= 8:
             l4 = bytearray(l4)
             l4[6:8] = b"\x00\x00"
             pseudo = bytes(payload[8:24]) + bytes(payload[24:40]) + len(l4).to_bytes(4, "big") + b"\x00" * 3 + bytes([next_header])
             checksum = cls._checksum16(pseudo + bytes(l4)) or 0xFFFF
             l4[6:8] = checksum.to_bytes(2, "big")
-            payload[40:] = l4
+            payload[l4_start:total_length] = l4
         elif next_header == 58 and len(l4) >= 4:
             l4 = bytearray(l4)
             l4[2:4] = b"\x00\x00"
             pseudo = bytes(payload[8:24]) + bytes(payload[24:40]) + len(l4).to_bytes(4, "big") + b"\x00" * 3 + bytes([next_header])
             l4[2:4] = cls._checksum16(pseudo + bytes(l4)).to_bytes(2, "big")
-            payload[40:] = l4
+            payload[l4_start:total_length] = l4
         return bytes(payload)
 
 

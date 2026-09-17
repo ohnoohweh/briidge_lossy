@@ -57,12 +57,16 @@ public final class ObstacleBridgeServiceCatalogStore: @unchecked Sendable {
     public func withdraw() -> ObstacleBridgeServiceCatalogInstall {
         let removed = services
         services = []
+        let withdrawnInstanceID = instanceID
+        let withdrawnConnectionSequence = connectionSequence
+        instanceID = nil
+        connectionSequence = nil
         return .init(
             accepted: true,
             removed: removed,
             installed: [],
-            instanceID: instanceID,
-            connectionSequence: connectionSequence
+            instanceID: withdrawnInstanceID,
+            connectionSequence: withdrawnConnectionSequence
         )
     }
 

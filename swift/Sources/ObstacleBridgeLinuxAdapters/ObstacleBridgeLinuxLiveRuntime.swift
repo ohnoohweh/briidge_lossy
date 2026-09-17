@@ -280,6 +280,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 replaceReceiveWorker(with: nil)
                 stopServiceOwners()
                 stopRemoteServiceOwners()
+                _ = remoteCatalogStore.withdraw()
                 configuredRuntime.disconnect()
                 configuredRuntime.advanceCandidate()
                 refreshStatusProjection()

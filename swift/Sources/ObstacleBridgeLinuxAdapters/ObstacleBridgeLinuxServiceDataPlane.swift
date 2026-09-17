@@ -55,6 +55,7 @@ public final class ObstacleBridgeLinuxServiceDataPlane {
         switch effect {
         case .connectLocal(let channelID, let service): return .connectRequested(channelID: channelID, spec: linuxSpec(service))
         case .writeLocal(let channelID, let payload): return .deliverLocal(channelID: channelID, payload: payload)
+        case .writeLocalFragment: return nil
         case .closeLocal(let channelID): return .closeLocal(channelID: channelID)
         case .outbound: return nil
         }

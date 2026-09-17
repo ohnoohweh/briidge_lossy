@@ -42,6 +42,7 @@ public enum ObstacleBridgeChannelMuxSessionMessageType: UInt8, Sendable {
     case data = 0
     case open = 1
     case close = 2
+    case dataFragment = 5
     case openChunk = 7
 }
 
@@ -60,6 +61,9 @@ public enum ObstacleBridgeChannelMuxSessionEffect: Equatable, Sendable {
     case outbound(ObstacleBridgeChannelMuxSessionFrame)
     case connectLocal(channelID: UInt16, service: ObstacleBridgeServiceSpec)
     case writeLocal(channelID: UInt16, payload: Data)
+    /// The session owns this record's channel and counter admission. Packet
+    /// adapters pass the admitted payload to the portable packet model.
+    case writeLocalFragment(channelID: UInt16, payload: Data)
     case closeLocal(channelID: UInt16)
 }
 
@@ -89,7 +93,6 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
     private var nextChannel: UInt16
     private let firstChannelID: UInt16
     private let channelStride: UInt16
-    private var reservedChannels: Set<UInt16> = []
     private var channels: [UInt16: Channel] = [:]
     private var openingChannels: [UInt16: OpeningChannel] = [:]
     private var outbound: [ObstacleBridgeChannelMuxSessionFrame] = []
@@ -164,6 +167,18 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
         return drainOutbound().map(ObstacleBridgeChannelMuxSessionEffect.outbound)
     }
 
+    /// Emit one already-framed application fragment through the same channel
+    /// lifecycle and counter owner as ordinary DATA. Core deliberately treats
+    /// the body as opaque here; its packet-model successor owns fragment
+    /// headers and reassembly semantics.
+    public func localDataFragment(channelID: UInt16, payload: Data) throws -> [ObstacleBridgeChannelMuxSessionEffect] {
+        guard var channel = channels[channelID] else { serviceFailures += 1; throw ObstacleBridgeChannelMuxSessionError.unknownChannel }
+        channel.nextOutboundCounter &+= 1
+        channels[channelID] = channel
+        try enqueue(.init(channelID: channelID, protocolType: channel.protocolType.rawValue, counter: channel.nextOutboundCounter, messageType: ObstacleBridgeChannelMuxSessionMessageType.dataFragment.rawValue, body: payload))
+        return drainOutbound().map(ObstacleBridgeChannelMuxSessionEffect.outbound)
+    }
+
     public func localEOF(channelID: UInt16) throws -> [ObstacleBridgeChannelMuxSessionEffect] {
         guard let channel = channels.removeValue(forKey: channelID) else { serviceFailures += 1; throw ObstacleBridgeChannelMuxSessionError.unknownChannel }
         try enqueue(.init(channelID: channelID, protocolType: channel.protocolType.rawValue, counter: channel.nextOutboundCounter &+ 1, messageType: ObstacleBridgeChannelMuxSessionMessageType.close.rawValue, body: Data()))
@@ -213,6 +228,12 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
             channel.nextInboundCounter &+= 1
             channels[frame.channelID] = channel
             return [.writeLocal(channelID: frame.channelID, payload: frame.body)]
+        case .dataFragment:
+            guard var channel = channels[frame.channelID] else { malformedFrames += 1; throw ObstacleBridgeChannelMuxSessionError.unknownChannel }
+            guard channel.protocolType == protocolType, frame.counter == channel.nextInboundCounter else { malformedFrames += 1; throw ObstacleBridgeChannelMuxSessionError.invalidCounter }
+            channel.nextInboundCounter &+= 1
+            channels[frame.channelID] = channel
+            return [.writeLocalFragment(channelID: frame.channelID, payload: frame.body)]
         case .close:
             guard let channel = channels[frame.channelID] else { malformedFrames += 1; throw ObstacleBridgeChannelMuxSessionError.unknownChannel }
             guard channel.protocolType == protocolType, frame.counter == channel.nextInboundCounter else { malformedFrames += 1; throw ObstacleBridgeChannelMuxSessionError.invalidCounter }
@@ -234,7 +255,6 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
         let effects = channels.keys.sorted().map(ObstacleBridgeChannelMuxSessionEffect.closeLocal)
         channels.removeAll(keepingCapacity: true)
         openingChannels.removeAll(keepingCapacity: true)
-        reservedChannels.removeAll(keepingCapacity: true)
         outbound.removeAll(keepingCapacity: true)
         return effects
     }
@@ -252,20 +272,6 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
         channels[channelID]?.service
     }
 
-    /// Reserve an adapter-managed channel while a capability-limited fallback
-    /// (for example pre-R007.4 fragmentation) is still active.  This keeps
-    /// Core allocation collision-free during an incremental migration.
-    public func reserve(channelID: UInt16) throws {
-        guard channelID != 0, channels[channelID] == nil, !reservedChannels.contains(channelID) else {
-            throw ObstacleBridgeChannelMuxSessionError.duplicateChannel
-        }
-        reservedChannels.insert(channelID)
-    }
-
-    public func releaseReservation(channelID: UInt16) {
-        reservedChannels.remove(channelID)
-    }
-
     private func isSupported(_ service: ObstacleBridgeServiceSpec, protocolType: ObstacleBridgeChannelMuxSessionProtocol?) -> Bool {
         guard let protocolType, protocolType == .tcp || protocolType == .udp,
               service.listenProtocol == service.targetProtocol,
@@ -279,7 +285,7 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
             let candidate = nextChannel
             let next = Int(nextChannel) + Int(channelStride)
             nextChannel = next <= Int(UInt16.max) ? UInt16(next) : firstChannelID
-            if channels[candidate] == nil, !reservedChannels.contains(candidate) { return candidate }
+            if channels[candidate] == nil { return candidate }
         } while nextChannel != initial
         serviceFailures += 1
         fatalError("no free ChannelMux channel identifiers")
