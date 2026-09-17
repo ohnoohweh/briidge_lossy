@@ -41,8 +41,10 @@ IOS_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null ||
 IOS_GIT_COMMIT="${IOS_GIT_COMMIT:-unknown}"
 echo "[build_ios_app] bundle identity display=ObstacleBridge version=${IOS_MARKETING_VERSION} build=${IOS_BUILD_NUMBER} commit=${IOS_GIT_COMMIT}"
 
-if [ ! -f "${PROJECT_PBXPROJ}" ]; then
-  echo "[build_ios_app] Xcode project missing, creating it first"
+XCODE_ROOT="$(dirname "${PROJECT_FILE}")"
+PYTHON_SUPPORT_XCFRAMEWORK="${XCODE_ROOT}/Support/Python.xcframework"
+if [ ! -f "${PROJECT_PBXPROJ}" ] || [ ! -d "${PYTHON_SUPPORT_XCFRAMEWORK}" ]; then
+  echo "[build_ios_app] Xcode project or Python support missing, creating it first"
   "${IOS_DIR}/scripts/create_ios_xcode_project.sh" --no-input
 else
   echo "[build_ios_app] refreshing iOS app bundle so changed packaged sources are included"
@@ -61,14 +63,16 @@ fi
 
 # Briefcase's generated container plist can carry a literal build number while
 # IPServer expands CURRENT_PROJECT_VERSION.  Xcode requires an embedded app
-# extension's CFBundleVersion to exactly match its container, so make both
-# targets consume the one numeric version supplied to xcodebuild below.
+# extension's CFBundleVersion and CFBundleShortVersionString to exactly match
+# its container, so make both targets consume the build values supplied to
+# xcodebuild below.
 APP_INFO_PLIST="${PROJECT_FILE%/*.xcodeproj}/ObstacleBridge/ObstacleBridge-Info.plist"
 if [ ! -f "${APP_INFO_PLIST}" ]; then
   echo "[build_ios_app] generated container Info.plist is missing: ${APP_INFO_PLIST}" >&2
   exit 1
 fi
 /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)' "${APP_INFO_PLIST}"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString $(MARKETING_VERSION)' "${APP_INFO_PLIST}"
 
 RESOLVED_APPLE_TEAM_ID="${OB_APPLE_TEAM_ID:-}"
 if [ -z "${RESOLVED_APPLE_TEAM_ID}" ] && [ -f "${PROJECT_PBXPROJ}" ]; then

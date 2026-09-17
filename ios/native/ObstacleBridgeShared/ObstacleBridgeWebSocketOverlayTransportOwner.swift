@@ -1451,7 +1451,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         if let connection = udpServerConnections[frame.chanID] {
             switch frame.mtype {
             case .data:
-                let snapshot = udpRuntime.handleInboundServerData(chanID: frame.chanID, body: frame.body)
+                let snapshot = udpRuntime.handleInboundServerData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
@@ -1463,7 +1463,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .close:
-                let snapshot = udpRuntime.handleInboundClose(chanID: frame.chanID)
+                let snapshot = udpRuntime.handleInboundClose(chanID: frame.chanID, counter: frame.counter)
                 if snapshot.closed {
                     udpServerConnections.removeValue(forKey: frame.chanID)
                     connection.cancel()

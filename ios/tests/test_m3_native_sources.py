@@ -594,6 +594,7 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"diff_sha": diffSHA' in provider
     assert '"build_timestamp_utc": timestamp' in provider
     assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
+    assert "Set :CFBundleShortVersionString $(MARKETING_VERSION)" in build_script
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
     assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
     assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider

@@ -23,6 +23,8 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift",
@@ -374,6 +376,25 @@
         "webadmin_endpoint": "http://37.1.192.30:13081/",
         "verification": "The macOS qualification host received HTTP 200 and the ObstacleBridge WebAdmin HTML document from this endpoint."
       }
+    }
+  },
+  "r007_channelmux_traceability": {
+    "reference_behavior": "Python ChannelMux assigns service channels, serializes OPEN/DATA/CLOSE lifecycle, bounds pending output, and rejects malformed or stale channel traffic before local I/O.",
+    "core": {
+      "status": "in-progress",
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::localLifecycleIsEmittedAsPortableEffects", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::epochCountersAndChannelAllocationAreOwnedByCore", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::oversizedOpenUsesCoreControlChunksAndReassembles", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::controlChunkCountersAreAdmittedBeforeServiceCreation", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeServiceCatalogTests.swift::replacementIsAtomicAndRejectsSameEpochReplays"]
+    },
+    "linux": {
+      "status": "in-progress",
+      "implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceCatalog.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceDataPlaneTests.swift::localTcpConnectionProducesOpenDataAndClose", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceDataPlaneTests.swift::boundedQueueCountsBackpressureDrop", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceCatalogTests.swift::catalogReplacesAndWithdrawsOnlyNewPeerEpochs"]
+    },
+    "apple": {
+      "status": "in-progress",
+      "implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTcpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"],
+      "tests": ["ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths", "ios/scripts/build_ios_app.sh::generic-device unsigned Xcode build"],
+      "gap": "TCP server and client frames, including OPEN chunks, plus ordinary UDP server paths execute Core session effects. UDP client paths, reduced-budget UDP fragmentation, and TUN retain local ChannelMux state. Apple does not yet consume Core service-catalog replacement decisions."
     }
   },
   "known_differences": [

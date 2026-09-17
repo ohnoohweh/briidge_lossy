@@ -20,32 +20,40 @@ public struct ObstacleBridgeLinuxServiceCatalogInstall: Equatable, Sendable {
 /// activates the new rows. Replays of an equal or older sequence from the
 /// same instance are ignored; a new instance begins a new peer epoch.
 public final class ObstacleBridgeLinuxServiceCatalogStore {
-    private var instanceID: UInt64?
-    private var connectionSequence: UInt32?
-    private var services: [ObstacleBridgeLinuxServiceSpec] = []
+    private let core = ObstacleBridgeServiceCatalogStore()
 
     public init() {}
 
     public func install(instanceID proposedInstanceID: UInt64, connectionSequence proposedConnectionSequence: UInt32, services proposedServices: [ObstacleBridgeLinuxServiceSpec]) throws -> ObstacleBridgeLinuxServiceCatalogInstall {
-        guard Set(proposedServices.map(\.serviceID)).count == proposedServices.count else {
+        do {
+            let installed = try core.install(
+                instanceID: proposedInstanceID,
+                connectionSequence: proposedConnectionSequence,
+                services: try proposedServices.map(ObstacleBridgeLinuxServiceCatalog.coreSpec)
+            )
+            return .init(
+                accepted: installed.accepted,
+                removed: try installed.removed.map(ObstacleBridgeLinuxServiceCatalog.linuxSpec),
+                installed: try installed.installed.map(ObstacleBridgeLinuxServiceCatalog.linuxSpec),
+                instanceID: installed.instanceID,
+                connectionSequence: installed.connectionSequence
+            )
+        } catch ObstacleBridgeServiceCatalogError.duplicateServiceID {
             throw ObstacleBridgeLinuxServiceCatalogError.duplicateServiceID
+        } catch {
+            throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload
         }
-        if let instanceID, let connectionSequence,
-           instanceID == proposedInstanceID,
-           proposedConnectionSequence <= connectionSequence {
-            return .init(accepted: false, removed: [], installed: services, instanceID: instanceID, connectionSequence: connectionSequence)
-        }
-        let removed = services
-        instanceID = proposedInstanceID
-        connectionSequence = proposedConnectionSequence
-        services = proposedServices.sorted { $0.serviceID < $1.serviceID }
-        return .init(accepted: true, removed: removed, installed: services, instanceID: instanceID, connectionSequence: connectionSequence)
     }
 
     public func withdraw() -> ObstacleBridgeLinuxServiceCatalogInstall {
-        let removed = services
-        services = []
-        return .init(accepted: true, removed: removed, installed: [], instanceID: instanceID, connectionSequence: connectionSequence)
+        let installed = core.withdraw()
+        return .init(
+            accepted: installed.accepted,
+            removed: (try? installed.removed.map(ObstacleBridgeLinuxServiceCatalog.linuxSpec)) ?? [],
+            installed: [],
+            instanceID: installed.instanceID,
+            connectionSequence: installed.connectionSequence
+        )
     }
 }
 
@@ -77,9 +85,26 @@ public enum ObstacleBridgeLinuxServiceCatalog {
         catch { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
     }
 
-    private static func linuxSpec(_ value: ObstacleBridgeServiceSpec) throws -> ObstacleBridgeLinuxServiceSpec {
+    static func linuxSpec(_ value: ObstacleBridgeServiceSpec) throws -> ObstacleBridgeLinuxServiceSpec {
         guard value.listenPort > 0, value.targetPort > 0 else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
         guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.listenProtocol), let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.targetProtocol) else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
         return .init(serviceID: value.serviceID, name: value.name, listenProtocol: listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
+    }
+
+    static func coreSpec(_ value: ObstacleBridgeLinuxServiceSpec) throws -> ObstacleBridgeServiceSpec {
+        guard (1...Int(UInt16.max)).contains(value.listenPort),
+              (1...Int(UInt16.max)).contains(value.targetPort) else {
+            throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload
+        }
+        return .init(
+            serviceID: value.serviceID,
+            name: value.name,
+            listenProtocol: value.listenProtocol.rawValue,
+            listenHost: value.listenHost,
+            listenPort: UInt16(value.listenPort),
+            targetProtocol: value.targetProtocol.rawValue,
+            targetHost: value.targetHost,
+            targetPort: UInt16(value.targetPort)
+        )
     }
 }

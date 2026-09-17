@@ -277,7 +277,9 @@ struct ObstacleBridgeChannelMuxCodec {
         }
     }
 
-    private static func serviceSpec(_ value: ObstacleBridgeServiceSpec) -> ServiceSpec? {
+    /// Native socket adapters consume this only after Core has admitted the
+    /// service record. It is a value conversion, not a second policy owner.
+    static func serviceSpec(_ value: ObstacleBridgeServiceSpec) -> ServiceSpec? {
         let listenProtocol = protoName(for: Int(value.listenProtocol))
         let targetProtocol = protoName(for: Int(value.targetProtocol))
         guard !listenProtocol.isEmpty, !targetProtocol.isEmpty else { return nil }

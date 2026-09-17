@@ -149,74 +149,61 @@ rejected compressed-frame counts and bytes. It records no payload bytes,
 keys, or zlib state. Core classifies the compression decision and decoder
 outcome; the Linux Admin adapter only serializes that snapshot.
 
-Enabled compression is qualified end-to-end with an independent Python TCP
-SecureLink peer: Swift emits a protected compressed ChannelMux request, Python
-rejects any uncompressed request, independently decompresses and recompresses
-the response, and Swift restores the original response frame. This is the
-supported R005.5e-2a bidirectional contract; disabled/mismatched-policy
-qualification is also explicit: disabled Swift emits and accepts uncompressed
-protected frames, while an enabled Swift client interoperates with Python's
-passive disabled-side decoder after it observes a compressed frame. This is
-the Python-compatible mismatch outcome, not a connection failure. A malformed
-or unsupported compressed frame fails deterministically at the Core decoder
-boundary; the authenticated session remains usable for its next valid
-protected exchange.
+### ChannelMux convergence status
 
-The iOS physical-device qualification uses the normal signed app and bundled
-`IPServer` extension rather than the resource-constrained simulator lane. Its
-authenticated overlay-published WebAdmin endpoint exposes redacted status and
-peer data while the device-local WebAdmin listener remains on loopback. The
-qualified device build reports its embedded source commit, dirty/diff identity,
-and timestamp, and its containing app and extension share one numeric
-`CFBundleVersion`. This device evidence covers the functional SecureLink and
-status contract; signed release-archive distribution remains separate work.
+Core owns ChannelMux frame, control-chunk, service-open, and service-catalog
+codecs, compression eligibility, overlay admission, the bounded TCP/UDP
+service-session lifecycle, and epoch-scoped catalog replacement decisions.
+The session emits OPEN/DATA/CLOSE, local-I/O, and cancellation effects,
+including bounded control-chunk emission and reassembly. Linux consumes the
+session at its service data-plane boundary and consumes Core catalog decisions
+through a POSIX listener facade. Apple TCP server and ordinary client
+OPEN/DATA/CLOSE channels, plus ordinary non-fragmented UDP server channels,
+consume the same session; UDP client paths and TUN runtimes still retain
+channel tables, packet parsing, fragmentation,
+ownership, and throttling. R007 moves those remaining portable decisions into
+typed Core state machines while adapters retain local socket, packet-flow, and
+device execution.
 
-The macOS Swift-backed CI lane builds the complete normal app bundle from a
-clean checkout, verifies the nested executable signatures and both bundle
-plists, packages that exact bundle, and reuses it for the host-side tests. Its
-ZIP, SHA-256, and build-info JSON are retained together as one CI artifact.
-The successful job is the macOS build evidence; the `macos-preview` release
-workflow performs its ongoing convenience-preview publication after `main`
-updates, rather than creating a separate development gate.
+## R007 work packages
 
-R005 is closed. Its applicable Linux, macOS, traceability, README, and
-ownership gates pass; the macOS bundle artifact and the physical-iPhone
-SecureLink/WebAdmin evidence qualify their platform-specific outcomes.
-Privileged-TUN and device-only results remain explicitly reported as such,
-rather than being mistaken for ordinary hosted CI coverage. TestFlight archive
-recording is optional release housekeeping and is not an R005 development
-gate.
+Packages close consecutively. Work may establish a later Core prerequisite,
+but no later package is complete until its predecessor has completion evidence
+in the traceability record and its adapter-side policy has been removed.
 
-### R006 overlay convergence status
+| Package | Scope | Definition of done |
+| --- | --- | --- |
+| `LSW-R007.1` | Core ChannelMux session | Core admits an epoch, allocates channels/counters, reassembles control records, and emits typed outbound, local-I/O, cancellation, and bounded-queue effects. Linux and Apple consume the same state-machine tests. |
+| `LSW-R007.2` | Core service catalog and lifecycle | Core validates and replaces service catalogs, resolves service identity, and owns OPEN/DATA/CLOSE lifecycle decisions. Platform code only binds, accepts, connects, reads, writes, and closes local sockets. |
+| `LSW-R007.3` | TCP and UDP adapter adoption | Linux and Apple TCP/UDP owners translate Core effects to native I/O and feed all completions back into Core. No channel allocation, counter, queue, or remote-service policy remains in an adapter. |
+| `LSW-R007.4` | Portable packet model | Core parses IPv4/IPv6 endpoints, normalizes eligible source addresses, recomputes required checksums, fragments/reassembles bounded TUN payloads, and classifies malformed packets. Byte characterization covers Python, Core, Linux, and Apple consumers. |
+| `LSW-R007.5` | Core TUN ownership and packet policy | Core owns local-TUN channel lifecycle, shared-TUN bindings, peer routing, anti-spoof admission, scoped throttling, drops, and epoch reset. Packet-device adapters only supply packets, apply accepted writes, and expose device status. |
+| `LSW-R007.6` | Product qualification and traceability | Linux, signed macOS, and physical iOS run the common ChannelMux/TUN path appropriate to their capabilities. Traceability identifies the same Python-reference behavior and explicitly records any capability-limited platform evidence. |
 
-Core owns a deterministic overlay coordinator and logical TCP/WebSocket
-envelope decision. The Linux live runtime executes its typed effects: Core
-allocates the admitted epoch, starts and cancels the one receive owner,
-chooses bounded retry timing and candidate index, and rejects stale retry or
-receive completion. Linux retains only Dispatch scheduling and native session,
-socket, and worker operations. An already-authenticated inbound listener
-session receives a Core epoch without opening an unintended outbound
-connection.
+### Current status
 
-The Apple shared runtime uses the same envelope decision and publishes
-transport/authentication readiness to Core. Its TCP and WebSocket owners execute
-Core-issued open/cancel transport, one-receive-owner, retry-token, and resolved
-candidate effects; stale native callbacks are rejected by the active Core epoch
-or retry token. The portable egress-window and backpressure projection also
-reside in Core. Native timers report transport-delay samples only; Core
-applies the liveness threshold and grace period, then issues cancellation,
-candidate rotation, and bounded retry effects. R006 is closed: the following
-work packages have matching Core, Linux, macOS, and physical-iOS evidence.
+| Package | Status today | Remaining completion condition |
+| --- | --- | --- |
+| `LSW-R007.1` | In progress: Core session behavior is covered in SwiftPM; Linux, Apple TCP server and client frames including OPEN chunks, and ordinary UDP server paths translate its effects. | Move UDP client lifecycle to the same session, then add shared consumer characterization. |
+| `LSW-R007.2` | Groundwork only: Core catalog validation and the Linux facade exist. | Adopt the catalog and lifecycle decisions in Apple after R007.1 closes. |
+| `LSW-R007.3` | Not started as a completion package. | Remove the remaining Apple client allocation, counter, queue, and remote-service policy after R007.1/R007.2 close. |
+| `LSW-R007.4` | Not started. | Deliver the portable packet model and byte characterization. |
+| `LSW-R007.5` | Not started. | Move TUN ownership and packet policy into Core. |
+| `LSW-R007.6` | Not started. | Qualify the completed common path on Linux, signed macOS, and physical iOS. |
 
-| Work package | Completion evidence |
-| --- | --- |
-| `LSW-R006.1` | Core coordinator and envelope types compile through SwiftPM, the signed macOS app build, and the deployed iOS build; Linux and Apple consumers use the admitted decisions. |
-| `LSW-R006.2` | TCP and WebSocket logical application, PING, and PONG policy has one Core owner with Python/Swift characterization. |
-| `LSW-R006.3` | Every Apple adapter reports lifecycle state through Core and executes its lifecycle effects. |
-| `LSW-R006.4` | Candidate rotation, retry bounds, and delayed-callback invalidation have no adapter-side policy owner. |
-| `LSW-R006.5` | Exactly one receive owner per epoch is Core-admitted; replacement cancels the old owner and stale completions cannot affect the next epoch. |
-| `LSW-R006.6` | Core owns liveness and bounded overlay backpressure decisions; adapters expose native queue and timer mechanics only. |
-| `LSW-R006.7` | The traceability record covers Linux, signed macOS, and physical iOS; the deployed iOS WebAdmin endpoint was reachable from the macOS qualification host. |
+### Known R007 gaps
+
+- UDP client paths and TUN runtimes retain ChannelMux lifecycle state beyond
+  the common service-session boundary. Reduced-budget UDP fragmentation
+  remains native until the portable packet model exists.
+- Apple does not yet consume Core catalog replacement decisions; local-service
+  queue policy is not yet one Core state machine.
+- Packet parsing, address normalization, checksum repair, fragmentation, and
+  reassembly remain Apple-specific implementation details.
+- Shared-TUN ownership, peer routing, packet admission, throttle state, and
+  drop accounting do not yet have a portable Core owner.
+- Linux has no qualified privileged-TUN data-plane evidence; Apple device
+  evidence must be repeated after the common TUN state machine is adopted.
 
 ## Engineering rules
 
@@ -245,7 +232,6 @@ lives in the traceability records.
 
 | Item | Remaining outcome |
 | --- | --- |
-| `LSW-R007` | Move ChannelMux TCP/UDP/TUN state, service/catalog lifecycle, packet policy, and portable IP handling into Core; retain platform socket and packet-device execution below it. |
 | `LSW-R008` | Consolidate typed configuration, capability admission, Admin routing/redaction, onboarding, and secret transformation in Core while retaining platform storage and HTTP services. |
 | `LSW-R009` | Finish package-product adoption, remove duplicate shared source ownership, and make Linux/macOS/Core/Windows-sentinel validation and traceability required CI behavior. |
 
@@ -265,11 +251,6 @@ lives in the traceability records.
 
 `LSW-R010` adds Windows adapters after Linux parity closes. It is not a gate
 for Linux delivery.
-
-`R005.4c` is optional TestFlight release housekeeping: record the signed
-archive identity and upload reference for a source revision already qualified
-by R005.4b. It does not block R005 development work or repeat device
-functional qualification.
 
 ## Open platform decisions
 

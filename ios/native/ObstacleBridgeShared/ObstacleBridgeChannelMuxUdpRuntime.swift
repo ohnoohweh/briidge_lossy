@@ -137,6 +137,10 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
     private let sessionMaxAppPayload: Int
     private let datagramCap: Int
     private let clientPendingCap: Int
+    /// Common state for ordinary local UDP service datagrams.  Fragmentation
+    /// remains an explicit portable-packet follow-up rather than being hidden
+    /// in this socket-facing runtime.
+    private let serverSession: ObstacleBridgeChannelMuxSession
     private var nextUdpID: Int
     private var nextFragmentDatagramID: UInt32
     private var controlChunkNextTxID: UInt32
@@ -149,6 +153,7 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
     private var clientPending: [Int: [Data]]
     private var clientTransports: [Int: ClientTransportState]
     private var fragmentStates: [FragmentKey: FragmentState]
+    private var coreServerChannels: Set<Int>
 
     init(
         instanceID: UInt64,
@@ -163,11 +168,19 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
         self.instanceID = instanceID
         self.connectionSeq = connectionSeq
         self.chanIDStart = chanIDStart
-        self.chanIDStride = max(1, chanIDStride)
+        let normalizedChannelStride = max(1, chanIDStride)
+        self.chanIDStride = normalizedChannelStride
         self.nextUdpID = nextUdpID
         self.sessionMaxAppPayload = sessionMaxAppPayload
         self.datagramCap = datagramCap
         self.clientPendingCap = max(1, clientPendingCap)
+        self.serverSession = ObstacleBridgeChannelMuxSession(
+            maximumApplicationPayload: sessionMaxAppPayload,
+            instanceID: instanceID,
+            connectionSequence: connectionSeq,
+            initialChannelID: UInt16(clamping: nextUdpID),
+            channelStride: UInt16(clamping: normalizedChannelStride)
+        )
         self.nextFragmentDatagramID = 1
         self.controlChunkNextTxID = 1
         self.counters = [:]
@@ -179,6 +192,7 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
         self.clientPending = [:]
         self.clientTransports = [:]
         self.fragmentStates = [:]
+        self.coreServerChannels = []
     }
 
     func handleLocalServerDatagram(
@@ -200,36 +214,62 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
         let clientKey = ClientKey(serviceKey: serviceKey, addrHost: addrHost, addrPort: addrPort)
         let existingChanID = channelByClient[clientKey]
         let allocatedChannel = existingChanID == nil
-        let chanID = existingChanID ?? allocateUdpID()
+        var frames: [Data] = []
+        let chanID: Int
         if allocatedChannel {
+            // A reduced application budget still needs the native fragment
+            // adapter until R007.4 provides the Core packet-fragment model.
+            if ObstacleBridgeChannelMuxCodec.muxHeaderSize + payload.count <= sessionMaxAppPayload {
+                let outbound = try wireFrames(from: serverSession.acceptLocal(service: coreServiceSpec(spec)))
+                guard let first = outbound.first else { return nil }
+                chanID = first.chanID
+                frames.append(contentsOf: outbound.map(\.wire))
+                coreServerChannels.insert(chanID)
+                nextUdpID = Int(serverSession.nextAvailableChannelID)
+            } else {
+                chanID = allocateUdpID()
+                try serverSession.reserve(channelID: UInt16(chanID))
+                guard let openFrames = try buildOpenFrames(chanID: chanID, spec: spec) else {
+                    serverSession.releaseReservation(channelID: UInt16(chanID))
+                    return nil
+                }
+                frames.append(contentsOf: openFrames)
+            }
             channelByClient[clientKey] = chanID
             clientByChannel[chanID] = clientKey
+        } else {
+            chanID = existingChanID!
         }
 
-        var frames: [Data] = []
-        if allocatedChannel {
-            guard let openFrames = try buildOpenFrames(chanID: chanID, spec: spec) else {
-                return nil
-            }
-            frames.append(contentsOf: openFrames)
+        if coreServerChannels.contains(chanID) {
+            frames.append(contentsOf: try wireFrames(from: serverSession.localData(channelID: UInt16(chanID), payload: payload)).map(\.wire))
+        } else {
+            guard let dataFrames = try buildDataFrames(chanID: chanID, payload: payload) else { return nil }
+            frames.append(contentsOf: dataFrames)
         }
-        guard let dataFrames = try buildDataFrames(chanID: chanID, payload: payload) else {
-            return nil
-        }
-        frames.append(contentsOf: dataFrames)
 
         return LocalServerDatagramSnapshot(
             chanID: chanID,
             allocatedChannel: allocatedChannel,
             frames: frames,
             nextUdpID: nextUdpID,
-            nextCounter: counters[chanID] ?? 0
+            nextCounter: coreServerChannels.contains(chanID)
+                ? Int(serverSession.nextOutboundCounter(channelID: UInt16(chanID)) ?? 0)
+                : counters[chanID] ?? 0
         )
     }
 
-    func handleInboundServerData(chanID: Int, body: Data) -> InboundServerDatagramSnapshot {
+    func handleInboundServerData(chanID: Int, body: Data, counter: Int? = nil) -> InboundServerDatagramSnapshot {
         guard let client = clientByChannel[chanID], body.count <= datagramCap else {
             return InboundServerDatagramSnapshot(delivered: false, packet: nil, addrHost: nil, addrPort: nil)
+        }
+        if coreServerChannels.contains(chanID) {
+            guard let counter,
+                  let effects = try? serverSession.receive(.init(channelID: UInt16(chanID), protocolType: ObstacleBridgeChannelMuxSessionProtocol.udp.rawValue, counter: UInt16(clamping: counter), messageType: ObstacleBridgeChannelMuxSessionMessageType.data.rawValue, body: body)),
+                  case .writeLocal(_, let packet) = effects.first else {
+                return InboundServerDatagramSnapshot(delivered: false, packet: nil, addrHost: nil, addrPort: nil)
+            }
+            return .init(delivered: true, packet: packet, addrHost: client.addrHost, addrPort: client.addrPort)
         }
         return InboundServerDatagramSnapshot(
             delivered: true,
@@ -716,7 +756,16 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleInboundClose(chanID: Int) -> CloseSnapshot {
+    func handleInboundClose(chanID: Int, counter: Int? = nil) -> CloseSnapshot {
+        if coreServerChannels.contains(chanID) {
+            guard let counter,
+                  (try? serverSession.receive(.init(channelID: UInt16(chanID), protocolType: ObstacleBridgeChannelMuxSessionProtocol.udp.rawValue, counter: UInt16(clamping: counter), messageType: ObstacleBridgeChannelMuxSessionMessageType.close.rawValue, body: Data()))) != nil else {
+                return .init(closed: false, chanID: chanID, nextUdpID: nextUdpID, activeChannels: clientByChannel.keys.sorted())
+            }
+            coreServerChannels.remove(chanID)
+        } else {
+            serverSession.releaseReservation(channelID: UInt16(chanID))
+        }
         let client = clientByChannel.removeValue(forKey: chanID)
         if let client {
             channelByClient.removeValue(forKey: client)
@@ -743,9 +792,17 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
         if channelID < start || channelID > 65535 {
             channelID = start
         }
-        let next = channelID + chanIDStride
-        nextUdpID = next <= 65535 ? next : start
-        return channelID
+        let scanStart = channelID
+        repeat {
+            let candidate = channelID
+            let next = candidate + chanIDStride
+            channelID = next <= 65535 ? next : start
+            if !coreServerChannels.contains(candidate), clientByChannel[candidate] == nil {
+                nextUdpID = channelID
+                return candidate
+            }
+        } while channelID != scanStart
+        fatalError("no free UDP channel identifiers")
     }
 
     private func nextCounter(chanID: Int, mtype: ObstacleBridgeChannelMuxCodec.MType) -> Int {
@@ -847,6 +904,64 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
         }
         nextFragmentDatagramID = datagramID == 0xFFFFFFFF ? 1 : datagramID &+ 1
         return datagramID
+    }
+
+    private struct SessionWireFrame {
+        let chanID: Int
+        let wire: Data
+    }
+
+    private func coreServiceSpec(_ value: ObstacleBridgeChannelMuxCodec.ServiceSpec) -> ObstacleBridgeServiceSpec {
+        let proto: (String) -> UInt8? = { name in
+            switch name.lowercased() {
+            case "udp": return ObstacleBridgeChannelMuxSessionProtocol.udp.rawValue
+            case "tcp": return ObstacleBridgeChannelMuxSessionProtocol.tcp.rawValue
+            default: return nil
+            }
+        }
+        guard let listenProtocol = proto(value.lProto), let targetProtocol = proto(value.rProto) else {
+            fatalError("unsupported UDP service protocol")
+        }
+        return .init(
+            serviceID: UInt16(clamping: value.svcID), name: value.name,
+            listenProtocol: listenProtocol, listenHost: value.lBind,
+            listenPort: UInt16(clamping: value.lPort), targetProtocol: targetProtocol,
+            targetHost: value.rHost, targetPort: UInt16(clamping: value.rPort),
+            lifecycleHooks: value.lifecycleHooks.map(coreJSONValue),
+            options: value.options.map(coreJSONValue)
+        )
+    }
+
+    private func coreJSONValue(_ value: [String: ObstacleBridgeChannelMuxCodec.JSONValue]) -> [String: ObstacleBridgeJSONValue] {
+        value.mapValues(coreJSONValue)
+    }
+
+    private func coreJSONValue(_ value: ObstacleBridgeChannelMuxCodec.JSONValue) -> ObstacleBridgeJSONValue {
+        switch value {
+        case .object(let object): return .object(coreJSONValue(object))
+        case .array(let values): return .array(values.map(coreJSONValue))
+        case .string(let value): return .string(value)
+        case .integer(let value): return .integer(value)
+        case .double(let value): return .double(value)
+        case .bool(let value): return .bool(value)
+        case .null: return .null
+        }
+    }
+
+    private func wireFrames(from effects: [ObstacleBridgeChannelMuxSessionEffect]) throws -> [SessionWireFrame] {
+        try effects.compactMap { effect in
+            guard case .outbound(let frame) = effect,
+                  let proto = ObstacleBridgeChannelMuxCodec.Proto(rawValue: Int(frame.protocolType)),
+                  let messageType = ObstacleBridgeChannelMuxCodec.MType(rawValue: Int(frame.messageType))
+            else { return nil }
+            return .init(
+                chanID: Int(frame.channelID),
+                wire: try ObstacleBridgeChannelMuxCodec.packMux(
+                    chanID: Int(frame.channelID), proto: proto,
+                    counter: Int(frame.counter), mtype: messageType, body: frame.body
+                )
+            )
+        }
     }
 
     private static func clientOpenKeyString(_ key: ClientOpenKey) -> String {

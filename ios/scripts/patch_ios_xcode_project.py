@@ -98,6 +98,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C50000000000000000003A", "71C50000000000000000013A", "ObstacleBridgeOverlayCoordinator.swift"),
     ("71C50000000000000000003C", "71C50000000000000000013C", "ObstacleBridgeOverlayBackpressure.swift"),
     ("71C50000000000000000003B", "71C50000000000000000013B", "ObstacleBridgeOverlayEnvelope.swift"),
+    ("71C50000000000000000003D", "71C50000000000000000013D", "ObstacleBridgeChannelMuxSession.swift"),
     ("71C500000000000000000012", "71C500000000000000000112", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C500000000000000000025", "71C500000000000000000125", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
     ("71C500000000000000000013", "71C500000000000000000113", "ObstacleBridgeTcpOverlayRuntime.swift"),
@@ -147,6 +148,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C61000000000000000003A", "71C61000000000000000013A", "ObstacleBridgeOverlayCoordinator.swift"),
     ("71C61000000000000000003C", "71C61000000000000000013C", "ObstacleBridgeOverlayBackpressure.swift"),
     ("71C61000000000000000003B", "71C61000000000000000013B", "ObstacleBridgeOverlayEnvelope.swift"),
+    ("71C61000000000000000003D", "71C61000000000000000013D", "ObstacleBridgeChannelMuxSession.swift"),
     ("71C610000000000000000030", "71C610000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
     ("71C610000000000000000038", "71C610000000000000000138", "ObstacleBridgeCore.swift"),
     ("71C610000000000000000037", "71C610000000000000000137", "ObstacleBridgeSecureLinkPSKTranscript.swift"),
@@ -186,7 +188,7 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeOverlayCoordinator.swift", "ObstacleBridgeOverlayBackpressure.swift", "ObstacleBridgeOverlayEnvelope.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
+    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeOverlayCoordinator.swift", "ObstacleBridgeOverlayBackpressure.swift", "ObstacleBridgeOverlayEnvelope.swift", "ObstacleBridgeChannelMuxSession.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     return f"../../../../native/ObstacleBridgeShared/{name}"
 
@@ -729,20 +731,23 @@ def add_core_crypto_package(text: str) -> str:
             raise ValueError(f"{target_name} native target block not found")
         if product_id in target_match.group(1):
             continue
-        pattern = (
-            rf"(\t\t[0-9A-F]{{24}} /\* {target_name} \*/ = \{{\n"
-            rf"\t\t\tisa = PBXNativeTarget;.*?)(\t\t\tname = {target_name};\n)"
-        )
-        replacement = (
-            r"\1"
+        # Briefcase template revisions may rearrange target fields.  The
+        # complete target block was found above, so insert relative to its
+        # own `name` field instead of re-matching a second broad PBX range.
+        name_pattern = re.compile(rf"\t\t\tname = \"?{re.escape(target_name)}\"?;\n")
+        # PBXNativeTarget may contain nested dictionaries in newer template
+        # versions, so the minimal block matcher above can stop before the
+        # target's name. Search forward from its unique target header instead.
+        name_match = name_pattern.search(text, target_match.start(1))
+        if not name_match:
+            raise ValueError(f"{target_name} target name field not found")
+        position = name_match.start()
+        insertion = (
             "\t\t\tpackageProductDependencies = (\n"
             f"\t\t\t\t{product_id} /* Crypto */,\n"
             "\t\t\t);\n"
-            r"\2"
         )
-        text, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
-        if count != 1:
-            raise ValueError(f"{target_name} target package dependency block not found")
+        text = text[:position] + insertion + text[position:]
 
     return text
 
@@ -816,6 +821,22 @@ def patch_app_target(text: str) -> str:
     )
     text = add_app_network_extension_framework(text)
     return text
+
+
+def enforce_ios_deployment_target(text: str) -> str:
+    """Keep every generated iOS target within the supported iOS 15 baseline.
+
+    The app target compiles the shared Swift crypto implementation as well as
+    the packet-tunnel extension.  Briefcase's template currently emits iOS
+    13.0 for the app and project configurations, which makes CryptoKit HKDF
+    unavailable even though the product's supported deployment baseline is
+    iOS 15.
+    """
+    return re.sub(
+        r"(IPHONEOS_DEPLOYMENT_TARGET = )[0-9]+(?:\.[0-9]+)?;",
+        r"\g<1>15.0;",
+        text,
+    )
 
 
 def strip_legacy_ipserver_python_support(text: str) -> str:
@@ -1115,6 +1136,7 @@ def patch_pbxproj_text(text: str) -> str:
     text = patch_app_target(text)
     text = patch_ipserver_target(text)
     text = add_core_crypto_package(text)
+    text = enforce_ios_deployment_target(text)
     return text
 
 
