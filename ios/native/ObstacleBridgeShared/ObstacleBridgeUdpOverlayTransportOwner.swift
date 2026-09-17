@@ -97,6 +97,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var lastIdleProbeNS: UInt64 = 0
     private var lastOverlayConnectedState = false
     private var batchFlushScheduled = false
+    private var coreRetryToken: UInt64?
+    private var coreRetryWorkItem: DispatchWorkItem?
+    private var coreReceiveEpoch: UInt64?
 
     init(
         bindHost: String,
@@ -171,6 +174,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
             )
         }
+        overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
+            self?.queue.async { self?.applyCoreEffects(effects) }
+        }
     }
 
     var overlayConnected: Bool {
@@ -200,25 +206,80 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         lastIdleProbeNS = 0
         lastOverlayConnectedState = false
 
-        installReadSource()
-
         startOverlayTimers()
         startPeerFallbackTimer()
-        if currentPeerAddress != nil {
+        if let overlayLayerTransportAdapter {
+            overlayLayerTransportAdapter.configureCoreCandidateCount(max(1, peerCandidates.count))
+            overlayLayerTransportAdapter.startCoreLifecycle()
+        } else {
+            installReadSource()
             sendInitialIdleProbe()
         }
     }
 
-    private func installReadSource() {
-        guard socketFD >= 0 else {
+    private func installReadSource(coreEpoch: UInt64? = nil) {
+        guard socketFD >= 0, readSource == nil else {
             return
         }
         let source = DispatchSource.makeReadSource(fileDescriptor: socketFD, queue: queue)
         source.setEventHandler { [weak self] in
-            self?.drainSocket()
+            guard let self,
+                  self.overlayLayerTransportAdapter == nil || self.coreReceiveEpoch == coreEpoch
+            else { return }
+            self.drainSocket()
         }
         readSource = source
         source.resume()
+    }
+
+    /// The datagram socket and Dispatch source are native mechanics. Core owns
+    /// epoch allocation, candidate selection, retry timing, and the one
+    /// admitted source owner for that epoch.
+    private func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect]) {
+        for effect in effects {
+            switch effect {
+            case .openTransport(_, let candidateIndex, _):
+                guard started else { continue }
+                if peerCandidates.indices.contains(candidateIndex) {
+                    peerCandidateIndex = candidateIndex
+                    currentPeerAddress = peerCandidates[candidateIndex]
+                }
+                currentPeerSelectedAtNS = monotonicNowNS()
+                sendInitialIdleProbe()
+            case .cancelTransport:
+                overlayRuntime.resetTransportEpoch()
+                tunRuntime?.resetTransportEpoch()
+                secureLinkHandshakePrimed = false
+                lastSecureLinkPrimeNS = 0
+                startupMuxFramesSent = false
+                startupMuxFramesReplayedWithTunOpen = false
+            case .startReceive(let epoch):
+                guard coreReceiveEpoch == nil else { continue }
+                coreReceiveEpoch = epoch
+                installReadSource(coreEpoch: epoch)
+            case .cancelReceive(let epoch):
+                guard coreReceiveEpoch == epoch else { continue }
+                coreReceiveEpoch = nil
+                readSource?.cancel()
+                readSource = nil
+            case .scheduleRetry(let token, let delay):
+                coreRetryWorkItem?.cancel()
+                coreRetryToken = token
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self, self.coreRetryToken == token else { return }
+                    self.coreRetryWorkItem = nil
+                    self.coreRetryToken = nil
+                    self.overlayLayerTransportAdapter?.retryTimerFired(token: token)
+                }
+                coreRetryWorkItem = workItem
+                queue.asyncAfter(deadline: .now() + .milliseconds(delay), execute: workItem)
+            case .cancelRetry(let token):
+                guard coreRetryToken == token else { continue }
+                coreRetryWorkItem?.cancel()
+                coreRetryWorkItem = nil
+                coreRetryToken = nil
+            }
+        }
     }
 
     @discardableResult
@@ -266,6 +327,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             return
         }
         started = false
+        overlayLayerTransportAdapter?.stopCoreLifecycle()
         controlTimer?.cancel()
         controlTimer = nil
         retransmitTimer?.cancel()
@@ -302,6 +364,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         lastInboundDatagramNS = 0
         lastIdleProbeNS = 0
         lastOverlayConnectedState = false
+        coreRetryWorkItem?.cancel()
+        coreRetryWorkItem = nil
+        coreRetryToken = nil
+        coreReceiveEpoch = nil
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         if socketFD >= 0 {
             Darwin.close(socketFD)
@@ -845,23 +911,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         else {
             return false
         }
-        let reason: String
-        if status.authFailCode != 0 {
-            reason = "secure_link_failed"
-        } else if status.sessionID != 0 {
-            reason = "secure_link_handshake_stale"
-        } else {
-            reason = "app_not_ready"
-        }
-        if peerCandidates.count > 1 {
-            rotateToNextPeerCandidate(nowNS: nowNS, reason: reason)
-        } else {
-            guard rebuildSocketForPeerRotation() else {
-                return false
-            }
-            resetOverlayTransportEpoch(reason: reason)
-            sendInitialIdleProbe()
-        }
+        adapter.handleTransportDisconnected()
         return true
     }
 
@@ -892,7 +942,11 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
         startupMuxFramesReplayedWithTunOpen = false
-        overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
+        if overlayLayerTransportAdapter?.coreLifecycleSnapshot().epoch != nil {
+            overlayLayerTransportAdapter?.handleTransportDisconnected()
+        } else {
+            overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)
+        }
         eventSink?("udp_overlay_transport_epoch_reset", ["reason": reason])
     }
 
@@ -900,32 +954,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         guard let adapter = overlayLayerTransportAdapter else {
             return
         }
-        guard let result = adapter.transportDelayRotationDue(
-            transmitDelayEstMS: overlayRuntime.transmitDelayEstMS,
-            candidateCount: peerCandidates.count
-        ) ?? adapter.connectionRotationDue(candidateCount: peerCandidates.count)
-        else {
-            return
-        }
-        eventSink?("udp_overlay_lifecycle_rotation", [
-            "epoch": result.epoch,
-            "candidate_cycle": result.candidateCycle,
-            "restart_required": result.restartRequired,
-        ])
-        guard !result.restartRequired else {
-            eventSink?("udp_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
-            return
-        }
-        if peerCandidates.count > 1 {
-            rotateToNextPeerCandidate(nowNS: nowNS, reason: result.reason)
-        } else {
-            guard rebuildSocketForPeerRotation() else {
-                adapter.rotationAttemptRejected(result)
-                return
-            }
-            resetOverlayTransportEpoch(reason: result.reason)
-            sendInitialIdleProbe()
-        }
+        _ = nowNS
+        adapter.reportTransportLiveness(delayMilliseconds: overlayRuntime.transmitDelayEstMS)
     }
 
     private func routeOverlayPayloads(_ payloads: [Data]) {

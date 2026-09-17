@@ -21,6 +21,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift",
@@ -347,6 +348,34 @@
       "mixed_runtime_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::protectedUnsolicitedChannelMuxFrameReachesOneReceiveOwner"]
     }
   ],
+  "r006_overlay_traceability": {
+    "reference_behavior": "Python overlay lifecycle admits one receive owner per epoch, rotates the resolved candidate after a bounded failure, rejects stale callbacks, and keeps application readiness below authenticated transport state.",
+    "core": {
+      "status": "complete",
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::authenticatedEpochStartsExactlyOneReceiveOwner", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::staleGenerationCannotChangeReplacementEpoch", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::sustainedTransportDelayIsCoreOwnedAndInvalidatesTheEpoch"]
+    },
+    "linux": {
+      "status": "complete",
+      "implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxReconnectSupervisor.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentProtectedPythonPeersUseDeadlineRetryFreshReadinessAndRejectRetiredEpoch", "tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle"]
+    },
+    "macos": {
+      "status": "complete",
+      "implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayLayerTransportAdapter.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift"],
+      "tests": ["ios/tests/test_macos_swift_host_runner.py::test_swift_overlay_owners_share_channelmux_tun_core", "ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect"]
+    },
+    "ios": {
+      "status": "physical-device-qualified",
+      "tests": ["ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect"],
+      "device_evidence": {
+        "date": "2026-09-17",
+        "deployment": "A freshly rebuilt iOS app and IPServer extension were deployed and reported running on a physical device.",
+        "webadmin_endpoint": "http://37.1.192.30:13081/",
+        "verification": "The macOS qualification host received HTTP 200 and the ObstacleBridge WebAdmin HTML document from this endpoint."
+      }
+    }
+  },
   "known_differences": [
     {"area": "myudp trailing bytes", "python_wins": "accept the declared frame and leave outer trailing bytes to the caller", "swift_gap": "portable Linux decoder requires exact length"},
     {"area": "myudp CONTROL missing list", "python_wins": "derive the bounded capacity from the wire payload budget", "swift_gap": "portable Linux codec caps entries at 64"},

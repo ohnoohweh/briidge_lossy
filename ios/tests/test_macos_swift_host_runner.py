@@ -46,6 +46,7 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" in build_script
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in build_script
     assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
@@ -577,8 +578,10 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
     assert "static func handleInboundTunMuxFrame(" in core
     for owner in [tcp_owner, udp_owner, ws_owner, quic_owner]:
         assert "func handleLifecycleRotationIfDue" in owner
-        assert "connectionRotationDue(candidateCount:" in owner
-        assert "lifecycle_restart_required" in owner
+        assert "reportTransportLiveness(delayMilliseconds:" in owner
+        assert "setCoreEffectSink" in owner
+        assert "startCoreLifecycle" in owner
+        assert "func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect])" in owner
     assert "static func handleTCPTransportEvent(" in core
 
     for source in (tcp_owner, udp_owner, ws_owner, quic_owner):
@@ -637,8 +640,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert 'snapshot["next_address_attempt_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
     assert 'snapshot["restart_in_seconds"] = appReadinessRecoveryInSeconds() ?? NSNull()' in udp_owner
     assert "guard rebuildSocketForPeerRotation() else" in udp_owner
-    assert 'reason = "secure_link_handshake_stale"' in udp_owner
-    assert 'reason = "secure_link_failed"' in udp_owner
+    assert "adapter.handleTransportDisconnected()" in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "liveness_lost")' in udp_owner
     assert 'resetOverlayTransportEpoch(reason: "peer_candidate_rotated")' in udp_owner
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
@@ -648,10 +650,9 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in overlay_adapter
     assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in overlay_adapter
     assert "handleTransportDisconnected()" in overlay_adapter
-    assert "transportDelayRotationDue(" in overlay_adapter
+    assert "reportTransportLiveness(delayMilliseconds: Double)" in overlay_adapter
     assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in overlay_adapter
     assert "let transportDelayRotationGrace: TimeInterval" in overlay_adapter
-    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in overlay_adapter
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert 'runtimeConfig["channelmux_transport_delay_threshold_ms"]' in host_runner
     assert 'runtimeConfig["channelmux_transport_delay_rotation_delay_ms"]' in host_runner
@@ -660,29 +661,29 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
 def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation() -> None:
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
     connect_overlay = ws_owner[
-        ws_owner.index("    private func connectOverlay() {") : ws_owner.index("    private func connectNetworkWebSocket(")
+        ws_owner.index("    private func connectOverlay(coreCandidateIndex:") : ws_owner.index("    private func connectNetworkWebSocket(")
     ]
 
-    assert "resetOverlayTransportEpoch()" in connect_overlay
-    assert connect_overlay.index("resetOverlayTransportEpoch()") < connect_overlay.index(
+    assert "resetOverlayTransportEpoch(notifyCore: false)" in connect_overlay
+    assert connect_overlay.index("resetOverlayTransportEpoch(notifyCore: false)") < connect_overlay.index(
         "websocketTransportGeneration += 1"
     )
 
 
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
     core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    backpressure = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift").read_text(encoding="utf-8")
     snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
     quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
 
-    assert "struct OverlayEgressWindowState" in core
+    assert "typealias OverlayEgressWindowState = ObstacleBridgeOverlayBackpressureState" in core
+    assert "public enum ObstacleBridgeOverlayBackpressurePolicy" in backpressure
+    assert "public static func recordEgress" in backpressure
+    assert "public static func snapshot(" in backpressure
     assert "static func overlayProtocolStats(" in core
-    assert '"waiting_count": max(0, waitingCount)' in core
-    assert '"inflight": max(0, inflight)' in core
-    assert '"max_inflight": max(0, maxInflight)' in core
-    assert '"egress_prev_window_bytes": max(0, egressWindow.previousBytes)' in core
-    assert '"egress_curr_window_bytes": max(0, egressWindow.currentBytes)' in core
+    assert "ObstacleBridgeOverlayBackpressurePolicy.snapshot" in core
     assert "static func selectedTransportRuntime(" in snapshot_support
     assert "static func selectedProtocolStats(" in snapshot_support
     assert "static func peerMetric(_ key: String" in snapshot_support

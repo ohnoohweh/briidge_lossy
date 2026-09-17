@@ -96,6 +96,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000033", "71C500000000000000000133", "ObstacleBridgeServiceCodec.swift"),
     ("71C500000000000000000011", "71C500000000000000000111", "ObstacleBridgeWebSocketPayloadCodec.swift"),
     ("71C50000000000000000003A", "71C50000000000000000013A", "ObstacleBridgeOverlayCoordinator.swift"),
+    ("71C50000000000000000003C", "71C50000000000000000013C", "ObstacleBridgeOverlayBackpressure.swift"),
     ("71C50000000000000000003B", "71C50000000000000000013B", "ObstacleBridgeOverlayEnvelope.swift"),
     ("71C500000000000000000012", "71C500000000000000000112", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C500000000000000000025", "71C500000000000000000125", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
@@ -144,6 +145,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000027", "71C610000000000000000127", "ObstacleBridgeOverlayStackPlanner.swift"),
     ("71C61000000000000000000D", "71C61000000000000000010D", "ObstacleBridgeWebSocketPayloadCodec.swift"),
     ("71C61000000000000000003A", "71C61000000000000000013A", "ObstacleBridgeOverlayCoordinator.swift"),
+    ("71C61000000000000000003C", "71C61000000000000000013C", "ObstacleBridgeOverlayBackpressure.swift"),
     ("71C61000000000000000003B", "71C61000000000000000013B", "ObstacleBridgeOverlayEnvelope.swift"),
     ("71C610000000000000000030", "71C610000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
     ("71C610000000000000000038", "71C610000000000000000138", "ObstacleBridgeCore.swift"),
@@ -184,7 +186,7 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeOverlayCoordinator.swift", "ObstacleBridgeOverlayEnvelope.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
+    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeOverlayCoordinator.swift", "ObstacleBridgeOverlayBackpressure.swift", "ObstacleBridgeOverlayEnvelope.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     return f"../../../../native/ObstacleBridgeShared/{name}"
 

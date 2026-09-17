@@ -1111,10 +1111,8 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
     assert "struct ObstacleBridgeConnectionLifecycleEvent" in runtime
-    assert "struct ObstacleBridgeConnectionRotationResult" in runtime
-    assert "func connectionRotationDue(candidateCount: Int)" in runtime
-    assert "func transportDelayRotationDue(" in runtime
-    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in runtime
+    assert "func reportTransportLiveness(delayMilliseconds: Double)" in runtime
+    assert "transportLivenessSample" in runtime
     assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in runtime
     assert "let transportDelayRotationGrace: TimeInterval" in runtime
     assert "transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS" in runtime

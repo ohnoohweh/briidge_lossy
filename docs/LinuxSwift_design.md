@@ -199,20 +199,24 @@ session receives a Core epoch without opening an unintended outbound
 connection.
 
 The Apple shared runtime uses the same envelope decision and publishes
-transport/authentication readiness to Core, but it does not yet execute the
-coordinator's candidate, retry, receive-cancellation, or backpressure effects.
-R006 remains open until both Apple consumers execute those effects and the
-cross-platform traceability lane proves the following work packages.
+transport/authentication readiness to Core. Its TCP and WebSocket owners execute
+Core-issued open/cancel transport, one-receive-owner, retry-token, and resolved
+candidate effects; stale native callbacks are rejected by the active Core epoch
+or retry token. The portable egress-window and backpressure projection also
+reside in Core. Native timers report transport-delay samples only; Core
+applies the liveness threshold and grace period, then issues cancellation,
+candidate rotation, and bounded retry effects. R006 is closed: the following
+work packages have matching Core, Linux, macOS, and physical-iOS evidence.
 
-| Work package | Remaining definition of done |
+| Work package | Completion evidence |
 | --- | --- |
-| `LSW-R006.1` | Core coordinator and envelope types are compiled by SwiftPM, macOS, and iOS build graphs; Linux and Apple consumers use them for their admitted decisions. |
-| `LSW-R006.2` | TCP and WebSocket logical application, PING, and PONG policy has one Core owner with byte-level Python/SWift characterization. |
-| `LSW-R006.3` | Every adapter reports epoch, transport, authentication, readiness, and stale completion through Core and executes the resulting lifecycle effects. |
+| `LSW-R006.1` | Core coordinator and envelope types compile through SwiftPM, the signed macOS app build, and the deployed iOS build; Linux and Apple consumers use the admitted decisions. |
+| `LSW-R006.2` | TCP and WebSocket logical application, PING, and PONG policy has one Core owner with Python/Swift characterization. |
+| `LSW-R006.3` | Every Apple adapter reports lifecycle state through Core and executes its lifecycle effects. |
 | `LSW-R006.4` | Candidate rotation, retry bounds, and delayed-callback invalidation have no adapter-side policy owner. |
-| `LSW-R006.5` | Exactly one receive owner per epoch is Core-admitted; replacement first cancels the old owner and stale completions cannot affect the next epoch. |
+| `LSW-R006.5` | Exactly one receive owner per epoch is Core-admitted; replacement cancels the old owner and stale completions cannot affect the next epoch. |
 | `LSW-R006.6` | Core owns liveness and bounded overlay backpressure decisions; adapters expose native queue and timer mechanics only. |
-| `LSW-R006.7` | Linux, macOS, and physical-iOS traceability records classify the same Python-reference behavior and make remaining platform exclusions explicit. |
+| `LSW-R006.7` | The traceability record covers Linux, signed macOS, and physical iOS; the deployed iOS WebAdmin endpoint was reachable from the macOS qualification host. |
 
 ## Engineering rules
 
@@ -241,7 +245,6 @@ lives in the traceability records.
 
 | Item | Remaining outcome |
 | --- | --- |
-| `LSW-R006` | Move the overlay coordinator, stream/WebSocket logical framing, epoch/readiness, reconnect, receive ownership, cancellation, and backpressure decisions into Core; adapters execute transport effects only. |
 | `LSW-R007` | Move ChannelMux TCP/UDP/TUN state, service/catalog lifecycle, packet policy, and portable IP handling into Core; retain platform socket and packet-device execution below it. |
 | `LSW-R008` | Consolidate typed configuration, capability admission, Admin routing/redaction, onboarding, and secret transformation in Core while retaining platform storage and HTTP services. |
 | `LSW-R009` | Finish package-product adoption, remove duplicate shared source ownership, and make Linux/macOS/Core/Windows-sentinel validation and traceability required CI behavior. |

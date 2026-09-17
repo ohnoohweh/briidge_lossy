@@ -22,14 +22,17 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         let started = coordinator.handle(.start)
         #expect(started.snapshot.state == .connecting)
         #expect(started.snapshot.epoch == 1)
-        #expect(started.effects == [.openTransport(epoch: 1, candidateIndex: 0, attempt: 1)])
+        #expect(started.effects == [
+            .openTransport(epoch: 1, candidateIndex: 0, attempt: 1),
+            .startReceive(epoch: 1),
+        ])
         #expect(coordinator.handle(.transportConnected(epoch: 1)).effects.isEmpty)
 
         let authenticated = coordinator.handle(.authenticated(epoch: 1))
         #expect(authenticated.snapshot.state == .connected)
         #expect(authenticated.snapshot.appReady)
         #expect(authenticated.snapshot.receiveActive)
-        #expect(authenticated.effects == [.startReceive(epoch: 1)])
+        #expect(authenticated.effects.isEmpty)
         #expect(coordinator.handle(.authenticated(epoch: 1)).effects.isEmpty)
     }
 
@@ -50,6 +53,7 @@ struct ObstacleBridgeOverlayCoordinatorTests {
             policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 40, maximumAttempts: 3)
         )
         _ = coordinator.handle(.start)
+        _ = coordinator.handle(.transportConnected(epoch: 1))
         _ = coordinator.handle(.authenticated(epoch: 1))
 
         let failure = coordinator.handle(.receiveFinished(epoch: 1, reason: "eof"))
@@ -64,7 +68,10 @@ struct ObstacleBridgeOverlayCoordinatorTests {
 
         let replacement = coordinator.handle(.retryTimerFired(token: 1))
         #expect(replacement.snapshot.epoch == 2)
-        #expect(replacement.effects == [.openTransport(epoch: 2, candidateIndex: 1, attempt: 2)])
+        #expect(replacement.effects == [
+            .openTransport(epoch: 2, candidateIndex: 1, attempt: 2),
+            .startReceive(epoch: 2),
+        ])
         #expect(coordinator.handle(.authenticated(epoch: 1)).effects.isEmpty)
         #expect(coordinator.snapshot.state == .connecting)
         #expect(coordinator.snapshot.epoch == 2)
@@ -78,12 +85,14 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         _ = coordinator.handle(.start)
         let firstFailure = coordinator.handle(.transportFailed(epoch: 1, reason: "first"))
         #expect(firstFailure.effects == [
+            .cancelReceive(epoch: 1),
             .cancelTransport(epoch: 1),
             .scheduleRetry(token: 1, afterMilliseconds: 10),
         ])
         _ = coordinator.handle(.retryTimerFired(token: 1))
         let secondFailure = coordinator.handle(.transportFailed(epoch: 2, reason: "second"))
         #expect(secondFailure.effects == [
+            .cancelReceive(epoch: 2),
             .cancelTransport(epoch: 2),
             .scheduleRetry(token: 2, afterMilliseconds: 20),
         ])
@@ -105,5 +114,36 @@ struct ObstacleBridgeOverlayCoordinatorTests {
         #expect(terminal.snapshot.state == .failed)
         #expect(terminal.snapshot.attempts == 3)
         #expect(terminal.snapshot.nextRetryMilliseconds == nil)
+    }
+
+    @Test func resolvedCandidateCountKeepsRotationInCore() {
+        let coordinator = ObstacleBridgeOverlayCoordinator(candidateCount: 1)
+        coordinator.configureCandidateCount(3)
+
+        _ = coordinator.handle(.start)
+        let failed = coordinator.handle(.transportFailed(epoch: 1, reason: "unreachable"))
+        #expect(failed.snapshot.candidateIndex == 1)
+        let retry = coordinator.handle(.retryTimerFired(token: 1))
+        #expect(retry.effects == [
+            .openTransport(epoch: 2, candidateIndex: 1, attempt: 2),
+            .startReceive(epoch: 2),
+        ])
+    }
+
+    @Test func sustainedTransportDelayIsCoreOwnedAndInvalidatesTheEpoch() {
+        let coordinator = ObstacleBridgeOverlayCoordinator(
+            candidateCount: 2,
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 3),
+            livenessPolicy: .init(transportDelayThresholdMilliseconds: 50, transportDelayGraceMilliseconds: 100)
+        )
+        _ = coordinator.handle(.start)
+        _ = coordinator.handle(.transportConnected(epoch: 1))
+        _ = coordinator.handle(.authenticated(epoch: 1))
+
+        #expect(coordinator.handle(.transportLivenessSample(epoch: 1, delayMilliseconds: 49, nowMilliseconds: 0)).effects.isEmpty)
+        #expect(coordinator.handle(.transportLivenessSample(epoch: 1, delayMilliseconds: 50, nowMilliseconds: 1_000)).effects.isEmpty)
+        let expired = coordinator.handle(.transportLivenessSample(epoch: 1, delayMilliseconds: 50, nowMilliseconds: 1_100))
+        #expect(expired.effects == [.cancelReceive(epoch: 1), .cancelTransport(epoch: 1), .scheduleRetry(token: 1, afterMilliseconds: 10)])
+        #expect(expired.snapshot.candidateIndex == 1)
     }
 }

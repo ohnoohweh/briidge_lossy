@@ -33,6 +33,19 @@ public struct ObstacleBridgeOverlayReconnectPolicy: Equatable, Sendable {
     }
 }
 
+/// Core-owned liveness admission for a connected overlay epoch. Native
+/// adapters report their transport-delay measurement and clock; Core decides
+/// when a sustained condition ends the epoch.
+public struct ObstacleBridgeOverlayLivenessPolicy: Equatable, Sendable {
+    public let transportDelayThresholdMilliseconds: Double
+    public let transportDelayGraceMilliseconds: Int
+
+    public init(transportDelayThresholdMilliseconds: Double = 5_000, transportDelayGraceMilliseconds: Int = 30_000) {
+        self.transportDelayThresholdMilliseconds = max(0, transportDelayThresholdMilliseconds)
+        self.transportDelayGraceMilliseconds = max(0, transportDelayGraceMilliseconds)
+    }
+}
+
 /// Redacted, deterministic projection of the one active overlay epoch.
 public struct ObstacleBridgeOverlayCoordinatorSnapshot: Equatable, Sendable {
     public let state: ObstacleBridgeOverlayLifecycleState
@@ -76,6 +89,7 @@ public enum ObstacleBridgeOverlayCoordinatorInput: Equatable, Sendable {
     case authenticated(epoch: UInt64)
     case transportFailed(epoch: UInt64, reason: String)
     case receiveFinished(epoch: UInt64, reason: String)
+    case transportLivenessSample(epoch: UInt64, delayMilliseconds: Double, nowMilliseconds: UInt64)
     case retryTimerFired(token: UInt64)
     case stop
 }
@@ -106,7 +120,8 @@ public struct ObstacleBridgeOverlayCoordinatorTransition: Equatable, Sendable {
 /// and I/O remain platform-adapter mechanics.
 public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
     private let policy: ObstacleBridgeOverlayReconnectPolicy
-    private let candidateCount: Int
+    private let livenessPolicy: ObstacleBridgeOverlayLivenessPolicy
+    private var candidateCount: Int
     private var nextEpoch: UInt64 = 1
     private var nextRetryToken: UInt64 = 1
     private var activeEpoch: UInt64?
@@ -116,13 +131,23 @@ public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
     private var candidateIndex = 0
     private var failureReason: String?
     private var receiveActive = false
+    private var transportDelayHighSinceMilliseconds: UInt64?
 
-    public init(candidateCount: Int, policy: ObstacleBridgeOverlayReconnectPolicy = .init()) {
+    public init(candidateCount: Int, policy: ObstacleBridgeOverlayReconnectPolicy = .init(), livenessPolicy: ObstacleBridgeOverlayLivenessPolicy = .init()) {
         self.candidateCount = max(1, candidateCount)
         self.policy = policy
+        self.livenessPolicy = livenessPolicy
     }
 
     public var snapshot: ObstacleBridgeOverlayCoordinatorSnapshot { makeSnapshot() }
+
+    /// Adapters may resolve native addresses before starting an epoch. Core
+    /// retains the resulting count and remains the sole candidate-rotation
+    /// policy owner.
+    public func configureCandidateCount(_ count: Int) {
+        candidateCount = max(1, count)
+        candidateIndex %= candidateCount
+    }
 
     @discardableResult
     public func handle(_ input: ObstacleBridgeOverlayCoordinatorInput) -> ObstacleBridgeOverlayCoordinatorTransition {
@@ -155,12 +180,25 @@ public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
             guard epoch == activeEpoch, state == .connecting else { return transition([]) }
             state = .connected
             failureReason = nil
-            receiveActive = true
-            return transition([.startReceive(epoch: epoch)])
+            return transition([])
 
         case .transportFailed(let epoch, let reason), .receiveFinished(let epoch, let reason):
             guard epoch == activeEpoch, state != .stopped else { return transition([]) }
             return failActiveEpoch(reason: reason)
+
+        case .transportLivenessSample(let epoch, let delayMilliseconds, let nowMilliseconds):
+            guard epoch == activeEpoch, state == .connected else { return transition([]) }
+            guard delayMilliseconds >= livenessPolicy.transportDelayThresholdMilliseconds else {
+                transportDelayHighSinceMilliseconds = nil
+                return transition([])
+            }
+            guard let highSince = transportDelayHighSinceMilliseconds else {
+                transportDelayHighSinceMilliseconds = nowMilliseconds
+                return transition([])
+            }
+            guard nowMilliseconds >= highSince,
+                  nowMilliseconds - highSince >= UInt64(livenessPolicy.transportDelayGraceMilliseconds) else { return transition([]) }
+            return failActiveEpoch(reason: "transport_liveness_expired")
 
         case .retryTimerFired(let token):
             guard token == scheduledRetryToken, state == .reconnecting else { return transition([]) }
@@ -178,8 +216,16 @@ public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
         activeEpoch = epoch
         state = .connecting
         failureReason = nil
-        receiveActive = false
-        return [.openTransport(epoch: epoch, candidateIndex: candidateIndex, attempt: attempts)]
+        receiveActive = true
+        transportDelayHighSinceMilliseconds = nil
+        // A receiver belongs to the epoch from the first native open. This
+        // admits SecureLink and datagram handshake traffic before the
+        // transport can be marked application-ready, while preserving exactly
+        // one Core-owned receiver per epoch.
+        return [
+            .openTransport(epoch: epoch, candidateIndex: candidateIndex, attempt: attempts),
+            .startReceive(epoch: epoch),
+        ]
     }
 
     private func failActiveEpoch(reason: String) -> ObstacleBridgeOverlayCoordinatorTransition {
@@ -191,6 +237,7 @@ public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
         effects.append(.cancelTransport(epoch: epoch))
         activeEpoch = nil
         receiveActive = false
+        transportDelayHighSinceMilliseconds = nil
         failureReason = reason
         candidateIndex = (candidateIndex + 1) % candidateCount
         guard attempts < policy.maximumAttempts else {
@@ -216,6 +263,7 @@ public final class ObstacleBridgeOverlayCoordinator: @unchecked Sendable {
         activeEpoch = nil
         scheduledRetryToken = nil
         receiveActive = false
+        transportDelayHighSinceMilliseconds = nil
         state = .stopped
         failureReason = nil
         return effects
