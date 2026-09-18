@@ -81,7 +81,8 @@ Representative anchors for those areas:
 - current shared-TUN coverage also pins the server-side virtual-peer probe path so internally generated ICMP verification traffic is routed through the shared-TUN dispatcher, bound to explicit local-virtual ownership, and consumed locally on reply instead of surfacing as unknown-destination traffic
 - the Swift component and iOS packet-flow probes admit TUN OPEN, OPEN chunks,
   DATA, fragments, and CLOSE through the portable session counter sequence;
-  the adapter probes then exercise only packet-device delivery.
+  the adapter probes then exercise only packet-device delivery, including the
+  packet-flow lifecycle fence that rejects stale deferred drains.
 - current overlay failover coverage pins ordered-peer rotation, completed candidate cycles, reset-on-connected behavior, and fresh-socket rotation for Python `myudp` clients and the native Swift UDP owner through [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py), [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py), and [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
 - the native Swift overlay-owner source guard pins a fresh shared-TUN epoch, authenticated-readiness local TUN `OPEN`, and ChannelMux remote-service catalog regeneration for UDP, TCP, WebSocket, and QUIC; it requires the regenerated catalog to precede that OPEN in the same ordered mux batch, preserves the reserved local-TUN service identifier `0` through the Core facade, while the Python listener-mode regression pins the authenticated-readiness `OPEN` for every configured local TUN listener before its first packet
 - the stream reconnect regression also closes suspended Python TCP, QUIC, and WebSocket reconnect coroutines after their event loops stop, ensuring shutdown cleanup uses the task identity captured while the loop was active and emits no secondary `no running event loop` exception

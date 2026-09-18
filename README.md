@@ -41,6 +41,8 @@ The project currently targets six platform families:
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
+  Packet-flow output drains are lifecycle-fenced, so deferred writes from a
+  stopped tunnel cannot affect a rapidly reactivated extension.
 - **Synology DSM Python package/runtime**: the NAS target packages the Python runtime as a DSM SPK with package-managed service lifecycle, a SynoCommunity Python dependency, and a package-user helper-handoff prototype. The current DSM privilege boundary supports transport and service relay while root-owned TUN operation remains experimental.
 
 ## Reader guide

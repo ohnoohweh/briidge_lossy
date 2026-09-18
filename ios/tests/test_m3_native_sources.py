@@ -183,6 +183,9 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "packet_bridge_activated" in bridge
     assert "packet_bridge_outgoing_write_completed" in bridge
     assert "packet_bridge_outgoing_write_slow" in bridge
+    assert "outgoingDrainGeneration" in bridge
+    assert "scheduleOutgoingDrain(provider: provider, generation: outcome.8)" in bridge
+    assert "shared.outgoingDrainGeneration == generation" in bridge
     assert "incoming_pcap_path" in bridge
     assert "outgoing_pcap_path" in bridge
     assert "ipserver-nepacketflow-in-" in bridge

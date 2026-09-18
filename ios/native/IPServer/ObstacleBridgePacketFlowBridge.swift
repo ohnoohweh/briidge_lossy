@@ -129,6 +129,9 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     private var outgoingPendingPackets: [Data] = []
     private var outgoingPendingProtocols: [NSNumber] = []
     private var outgoingDrainScheduled = false
+    /// Deferred drains are scoped to a packet-tunnel lifecycle. This prevents
+    /// work queued before a stop from observing a rapid reactivation.
+    private var outgoingDrainGeneration: UInt64 = 0
     private let maxQueuedPackets = 2048
     private let maxOutgoingQueuedPackets = 2048
     private let maxOutgoingBatchPackets = 64
@@ -162,6 +165,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             shared.outgoingPendingPackets.removeAll(keepingCapacity: false)
             shared.outgoingPendingProtocols.removeAll(keepingCapacity: false)
             shared.outgoingDrainScheduled = false
+            shared.outgoingDrainGeneration &+= 1
             return capture
         }
         var fields = pcapFields
@@ -212,6 +216,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             shared.outgoingPendingPackets.removeAll(keepingCapacity: false)
             shared.outgoingPendingProtocols.removeAll(keepingCapacity: false)
             shared.outgoingDrainScheduled = false
+            shared.outgoingDrainGeneration &+= 1
             return (provider, payload)
         }
         if let provider = state.0 {
@@ -295,10 +300,10 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
 
     @objc class func writePacket(_ packet: NSData) -> Bool {
         let data = packet as Data
-        let outcome = shared.queue.sync { () -> (PacketTunnelProvider?, Bool, Int32, Int, Int, Int, Int, Bool) in
+        let outcome = shared.queue.sync { () -> (PacketTunnelProvider?, Bool, Int32, Int, Int, Int, Int, Bool, UInt64) in
             let proto = protocolFamily(for: data)
             guard shared.active, let provider = shared.provider else {
-                return (nil, false, proto, 0, 0, 0, 0, false)
+                return (nil, false, proto, 0, 0, 0, 0, false, shared.outgoingDrainGeneration)
             }
             guard shared.outgoingPendingPackets.count < shared.maxOutgoingQueuedPackets else {
                 return (
@@ -309,7 +314,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                     shared.bytesToSystem,
                     shared.outgoingWriteInflight,
                     shared.outgoingPendingPackets.count,
-                    false
+                    false,
+                    shared.outgoingDrainGeneration
                 )
             }
             shared.outgoingPCAPWriter?.writePacket(data)
@@ -331,7 +337,8 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 shared.bytesToSystem,
                 shared.outgoingWriteInflight,
                 shared.outgoingQueuedPackets,
-                shouldSchedule
+                shouldSchedule,
+                shared.outgoingDrainGeneration
             )
         }
         guard outcome.1, let provider = outcome.0 else {
@@ -349,7 +356,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             return false
         }
         if outcome.7 {
-            scheduleOutgoingDrain(provider: provider)
+            scheduleOutgoingDrain(provider: provider, generation: outcome.8)
         }
         if outcome.3 <= 3 || (outcome.3 % 128) == 0 {
             provider.recordPacketBridgeEvent(
@@ -487,20 +494,23 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
         }
     }
 
-    private static func scheduleOutgoingDrain(provider: PacketTunnelProvider) {
+    private static func scheduleOutgoingDrain(provider: PacketTunnelProvider, generation: UInt64) {
         let delayNs = UInt64(max(0, shared.outgoingDrainCoalesceDelayMs)) * 1_000_000
         shared.outgoingDrainQueue.asyncAfter(deadline: .now() + .nanoseconds(Int(delayNs))) {
-            drainOutgoingPackets(provider: provider)
+            drainOutgoingPackets(provider: provider, generation: generation)
         }
     }
 
-    private static func drainOutgoingPackets(provider: PacketTunnelProvider) {
+    private static func drainOutgoingPackets(provider: PacketTunnelProvider, generation: UInt64) {
         while true {
             let batch = shared.queue.sync { () -> ([Data], [NSNumber], Int) in
                 guard shared.active,
                       let currentProvider = shared.provider,
                       currentProvider === provider,
-                      !shared.outgoingPendingPackets.isEmpty else {
+                      shared.outgoingDrainGeneration == generation else {
+                    return ([], [], 0)
+                }
+                guard !shared.outgoingPendingPackets.isEmpty else {
                     shared.outgoingDrainScheduled = false
                     shared.outgoingQueuedPackets = shared.outgoingPendingPackets.count
                     return ([], [], 0)
