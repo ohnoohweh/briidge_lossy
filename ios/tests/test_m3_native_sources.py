@@ -40,6 +40,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
     assert "ipserver-native-provider-state.json" in provider
+    assert "ipserver-runtime-health-v1.json" in provider
+    assert "ObstacleBridgeRuntimeHealthRing" in provider
+    assert "previous_runtime_lifetime_ended_cleanly" in provider
     assert "updateProviderState(" in provider
     assert "bridge_state" in provider
     assert "processMemorySnapshot()" in provider

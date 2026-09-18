@@ -68,6 +68,39 @@ unqualified traffic or failure-detail fields are absent. The compression
 projection reports policy and aggregate decision/counter values only; decoding
 and eligibility remain Core decisions.
 
+## Cross-platform runtime health evidence
+
+The Python runtime and Swift Core implement the portable redacted record schema
+and bounded in-memory ring. The iOS packet-tunnel provider persists its ring
+atomically in the App Group at provider-state cadence, reads the preceding ring
+before a new lifetime, and projects the redacted prior-lifetime classification
+through Admin status. Linux, macOS, Windows, and Python adapters do not yet
+persist this contract. No record adds data to SecureLink or ChannelMux.
+Records are written at a bounded cadence and at lifecycle or threshold
+transitions, rather than for every packet.
+
+A record contains the lifecycle sequence and clean-stop marker, process and
+memory high-water measurements where the platform supplies them, heartbeat
+age, packet-pump state, overlay and SecureLink epoch/state, and the existing
+bounded packet-flow measurements: queued and inflight work, queue high-water,
+drops, slow writes, and packet counters. It contains no packet payload,
+credential, key, nonce, or peer traffic detail.
+
+The next runtime owner reads the previous ring before replacing it and reports
+whether the preceding lifetime ended through a recorded controlled stop or
+ended without one. This distinguishes a clean shutdown from an unclean
+termination even when the prior process could not serve its live Admin API.
+Platform crash, watchdog, and memory-termination reports remain external
+evidence correlated by timestamp; they are not inferred as a specific cause
+from the health ring alone.
+
+Load protection is expressed as bounded admission and backpressure before
+resource exhaustion: adapters slow or discard packet work at calibrated queue,
+write-latency, or memory thresholds while retaining the health evidence.
+Runtime owners do not self-terminate to enforce these limits. Thresholds are
+qualified on each supported physical platform because available memory,
+scheduler behavior, and operating-system termination policy differ.
+
 ## Known open gaps
 
 - Packet policy does not yet admit IPv6 jumbograms or encrypted payloads,
@@ -80,6 +113,9 @@ and eligibility remain Core decisions.
   evidence exist.
 - Linux does not provide TLS WebSocket, QUIC, proxy, package/service-manager,
   or multi-peer myudp-listener support.
+- Linux, macOS, Windows, and Python lack durable health-ring stores, lifecycle
+  wiring, and restart classification. Physical-device threshold qualification
+  is also open. Live Admin data alone cannot diagnose an abrupt runtime loss.
 
 ## R007 delivery packages
 
@@ -90,6 +126,7 @@ Only unfinished packages are listed here.
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
 | `LSW-R007.5` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
+| `LSW-R007.6` | Cross-platform runtime-health evidence | The portable diagnostic contract is implemented by the Python runtime and Swift Core; every supported Linux, macOS, iOS, and Windows owner persists and recovers the same redacted bounded health record across runtime replacement. Controlled-stop and unclean-lifetime classification, threshold backpressure, and physical-device load evidence are qualified without protocol changes. |
 
 ## Follow-on Linux packages
 

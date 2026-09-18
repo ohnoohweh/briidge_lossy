@@ -49,6 +49,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
     private var packetPumpDroppedBeforeOverlay = 0
     private var providerStateUpdateCount = 0
     private var heartbeatTickCount = 0
+    private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
+    private var runtimeHealthSequence: UInt64 = 0
+    private var previousRuntimeLifetimeEndedCleanly: Bool?
+    private let runtimeHealthQueue = DispatchQueue(label: "PacketTunnelProvider.RuntimeHealth")
     private var runtimeMode = "unconfigured"
     private var swiftSimpleUDPPeerBridge: SwiftSimpleUDPPeerBridge?
     private var sharedOverlayBootstrapState: [String: Any] = [:]
@@ -136,6 +140,89 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         return logDirectory.appendingPathComponent("ipserver-native-provider-state.json")
     }
 
+    private func runtimeHealthURL() -> URL? {
+        guard let containerURL = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
+        ) else {
+            return nil
+        }
+        let logDirectory = containerURL.appendingPathComponent("logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: logDirectory, withIntermediateDirectories: true)
+        return logDirectory.appendingPathComponent("ipserver-runtime-health-v1.json")
+    }
+
+    private func beginRuntimeHealthLifetime() {
+        guard let url = runtimeHealthURL() else {
+            runtimeHealthQueue.sync {
+                previousRuntimeLifetimeEndedCleanly = nil
+                runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
+                runtimeHealthSequence = 0
+            }
+            return
+        }
+        let priorCleanStop: Bool?
+        if let data = try? Data(contentsOf: url),
+           let prior = try? JSONDecoder().decode(ObstacleBridgeRuntimeHealthRing.self, from: data) {
+            priorCleanStop = prior.previousLifetimeEndedCleanly
+        } else {
+            priorCleanStop = nil
+        }
+        runtimeHealthQueue.sync {
+            previousRuntimeLifetimeEndedCleanly = priorCleanStop
+            runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
+            runtimeHealthSequence = 0
+        }
+    }
+
+    private static func runtimeHealthUInt64(_ value: Any?) -> UInt64? {
+        if let value = value as? UInt64 { return value }
+        if let value = value as? Int, value >= 0 { return UInt64(value) }
+        if let value = value as? NSNumber { return value.uint64Value }
+        return nil
+    }
+
+    private func appendRuntimeHealthRecord(
+        state: String,
+        bridgeSnapshot: [String: Any],
+        processMemory: [String: Any]
+    ) {
+        guard let url = runtimeHealthURL() else { return }
+        let bootstrapState = ObstacleBridgeRuntimeConfig.stringValue(from: sharedOverlayBootstrapState["state"])
+        runtimeHealthQueue.sync {
+            runtimeHealthSequence &+= 1
+            let record = ObstacleBridgeRuntimeHealthRecord(
+                sequence: runtimeHealthSequence,
+                timestampUnixMilliseconds: UInt64((Date().timeIntervalSince1970 * 1_000).rounded()),
+                event: state,
+                controlledStop: state == "stopTunnel_completed",
+                processResidentBytes: Self.runtimeHealthUInt64(processMemory["resident_size"]),
+                processFootprintBytes: Self.runtimeHealthUInt64(processMemory["phys_footprint"]),
+                packetPumpRunning: adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot),
+                overlayState: bootstrapState ?? runtimeMode,
+                secureLinkState: sharedSecureLinkPskTransportAdapter == nil ? "off" : "configured",
+                incomingQueuedPackets: Self.runtimeHealthUInt64(bridgeSnapshot["queued_packets"]),
+                outgoingQueuedPackets: Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_queued_packets"]),
+                outgoingInflightWrites: Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_write_inflight"]),
+                incomingDroppedPackets: Self.runtimeHealthUInt64(bridgeSnapshot["dropped_incoming_packets"]),
+                slowWrites: Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_write_slow_calls"]),
+                packetsFromSystem: Self.runtimeHealthUInt64(bridgeSnapshot["packets_from_system"]),
+                packetsToSystem: Self.runtimeHealthUInt64(bridgeSnapshot["packets_to_system"])
+            )
+            runtimeHealthRing.append(record)
+            guard let data = try? JSONEncoder().encode(runtimeHealthRing) else { return }
+            try? data.write(to: url, options: [.atomic])
+        }
+    }
+
+    private func runtimeHealthAdminFields() -> [String: Any] {
+        runtimeHealthQueue.sync {
+            [
+                "runtime_health_record_count": runtimeHealthRing.records.count,
+                "previous_runtime_lifetime_ended_cleanly": previousRuntimeLifetimeEndedCleanly ?? NSNull(),
+            ]
+        }
+    }
+
     private func updateProviderState(_ state: String, extraFields: [String: Any] = [:]) {
         guard let url = providerStateURL() else {
             return
@@ -166,7 +253,8 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         if !effectivePacketTunnelSettingsState.isEmpty {
             payload["effective_tunnel_network_settings"] = effectivePacketTunnelSettingsState
         }
-        for (key, value) in Self.processMemorySnapshot() {
+        let processMemory = Self.processMemorySnapshot()
+        for (key, value) in processMemory {
             payload[key] = value
         }
         for (key, value) in extraFields {
@@ -178,6 +266,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             return
         }
         try? data.write(to: url, options: [.atomic])
+        appendRuntimeHealthRecord(
+            state: state,
+            bridgeSnapshot: ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
+            processMemory: processMemory
+        )
     }
 
     func recordPacketBridgeEvent(_ event: String, fields: [String: Any] = [:]) {
@@ -475,6 +568,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
 
     public override func startTunnel(options: [String : NSObject]?, completionHandler: @escaping (Error?) -> Void) {
+        beginRuntimeHealthLifetime()
         runtimeMode = "unconfigured"
         swiftSimpleUDPPeerBridge = nil
         effectivePacketTunnelSettingsState = [:]
@@ -1563,6 +1657,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
     private func adminStatusSnapshotUncached(bridgeSnapshot: [String: Any]? = nil) -> [String: Any] {
         let bridgeSnapshot = bridgeSnapshot ?? adminBridgeSnapshot()
         let packetProcessingActive = adminPacketProcessingActive(bridgeSnapshot: bridgeSnapshot)
+        let runtimeHealth = runtimeHealthAdminFields()
         let startedAt = adminStartedAt(bridgeSnapshot: bridgeSnapshot)
         let runtimeConfig = adminRuntimeConfigPayload() ?? [:]
         var payload = ObstacleBridgeAdminSnapshotSupport.statusEnvelope(
@@ -1580,6 +1675,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "packet_pump_running": packetProcessingActive,
                 "provider_state_update_count": providerStateUpdateCount,
                 "heartbeat_tick_count": heartbeatTickCount,
+                "runtime_health_record_count": runtimeHealth["runtime_health_record_count"] ?? 0,
+                "previous_runtime_lifetime_ended_cleanly": runtimeHealth["previous_runtime_lifetime_ended_cleanly"] ?? NSNull(),
                 "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
                 "proxy_provider": proxyProviderSnapshot(),
