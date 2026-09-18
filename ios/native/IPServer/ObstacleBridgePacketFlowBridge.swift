@@ -115,6 +115,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
     private var bytesFromSystem = 0
     private var bytesToSystem = 0
     private var droppedIncomingPackets = 0
+    private var droppedOutgoingPackets = 0
     private var outgoingWriteCalls = 0
     private var outgoingWriteSlowCalls = 0
     private var outgoingWriteMaxDurationMs = 0.0
@@ -151,6 +152,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
             shared.bytesFromSystem = 0
             shared.bytesToSystem = 0
             shared.droppedIncomingPackets = 0
+            shared.droppedOutgoingPackets = 0
             shared.outgoingWriteCalls = 0
             shared.outgoingWriteSlowCalls = 0
             shared.outgoingWriteMaxDurationMs = 0.0
@@ -188,6 +190,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "bytes_from_system": shared.bytesFromSystem,
                 "bytes_to_system": shared.bytesToSystem,
                 "dropped_incoming_packets": shared.droppedIncomingPackets,
+                "dropped_outgoing_packets": shared.droppedOutgoingPackets,
                 "outgoing_write_calls": shared.outgoingWriteCalls,
                 "outgoing_write_slow_calls": shared.outgoingWriteSlowCalls,
                 "outgoing_write_max_duration_ms": shared.outgoingWriteMaxDurationMs,
@@ -306,6 +309,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 return (nil, false, proto, 0, 0, 0, 0, false, shared.outgoingDrainGeneration)
             }
             guard shared.outgoingPendingPackets.count < shared.maxOutgoingQueuedPackets else {
+                shared.droppedOutgoingPackets += 1
                 return (
                     provider,
                     false,
@@ -350,6 +354,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                         "protocol_family": outcome.2,
                         "queued_packets": outcome.6,
                         "max_queued_packets": shared.maxOutgoingQueuedPackets,
+                        "dropped_outgoing_packets": shared.queue.sync { shared.droppedOutgoingPackets },
                     ]
                 )
             }
@@ -400,6 +405,7 @@ final class ObstacleBridgePacketFlowBridge: NSObject {
                 "bytes_from_system": bytesFromSystem,
                 "bytes_to_system": bytesToSystem,
                 "dropped_incoming_packets": droppedIncomingPackets,
+                "dropped_outgoing_packets": droppedOutgoingPackets,
                 "outgoing_write_calls": outgoingWriteCalls,
                 "outgoing_write_slow_calls": outgoingWriteSlowCalls,
                 "outgoing_write_max_duration_ms": outgoingWriteMaxDurationMs,

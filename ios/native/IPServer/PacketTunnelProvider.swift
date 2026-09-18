@@ -204,6 +204,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 outgoingQueuedPackets: Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_queued_packets"]),
                 outgoingInflightWrites: Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_write_inflight"]),
                 incomingDroppedPackets: Self.runtimeHealthUInt64(bridgeSnapshot["dropped_incoming_packets"]),
+                outgoingDroppedPackets: Self.runtimeHealthUInt64(bridgeSnapshot["dropped_outgoing_packets"]),
                 slowWrites: Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_write_slow_calls"]),
                 packetsFromSystem: Self.runtimeHealthUInt64(bridgeSnapshot["packets_from_system"]),
                 packetsToSystem: Self.runtimeHealthUInt64(bridgeSnapshot["packets_to_system"])

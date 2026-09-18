@@ -88,6 +88,12 @@ bounded packet-flow measurements: queued and inflight work, queue high-water,
 drops, slow writes, and packet counters. It contains no packet payload,
 credential, key, nonce, or peer traffic detail.
 
+The iOS packet-flow bridge accounts separately for incoming queue shedding and
+outgoing queue rejection. Both counts, together with outgoing queue depth,
+inflight writes, and slow-write count, are copied into the retained provider
+health record at each provider-state observation. This gives a post-loss record
+of whether local packet admission was under pressure without retaining traffic.
+
 The next runtime owner reads the previous ring before replacing it and reports
 whether the preceding lifetime ended through a recorded controlled stop or
 ended without one. This distinguishes a clean shutdown from an unclean
