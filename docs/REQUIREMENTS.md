@@ -506,4 +506,6 @@ Repository governance update (testability): the unit-test traceability snapshot 
 
 Repository governance update (public endpoint privacy): documentation, design examples, and committed test fixtures use IANA-reserved documentation address ranges rather than live operator or deployment endpoints. This keeps routing and address-normalization examples reproducible without publishing infrastructure addresses.
 
+`REQ-MUX-009` implementation note: a configured server-owned shared TUN remains open across overlay-disconnected lifecycle edges, including initial SecureLink or transport reconnect transitions. Reconnect cleanup pauses admission and clears peer channels while retaining the shared device and helper-managed network state; full teardown remains limited to adapter shutdown or catalog removal.
+
 The supporting product-requirement traceability manifest is maintained in [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml). It is stored with the repository's CI/support metadata rather than in `docs/`, but it continues to trace these product requirements to their defending tests.

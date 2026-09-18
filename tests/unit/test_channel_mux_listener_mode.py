@@ -682,6 +682,44 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         text = "\n".join(logs.output)
         self.assertIn("reason=on_overlay_state_disconnected", text)
 
+    def test_overlay_disconnect_retains_server_owned_shared_tun(self):
+        asyncio.run(self._test_overlay_disconnect_retains_server_owned_shared_tun())
+
+    async def _test_overlay_disconnect_retains_server_owned_shared_tun(self):
+        svc_key = ("local", 0, 1)
+        spec = ChannelMux.ServiceSpec(
+            1,
+            "tun",
+            "obtun0",
+            1500,
+            "tun",
+            "obtun0",
+            1500,
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [{"peer_ref": "iphone-client", "ipv4": ["192.168.106.4"]}],
+                }
+            },
+        )
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        mux._local_services[svc_key] = spec
+        mux._svc_tun_devices[svc_key] = ChannelMux.TunDevice(
+            fd=-1,
+            ifname="obtun0",
+            mtu=1500,
+            service_key=svc_key,
+        )
+
+        with patch.object(mux, "_stop_listener_for_service_id", new=AsyncMock()) as stop_listener:
+            await mux.on_overlay_state(False)
+
+        stop_listener.assert_not_awaited()
+        self.assertIn(svc_key, mux._svc_tun_devices)
+
     def test_on_overlay_state_allows_connected_non_securelink_transport(self):
         asyncio.run(self._test_on_overlay_state_allows_connected_non_securelink_transport())
 

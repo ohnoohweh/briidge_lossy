@@ -1542,6 +1542,8 @@ The current Python-side TUN helper focus includes Linux-native lifecycle hardeni
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
+Configured server-owned shared TUN interfaces stay open while overlay peers reconnect: the runtime clears peer channels and pauses admission without removing the helper-managed interface or its host-network state.
+
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
 

@@ -1258,6 +1258,7 @@ REQ-MUX-009:
     - tests/unit/test_runner_ios_status_callbacks.py::test_runner_keeps_status_callbacks_wired_on_ios
     - tests/unit/test_channel_mux_listener_mode.py::test_peer_installed_tun_stop_runs_listener_on_stopped_before_close
     - tests/unit/test_channel_mux_listener_mode.py::test_shared_server_tun_stop_skips_on_stopped_hook_when_device_is_retained
+    - tests/unit/test_channel_mux_listener_mode.py::test_overlay_disconnect_retains_server_owned_shared_tun
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_open_uses_pending_peer_listener_before_async_catalog_start
     - tests/unit/test_channel_mux_listener_mode.py::test_tunnel_hook_env_defaults_follow_tun_routing_config
     - tests/unit/test_channel_mux_listener_mode.py::test_tun_routing_explicit_empty_gateways_are_preserved

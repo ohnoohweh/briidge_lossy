@@ -2376,7 +2376,13 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
                 was_accepting_enabled=was_accepting,
                 new_accepting_enabled=self._accepting_enabled,
             )
-            await self._stop_all_services()
+            # A server-owned shared TUN is the durable packet-switch endpoint.
+            # A lower-layer reconnect must pause its reader and clear peer
+            # channels, but must not tear down its helper-owned interface and
+            # host-network configuration.  Otherwise a transient initial
+            # SecureLink/transport lifecycle edge leaves a connected peer with
+            # no server TUN to which return packets can be delivered.
+            await self._stop_all_services(preserve_server_shared_tuns=True)
             await self._close_all_channels()
             return
         self._cancel_connection_rotation()
@@ -2615,7 +2621,7 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             except Exception as e:
                 self.log.warning("[MUX] service %s:%s start failed: %r", svc_key[0], svc.svc_id, e)
 
-    async def _stop_all_services(self):
+    async def _stop_all_services(self, *, preserve_server_shared_tuns: bool = False):
         effective = self._effective_services_by_id()
         # UDP first
         for sid in list(self._svc_udp_servers.keys()):
@@ -2628,6 +2634,20 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
         # TUN
         for sid in list(self._svc_tun_devices.keys()):
             spec = effective.get(sid)
+            if (
+                preserve_server_shared_tuns
+                and str(sid[0]) == "local"
+                and spec is not None
+                and self._is_server_shared_tun_service(spec)
+            ):
+                self.log.info(
+                    "[TUN/SRV] retain server-shared interface across overlay disconnect "
+                    "if=%s service=%s:%s",
+                    str(getattr(self._svc_tun_devices.get(sid), "ifname", "") or ""),
+                    sid[0],
+                    sid[2],
+                )
+                continue
             await self._stop_listener_for_service_id(sid, spec.l_proto if spec else "tun", spec=spec)
 
     async def _close_all_channels(self):
