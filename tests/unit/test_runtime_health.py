@@ -68,16 +68,16 @@ class RuntimeHealthTests(unittest.TestCase):
     def test_store_recovers_last_stop_marker_and_writes_a_bounded_private_file(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "runtime-health.json"
-            store = RuntimeHealthStore(path, capacity=2)
+            store = RuntimeHealthStore(path, capacity=3)
             self.assertIsNone(store.begin_lifetime())
             store.append(RuntimeHealthRecord(sequence=1, timestamp_unix_milliseconds=1, event="stop", controlled_stop=True))
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
-            restarted = RuntimeHealthStore(path, capacity=2)
+            restarted = RuntimeHealthStore(path, capacity=3)
             self.assertTrue(restarted.begin_lifetime())
             restarted.append(RuntimeHealthRecord(sequence=2, timestamp_unix_milliseconds=2, event="start"))
             restarted.append(RuntimeHealthRecord(sequence=3, timestamp_unix_milliseconds=3, event="heartbeat"))
-            self.assertEqual([record.sequence for record in restarted.ring.records], [2, 3])
+            self.assertEqual([record.sequence for record in restarted.ring.records], [1, 2, 3])
 
     def test_runner_lifecycle_persists_and_reports_redacted_health(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -101,4 +101,8 @@ class RuntimeHealthTests(unittest.TestCase):
                 restarted._begin_runtime_health_lifetime()
                 fields = restarted._runtime_health_status_fields()
                 self.assertTrue(fields["previous_runtime_lifetime_ended_cleanly"])
+                self.assertEqual(
+                    [record["event"] for record in fields["runtime_health_recent_records"]],
+                    ["runner_started", "runner_stopped", "runner_started"],
+                )
                 self.assertNotIn("packet_contents", fields)

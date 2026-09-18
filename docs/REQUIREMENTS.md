@@ -467,12 +467,13 @@ Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE
   implemented in Python and Swift Core. The Python Runner persists its ring
   beside the effective configuration (or at its explicit environment-selected
   path), records start, heartbeat, and controlled stop, and publishes the
-  preceding lifetime's classification with the retained-record count in
-  `/api/status`; the Linux Swift foreground runtime stores the same evidence
+  preceding lifetime's classification, retained-record count, and redacted
+  bounded record tail in `/api/status`; the Linux Swift foreground runtime stores the same evidence
   beside its runtime configuration, the macOS Swift host runner stores it in
   its runtime-config directory, and the iOS packet-tunnel provider uses its
   App Group. Packet contents, credentials, keys, nonces, and peer traffic
-  detail are not retained. Physical-device load-threshold qualification remains
+  detail are not retained. A new runtime lifetime retains the bounded prior
+  evidence before appending its start marker. Physical-device load-threshold qualification remains
   open.
 - `REQ-ADM-002`: When admin authentication is disabled, the admin API shall remain available without login.
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.

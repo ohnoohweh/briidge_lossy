@@ -494,8 +494,8 @@ final class ObstacleBridgeHostRunner {
         runtimeHealthQueue.sync {
             let previous = ObstacleBridgeRuntimeHealthPersistence.load(from: runtimeHealthURL)
             previousRuntimeLifetimeEndedCleanly = previous?.previousLifetimeEndedCleanly
-            runtimeHealthRing = .init(capacity: previous?.capacity ?? 128)
-            runtimeHealthSequence = 0
+            runtimeHealthRing = previous ?? .init()
+            runtimeHealthSequence = previous?.records.last?.sequence ?? 0
         }
         appendRuntimeHealth(event: "runtime_started")
     }
@@ -521,6 +521,15 @@ final class ObstacleBridgeHostRunner {
 
     private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
         runtimeHealthQueue.sync { (runtimeHealthRing.records.count, previousRuntimeLifetimeEndedCleanly) }
+    }
+
+    private func runtimeHealthRecentRecords() -> [[String: Any]] {
+        runtimeHealthQueue.sync {
+            runtimeHealthRing.records.suffix(16).compactMap { record in
+                guard let data = try? JSONEncoder().encode(record) else { return nil }
+                return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+        }
     }
 
     private func startRuntimeHealthHeartbeat() {
@@ -1321,6 +1330,7 @@ final class ObstacleBridgeHostRunner {
         let uptimeMS = Int(Date().timeIntervalSince(startedAt) * 1000)
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
         let health = runtimeHealthMetadata()
+        let healthRecords = runtimeHealthRecentRecords()
         return [
             "ok": true,
             "mode": "swift_host_runner",
@@ -1334,6 +1344,7 @@ final class ObstacleBridgeHostRunner {
             "uptime_sec": uptimeSec,
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
+            "runtime_health_recent_records": healthRecords,
             "bootstrap_state": bootstrapState,
             "admin_web_name": Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
             "build": buildSummary(),

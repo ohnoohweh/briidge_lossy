@@ -94,13 +94,15 @@ inflight writes, and slow-write count, are copied into the retained provider
 health record at each provider-state observation. This gives a post-loss record
 of whether local packet admission was under pressure without retaining traffic.
 
-The next runtime owner reads the previous ring before replacing it and reports
-whether the preceding lifetime ended through a recorded controlled stop or
-ended without one. This distinguishes a clean shutdown from an unclean
-termination even when the prior process could not serve its live Admin API.
-Platform crash, watchdog, and memory-termination reports remain external
-evidence correlated by timestamp; they are not inferred as a specific cause
-from the health ring alone.
+The next runtime owner continues the retained bounded ring and reports whether
+the preceding lifetime ended through a recorded controlled stop or ended
+without one. Admin status provides the most recent redacted records as well as
+the preceding-lifetime classification, allowing an authenticated remote
+WebAdmin path to capture evidence before and after a restart. This distinguishes
+a clean shutdown from an unclean termination even when the prior process could
+not serve its live Admin API. Platform crash, watchdog, and memory-termination
+reports remain external evidence correlated by timestamp; they are not inferred
+as a specific cause from the health ring alone.
 
 Load protection is expressed as bounded admission and backpressure before
 resource exhaustion: adapters slow or discard packet work at configured queue,
@@ -133,7 +135,7 @@ Only unfinished packages are listed here.
 
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
-| `LSW-R007.5` | Physical runtime-load qualification | On a signed physical iPhone and each released host owner, controlled sustained traffic demonstrates bounded packet admission without self-termination. Retained health records and redacted Admin snapshots capture both packet directions, queue/inflight high-water, drops, slow writes, lifecycle classification, and the matching platform termination or watchdog evidence. The recorded operating threshold and evidence location are reproducible without protocol changes. |
+| `LSW-R007.5` | Physical runtime-load qualification | On a signed physical iPhone and each released host owner, controlled sustained traffic demonstrates bounded packet admission without self-termination. Retained health records and redacted Admin snapshots capture both packet directions, queue/inflight high-water, drops, slow writes, lifecycle classification, and the matching platform termination or watchdog evidence. The recorded operating threshold and authenticated remote-WebAdmin evidence location are reproducible without protocol changes. |
 | `LSW-R007.6` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
 
 ## Follow-on Linux packages

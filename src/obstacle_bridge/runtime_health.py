@@ -108,7 +108,10 @@ class RuntimeHealthStore:
     def begin_lifetime(self) -> Optional[bool]:
         prior = self.load()
         previous = prior.previous_lifetime_ended_cleanly if prior is not None else None
-        self.ring = RuntimeHealthRing(capacity=self.capacity)
+        # Preserve bounded observations from the preceding lifetime. A fresh
+        # start marker below is the lifetime boundary; discarding the old ring
+        # here would erase the only local evidence of an abrupt termination.
+        self.ring = prior if prior is not None else RuntimeHealthRing(capacity=self.capacity)
         return previous
 
     def append(self, record: RuntimeHealthRecord) -> None:

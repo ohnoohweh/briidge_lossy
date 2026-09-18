@@ -58,6 +58,8 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     assert ".ObstacleBridgeHostRunner.runtime-health-v1.json" in source
     assert "ObstacleBridgeRuntimeHealthPersistence.load" in source
     assert "ObstacleBridgeRuntimeHealthPersistence.save" in source
+    assert "runtimeHealthRing = previous ?? .init()" in source
+    assert '"runtime_health_recent_records"' in source
     assert 'appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)' in source
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
 

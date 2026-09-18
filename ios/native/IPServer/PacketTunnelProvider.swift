@@ -160,17 +160,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             return
         }
-        let priorCleanStop: Bool?
+        let prior: ObstacleBridgeRuntimeHealthRing?
         if let data = try? Data(contentsOf: url),
-           let prior = try? JSONDecoder().decode(ObstacleBridgeRuntimeHealthRing.self, from: data) {
-            priorCleanStop = prior.previousLifetimeEndedCleanly
+           let decoded = try? JSONDecoder().decode(ObstacleBridgeRuntimeHealthRing.self, from: data) {
+            prior = decoded
         } else {
-            priorCleanStop = nil
+            prior = nil
         }
         runtimeHealthQueue.sync {
-            previousRuntimeLifetimeEndedCleanly = priorCleanStop
-            runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
-            runtimeHealthSequence = 0
+            previousRuntimeLifetimeEndedCleanly = prior?.previousLifetimeEndedCleanly
+            runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()
+            runtimeHealthSequence = prior?.records.last?.sequence ?? 0
         }
     }
 
@@ -220,7 +220,15 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             [
                 "runtime_health_record_count": runtimeHealthRing.records.count,
                 "previous_runtime_lifetime_ended_cleanly": previousRuntimeLifetimeEndedCleanly ?? NSNull(),
+                "runtime_health_recent_records": runtimeHealthRecordsPayload(runtimeHealthRing.records),
             ]
+        }
+    }
+
+    private func runtimeHealthRecordsPayload(_ records: [ObstacleBridgeRuntimeHealthRecord]) -> [[String: Any]] {
+        Array(records.suffix(16)).compactMap { record in
+            guard let data = try? JSONEncoder().encode(record) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         }
     }
 

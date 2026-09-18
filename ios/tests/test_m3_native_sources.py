@@ -196,6 +196,14 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "ipserver-nepacketflow-out-" in bridge
 
 
+def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    assert "runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()" in provider
+    assert '"runtime_health_recent_records"' in provider
+    assert "runtimeHealthRecordsPayload" in provider
+
+
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
     entitlements = (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")

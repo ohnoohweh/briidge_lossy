@@ -23,6 +23,7 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
+    private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -31,11 +32,13 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime) {
         self.statusProvider = { runtime.status() }
         self.runtimeHealthProvider = { (0, nil) }
+        self.runtimeHealthRecordsProvider = { [] }
     }
 
     public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime) {
         self.statusProvider = { liveRuntime.status() }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
+        self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -105,6 +108,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private func statusData() -> Data {
         let status = statusProvider()
         let health = runtimeHealthProvider()
+        let healthRecords = runtimeHealthRecordsProvider().compactMap { record -> [String: Any]? in
+            guard let data = try? JSONEncoder().encode(record) else { return nil }
+            return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        }
         let payload: [String: Any] = [
             "platform": "linux-swift",
             "overlay_transport": status.transport,
@@ -113,6 +120,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "failure_reason": status.failureReason as Any,
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
+            "runtime_health_recent_records": healthRecords,
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],
                 ["name": "secure_link", "state": status.secureLinkState, "authenticated": status.secureLinkState == "authenticated"],

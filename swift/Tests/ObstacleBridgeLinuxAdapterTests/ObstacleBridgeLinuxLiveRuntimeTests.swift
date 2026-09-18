@@ -37,6 +37,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
             Thread.sleep(forTimeInterval: 0.01)
         }
         #expect(next.runtimeHealthMetadataForAdmin().previousClean == true)
+        #expect(next.runtimeHealthRecentRecordsForAdmin().contains(where: { $0.event == "runtime_stopped" && $0.controlledStop }))
         next.stop()
     }
 

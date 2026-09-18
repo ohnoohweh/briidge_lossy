@@ -1475,6 +1475,7 @@ REQ-ADM-001:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_persists_portable_runtime_health_evidence
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists
+    - ios/tests/test_m3_native_sources.py::test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence
     # Also covers paused iOS DNS/ICMP verification while TUN throttling is active.
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic
 

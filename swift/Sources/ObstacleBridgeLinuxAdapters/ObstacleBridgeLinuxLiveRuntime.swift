@@ -216,6 +216,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         runtimeHealthMetadata()
     }
 
+    /// The local Admin server serializes this redacted bounded tail. It exists
+    /// so evidence of an unclean preceding lifetime survives a restart.
+    public func runtimeHealthRecentRecordsForAdmin() -> [ObstacleBridgeRuntimeHealthRecord] {
+        runtimeHealthLock.lock()
+        defer { runtimeHealthLock.unlock() }
+        return Array(runtimeHealthRing.records.suffix(16))
+    }
+
     /// Delivers one authenticated ChannelMux frame from the overlay reader.
     /// The current lower transport supplies replies synchronously; this API is
     /// also the receive-side handoff used by a future duplex reader.
@@ -484,8 +492,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         runtimeHealthLock.lock()
         let previous = runtimeHealthURL.flatMap { ObstacleBridgeRuntimeHealthPersistence.load(from: $0) }
         previousRuntimeLifetimeEndedCleanly = previous?.previousLifetimeEndedCleanly
-        runtimeHealthRing = ObstacleBridgeRuntimeHealthRing(capacity: previous?.capacity ?? 128)
-        runtimeHealthSequence = 0
+        runtimeHealthRing = previous ?? ObstacleBridgeRuntimeHealthRing()
+        runtimeHealthSequence = previous?.records.last?.sequence ?? 0
         runtimeHealthLock.unlock()
         appendRuntimeHealth(event: "runtime_started")
     }

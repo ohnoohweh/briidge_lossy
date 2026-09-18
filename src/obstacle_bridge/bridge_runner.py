@@ -299,7 +299,7 @@ class Runner:
             return
         try:
             self._runtime_health_previous_lifetime_ended_cleanly = store.begin_lifetime()
-            self._runtime_health_sequence = 0
+            self._runtime_health_sequence = store.ring.records[-1].sequence if store.ring.records else 0
             self._record_runtime_health("runner_started")
         except OSError as exc:
             self._runtime_health_last_error = type(exc).__name__
@@ -315,6 +315,7 @@ class Runner:
         return {
             "runtime_health_record_count": len(store.ring.records) if store is not None else 0,
             "previous_runtime_lifetime_ended_cleanly": self._runtime_health_previous_lifetime_ended_cleanly,
+            "runtime_health_recent_records": [record.as_payload() for record in (store.ring.records[-16:] if store is not None else ())],
             "runtime_health_last_error": self._runtime_health_last_error or None,
         }
 
