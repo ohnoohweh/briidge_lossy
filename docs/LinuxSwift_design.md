@@ -127,8 +127,8 @@ Only unfinished packages are listed here.
 
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
-| `LSW-R007.5` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
-| `LSW-R007.6` | Cross-platform runtime-health evidence | The portable diagnostic contract is implemented by the Python runtime and Swift Core; every supported Linux, macOS, iOS, and Windows owner persists and recovers the same redacted bounded health record across runtime replacement. Controlled-stop and unclean-lifetime classification, threshold backpressure, and physical-device load evidence are qualified without protocol changes. |
+| `LSW-R007.5` | Cross-platform runtime-health evidence | The portable diagnostic contract is implemented by the Python runtime and Swift Core; every supported Linux, macOS, iOS, and Windows owner persists and recovers the same redacted bounded health record across runtime replacement. Controlled-stop and unclean-lifetime classification, threshold backpressure, and physical-device load evidence are qualified without protocol changes. |
+| `LSW-R007.6` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
 
 ## Follow-on Linux packages
 
