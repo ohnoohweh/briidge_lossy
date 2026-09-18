@@ -139,7 +139,10 @@ enum ObstacleBridgeLinuxMain {
     private static func runForeground(options: RuntimeRunOptions) {
         do {
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configPath)
-            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration)
+            let healthURL = URL(fileURLWithPath: options.configPath)
+                .deletingLastPathComponent()
+                .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
+            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
             let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime)
             try admin.start(port: options.adminPort)
             var resources: [Any] = []

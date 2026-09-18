@@ -468,10 +468,12 @@ Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE
   beside the effective configuration (or at its explicit environment-selected
   path), records start, heartbeat, and controlled stop, and publishes the
   preceding lifetime's classification with the retained-record count in
-  `/api/status`; the iOS packet-tunnel provider provides the same evidence
-  through its App Group. Packet contents, credentials, keys, nonces, and peer
-  traffic detail are not retained. Swift Linux/macOS stores and load-threshold
-  qualification remain open.
+  `/api/status`; the Linux Swift foreground runtime stores the same evidence
+  beside its runtime configuration, the macOS Swift host runner stores it in
+  its runtime-config directory, and the iOS packet-tunnel provider uses its
+  App Group. Packet contents, credentials, keys, nonces, and peer traffic
+  detail are not retained. Physical-device load-threshold qualification remains
+  open.
 - `REQ-ADM-002`: When admin authentication is disabled, the admin API shall remain available without login.
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.
 - `REQ-ADM-004`: After correct authentication, the admin API shall become available to that authenticated client.

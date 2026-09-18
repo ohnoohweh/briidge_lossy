@@ -22,6 +22,7 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 /// reads only the runtime's redacted status projection.
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
+    private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
@@ -29,10 +30,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime) {
         self.statusProvider = { runtime.status() }
+        self.runtimeHealthProvider = { (0, nil) }
     }
 
     public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime) {
         self.statusProvider = { liveRuntime.status() }
+        self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -101,12 +104,15 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     private func statusData() -> Data {
         let status = statusProvider()
+        let health = runtimeHealthProvider()
         let payload: [String: Any] = [
             "platform": "linux-swift",
             "overlay_transport": status.transport,
             "transport_state": status.state,
             "app_ready": status.appReady,
             "failure_reason": status.failureReason as Any,
+            "runtime_health_record_count": health.count,
+            "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],
                 ["name": "secure_link", "state": status.secureLinkState, "authenticated": status.secureLinkState == "authenticated"],

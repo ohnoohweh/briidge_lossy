@@ -70,15 +70,16 @@ and eligibility remain Core decisions.
 
 ## Cross-platform runtime health evidence
 
-The Python runtime and Swift Core implement the portable redacted record schema
-and bounded in-memory ring. The Python Runner persists the ring atomically
-next to its effective configuration (or at its explicit environment-selected
-path), records start, 15-second heartbeat, and controlled-stop observations,
-and projects prior-lifetime classification through Admin status on Linux,
-macOS, and Windows. The iOS packet-tunnel provider persists its ring atomically
-in the App Group at provider-state cadence, reads the preceding ring before a
-new lifetime, and projects the same redacted classification through Admin
-status. No record adds data to SecureLink or ChannelMux.
+Swift Core defines the portable redacted record schema, bounded ring, and
+atomic file representation. The Python Runner persists it beside its effective
+configuration (or at an explicit environment-selected path); the Linux Swift
+foreground owner persists it beside its runtime configuration; and the macOS
+host runner persists it in its runtime-config directory. These owners record
+startup, lifecycle, 15-second heartbeat, and controlled-stop observations and
+project the prior-lifetime classification through Admin status. The iOS
+packet-tunnel provider persists the same ring in the App Group at
+provider-state cadence and reads it before starting a new provider lifetime.
+No record adds data to SecureLink or ChannelMux.
 
 A record contains the lifecycle sequence and clean-stop marker, process and
 memory high-water measurements where the platform supplies them, heartbeat
@@ -114,10 +115,9 @@ scheduler behavior, and operating-system termination policy differ.
   evidence exist.
 - Linux does not provide TLS WebSocket, QUIC, proxy, package/service-manager,
   or multi-peer myudp-listener support.
-- The Linux Swift and macOS Swift owners lack durable health-ring stores,
-  lifecycle wiring, and restart classification. Physical-device threshold
-  qualification is also open. Live Admin data alone cannot diagnose an abrupt
-  runtime loss.
+- Physical-device threshold qualification remains open. Live Admin data alone
+  cannot diagnose an abrupt runtime loss; retained health evidence must be
+  correlated with platform crash, watchdog, and memory-termination reports.
 
 ## R007 delivery packages
 

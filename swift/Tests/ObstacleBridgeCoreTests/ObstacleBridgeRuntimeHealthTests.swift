@@ -40,4 +40,19 @@ struct ObstacleBridgeRuntimeHealthTests {
         #expect(ring.records.map(\.sequence) == [2, 3])
         #expect(ring.previousLifetimeEndedCleanly == false)
     }
+
+    @Test func persistenceKeepsOnlyCompleteRedactedRing() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let url = directory.appendingPathComponent("runtime-health.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        var ring = ObstacleBridgeRuntimeHealthRing(capacity: 2)
+        ring.append(.init(sequence: 1, timestampUnixMilliseconds: 1, event: "start"))
+        ring.append(.init(sequence: 2, timestampUnixMilliseconds: 2, event: "stop", controlledStop: true))
+
+        try ObstacleBridgeRuntimeHealthPersistence.save(ring, to: url)
+
+        #expect(ObstacleBridgeRuntimeHealthPersistence.load(from: url) == ring)
+        #expect(ObstacleBridgeRuntimeHealthPersistence.load(from: url)?.previousLifetimeEndedCleanly == true)
+    }
 }

@@ -141,3 +141,24 @@ public struct ObstacleBridgeRuntimeHealthRing: Codable, Equatable, Sendable {
         return records.last?.controlledStop == true
     }
 }
+
+/// Platform owners use this small file helper instead of each defining its own
+/// persistence format. The file contains only `ObstacleBridgeRuntimeHealthRing`
+/// and is replaced atomically so a process loss can leave, at worst, the last
+/// complete observation available for restart classification.
+public enum ObstacleBridgeRuntimeHealthPersistence {
+    public static func load(from url: URL) -> ObstacleBridgeRuntimeHealthRing? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(ObstacleBridgeRuntimeHealthRing.self, from: data)
+    }
+
+    public static func save(_ ring: ObstacleBridgeRuntimeHealthRing, to url: URL) throws {
+        let directory = url.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let data = try JSONEncoder().encode(ring)
+        try data.write(to: url, options: .atomic)
+        #if os(Linux)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        #endif
+    }
+}

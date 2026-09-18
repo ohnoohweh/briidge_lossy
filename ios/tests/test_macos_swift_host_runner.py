@@ -52,6 +52,16 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
+def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert ".ObstacleBridgeHostRunner.runtime-health-v1.json" in source
+    assert "ObstacleBridgeRuntimeHealthPersistence.load" in source
+    assert "ObstacleBridgeRuntimeHealthPersistence.save" in source
+    assert 'appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)' in source
+    assert '"previous_runtime_lifetime_ended_cleanly"' in source
+
+
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
 
