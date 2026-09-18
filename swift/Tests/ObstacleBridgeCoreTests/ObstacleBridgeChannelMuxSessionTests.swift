@@ -56,10 +56,34 @@ struct ObstacleBridgeChannelMuxSessionTests {
 
     @Test func boundedQueueAndServiceAdmissionAreCoreDecisions() throws {
         let session = ObstacleBridgeChannelMuxSession(maximumQueuedFrames: 1)
-        let invalid = ObstacleBridgeServiceSpec(serviceID: 1, name: nil, listenProtocol: ObstacleBridgeChannelMuxProtocol.tun.rawValue, listenHost: "", listenPort: 1, targetProtocol: ObstacleBridgeChannelMuxProtocol.tun.rawValue, targetHost: "", targetPort: 1)
+        let invalid = ObstacleBridgeServiceSpec(serviceID: 1, name: nil, listenProtocol: ObstacleBridgeChannelMuxProtocol.tun.rawValue, listenHost: "", listenPort: 1, targetProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, targetHost: "", targetPort: 1)
         #expect(throws: ObstacleBridgeChannelMuxSessionError.unsupportedProtocol) { try session.acceptLocal(service: invalid) }
         _ = try session.acceptLocal(service: service)
         #expect(session.snapshot().openedTCPChannels == 1)
+    }
+
+    @Test func tunLifecycleUsesThePortableSessionCountersAndEffects() throws {
+        let tun = ObstacleBridgeServiceSpec(
+            serviceID: 12,
+            name: "tun",
+            listenProtocol: ObstacleBridgeChannelMuxSessionProtocol.tun.rawValue,
+            listenHost: "10.0.0.1",
+            listenPort: 0,
+            targetProtocol: ObstacleBridgeChannelMuxSessionProtocol.tun.rawValue,
+            targetHost: "10.0.0.2",
+            targetPort: 0
+        )
+        let sender = ObstacleBridgeChannelMuxSession(instanceID: 7, connectionSequence: 8)
+        let outbound = try sender.acceptLocal(service: tun)
+        guard case .outbound(let open) = try #require(outbound.first) else { Issue.record("missing TUN OPEN"); return }
+        #expect(open.protocolType == ObstacleBridgeChannelMuxSessionProtocol.tun.rawValue)
+        let receiver = ObstacleBridgeChannelMuxSession(expectedInboundInstanceID: 7, expectedInboundConnectionSequence: 8)
+        #expect(try receiver.receive(open) == [.connectLocal(channelID: open.channelID, service: tun)])
+        let data = try sender.localData(channelID: open.channelID, payload: Data([1, 2]))
+        guard case .outbound(let dataFrame) = try #require(data.first) else { Issue.record("missing TUN DATA"); return }
+        #expect(try receiver.receive(dataFrame) == [.writeLocal(channelID: open.channelID, payload: Data([1, 2]))])
+        #expect(receiver.snapshot().activeTUNChannels == 1)
+        #expect(receiver.snapshot().openedTUNChannels == 1)
     }
 
     @Test func oversizedOpenUsesCoreControlChunksAndReassembles() throws {

@@ -1206,6 +1206,9 @@ REQ-MUX-008:
     - tests/unit/test_channel_mux_listener_mode.py::test_reassembles_udp_fragments_before_local_delivery
     - tests/unit/test_channel_mux_listener_mode.py::test_send_mux_fragments_oversized_tun_packet
     - tests/unit/test_channel_mux_listener_mode.py::test_reassembles_tun_fragments_before_device_write
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::fragmentReassemblyIsBoundedAndRejectsOverlap
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::tunThrottlePolicyRequiresEveryActiveScopeToFit
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::tunLifecycleUsesThePortableSessionCountersAndEffects
 
 REQ-MUX-009:
   # Includes Linux hook coverage for exact excluded-route snapshotting so

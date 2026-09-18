@@ -247,7 +247,7 @@ struct ObstacleBridgeChannelMuxCodec {
         return nil
     }
 
-    private static func coreServiceSpec(_ value: ServiceSpec) throws -> ObstacleBridgeServiceSpec {
+    static func coreServiceSpec(_ value: ServiceSpec) throws -> ObstacleBridgeServiceSpec {
         guard
             (0...Int(UInt16.max)).contains(value.svcID),
             (0...Int(UInt16.max)).contains(value.lPort),

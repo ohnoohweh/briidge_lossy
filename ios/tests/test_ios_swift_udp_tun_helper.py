@@ -24,6 +24,7 @@ def _compile_swift_udp_tun_probe(source_path: Path, binary_path: Path) -> None:
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxSession.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
@@ -164,21 +165,21 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                             }
                             switch muxFrame.mtype {
                             case .open:
-                                _ = muxRuntime.handleInboundTunOpen(chanID: muxFrame.chanID, payload: muxFrame.body)
+                                _ = muxRuntime.handleInboundTunOpen(chanID: muxFrame.chanID, payload: muxFrame.body, counter: muxFrame.counter)
                             case .openChunk:
-                                _ = muxRuntime.handleInboundTunOpenChunk(chanID: muxFrame.chanID, payload: muxFrame.body)
+                                _ = muxRuntime.handleInboundTunOpenChunk(chanID: muxFrame.chanID, payload: muxFrame.body, counter: muxFrame.counter)
                             case .data:
-                                let tunSnapshot = muxRuntime.handleInboundTunData(chanID: muxFrame.chanID, body: muxFrame.body, mtu: mtu)
+                                let tunSnapshot = muxRuntime.handleInboundTunData(chanID: muxFrame.chanID, body: muxFrame.body, mtu: mtu, counter: muxFrame.counter)
                                 if let packet = tunSnapshot.packet, tunSnapshot.delivered {
                                     packets.append(packet)
                                 }
                             case .dataFrag:
-                                let tunSnapshot = muxRuntime.handleInboundTunFragment(chanID: muxFrame.chanID, payload: muxFrame.body, mtu: mtu)
+                                let tunSnapshot = muxRuntime.handleInboundTunFragment(chanID: muxFrame.chanID, payload: muxFrame.body, mtu: mtu, counter: muxFrame.counter)
                                 if let packet = tunSnapshot.packet, tunSnapshot.delivered {
                                     packets.append(packet)
                                 }
                             case .close:
-                                _ = muxRuntime.handleInboundTunClose(chanID: muxFrame.chanID)
+                                _ = muxRuntime.handleInboundTunClose(chanID: muxFrame.chanID, counter: muxFrame.counter)
                             default:
                                 continue
                             }

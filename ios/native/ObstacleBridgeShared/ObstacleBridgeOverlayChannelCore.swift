@@ -588,7 +588,7 @@ enum ObstacleBridgeOverlayChannelCore {
 
         switch frame.mtype {
         case .open:
-            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
+            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if snapshot.accepted {
                 activeTunChanIDs.insert(frame.chanID)
                 tunRuntime.recordSharedTunPeerBinding(peerID: currentTunPeerID, chanID: frame.chanID)
@@ -596,7 +596,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 onOpenRejected?(frame.chanID)
             }
         case .openChunk:
-            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
+            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if snapshot.accepted {
                 activeTunChanIDs.insert(frame.chanID)
                 tunRuntime.recordSharedTunPeerBinding(peerID: currentTunPeerID, chanID: frame.chanID)
@@ -608,7 +608,8 @@ enum ObstacleBridgeOverlayChannelCore {
                 peerID: currentTunPeerID,
                 chanID: frame.chanID,
                 body: frame.body,
-                mtu: tunMTU
+                mtu: tunMTU,
+                counter: frame.counter
             )
             if !snapshot.delivered {
                 if let reason = snapshot.dropReason {
@@ -633,7 +634,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 handleDeliveredPacket(packet, chanID: frame.chanID)
             }
         case .dataFrag:
-            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU)
+            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU, counter: frame.counter)
             if let packet = snapshot.packet, snapshot.delivered {
                 activeTunChanIDs.insert(frame.chanID)
                 let guarded = tunRuntime.handleInboundTunDataSharedGuarded(
@@ -659,7 +660,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 handleDeliveredPacket(packet, chanID: frame.chanID)
             }
         case .close:
-            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
+            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 activeTunChanIDs.remove(frame.chanID)
                 tunRuntime.dropSharedTunPeerBinding(peerID: currentTunPeerID, chanID: frame.chanID)

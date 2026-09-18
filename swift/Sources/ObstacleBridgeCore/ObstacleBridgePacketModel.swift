@@ -461,3 +461,219 @@ public enum ObstacleBridgeTunPeerBindingPolicy {
         )
     }
 }
+
+public struct ObstacleBridgeTunActivePeerChannel: Equatable, Sendable {
+    public let peerID: Int
+    public let preferredChannelID: Int?
+
+    public init(peerID: Int, preferredChannelID: Int?) {
+        self.peerID = peerID
+        self.preferredChannelID = preferredChannelID
+    }
+}
+
+public struct ObstacleBridgeTunRouteDecision: Equatable, Sendable {
+    public let routed: Bool
+    public let routeClass: String?
+    public let peerIDs: [Int]
+    public let channelIDs: [Int]
+    public let ipVersion: Int
+    public let destinationAddress: String
+    public let dropReason: String?
+}
+
+/// Ownership-based egress selection for shared TUNs. Input address text is
+/// rendered by the platform adapter; all route and drop decisions are Core
+/// value semantics and require no packet-device or peer handle.
+public enum ObstacleBridgeTunRoutingPolicy {
+    public static func plan(
+        ipVersion: Int,
+        destinationAddress: String,
+        ownerByIPv4: [String: String],
+        ownerByIPv6: [String: String],
+        peerIDByReference: [String: Int],
+        activePeers: [ObstacleBridgeTunActivePeerChannel]
+    ) -> ObstacleBridgeTunRouteDecision {
+        if ipVersion == Int(ObstacleBridgeIPVersion.ipv4.rawValue), destinationAddress == "255.255.255.255" {
+            let selected = activePeers
+                .filter { $0.preferredChannelID != nil }
+                .sorted { $0.peerID < $1.peerID }
+            return .init(
+                routed: !selected.isEmpty,
+                routeClass: "broadcast",
+                peerIDs: selected.map(\.peerID),
+                channelIDs: selected.compactMap(\.preferredChannelID),
+                ipVersion: ipVersion,
+                destinationAddress: destinationAddress,
+                dropReason: selected.isEmpty ? "broadcast_no_active_peers" : nil
+            )
+        }
+        let ownerReference = ownerByIPv4[destinationAddress] ?? ownerByIPv6[destinationAddress]
+        guard let ownerReference else {
+            return .init(routed: false, routeClass: "unicast", peerIDs: [], channelIDs: [], ipVersion: ipVersion, destinationAddress: destinationAddress, dropReason: "unknown_destination")
+        }
+        guard let peerID = peerIDByReference[ownerReference] else {
+            return .init(routed: false, routeClass: "unicast", peerIDs: [], channelIDs: [], ipVersion: ipVersion, destinationAddress: destinationAddress, dropReason: "destination_peer_unmapped")
+        }
+        guard let active = activePeers.first(where: { $0.peerID == peerID }), let channelID = active.preferredChannelID else {
+            return .init(routed: false, routeClass: "unicast", peerIDs: [peerID], channelIDs: [], ipVersion: ipVersion, destinationAddress: destinationAddress, dropReason: "destination_peer_inactive")
+        }
+        return .init(routed: true, routeClass: "unicast", peerIDs: [peerID], channelIDs: [channelID], ipVersion: ipVersion, destinationAddress: destinationAddress, dropReason: nil)
+    }
+}
+
+public enum ObstacleBridgeTunInboundAdmissionPolicy {
+    public static func admits(sourceAddress: String, allowedSourceAddresses: Set<String>?) -> Bool {
+        guard let allowedSourceAddresses, !allowedSourceAddresses.isEmpty else { return true }
+        return allowedSourceAddresses.contains(sourceAddress)
+    }
+
+    public static func ownerReference(
+        for sourceAddress: String,
+        ownerByIPv4: [String: String],
+        ownerByIPv6: [String: String]
+    ) -> String? {
+        guard !sourceAddress.isEmpty else { return nil }
+        return ownerByIPv4[sourceAddress] ?? ownerByIPv6[sourceAddress]
+    }
+}
+
+public struct ObstacleBridgeTunDropEvent: Equatable, Sendable {
+    public let reason: String
+    public let direction: String
+    public let peerID: Int?
+    public let channelID: Int?
+    public let ipVersion: Int?
+    public let sourceAddress: String?
+    public let destinationAddress: String?
+    public let routeClass: String?
+    public let packetBytes: Int?
+
+    public init(
+        reason: String,
+        direction: String,
+        peerID: Int? = nil,
+        channelID: Int? = nil,
+        ipVersion: Int? = nil,
+        sourceAddress: String? = nil,
+        destinationAddress: String? = nil,
+        routeClass: String? = nil,
+        packetBytes: Int? = nil
+    ) {
+        self.reason = reason.isEmpty ? "unknown" : reason
+        self.direction = direction
+        self.peerID = peerID
+        self.channelID = channelID
+        self.ipVersion = ipVersion
+        self.sourceAddress = sourceAddress
+        self.destinationAddress = destinationAddress
+        self.routeClass = routeClass
+        self.packetBytes = packetBytes.map { max(0, $0) }
+    }
+}
+
+public struct ObstacleBridgeTunDropSnapshot: Equatable, Sendable {
+    public let total: Int
+    public let byReason: [String: Int]
+    public let recent: [ObstacleBridgeTunDropEvent]
+}
+
+/// Bounded, portable TUN drop accounting. Adapters choose when an OS write or
+/// read occurs; every policy drop is recorded in this Core ledger.
+public final class ObstacleBridgeTunDropLedger: @unchecked Sendable {
+    private let maximumRecent: Int
+    private var total = 0
+    private var byReason: [String: Int] = [:]
+    private var recent: [ObstacleBridgeTunDropEvent] = []
+
+    public init(maximumRecent: Int = 64) {
+        self.maximumRecent = max(1, maximumRecent)
+    }
+
+    public func record(_ event: ObstacleBridgeTunDropEvent) {
+        total += 1
+        byReason[event.reason, default: 0] += 1
+        recent.append(event)
+        if recent.count > maximumRecent {
+            recent.removeFirst(recent.count - maximumRecent)
+        }
+    }
+
+    public func snapshot() -> ObstacleBridgeTunDropSnapshot {
+        .init(total: total, byReason: byReason, recent: recent)
+    }
+
+    public func reset() {
+        total = 0
+        byReason.removeAll(keepingCapacity: true)
+        recent.removeAll(keepingCapacity: true)
+    }
+}
+
+/// Per-scope rolling byte accounting for TUN ingress shedding. The adapter
+/// supplies its clock and transport metrics; Core advances the bounded window
+/// and retains no scheduler or packet-device dependency.
+public struct ObstacleBridgeTunThrottleState: Equatable, Sendable {
+    public var windowStartNS: UInt64?
+    public var previousBytes: Int
+    public var currentBytes: Int
+    public var throttleDropCount: Int
+
+    public init(
+        windowStartNS: UInt64? = nil,
+        previousBytes: Int = 0,
+        currentBytes: Int = 0,
+        throttleDropCount: Int = 0
+    ) {
+        self.windowStartNS = windowStartNS
+        self.previousBytes = max(0, previousBytes)
+        self.currentBytes = max(0, currentBytes)
+        self.throttleDropCount = max(0, throttleDropCount)
+    }
+
+    public mutating func advance(nowNS: UInt64, windowNS: UInt64 = 100_000_000) {
+        guard windowNS > 0 else { return }
+        guard let start = windowStartNS else {
+            windowStartNS = nowNS
+            return
+        }
+        guard nowNS >= start, nowNS - start >= windowNS else { return }
+        let windows = (nowNS - start) / windowNS
+        previousBytes = windows == 1 ? currentBytes : 0
+        currentBytes = 0
+        windowStartNS = start &+ windows &* windowNS
+    }
+
+    public mutating func recordForwarded(bytes: Int) {
+        currentBytes += max(0, bytes)
+    }
+
+    public mutating func recordDrop() {
+        throttleDropCount += 1
+    }
+}
+
+public enum ObstacleBridgeTunThrottlePolicy {
+    public static func budget(previousBytes: Int, ratio: Double = 0.9) -> Int {
+        max(0, Int(Double(max(0, previousBytes)) * min(max(ratio, 0), 1)))
+    }
+
+    /// Returns whether one packet fits every active ingress scope. Each tuple
+    /// declares whether that scope is the aggregate scope, whose prior window
+    /// may be supplied by the lower transport.
+    public static func admits(
+        packetBytes: Int,
+        transportPreviousBytes: Int,
+        scopes: [(isAggregate: Bool, state: ObstacleBridgeTunThrottleState)]
+    ) -> Bool {
+        let requiredBytes = max(0, packetBytes)
+        for scope in scopes {
+            let baseline = scope.isAggregate && transportPreviousBytes > 0
+                ? transportPreviousBytes
+                : scope.state.previousBytes
+            let allowance = budget(previousBytes: baseline)
+            guard allowance > 0, scope.state.currentBytes + requiredBytes <= allowance else { return false }
+        }
+        return true
+    }
+}

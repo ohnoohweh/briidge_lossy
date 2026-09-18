@@ -115,4 +115,99 @@ struct ObstacleBridgePacketModelTests {
         #expect(cleanup.peerReferenceByID == [2: "two"])
         #expect(cleanup.peerIDByReference == ["two": 2])
     }
+
+    @Test func sharedTunRoutingPolicySelectsOwnedUnicastAndBoundedBroadcast() {
+        let active = [
+            ObstacleBridgeTunActivePeerChannel(peerID: 7, preferredChannelID: 12),
+            ObstacleBridgeTunActivePeerChannel(peerID: 2, preferredChannelID: 4),
+            ObstacleBridgeTunActivePeerChannel(peerID: 9, preferredChannelID: nil),
+        ]
+        let unicast = ObstacleBridgeTunRoutingPolicy.plan(
+            ipVersion: 4,
+            destinationAddress: "10.0.0.7",
+            ownerByIPv4: ["10.0.0.7": "seven"],
+            ownerByIPv6: [:],
+            peerIDByReference: ["seven": 7],
+            activePeers: active
+        )
+        #expect(unicast.routed)
+        #expect(unicast.routeClass == "unicast")
+        #expect(unicast.peerIDs == [7])
+        #expect(unicast.channelIDs == [12])
+
+        let broadcast = ObstacleBridgeTunRoutingPolicy.plan(
+            ipVersion: 4,
+            destinationAddress: "255.255.255.255",
+            ownerByIPv4: [:],
+            ownerByIPv6: [:],
+            peerIDByReference: [:],
+            activePeers: active
+        )
+        #expect(broadcast.routed)
+        #expect(broadcast.routeClass == "broadcast")
+        #expect(broadcast.peerIDs == [2, 7])
+        #expect(broadcast.channelIDs == [4, 12])
+    }
+
+    @Test func sharedTunInboundAdmissionUsesConfiguredAddressOwnership() {
+        #expect(ObstacleBridgeTunInboundAdmissionPolicy.admits(
+            sourceAddress: "fd20::2",
+            allowedSourceAddresses: ["fd20::2"]
+        ))
+        #expect(!ObstacleBridgeTunInboundAdmissionPolicy.admits(
+            sourceAddress: "fd20::3",
+            allowedSourceAddresses: ["fd20::2"]
+        ))
+        #expect(ObstacleBridgeTunInboundAdmissionPolicy.ownerReference(
+            for: "10.0.0.2",
+            ownerByIPv4: ["10.0.0.2": "two"],
+            ownerByIPv6: ["fd20::2": "two"]
+        ) == "two")
+        #expect(ObstacleBridgeTunInboundAdmissionPolicy.ownerReference(
+            for: "10.0.0.3",
+            ownerByIPv4: ["10.0.0.2": "two"],
+            ownerByIPv6: [:]
+        ) == nil)
+    }
+
+    @Test func tunDropLedgerBoundsRecentEventsAndKeepsReasonTotals() {
+        let ledger = ObstacleBridgeTunDropLedger(maximumRecent: 2)
+        ledger.record(.init(reason: "unknown_destination", direction: "outbound", peerID: 7, packetBytes: 99))
+        ledger.record(.init(reason: "source_not_owned_by_peer", direction: "inbound", peerID: 2))
+        ledger.record(.init(reason: "unknown_destination", direction: "outbound", peerID: 7))
+        let snapshot = ledger.snapshot()
+        #expect(snapshot.total == 3)
+        #expect(snapshot.byReason == ["unknown_destination": 2, "source_not_owned_by_peer": 1])
+        #expect(snapshot.recent.map(\.reason) == ["source_not_owned_by_peer", "unknown_destination"])
+        ledger.reset()
+        #expect(ledger.snapshot() == .init(total: 0, byReason: [:], recent: []))
+    }
+
+    @Test func tunThrottleStateRollsWindowsAndTracksForwardedBytes() {
+        var state = ObstacleBridgeTunThrottleState()
+        state.advance(nowNS: 100)
+        state.recordForwarded(bytes: 90)
+        state.recordDrop()
+        state.advance(nowNS: 100_000_100)
+        #expect(state.previousBytes == 90)
+        #expect(state.currentBytes == 0)
+        #expect(state.throttleDropCount == 1)
+        state.advance(nowNS: 300_000_100)
+        #expect(state.previousBytes == 0)
+    }
+
+    @Test func tunThrottlePolicyRequiresEveryActiveScopeToFit() {
+        let aggregate = ObstacleBridgeTunThrottleState(previousBytes: 100, currentBytes: 10)
+        let peer = ObstacleBridgeTunThrottleState(previousBytes: 80, currentBytes: 60)
+        #expect(ObstacleBridgeTunThrottlePolicy.admits(
+            packetBytes: 10,
+            transportPreviousBytes: 120,
+            scopes: [(isAggregate: true, state: aggregate), (isAggregate: false, state: peer)]
+        ))
+        #expect(!ObstacleBridgeTunThrottlePolicy.admits(
+            packetBytes: 20,
+            transportPreviousBytes: 120,
+            scopes: [(isAggregate: true, state: aggregate), (isAggregate: false, state: peer)]
+        ))
+    }
 }

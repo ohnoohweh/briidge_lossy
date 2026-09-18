@@ -36,6 +36,7 @@ public struct ObstacleBridgeChannelMuxSessionFrame: Equatable, Sendable {
 public enum ObstacleBridgeChannelMuxSessionProtocol: UInt8, Sendable {
     case udp = 0
     case tcp = 1
+    case tun = 2
 }
 
 public enum ObstacleBridgeChannelMuxSessionMessageType: UInt8, Sendable {
@@ -49,12 +50,14 @@ public enum ObstacleBridgeChannelMuxSessionMessageType: UInt8, Sendable {
 public struct ObstacleBridgeChannelMuxSessionSnapshot: Codable, Equatable, Sendable {
     public let activeTCPChannels: Int
     public let activeUDPChannels: Int
+    public let activeTUNChannels: Int
     public let queuedFrames: Int
     public let droppedFrames: Int
     public let malformedFrames: Int
     public let serviceFailures: Int
     public let openedTCPChannels: Int
     public let openedUDPChannels: Int
+    public let openedTUNChannels: Int
 }
 
 public enum ObstacleBridgeChannelMuxSessionEffect: Equatable, Sendable {
@@ -101,6 +104,7 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
     private var serviceFailures = 0
     private var openedTCPChannels = 0
     private var openedUDPChannels = 0
+    private var openedTUNChannels = 0
     private var nextControlTransactionID: UInt32 = 1
     private let controlReassembler = ObstacleBridgeControlChunkReassembler()
 
@@ -139,7 +143,7 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
         // OPEN occupies counter zero in each direction, so the peer's first
         // DATA/CLOSE record must carry counter one.
         channels[channelID] = .init(service: service, protocolType: protocolType, nextOutboundCounter: 0, nextInboundCounter: 1)
-        if protocolType == .tcp { openedTCPChannels += 1 } else { openedUDPChannels += 1 }
+        recordOpened(protocolType)
         let payload: Data
         do { payload = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: instanceID, connectionSequence: connectionSequence, service: service) }
         catch { serviceFailures += 1; throw ObstacleBridgeChannelMuxSessionError.malformedOpen }
@@ -220,7 +224,7 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
                   epochMatches(opened)
             else { malformedFrames += 1; throw ObstacleBridgeChannelMuxSessionError.malformedOpen }
             channels[frame.channelID] = .init(service: opened.service, protocolType: protocolType, nextOutboundCounter: 0, nextInboundCounter: 1)
-            if protocolType == .tcp { openedTCPChannels += 1 } else { openedUDPChannels += 1 }
+            recordOpened(protocolType)
             return [.connectLocal(channelID: frame.channelID, service: opened.service)]
         case .data:
             guard var channel = channels[frame.channelID] else { malformedFrames += 1; throw ObstacleBridgeChannelMuxSessionError.unknownChannel }
@@ -245,7 +249,7 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
     }
 
     public func snapshot() -> ObstacleBridgeChannelMuxSessionSnapshot {
-        .init(activeTCPChannels: channels.values.filter { $0.protocolType == .tcp }.count, activeUDPChannels: channels.values.filter { $0.protocolType == .udp }.count, queuedFrames: outbound.count, droppedFrames: droppedFrames, malformedFrames: malformedFrames, serviceFailures: serviceFailures, openedTCPChannels: openedTCPChannels, openedUDPChannels: openedUDPChannels)
+        .init(activeTCPChannels: channels.values.filter { $0.protocolType == .tcp }.count, activeUDPChannels: channels.values.filter { $0.protocolType == .udp }.count, activeTUNChannels: channels.values.filter { $0.protocolType == .tun }.count, queuedFrames: outbound.count, droppedFrames: droppedFrames, malformedFrames: malformedFrames, serviceFailures: serviceFailures, openedTCPChannels: openedTCPChannels, openedUDPChannels: openedUDPChannels, openedTUNChannels: openedTUNChannels)
     }
 
     /// Adapter cancellation is explicit: callers receive the local resources
@@ -273,10 +277,19 @@ public final class ObstacleBridgeChannelMuxSession: @unchecked Sendable {
     }
 
     private func isSupported(_ service: ObstacleBridgeServiceSpec, protocolType: ObstacleBridgeChannelMuxSessionProtocol?) -> Bool {
-        guard let protocolType, protocolType == .tcp || protocolType == .udp,
-              service.listenProtocol == service.targetProtocol,
-              service.targetPort > 0 else { return false }
+        guard let protocolType,
+              service.listenProtocol == service.targetProtocol else { return false }
+        if protocolType == .tun { return true }
+        guard protocolType == .tcp || protocolType == .udp, service.targetPort > 0 else { return false }
         return true
+    }
+
+    private func recordOpened(_ protocolType: ObstacleBridgeChannelMuxSessionProtocol) {
+        switch protocolType {
+        case .tcp: openedTCPChannels += 1
+        case .udp: openedUDPChannels += 1
+        case .tun: openedTUNChannels += 1
+        }
     }
 
     private func allocate(protocolType: ObstacleBridgeChannelMuxSessionProtocol) -> UInt16 {

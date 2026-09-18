@@ -50,11 +50,13 @@ ChannelMux fragment header/reassembly state. Its reassembler is keyed by
 channel and datagram ID, rejects overlap and inconsistent length records, and
 has explicit datagram and packet-size limits. It also performs source
 replacement with IPv4 header and safe ICMP/TCP/UDP checksum repair across
-bounded IPv6 extension chains; the Apple TUN adapter supplies only the
-configured address bytes and renders parsed address bytes for native
-diagnostic projections. Apple UDP and TUN frames use its fragmenter and
-reassembler; their adapters supply local channel/socket state, MTU, and
-accepted packet delivery.
+bounded IPv6 extension chains. `ObstacleBridgeChannelMuxSession` owns TUN
+channel allocation, OPEN/DATA/CLOSE counter progression, bounded OPEN-chunk
+admission, and transport-epoch reset. The packet model owns TUN binding,
+ownership routing, inbound source admission, bounded drop accounting, and
+ingress-shedding state. Apple adapters supply configured address bytes,
+transport measurements, and packet-device I/O, then render typed results for
+native diagnostics.
 
 ## Linux operator projection
 
@@ -71,12 +73,8 @@ and eligibility remain Core decisions.
 - Packet policy does not yet admit IPv6 jumbograms or encrypted payloads,
   classify all malformed transport payloads, or expose
   packet-device-independent effects for packet delivery and discard.
-- Catalog-driven listener lifecycle lacks iOS packet-tunnel runtime evidence
-  and connection-drain qualification across all Apple owners.
-- Core owns logical TUN channel binding, preference, close, epoch reset, and
-  deterministic shared-peer binding/disconnect cleanup. Routing, anti-spoof
-  admission, transport-delay shedding, and packet-drop accounting remain
-  adapter-owned.
+- Catalog-driven listener lifecycle still lacks connection-drain qualification
+  across all Apple owners.
 - Linux lacks privileged `/dev/net/tun` data-plane qualification. The
   foreground executable rejects TUN configuration until that adapter and its
   evidence exist.
@@ -91,7 +89,6 @@ Only unfinished packages are listed here.
 
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
-| `LSW-R007.4` | Core TUN policy state | Core owns TUN-channel lifecycle, shared-TUN bindings, peer selection, anti-spoof decisions, delay shedding, drop counters, and epoch reset. Packet adapters only provide reads, accepted writes, and device state. |
 | `LSW-R007.5` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
 
 ## Follow-on Linux packages
