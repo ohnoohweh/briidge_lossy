@@ -71,13 +71,14 @@ and eligibility remain Core decisions.
 ## Cross-platform runtime health evidence
 
 The Python runtime and Swift Core implement the portable redacted record schema
-and bounded in-memory ring. The iOS packet-tunnel provider persists its ring
-atomically in the App Group at provider-state cadence, reads the preceding ring
-before a new lifetime, and projects the redacted prior-lifetime classification
-through Admin status. Linux, macOS, Windows, and Python adapters do not yet
-persist this contract. No record adds data to SecureLink or ChannelMux.
-Records are written at a bounded cadence and at lifecycle or threshold
-transitions, rather than for every packet.
+and bounded in-memory ring. The Python Runner persists the ring atomically
+next to its effective configuration (or at its explicit environment-selected
+path), records start, 15-second heartbeat, and controlled-stop observations,
+and projects prior-lifetime classification through Admin status on Linux,
+macOS, and Windows. The iOS packet-tunnel provider persists its ring atomically
+in the App Group at provider-state cadence, reads the preceding ring before a
+new lifetime, and projects the same redacted classification through Admin
+status. No record adds data to SecureLink or ChannelMux.
 
 A record contains the lifecycle sequence and clean-stop marker, process and
 memory high-water measurements where the platform supplies them, heartbeat
@@ -113,9 +114,10 @@ scheduler behavior, and operating-system termination policy differ.
   evidence exist.
 - Linux does not provide TLS WebSocket, QUIC, proxy, package/service-manager,
   or multi-peer myudp-listener support.
-- Linux, macOS, Windows, and Python lack durable health-ring stores, lifecycle
-  wiring, and restart classification. Physical-device threshold qualification
-  is also open. Live Admin data alone cannot diagnose an abrupt runtime loss.
+- The Linux Swift and macOS Swift owners lack durable health-ring stores,
+  lifecycle wiring, and restart classification. Physical-device threshold
+  qualification is also open. Live Admin data alone cannot diagnose an abrupt
+  runtime loss.
 
 ## R007 delivery packages
 

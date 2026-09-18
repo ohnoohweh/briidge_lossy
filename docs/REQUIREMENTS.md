@@ -464,13 +464,14 @@ Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE
 
 - `REQ-ADM-001`: The admin web interface shall expose health, status, peer, connection, proxy-provider, log, and configuration-related APIs needed for operational visibility. The same operator surface shall remain usable from packaged application builds, including packaged iOS runtimes, so the WebAdmin HTML/JS assets are still served at `/` even when the source-tree-relative `./admin_web` directory is not present at runtime. The repository-top `admin_web/` directory remains the canonical asset source for source-tree workflows, and packaged builds shall stage those same assets into the runtime bundle so hosts such as the iOS Briefcase app can seed or serve WebAdmin without a checked-in duplicate mirror under `src/`. The iOS foreground app shall use the extension's configured loopback Admin API and a native control for Network Extension lifecycle; TUN routing remains controlled through the shared WebAdmin API rather than a second native switch. When the extension is confirmed off, native UI shall replace the embedded WebAdmin view with a compact offline card so stale administration data is not visible; when active, the embedded page and Safari shall use the same shared Admin API and heading.
   Implementation note: the portable runtime-health record and bounded ring are
-  implemented in Python and Swift Core. The iOS packet-tunnel provider persists
-  its redacted ring atomically in its App Group, records a controlled-stop
-  marker only after stop completion, and publishes the preceding lifetime's
-  clean/unclean classification with the retained-record count in `/api/status`.
-  Packet contents, credentials, keys, nonces, and peer traffic detail are not
-  retained. Other platform runtime stores and load-threshold qualification
-  remain outside this delivered iOS slice.
+  implemented in Python and Swift Core. The Python Runner persists its ring
+  beside the effective configuration (or at its explicit environment-selected
+  path), records start, heartbeat, and controlled stop, and publishes the
+  preceding lifetime's classification with the retained-record count in
+  `/api/status`; the iOS packet-tunnel provider provides the same evidence
+  through its App Group. Packet contents, credentials, keys, nonces, and peer
+  traffic detail are not retained. Swift Linux/macOS stores and load-threshold
+  qualification remain open.
 - `REQ-ADM-002`: When admin authentication is disabled, the admin API shall remain available without login.
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.
 - `REQ-ADM-004`: After correct authentication, the admin API shall become available to that authenticated client.
