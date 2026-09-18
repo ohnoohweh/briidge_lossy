@@ -201,6 +201,7 @@ def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> Non
 
     assert "runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()" in provider
     assert '"runtime_health_recent_records"' in provider
+    assert '"runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? []' in provider
     assert "runtimeHealthRecordsPayload" in provider
 
 

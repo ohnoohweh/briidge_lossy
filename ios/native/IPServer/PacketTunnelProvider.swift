@@ -1686,6 +1686,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "heartbeat_tick_count": heartbeatTickCount,
                 "runtime_health_record_count": runtimeHealth["runtime_health_record_count"] ?? 0,
                 "previous_runtime_lifetime_ended_cleanly": runtimeHealth["previous_runtime_lifetime_ended_cleanly"] ?? NSNull(),
+                "runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? [],
                 "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
                 "proxy_provider": proxyProviderSnapshot(),
