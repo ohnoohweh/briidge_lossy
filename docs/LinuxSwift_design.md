@@ -103,11 +103,11 @@ evidence correlated by timestamp; they are not inferred as a specific cause
 from the health ring alone.
 
 Load protection is expressed as bounded admission and backpressure before
-resource exhaustion: adapters slow or discard packet work at calibrated queue,
+resource exhaustion: adapters slow or discard packet work at configured queue,
 write-latency, or memory thresholds while retaining the health evidence.
-Runtime owners do not self-terminate to enforce these limits. Thresholds are
-qualified on each supported physical platform because available memory,
-scheduler behavior, and operating-system termination policy differ.
+Runtime owners do not self-terminate to enforce these limits. Physical
+qualification selects and records operating thresholds because available
+memory, scheduler behavior, and termination policy differ by platform.
 
 ## Known open gaps
 
@@ -133,7 +133,7 @@ Only unfinished packages are listed here.
 
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
-| `LSW-R007.5` | Cross-platform runtime-health evidence | The portable diagnostic contract is implemented by the Python runtime and Swift Core; every supported Linux, macOS, iOS, and Windows owner persists and recovers the same redacted bounded health record across runtime replacement. Controlled-stop and unclean-lifetime classification, threshold backpressure, and physical-device load evidence are qualified without protocol changes. |
+| `LSW-R007.5` | Physical runtime-load qualification | On a signed physical iPhone and each released host owner, controlled sustained traffic demonstrates bounded packet admission without self-termination. Retained health records and redacted Admin snapshots capture both packet directions, queue/inflight high-water, drops, slow writes, lifecycle classification, and the matching platform termination or watchdog evidence. The recorded operating threshold and evidence location are reproducible without protocol changes. |
 | `LSW-R007.6` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
 
 ## Follow-on Linux packages
