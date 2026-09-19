@@ -123,6 +123,12 @@ memory, scheduler behavior, and termination policy differ by platform.
   evidence exist.
 - Linux does not provide TLS WebSocket, QUIC, proxy, package/service-manager,
   or multi-peer myudp-listener support.
+- The physical iOS myudp shared-TUN path can authenticate and exchange raw
+  overlay traffic while failing to deliver peer-to-client TUN packets to
+  `NEPacketTunnelFlow`. Its repeated peer and global probes therefore time
+  out despite an active lower-layer session. The ChannelMux TUN return-path
+  binding and delivery decision need packet-level qualification before iOS
+  data-plane load evidence can be accepted.
 - Physical-device threshold qualification remains open. Live Admin data alone
   cannot diagnose an abrupt runtime loss; retained health evidence must be
   correlated with platform crash, watchdog, and memory-termination reports.
