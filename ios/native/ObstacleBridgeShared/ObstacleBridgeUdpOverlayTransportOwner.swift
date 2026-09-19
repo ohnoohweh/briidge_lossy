@@ -89,6 +89,21 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
     private var activeTunChanIDs: Set<Int> = []
     private var tunStats: [String: Int] = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+    // Bounded, payload-free evidence for the ChannelMux-to-packet-device
+    // boundary.  This distinguishes an absent inbound frame from a rejected
+    // or successfully delivered one when qualifying a physical tunnel.
+    private var tunMuxFrameCounters: [String: Int] = [
+        "inbound_open": 0,
+        "inbound_open_chunk": 0,
+        "inbound_data": 0,
+        "inbound_data_frag": 0,
+        "inbound_close": 0,
+        "inbound_other": 0,
+        "open_rejected": 0,
+        "open_chunk_rejected": 0,
+        "data_delivered": 0,
+        "data_dropped": 0,
+    ]
     private var udpServerDrivers: [ObjectIdentifier: ObstacleBridgeUDPServerConnectionDriver] = [:]
     private var started = false
     private var secureLinkHandshakePrimed = false
@@ -358,6 +373,18 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         tcpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+        tunMuxFrameCounters = [
+            "inbound_open": 0,
+            "inbound_open_chunk": 0,
+            "inbound_data": 0,
+            "inbound_data_frag": 0,
+            "inbound_close": 0,
+            "inbound_other": 0,
+            "open_rejected": 0,
+            "open_chunk_rejected": 0,
+            "data_delivered": 0,
+            "data_dropped": 0,
+        ]
         currentPeerAddress = fixedPeerAddress
         peerCandidates.removeAll()
         peerCandidateIndex = 0
@@ -469,6 +496,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["client_udp_channels"] = udpConnectionStates.count
             snapshot["tun_channels"] = activeTunChanIDs.count
             snapshot["tun_stats"] = tunStats
+            snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters
+            snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]
             snapshot["established_ns"] = overlayRuntime.establishedNS
             snapshot["last_rx_wall_ns"] = overlayRuntime.lastRxWallNS
             snapshot["last_rtt_ok_ns"] = overlayRuntime.lastRttOkNS
@@ -1090,6 +1119,20 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleInboundTunMuxFrame(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) {
+        switch frame.mtype {
+        case .open:
+            tunMuxFrameCounters["inbound_open", default: 0] += 1
+        case .openChunk:
+            tunMuxFrameCounters["inbound_open_chunk", default: 0] += 1
+        case .data:
+            tunMuxFrameCounters["inbound_data", default: 0] += 1
+        case .dataFrag:
+            tunMuxFrameCounters["inbound_data_frag", default: 0] += 1
+        case .close:
+            tunMuxFrameCounters["inbound_close", default: 0] += 1
+        default:
+            tunMuxFrameCounters["inbound_other", default: 0] += 1
+        }
         let protocolStats = overlayRuntime.protocolStatsSnapshot()
         ObstacleBridgeOverlayChannelCore.handleInboundTunMuxFrame(
             frame,
@@ -1104,10 +1147,18 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             tunStats: &tunStats,
             tunPacketSink: tunPacketSink,
             sendMuxFrames: sendMuxFrames,
+            onInboundDrop: { [weak self] _ in
+                self?.tunMuxFrameCounters["data_dropped", default: 0] += 1
+            },
+            onInboundDeliver: { [weak self] _ in
+                self?.tunMuxFrameCounters["data_delivered", default: 0] += 1
+            },
             onOpenRejected: { [weak self] chanID in
+                self?.tunMuxFrameCounters["open_rejected", default: 0] += 1
                 self?.eventSink?("udp_overlay_tun_open_rejected", ["chan_id": chanID])
             },
             onOpenChunkRejected: { [weak self] chanID in
+                self?.tunMuxFrameCounters["open_chunk_rejected", default: 0] += 1
                 self?.eventSink?("udp_overlay_tun_open_chunk_rejected", ["chan_id": chanID])
             }
         )

@@ -1204,6 +1204,10 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     # suppresses that recovery path.
     assert "let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)" in owner
     assert "nowNS - idleAnchorNS < Self.peerFallbackIdleNS" in owner
+    assert 'snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters' in owner
+    assert 'snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]' in owner
+    assert 'tunMuxFrameCounters["data_delivered", default: 0] += 1' in owner
+    assert 'tunMuxFrameCounters["data_dropped", default: 0] += 1' in owner
 
 
 def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:
