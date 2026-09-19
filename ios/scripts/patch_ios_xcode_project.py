@@ -39,6 +39,7 @@ PYTHON_UTILS_PREVIOUS_APP_STORE_BUNDLE_ID_LINE = (
 PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE = (
     '    FRAMEWORK_BUNDLE_ID=$(echo $PRODUCT_BUNDLE_IDENTIFIER.$FULL_MODULE_NAME | tr "_" "-" | sed \'s/\\.-/./g\')\n'
 )
+PYTHON_DYLIB_INFO_TEMPLATE = Path("Support") / "Python.xcframework" / "build" / "iOS-dylib-Info-template.plist"
 
 PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "\n"
@@ -1275,6 +1276,25 @@ def patch_python_build_utility(pbxproj_path: Path) -> bool:
     return True
 
 
+def patch_python_dylib_info_template(pbxproj_path: Path) -> bool:
+    """Mark generated CPython extension bundles as frameworks, not apps."""
+    template_path = pbxproj_path.parent.parent / PYTHON_DYLIB_INFO_TEMPLATE
+    if not template_path.is_file():
+        raise ValueError(f"Python dynamic-library plist template is missing: {template_path}")
+    original = template_path.read_text(encoding="utf-8")
+    application_package_type = "<key>CFBundlePackageType</key>\n\t<string>APPL</string>"
+    framework_package_type = "<key>CFBundlePackageType</key>\n\t<string>FMWK</string>"
+    if framework_package_type in original:
+        return False
+    if application_package_type not in original:
+        raise ValueError("Python dynamic-library plist package type not found")
+    template_path.write_text(
+        original.replace(application_package_type, framework_package_type, 1),
+        encoding="utf-8",
+    )
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pbxproj", nargs="?", type=Path, default=DEFAULT_PROJECT)
@@ -1284,7 +1304,8 @@ def main() -> int:
         raise SystemExit(f"Xcode project file not found: {path}")
     changed = patch_pbxproj_file(path)
     utils_changed = patch_python_build_utility(path)
-    print(f"{'patched' if changed or utils_changed else 'already configured'}: {path}")
+    dylib_template_changed = patch_python_dylib_info_template(path)
+    print(f"{'patched' if changed or utils_changed or dylib_template_changed else 'already configured'}: {path}")
     return 0
 
 

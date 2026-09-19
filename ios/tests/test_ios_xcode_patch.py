@@ -355,3 +355,20 @@ def test_patch_python_build_utility_uses_app_store_valid_module_bundle_ids(tmp_p
     utility_path.write_text(patcher.PYTHON_UTILS_PREVIOUS_APP_STORE_BUNDLE_ID_LINE, encoding="utf-8")
     assert patcher.patch_python_build_utility(pbxproj) is True
     assert patcher.PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE in utility_path.read_text(encoding="utf-8")
+
+
+def test_patch_python_dylib_info_template_marks_extension_modules_as_frameworks(tmp_path) -> None:
+    xcodeproj = tmp_path / "ObstacleBridge.xcodeproj"
+    xcodeproj.mkdir(parents=True)
+    pbxproj = xcodeproj / "project.pbxproj"
+    pbxproj.write_text(BASELINE_PROJECT, encoding="utf-8")
+    template_path = tmp_path / patcher.PYTHON_DYLIB_INFO_TEMPLATE
+    template_path.parent.mkdir(parents=True)
+    template_path.write_text(
+        "<key>CFBundlePackageType</key>\n\t<string>APPL</string>",
+        encoding="utf-8",
+    )
+
+    assert patcher.patch_python_dylib_info_template(pbxproj) is True
+    assert patcher.patch_python_dylib_info_template(pbxproj) is False
+    assert "<string>FMWK</string>" in template_path.read_text(encoding="utf-8")
