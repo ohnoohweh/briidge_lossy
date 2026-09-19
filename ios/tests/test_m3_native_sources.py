@@ -1199,6 +1199,11 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     assert "installReadSource()" in owner
     assert "udp_overlay_socket_rebuilt" in owner
     assert "guard rebuildSocketForPeerRotation() else" in owner
+    # A peer that completed its initial handshake must still rotate after a
+    # later receive outage; anchoring only at selection time permanently
+    # suppresses that recovery path.
+    assert "let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)" in owner
+    assert "nowNS - idleAnchorNS < Self.peerFallbackIdleNS" in owner
 
 
 def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:

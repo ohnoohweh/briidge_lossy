@@ -788,13 +788,14 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             return
         }
         let nowNS = monotonicNowNS()
-        guard lastInboundDatagramNS == 0 || lastInboundDatagramNS < currentPeerSelectedAtNS else {
+        // A successful initial handshake must not suppress later recovery.
+        // Once a peer stops delivering datagrams, rebuild the native socket
+        // and try the next candidate after the same bounded idle interval.
+        let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)
+        if nowNS <= idleAnchorNS {
             return
         }
-        if nowNS <= currentPeerSelectedAtNS {
-            return
-        }
-        if nowNS - currentPeerSelectedAtNS < Self.peerFallbackIdleNS {
+        if nowNS - idleAnchorNS < Self.peerFallbackIdleNS {
             return
         }
         rotateToNextPeerCandidate(nowNS: nowNS, reason: "idle")
