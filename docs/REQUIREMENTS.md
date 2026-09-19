@@ -520,8 +520,8 @@ Repository governance update (public endpoint privacy): documentation, design ex
 
 `REQ-MUX-009` implementation note: a configured server-owned shared TUN remains open across overlay-disconnected lifecycle edges, including initial SecureLink or transport reconnect transitions. Reconnect cleanup pauses admission and clears peer channels while retaining the shared device and helper-managed network state; full teardown remains limited to adapter shutdown or catalog removal. A listener reader admits a return packet only when the process-shared registry resolves its selected peer channel to the same active shared device; this allows authenticated child-peer return traffic without making an unbound or disconnected path eligible.
 
-The shared Python/Swift ChannelMux parity fixture supplies the explicit inbound
-counter for server DATA and CLOSE frames, so the portable Core replay contract
-is exercised rather than bypassed by an absent counter.
+The shared Python/Swift ChannelMux parity fixture supplies explicit inbound
+counters for server and client DATA/CLOSE frames, so the portable Core replay
+contract is exercised rather than bypassed by an absent counter.
 
 The supporting product-requirement traceability manifest is maintained in [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml). It is stored with the repository's CI/support metadata rather than in `docs/`, but it continues to trace these product requirements to their defending tests.

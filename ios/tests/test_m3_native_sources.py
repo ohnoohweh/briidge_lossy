@@ -977,7 +977,7 @@ def test_channel_mux_tcp_transport_owner_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeChannelMuxTCPTransportOwner" in runtime
-    assert "ControlChunkReassembler" in runtime
+    assert "handleInboundClientOpenChunk(" in runtime
     assert "acceptLocalConnection(" in runtime
     assert "handleInboundMuxFrame(" in runtime
     assert "ObstacleBridgeChannelMuxTcpRuntime" in runtime

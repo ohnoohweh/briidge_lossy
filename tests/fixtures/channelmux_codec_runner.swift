@@ -2192,7 +2192,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let first else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let closeSnapshot = runtime.handleInboundClose(chanID: first.chanID)
+        let closeSnapshot = runtime.handleInboundClose(chanID: first.chanID, counter: 1)
         let second = try runtime.handleLocalServerDatagram(
             spec: try parseServiceSpec(specObject),
             serviceKey: serviceKey,
