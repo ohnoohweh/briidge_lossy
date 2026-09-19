@@ -77,8 +77,10 @@ archives the `ObstacleBridge` container app, exports its signed IPA, and
 uploads it to App Store Connect. `IPServer` is embedded in that archive; do
 not archive or upload the extension by itself.
 
-Create the untracked `ios/.local-testflight-env` file with your signing and
-App Store Connect API-key values:
+Add the App Store Connect API-key values to your existing untracked
+`~/.local-device-env` file (the release script imports only its
+ObstacleBridge/TestFlight variables, so unrelated local credentials are not
+passed to build or upload subprocesses):
 
 ```bash
 export OB_APPLE_TEAM_ID="YOUR_TEAM_ID"
@@ -88,6 +90,9 @@ export OB_APPSTORE_API_KEY_PATH="/absolute/path/AuthKey_YOUR_KEY_ID.p8"
 # Optional when the account has multiple providers:
 # export OB_APPSTORE_PROVIDER_PUBLIC_ID="YOUR_PROVIDER_ID"
 ```
+
+`ios/.local-device-env` and `ios/.local-testflight-env` remain optional
+untracked overrides; later files override values from the user-wide file.
 
 Run:
 

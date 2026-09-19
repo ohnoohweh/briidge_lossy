@@ -18,6 +18,9 @@ def test_testflight_release_archives_container_and_uploads_with_api_key() -> Non
     assert '--p8-file-path "${OB_APPSTORE_API_KEY_PATH}"' in source
     assert '--wait' in source
     assert 'IPServer is an embedded packet-tunnel extension' in source
+    assert 'load_release_environment "${HOME}/.local-device-env"' in source
+    assert 'OB_APPSTORE_API_KEY_ID|OB_APPSTORE_API_ISSUER_ID' in source
+    assert 'unrelated credentials' in source
 
 
 def test_device_build_script_accepts_release_version_and_generic_signing_update() -> None:

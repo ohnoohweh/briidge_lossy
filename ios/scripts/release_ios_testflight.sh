@@ -9,12 +9,53 @@ IOS_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${IOS_DIR}/.." && pwd)"
 PROJECT_FILE="${IOS_DIR}/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj"
 
-for env_file in "${IOS_DIR}/.local-device-env" "${IOS_DIR}/.local-testflight-env"; do
-  if [ -f "${env_file}" ]; then
-    # shellcheck disable=SC1090
-    . "${env_file}"
-  fi
-done
+load_release_environment() {
+  local env_file="$1"
+  local assignment
+  local name
+  local value
+
+  [ -f "${env_file}" ] || return 0
+  # The shared local environment can contain unrelated credentials. Evaluate
+  # it only in a subshell and import the release allowlist, so those values do
+  # not become part of xcodebuild or upload subprocess environments.
+  while IFS= read -r assignment; do
+    name="${assignment%%=*}"
+    value="${assignment#*=}"
+    case "${name}" in
+      OB_APPLE_TEAM_ID|OB_APPSTORE_API_KEY_ID|OB_APPSTORE_API_ISSUER_ID|OB_APPSTORE_API_KEY_PATH|OB_APPSTORE_PROVIDER_PUBLIC_ID|OB_IOS_MARKETING_VERSION|OB_IOS_BUILD_NUMBER|OB_TESTFLIGHT_OUTPUT_DIR|OB_TESTFLIGHT_DERIVED_DATA_PATH)
+        printf -v "${name}" '%s' "${value}"
+        export "${name}"
+        ;;
+    esac
+  done < <(
+    (
+      # shellcheck disable=SC1090
+      . "${env_file}"
+      for name in \
+        OB_APPLE_TEAM_ID \
+        OB_APPSTORE_API_KEY_ID \
+        OB_APPSTORE_API_ISSUER_ID \
+        OB_APPSTORE_API_KEY_PATH \
+        OB_APPSTORE_PROVIDER_PUBLIC_ID \
+        OB_IOS_MARKETING_VERSION \
+        OB_IOS_BUILD_NUMBER \
+        OB_TESTFLIGHT_OUTPUT_DIR \
+        OB_TESTFLIGHT_DERIVED_DATA_PATH; do
+        if [ -n "${!name:-}" ]; then
+          printf '%s=%s\n' "${name}" "${!name}"
+        fi
+      done
+    )
+  )
+}
+
+# The user-wide file is the primary local release configuration. Repo-local
+# files remain optional machine-specific overrides and are intentionally
+# untracked.
+load_release_environment "${HOME}/.local-device-env"
+load_release_environment "${IOS_DIR}/.local-device-env"
+load_release_environment "${IOS_DIR}/.local-testflight-env"
 
 require_value() {
   local name="$1"
