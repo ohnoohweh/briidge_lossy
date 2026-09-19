@@ -299,10 +299,10 @@ def test_swift_overlay_epoch_reset_reopens_local_tun_channels() -> None:
 
 def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    connect_overlay = owner[owner.index("    private func connectOverlay() {") : owner.index("    private func connectNetworkWebSocket(")]
+    connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func connectNetworkWebSocket(")]
 
-    assert "resetOverlayTransportEpoch()" in connect_overlay
-    assert connect_overlay.index("resetOverlayTransportEpoch()") < connect_overlay.index(
+    assert "resetOverlayTransportEpoch(notifyCore: false)" in connect_overlay
+    assert connect_overlay.index("resetOverlayTransportEpoch(notifyCore: false)") < connect_overlay.index(
         "websocketTransportGeneration += 1"
     )
 
@@ -874,10 +874,11 @@ def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
 def test_shared_overlay_lifecycle_reports_to_core_coordinator() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     assert "private let coreCoordinator: ObstacleBridgeOverlayCoordinator" in runtime
-    assert "coreCoordinator.handle(.start)" in runtime
-    assert "coreCoordinator.handle(.transportConnected" in runtime
-    assert "coreCoordinator.handle(.authenticated" in runtime
-    assert "coreCoordinator.handle(.transportFailed" in runtime
+    assert "applyCore(.start)" in runtime
+    assert "applyCore(.transportConnected" in runtime
+    assert "applyCore(.authenticated" in runtime
+    assert "applyCore(.transportFailed" in runtime
+    assert "let transition = coreCoordinator.handle(input)" in runtime
     assert "let coreReady = coreCoordinator.snapshot.appReady" in runtime
 
 

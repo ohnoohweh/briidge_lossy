@@ -1308,6 +1308,10 @@ REQ-MUX-009:
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_shared_tun_ownership_metadata_roundtrip_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_shared_tun_ownership_snapshot_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv4
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_server_open_then_inbound_data_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_server_close_then_local_datagram_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_server_accept_then_inbound_data_matches_python
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_server_accept_then_inbound_close_matches_python
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_broadcast_destination
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_rejects_spoofed_ipv4
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_guarded_inbound_tun_data_accepts_owned_ipv6
