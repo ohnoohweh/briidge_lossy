@@ -682,6 +682,44 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         text = "\n".join(logs.output)
         self.assertIn("reason=on_overlay_state_disconnected", text)
 
+    def test_overlay_disconnect_retains_server_owned_shared_tun(self):
+        asyncio.run(self._test_overlay_disconnect_retains_server_owned_shared_tun())
+
+    async def _test_overlay_disconnect_retains_server_owned_shared_tun(self):
+        svc_key = ("local", 0, 1)
+        spec = ChannelMux.ServiceSpec(
+            1,
+            "tun",
+            "obtun0",
+            1500,
+            "tun",
+            "obtun0",
+            1500,
+            options={
+                "shared_tun_ownership": {
+                    "mode": "server_shared",
+                    "peers": [{"peer_ref": "iphone-client", "ipv4": ["192.168.106.4"]}],
+                }
+            },
+        )
+        session = _FakeSession(connected=False)
+        mux = ChannelMux(session, asyncio.get_running_loop())
+        mux._overlay_connected = True
+        mux._accepting_enabled = True
+        mux._local_services[svc_key] = spec
+        mux._svc_tun_devices[svc_key] = ChannelMux.TunDevice(
+            fd=-1,
+            ifname="obtun0",
+            mtu=1500,
+            service_key=svc_key,
+        )
+
+        with patch.object(mux, "_stop_listener_for_service_id", new=AsyncMock()) as stop_listener:
+            await mux.on_overlay_state(False)
+
+        stop_listener.assert_not_awaited()
+        self.assertIn(svc_key, mux._svc_tun_devices)
+
     def test_on_overlay_state_allows_connected_non_securelink_transport(self):
         asyncio.run(self._test_on_overlay_state_allows_connected_non_securelink_transport())
 
@@ -2222,7 +2260,11 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         # server-owned mux keeps the one TUN reader.  Its routing state must
         # therefore receive the peer binding and use its listener session for
         # replies.
-        self.mux._tun_admission_epoch = self.mux._connection_lifecycle_epoch
+        # A server listener has no globally connected overlay. Its shared
+        # reader must instead admit replies for an authenticated child binding.
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+        self.mux._tun_admission_epoch = None
         mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
         setattr(dev, '_reader_mux', self.mux)
         dev.reader_registered = True
@@ -2253,6 +2295,10 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
         self.assertNotIn((svc_key, shared_peer_id), mux2._shared_tun_runtime_by_peer)
+        self.assertFalse(self.mux._shared_tun_reader_admission_allowed(dev))
+        with patch.object(mux2, '_send_mux') as disconnected_send:
+            self.mux._on_local_tun_packet(dev, _ipv4_packet('192.168.106.1', '192.168.106.2'))
+        disconnected_send.assert_not_called()
 
     async def test_first_shared_tun_peer_open_activates_stable_reader_owner_before_reverse_route(self):
         """A proactive Swift TUN OPEN must not beat deferred listener startup.
@@ -2314,6 +2360,32 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             peer_id=4,
         )
 
+    async def test_shared_tun_reply_recovers_missing_reverse_index_from_bound_peer(self):
+        svc_key = ("local", 0, 1)
+        spec = ChannelMux.ServiceSpec(
+            1, "tun", "obtun0", 1600, "tun", "obtun0", 1600,
+            options={"shared_tun_ownership": {"mode": "server_shared", "peers": [
+                {"peer_ref": "iphone-client", "ipv4": ["192.168.106.4"]},
+            ]}},
+        )
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        self.mux._record_shared_tun_peer_binding(svc_key, 4, 1)
+        self.mux._shared_tun_peer_ref_by_peer[(svc_key, 4)] = "iphone-client"
+        packet = _ipv4_packet("192.168.106.1", "192.168.106.4")
+
+        route = self.mux._shared_tun_plan_local_delivery(svc_key, packet)
+
+        self.assertTrue(route["routed"])
+        self.assertEqual(route["selected_peer_ids"], [4])
+        self.assertEqual(route["selected_chan_ids"], [1])
+
+        self.mux._record_shared_tun_peer_binding(svc_key, 5, 2)
+        self.mux._shared_tun_peer_ref_by_peer[(svc_key, 5)] = "iphone-client"
+        self.mux._shared_tun_peer_id_by_ref.clear()
+        ambiguous_route = self.mux._shared_tun_plan_local_delivery(svc_key, packet)
+        self.assertFalse(ambiguous_route["routed"])
+        self.assertEqual(ambiguous_route["drop_reason"], "destination_peer_unmapped")
+
     async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
         self.mux.args = argparse.Namespace(
             TUN_routing={
@@ -2353,6 +2425,29 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(normalized[8:24], ipaddress.IPv6Address("fd20:106::2").packed)
         self.assertEqual(normalized[24:40], ipaddress.IPv6Address("ff02::16").packed)
+
+    async def test_local_tun_packet_source_normalizes_ipv6_destination_options_udp(self):
+        self.mux.args = argparse.Namespace(
+            TUN_routing={
+                "tunnel_address6": "fd20:106::2",
+                "shared_tun_disable_outgoing_normalization": False,
+            }
+        )
+        spec = ChannelMux.ServiceSpec(6, "tun", "obtun0", 1600, "tun", "obtun0", 1600)
+        svc_key = ("local", 0, 6)
+        dev = ChannelMux.TunDevice(fd=-1, ifname="obtun0", mtu=1600, service_key=svc_key)
+        packet = bytearray(b"\x60\x00\x00\x00\x00\x1c\x3c\x40")
+        packet += ipaddress.IPv6Address("fe80::5982:73cb:ba81:e36c").packed
+        packet += ipaddress.IPv6Address("2606:4700:4700::1111").packed
+        packet += b"\x11\x00\x00\x00\x00\x00\x00\x00"  # Destination Options -> UDP
+        packet += b"\x00\x01\x00\x02\x00\x14\x00\x00" + (b"\xa5" * 12)
+        self.mux._local_services[svc_key] = spec
+
+        normalized = self.mux._normalize_local_tun_packet_source(dev, bytes(packet))
+
+        self.assertEqual(normalized[8:24], ipaddress.IPv6Address("fd20:106::2").packed)
+        pseudo = normalized[8:24] + normalized[24:40] + (20).to_bytes(4, "big") + b"\x00\x00\x00\x11"
+        self.assertEqual(ChannelMux._checksum16(pseudo + normalized[48:68]), 0)
 
     async def test_local_tun_packet_source_normalization_can_be_disabled(self):
         self.mux.args = argparse.Namespace(

@@ -4,15 +4,19 @@ from ._bridge_import import export_bridge_globals
 import base64
 import contextlib as _process_contextlib
 import ctypes
+import os
 import secrets
 import shutil
 import signal as _process_signal
 import subprocess
 import tempfile
 import threading
+import time
+from pathlib import Path
 from typing import Mapping
 
 from .bridge_tun_helper_client import _open_local_helper_connection
+from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
 
 _bridge = export_bridge_globals(globals())
 
@@ -46,8 +50,15 @@ class RunnerMuxAggregate:
         tun_local_reply_stage_counts: dict[str, int] = {}
         tun_probe_last_timeout_diag: dict[str, Any] = {}
         tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        tun_receive_by_peer: dict[str, dict[str, int]] = {}
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
+            for peer_id, counters in dict(snap.get("tun_receive_by_peer") or {}).items():
+                label = f"{idx}:{peer_id}"
+                tun_receive_by_peer[label] = {
+                    str(stage): int(count or 0)
+                    for stage, count in dict(counters or {}).items()
+                }
             udp_rows.extend(snap.get("udp", []))
             tcp_rows.extend(snap.get("tcp", []))
             tun_rows.extend(snap.get("tun", []))
@@ -92,6 +103,7 @@ class RunnerMuxAggregate:
             "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
             "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
             "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
+            "tun_receive_by_peer": tun_receive_by_peer,
         }
 
     @staticmethod
@@ -212,6 +224,11 @@ class Runner:
         self._last_disconnected_monotonic: Optional[float] = None
         self._last_connection_lifecycle_monotonic: Optional[float] = None
         self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
+        self._runtime_health_store: Optional[RuntimeHealthStore] = self._make_runtime_health_store()
+        self._runtime_health_previous_lifetime_ended_cleanly: Optional[bool] = None
+        self._runtime_health_sequence = 0
+        self._runtime_health_task: Optional[asyncio.Task] = None
+        self._runtime_health_last_error = ""
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._async_diag_lock = threading.Lock()
@@ -238,6 +255,76 @@ class Runner:
             "last_failed_kind": "",
             "last_failed_monotonic": None,
             "last_failed_error": "",
+        }
+
+    def _make_runtime_health_store(self) -> Optional[RuntimeHealthStore]:
+        configured = str(os.environ.get("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH") or "").strip()
+        if not configured:
+            config_path = str(getattr(self.args, "_config_path", "") or getattr(self.args, "config", "")).strip()
+            if not config_path:
+                return None
+            path = Path(config_path).expanduser()
+            configured = str(path.with_name(f".{path.stem}.runtime-health-v1.json"))
+        try:
+            return RuntimeHealthStore(configured)
+        except (OSError, ValueError) as exc:
+            self.log.warning("[RUNNER] runtime-health store disabled path=%s error=%s", configured, type(exc).__name__)
+            return None
+
+    def _record_runtime_health(self, event: str, *, controlled_stop: bool = False) -> None:
+        store = self._runtime_health_store
+        if store is None:
+            return
+        connected = any(self._session_app_ready(session) for session in self._sessions)
+        secure_link_state = None
+        for session in self._sessions:
+            getter = getattr(session, "get_secure_link_status_snapshot", None)
+            if callable(getter):
+                with contextlib.suppress(Exception):
+                    state = str(dict(getter() or {}).get("state") or "").strip()
+                    if state:
+                        secure_link_state = state
+                        break
+        self._runtime_health_sequence += 1
+        try:
+            store.append(RuntimeHealthRecord(
+                sequence=self._runtime_health_sequence,
+                timestamp_unix_milliseconds=int(time.time() * 1_000),
+                event=event,
+                controlled_stop=controlled_stop,
+                packet_pump_running=connected,
+                overlay_state=STATE_CONNECTED if connected else STATE_DISCONNECTED,
+                securelink_state=secure_link_state,
+            ))
+            self._runtime_health_last_error = ""
+        except OSError as exc:
+            self._runtime_health_last_error = type(exc).__name__
+            self.log.warning("[RUNNER] runtime-health persist failed event=%s error=%s", event, type(exc).__name__)
+
+    def _begin_runtime_health_lifetime(self) -> None:
+        store = self._runtime_health_store
+        if store is None:
+            return
+        try:
+            self._runtime_health_previous_lifetime_ended_cleanly = store.begin_lifetime()
+            self._runtime_health_sequence = store.ring.records[-1].sequence if store.ring.records else 0
+            self._record_runtime_health("runner_started")
+        except OSError as exc:
+            self._runtime_health_last_error = type(exc).__name__
+            self.log.warning("[RUNNER] runtime-health startup failed error=%s", type(exc).__name__)
+
+    async def _runtime_health_heartbeat(self) -> None:
+        while True:
+            await asyncio.sleep(15.0)
+            self._record_runtime_health("heartbeat")
+
+    def _runtime_health_status_fields(self) -> dict[str, Any]:
+        store = self._runtime_health_store
+        return {
+            "runtime_health_record_count": len(store.ring.records) if store is not None else 0,
+            "previous_runtime_lifetime_ended_cleanly": self._runtime_health_previous_lifetime_ended_cleanly,
+            "runtime_health_recent_records": [record.as_payload() for record in (store.ring.records[-16:] if store is not None else ())],
+            "runtime_health_last_error": self._runtime_health_last_error or None,
         }
 
     def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
@@ -1039,6 +1126,7 @@ class Runner:
             available_crypto_extract(),
         )
         self._ensure_runtime_events()
+        self._begin_runtime_health_lifetime()
         await self._start_tun_helper()
         await self._start_proxy_provider()
 
@@ -1133,6 +1221,7 @@ class Runner:
         self._client_restart_watchdog_task = asyncio.create_task(
             self._client_restart_watchdog()
         )
+        self._runtime_health_task = asyncio.create_task(self._runtime_health_heartbeat())
 
     async def run(self):
         self.log.debug("[SERVER] Run entered")
@@ -1159,10 +1248,14 @@ class Runner:
 
         finally:
             try:
-                self.log.debug("[RUNNER] wait for stop with 2.0 timeout")
-                await asyncio.wait_for(self.stop(reason="run-finally"), timeout=2.0)
+                # Individual stop steps have their own bounded timeouts.  Do
+                # not cancel the complete sequence after two seconds: that
+                # can interrupt a valid device/session close and strand the
+                # bridge below an already-exited supervisor.
+                self.log.debug("[RUNNER] completing bounded stop sequence")
+                await self.stop(reason="run-finally")
             except Exception:
-                self.log.debug("[RUNNER] stop timed out during restart")
+                self.log.exception("[RUNNER] stop sequence failed")
 
         if self._restart_requested is not None and self._restart_requested.is_set():
             self.log.warning("[RUNNER] exiting rc=%d", int(self._restart_exit_code))
@@ -1209,6 +1302,11 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._client_restart_watchdog_task
             self._client_restart_watchdog_task = None
+        if self._runtime_health_task is not None:
+            self._runtime_health_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._runtime_health_task
+            self._runtime_health_task = None
         if self.admin_web is not None:
             await _run_stop_step("admin_web.stop", self.admin_web.stop(), timeout_s=2.0)
             self.admin_web = None        
@@ -1231,6 +1329,7 @@ class Runner:
         self.log.debug("[RUNNER] stop: entering _session_obj")
         for idx, session in enumerate(reversed(self._sessions)):
             await _run_stop_step(f"session.stop[{idx}]", session.stop(), timeout_s=5.0)
+        self._record_runtime_health("runner_stopped", controlled_stop=True)
         self.log.info("[RUNNER] stop leaving reason=%s", stop_reason)
 
     @staticmethod
@@ -1711,6 +1810,7 @@ class Runner:
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
         payload["tun_helper"] = self._tun_helper_snapshot()
+        payload.update(self._runtime_health_status_fields())
         return payload
 
     def get_connections_snapshot(self) -> dict:
@@ -1737,11 +1837,17 @@ class Runner:
         tun_local_reply_stage_counts: dict[str, int] = {}
         tun_probe_last_timeout_diag: dict[str, Any] = {}
         tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        tun_receive_by_peer: dict[str, dict[str, int]] = {}
         session_labels = list(getattr(self, "_session_labels", []) or [])
         mux_index_by_id = {id(mux): index for index, mux in enumerate(self._muxes)}
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
+            for peer_id, counters in dict(snap.get("tun_receive_by_peer") or {}).items():
+                tun_receive_by_peer[f"{idx}:{peer_id}"] = {
+                    str(stage): int(count or 0)
+                    for stage, count in dict(counters or {}).items()
+                }
             mux_udp_rows = list(snap.get("udp", []))
             mux_tcp_rows = list(snap.get("tcp", []))
             mux_tun_rows = list(snap.get("tun", []))
@@ -1926,6 +2032,7 @@ class Runner:
             "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
             "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
             "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
+            "tun_receive_by_peer": tun_receive_by_peer,
         }
 
     def get_config_snapshot(self, include_secrets: bool = False) -> dict:
@@ -3790,6 +3897,45 @@ def _signal_name(signum: int) -> str:
     return str(signum)
 
 
+PROCESS_SIGNAL_SHUTDOWN_DEADLINE_S = 20.0
+
+
+def _arm_process_shutdown_deadline(runner: Runner, log: logging.Logger) -> None:
+    """Ensure a signalled bridge cannot remain alive without its launcher."""
+
+    if getattr(runner, "_process_signal_shutdown_timer", None) is not None:
+        return
+
+    def _force_exit() -> None:
+        exit_code = int(getattr(runner, "_shutdown_exit_code", 0) or 0)
+        if exit_code <= 0:
+            exit_code = 1
+        log.critical(
+            "[RUNNER] shutdown deadline exceeded after %.1fs; forcing exit rc=%d reason=%s",
+            PROCESS_SIGNAL_SHUTDOWN_DEADLINE_S,
+            exit_code,
+            str(getattr(runner, "_shutdown_reason", "") or "unspecified"),
+        )
+        os._exit(exit_code)
+
+    timer = threading.Timer(PROCESS_SIGNAL_SHUTDOWN_DEADLINE_S, _force_exit)
+    timer.daemon = True
+    runner._process_signal_shutdown_timer = timer
+    timer.start()
+    log.warning(
+        "[RUNNER] graceful signal shutdown deadline armed timeout_s=%.1f",
+        PROCESS_SIGNAL_SHUTDOWN_DEADLINE_S,
+    )
+
+
+def _cancel_process_shutdown_deadline(runner: Runner) -> None:
+    timer = getattr(runner, "_process_signal_shutdown_timer", None)
+    runner._process_signal_shutdown_timer = None
+    if timer is not None:
+        with _process_contextlib.suppress(Exception):
+            timer.cancel()
+
+
 def _install_process_signal_handlers(runner: Runner, log: logging.Logger) -> list[tuple[int, object]]:
     installed: list[tuple[int, object]] = []
 
@@ -3803,6 +3949,7 @@ def _install_process_signal_handlers(runner: Runner, log: logging.Logger) -> lis
             exit_code,
         )
         runner.request_shutdown(exit_code, reason=reason)
+        _arm_process_shutdown_deadline(runner, log)
 
     for signum in (_process_signal.SIGINT, _process_signal.SIGTERM):
         with _process_contextlib.suppress(Exception):
@@ -4260,6 +4407,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         )
         raise
     finally:
+        _cancel_process_shutdown_deadline(r)
         _restore_process_signal_handlers(installed_signal_handlers)
         log.info(
             "[RUNNER] process leaving stop_requested=%s shutdown_rc=%r shutdown_reason=%r restart_requested=%s restart_rc=%r restart_reason=%r",

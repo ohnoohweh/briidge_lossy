@@ -28,6 +28,7 @@ SWIFT_SECURELINK_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "Ob
 SWIFT_UDP_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayCodec.swift"
 SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
 SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTunRuntime.swift"
+SWIFT_PACKET_MODEL_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketModel.swift"
 SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxUdpRuntime.swift"
 SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTcpRuntime.swift"
 SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeCompressLayerRuntime.swift"
@@ -35,6 +36,8 @@ SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeSh
 SWIFT_WS_PAYLOAD_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"
 SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
 SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
+SWIFT_CHANNELMUX_SESSION_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxSession.swift"
+SWIFT_OVERLAY_ENVELOPE_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayEnvelope.swift"
 SWIFT_MYUDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"
 SWIFT_SECURELINK_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"
 SWIFT_SECURELINK_TRANSCRIPT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"
@@ -152,12 +155,15 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_UDP_CODEC_SOURCE),
         str(SWIFT_UDP_PEER_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE),
+        str(SWIFT_PACKET_MODEL_SOURCE),
         str(SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE),
         str(SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE),
         str(SWIFT_OVERLAY_STACK_PLANNER_SOURCE),
         str(SWIFT_BINARY_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
+        str(SWIFT_CHANNELMUX_SESSION_SOURCE),
+        str(SWIFT_OVERLAY_ENVELOPE_SOURCE),
         str(SWIFT_MYUDP_CODEC_SOURCE),
         str(SWIFT_SECURELINK_FRAME_CODEC_SOURCE),
         str(SWIFT_SECURELINK_TRANSCRIPT_SOURCE),

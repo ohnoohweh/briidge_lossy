@@ -142,6 +142,7 @@ final class ObstacleBridgeHostRunner {
     private let serviceStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Services")
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
+    private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -152,9 +153,12 @@ final class ObstacleBridgeHostRunner {
     private var sharedChannelMuxUdpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
     private var sharedChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime()
     private var udpServiceListeners: [Int: NWListener] = [:]
+    private var catalogUDPServiceListeners: [Int: NWListener] = [:]
     private var udpConnectionStates: [Int: [String: Any]] = [:]
     private var udpConnectionObjects: [ObjectIdentifier: ObstacleBridgeUDPProxyConnection] = [:]
     private var tcpServiceListeners: [Int: NWListener] = [:]
+    private var catalogTCPServiceListeners: [Int: NWListener] = [:]
+    private var catalogServiceSpecs: [Int: ObstacleBridgeNativeServiceSpec] = [:]
     private var tcpConnectionStates: [Int: [String: Any]] = [:]
     private var tcpConnectionObjects: [Int: ObstacleBridgeTCPProxyConnection] = [:]
     private var sharedCompressLayerRuntime: ObstacleBridgeCompressLayerRuntime?
@@ -186,6 +190,10 @@ final class ObstacleBridgeHostRunner {
     private var tunProbeLastTimeoutDiag: [String: Any] = [:]
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
+    private var runtimeHealthTimer: DispatchSourceTimer?
+    private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
+    private var runtimeHealthSequence: UInt64 = 0
+    private var previousRuntimeLifetimeEndedCleanly: Bool?
     private var cachedStatusSnapshot: [String: Any] = [:]
     private var cachedConnectionsSnapshot: [String: Any] = [:]
     private var cachedPeersSnapshot: [[String: Any]] = []
@@ -433,6 +441,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     func start() throws {
+        beginRuntimeHealthLifetime()
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
         do {
@@ -450,6 +459,7 @@ final class ObstacleBridgeHostRunner {
         }
         startAdminSnapshotPublisher()
         startClientRestartWatchdog()
+        startRuntimeHealthHeartbeat()
     }
 
     func stop() {
@@ -470,6 +480,71 @@ final class ObstacleBridgeHostRunner {
         stopOwnServers()
         controlServer?.stop()
         controlServer = nil
+        stopRuntimeHealthHeartbeat()
+        appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
+    }
+
+    private var runtimeHealthURL: URL {
+        URL(fileURLWithPath: runtimeConfigPath)
+            .deletingLastPathComponent()
+            .appendingPathComponent(".ObstacleBridgeHostRunner.runtime-health-v1.json")
+    }
+
+    private func beginRuntimeHealthLifetime() {
+        runtimeHealthQueue.sync {
+            let previous = ObstacleBridgeRuntimeHealthPersistence.load(from: runtimeHealthURL)
+            previousRuntimeLifetimeEndedCleanly = previous?.previousLifetimeEndedCleanly
+            runtimeHealthRing = previous ?? .init()
+            runtimeHealthSequence = previous?.records.last?.sequence ?? 0
+        }
+        appendRuntimeHealth(event: "runtime_started")
+    }
+
+    private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
+        let overlayState = bootstrapState["startup_status"] as? String
+        let secureLinkState = sharedSecureLinkPskTransportAdapter == nil
+            ? "off"
+            : (overlayCurrentlyConnected() == true ? "authenticated" : "disconnected")
+        runtimeHealthQueue.sync {
+            runtimeHealthSequence += 1
+            runtimeHealthRing.append(.init(
+                sequence: runtimeHealthSequence,
+                timestampUnixMilliseconds: UInt64(Date().timeIntervalSince1970 * 1_000),
+                event: event,
+                controlledStop: controlledStop,
+                overlayState: overlayState,
+                secureLinkState: secureLinkState
+            ))
+            try? ObstacleBridgeRuntimeHealthPersistence.save(runtimeHealthRing, to: runtimeHealthURL)
+        }
+    }
+
+    private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
+        runtimeHealthQueue.sync { (runtimeHealthRing.records.count, previousRuntimeLifetimeEndedCleanly) }
+    }
+
+    private func runtimeHealthRecentRecords() -> [[String: Any]] {
+        runtimeHealthQueue.sync {
+            runtimeHealthRing.records.suffix(16).compactMap { record in
+                guard let data = try? JSONEncoder().encode(record) else { return nil }
+                return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            }
+        }
+    }
+
+    private func startRuntimeHealthHeartbeat() {
+        stopRuntimeHealthHeartbeat()
+        let timer = DispatchSource.makeTimerSource(queue: serviceStateQueue)
+        timer.schedule(deadline: .now() + .seconds(15), repeating: .seconds(15))
+        timer.setEventHandler { [weak self] in self?.appendRuntimeHealth(event: "heartbeat") }
+        runtimeHealthTimer = timer
+        timer.resume()
+    }
+
+    private func stopRuntimeHealthHeartbeat() {
+        runtimeHealthTimer?.setEventHandler {}
+        runtimeHealthTimer?.cancel()
+        runtimeHealthTimer = nil
     }
 
     private func startProxyProviderIfConfigured() throws {
@@ -1254,6 +1329,8 @@ final class ObstacleBridgeHostRunner {
     private func snapshotUncached() -> [String: Any] {
         let uptimeMS = Int(Date().timeIntervalSince(startedAt) * 1000)
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
+        let health = runtimeHealthMetadata()
+        let healthRecords = runtimeHealthRecentRecords()
         return [
             "ok": true,
             "mode": "swift_host_runner",
@@ -1265,6 +1342,9 @@ final class ObstacleBridgeHostRunner {
             "admin_url": "http://\(bindHost):\(statusPort)/",
             "uptime_ms": uptimeMS,
             "uptime_sec": uptimeSec,
+            "runtime_health_record_count": health.count,
+            "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
+            "runtime_health_recent_records": healthRecords,
             "bootstrap_state": bootstrapState,
             "admin_web_name": Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
             "build": buildSummary(),
@@ -2029,7 +2109,83 @@ final class ObstacleBridgeHostRunner {
                 listener.cancel()
             }
             udpServiceListeners.removeAll()
+            for listener in catalogUDPServiceListeners.values {
+                listener.cancel()
+            }
+            catalogUDPServiceListeners.removeAll()
+            for listener in catalogTCPServiceListeners.values {
+                listener.cancel()
+            }
+            catalogTCPServiceListeners.removeAll()
+            catalogServiceSpecs.removeAll()
         }
+    }
+
+    private func applyRemoteServiceCatalog(_ install: ObstacleBridgeAppleServiceCatalog.Install) {
+        guard install.accepted else { return }
+        serviceStateQueue.async { [weak self] in
+            guard let self else { return }
+            for spec in install.removed {
+                let id = spec.svcID
+                self.catalogTCPServiceListeners.removeValue(forKey: id)?.cancel()
+                self.catalogUDPServiceListeners.removeValue(forKey: id)?.cancel()
+                self.catalogServiceSpecs.removeValue(forKey: id)
+            }
+            for spec in install.installed {
+                let native = ObstacleBridgeNativeServiceSpec(channelMuxSpec: spec)
+                guard native.listenProtocol == native.targetProtocol,
+                      native.listenProtocol == "tcp" || native.listenProtocol == "udp",
+                      native.listenPort > 0, native.targetPort > 0,
+                      self.ownServerSpecs.contains(where: { $0.svcID == native.svcID }) == false
+                else { continue }
+                self.catalogTCPServiceListeners.removeValue(forKey: native.svcID)?.cancel()
+                self.catalogUDPServiceListeners.removeValue(forKey: native.svcID)?.cancel()
+                do {
+                    if native.listenProtocol == "tcp" {
+                        try self.startCatalogTCPService(native)
+                    } else {
+                        try self.startCatalogUDPService(native)
+                    }
+                    self.catalogServiceSpecs[native.svcID] = native
+                } catch {
+                    self.handleSharedOverlayOwnerEvent(event: "remote_catalog_listener_failed", fields: [
+                        "service_id": native.svcID,
+                        "protocol": native.listenProtocol,
+                        "error": error.localizedDescription,
+                    ])
+                }
+            }
+        }
+    }
+
+    private func startCatalogUDPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
+        guard let port = NWEndpoint.Port(rawValue: UInt16(spec.listenPort)) else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid catalog udp listen port: \(spec.listenPort)")
+        }
+        let params = NWParameters.udp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
+        let listener = try NWListener(using: params)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.acceptUDPConnection(connection, spec: spec)
+        }
+        listener.start(queue: serviceStateQueue)
+        catalogUDPServiceListeners[spec.svcID] = listener
+    }
+
+    private func startCatalogTCPService(_ spec: ObstacleBridgeNativeServiceSpec) throws {
+        guard let port = NWEndpoint.Port(rawValue: UInt16(spec.listenPort)) else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("invalid catalog tcp listen port: \(spec.listenPort)")
+        }
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        params.requiredLocalEndpoint = .hostPort(host: NWEndpoint.Host(spec.listenBind), port: port)
+        let listener = try NWListener(using: params)
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.acceptTCPConnection(connection, spec: spec)
+        }
+        listener.start(queue: serviceStateQueue)
+        catalogTCPServiceListeners[spec.svcID] = listener
     }
 
     private func teardownSharedMacOSTunAdapter(runLifecycleHook: Bool) {
@@ -2228,7 +2384,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func listeningRows(protocol protocolName: String) -> [[String: Any]] {
-        ownServerSpecs
+        (ownServerSpecs + Array(catalogServiceSpecs.values))
             .filter { $0.listenProtocol == protocolName && $0.targetProtocol == protocolName }
             .map { listeningRow(for: $0, protocol: protocolName) }
     }
@@ -2714,6 +2870,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedWebSocketOverlayTransportOwner = owner
@@ -2777,6 +2936,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedTcpOverlayTransportOwner = owner
@@ -2850,6 +3012,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedQuicOverlayTransportOwner = owner
@@ -2910,6 +3075,9 @@ final class ObstacleBridgeHostRunner {
             muxConnectionSeq: muxConnectionSeq,
             eventSink: { [weak self] event, fields in
                 self?.handleSharedOverlayOwnerEvent(event: event, fields: fields)
+            },
+            serviceCatalogSink: { [weak self] install in
+                self?.applyRemoteServiceCatalog(install)
             }
         )
         sharedUdpOverlayTransportOwner = owner

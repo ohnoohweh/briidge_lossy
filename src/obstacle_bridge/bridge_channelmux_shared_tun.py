@@ -810,11 +810,27 @@ class ChannelMuxSharedTunMixin:
         ownership = dict(ownership)
         owner_by_ipv4 = {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv4") or {}).items()}
         owner_by_ipv6 = {str(k): str(v) for k, v in dict(ownership.get("owner_by_ipv6") or {}).items()}
+        active_peer_bindings = self._shared_tun_active_peer_bindings_for_service(svc_key)
+        active_peer_ids = {
+            int(entry["peer_id"])
+            for entry in active_peer_bindings
+            if entry.get("preferred_chan_id") is not None
+        }
         peer_id_by_ref = {
             str(peer_ref): int(peer_id)
             for (mapped_svc_key, peer_ref), peer_id in self._shared_tun_peer_id_by_ref.items()
-            if mapped_svc_key == svc_key
+            if mapped_svc_key == svc_key and int(peer_id) in active_peer_ids
         }
+        # The reader owner can retain a live channel binding after its reverse
+        # ref index is lost. Rebuild only unambiguous active mappings; never
+        # infer ownership from the destination address alone.
+        refs_to_active_ids: dict[str, set[int]] = {}
+        for (mapped_svc_key, peer_id), peer_ref in self._shared_tun_peer_ref_by_peer.items():
+            if mapped_svc_key == svc_key and int(peer_id) in active_peer_ids and peer_ref:
+                refs_to_active_ids.setdefault(str(peer_ref), set()).add(int(peer_id))
+        for peer_ref, peer_ids in refs_to_active_ids.items():
+            if len(peer_ids) == 1:
+                peer_id_by_ref[peer_ref] = next(iter(peer_ids))
         local_virtual_peer = self._shared_tun_local_probe_binding_for_service(svc_key)
         if isinstance(local_virtual_peer, dict):
             peer_ref = str(local_virtual_peer.get("peer_ref") or self.SHARED_TUN_LOCAL_PROBE_PEER_REF)
@@ -827,7 +843,6 @@ class ChannelMuxSharedTunMixin:
                 owner_by_ipv6[str(addr)] = peer_ref
         ownership["owner_by_ipv4"] = owner_by_ipv4
         ownership["owner_by_ipv6"] = owner_by_ipv6
-        active_peer_bindings = self._shared_tun_active_peer_bindings_for_service(svc_key)
         return self._shared_tun_plan_outbound_route(ownership, peer_id_by_ref, active_peer_bindings, packet)
     def _shared_tun_plan_inbound_peer_relay(
         self,

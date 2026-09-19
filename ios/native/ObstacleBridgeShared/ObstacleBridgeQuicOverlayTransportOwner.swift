@@ -5,6 +5,7 @@ import Network
 final class ObstacleBridgeQuicOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
@@ -33,6 +34,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
+    private let serviceCatalogSink: ServiceCatalogSink?
     private let serviceNameByID: [Int: String]
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
@@ -47,6 +49,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private let muxInstanceID: UInt64
     private let muxConnectionSeq: UInt32
     private var overlayConnection: NWConnection?
+    private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var overlayConnected = false
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
@@ -62,6 +65,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private var reconnectScheduled = false
     private var reconnectWorkItem: DispatchWorkItem?
     private var nextReconnectAttemptDeadlineNS: UInt64?
+    private var coreRetryToken: UInt64?
+    private var coreReceiveEpoch: UInt64?
     private var secureLinkDueTimer: DispatchSourceTimer?
     private var lowerLayerFallbackWorkItem: DispatchWorkItem?
     private var lowerLayerFallbackDeadlineNS: UInt64?
@@ -129,7 +134,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
-        eventSink: EventSink? = nil
+        eventSink: EventSink? = nil,
+        serviceCatalogSink: ServiceCatalogSink? = nil
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
@@ -146,6 +152,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         self.startupMuxFramesProvider = startupMuxFramesProvider
         self.queue = queue
         self.eventSink = eventSink
+        self.serviceCatalogSink = serviceCatalogSink
         self.serviceNameByID = serviceNameByID
         self.tunServiceSpec = tunServiceSpec
         self.tunIfname = tunIfname?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -174,6 +181,9 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
             )
         }
+        overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
+            self?.queue.async { self?.applyCoreEffects(effects) }
+        }
     }
 
     func start() {
@@ -181,12 +191,20 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         guard !peerHost.isEmpty, peerPort > 0 else { return }
         started = true
         startSecureLinkDueTimer()
-        connectOverlay()
+        if let overlayLayerTransportAdapter {
+            let candidates = (try? resolvePeerCandidates(host: peerHost, port: peerPort)) ?? []
+            if !candidates.isEmpty { resolvedPeerCandidates = candidates }
+            overlayLayerTransportAdapter.configureCoreCandidateCount(max(1, candidates.count))
+            overlayLayerTransportAdapter.startCoreLifecycle()
+        } else {
+            connectOverlay()
+        }
     }
 
     func stop() {
         guard started else { return }
         started = false
+        withdrawRemoteServiceCatalog()
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         tunRuntime?.resetTransportEpoch()
         overlayConnected = false
@@ -194,6 +212,8 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        coreRetryToken = nil
+        coreReceiveEpoch = nil
         secureLinkDueTimer?.cancel()
         secureLinkDueTimer = nil
         lowerLayerFallbackWorkItem?.cancel()
@@ -211,6 +231,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
         startupMuxFramesSent = false
         startupMuxFramesReplayedWithTunOpen = false
+        overlayLayerTransportAdapter?.stopCoreLifecycle()
     }
 
     func connectionRows() -> (tcp: [[String: Any]], udp: [[String: Any]], tun: [[String: Any]]) {
@@ -395,7 +416,51 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         return false
     }
 
-    private func connectOverlay() {
+    /// Executes the native mechanics requested by the shared coordinator.
+    private func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect]) {
+        for effect in effects {
+            switch effect {
+            case .openTransport(_, let candidateIndex, _):
+                guard started else { continue }
+                connectOverlay(coreCandidateIndex: candidateIndex)
+            case .cancelTransport:
+                overlayConnection?.cancel()
+                overlayConnection = nil
+                overlayConnected = false
+            case .startReceive(let epoch):
+                guard coreReceiveEpoch == nil else { continue }
+                coreReceiveEpoch = epoch
+                receiveOverlayData()
+            case .cancelReceive(let epoch):
+                guard coreReceiveEpoch == epoch else { continue }
+                coreReceiveEpoch = nil
+            case .scheduleRetry(let token, let delay):
+                reconnectWorkItem?.cancel()
+                coreRetryToken = token
+                reconnectScheduled = true
+                nextReconnectAttemptDeadlineNS = DispatchTime.now().uptimeNanoseconds + UInt64(delay) * 1_000_000
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self, self.coreRetryToken == token else { return }
+                    self.reconnectScheduled = false
+                    self.nextReconnectAttemptDeadlineNS = nil
+                    self.reconnectWorkItem = nil
+                    self.coreRetryToken = nil
+                    self.overlayLayerTransportAdapter?.retryTimerFired(token: token)
+                }
+                reconnectWorkItem = workItem
+                queue.asyncAfter(deadline: .now() + .milliseconds(delay), execute: workItem)
+            case .cancelRetry(let token):
+                guard coreRetryToken == token else { continue }
+                reconnectWorkItem?.cancel()
+                reconnectWorkItem = nil
+                coreRetryToken = nil
+                reconnectScheduled = false
+                nextReconnectAttemptDeadlineNS = nil
+            }
+        }
+    }
+
+    private func connectOverlay(coreCandidateIndex: Int? = nil) {
         guard started else { return }
         guard let endpointPort = NWEndpoint.Port(rawValue: UInt16(peerPort)) else {
             eventSink?("quic_overlay_invalid_peer_port", ["port": peerPort])
@@ -405,8 +470,12 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
         reconnectWorkItem = nil
+        coreRetryToken = nil
         reconnectAttempts += 1
         do {
+            if let coreCandidateIndex, !resolvedPeerCandidates.isEmpty {
+                resolvedPeerCandidateIndex = coreCandidateIndex % resolvedPeerCandidates.count
+            }
             let resolved = try currentResolvedPeer()
             resolvedPeerHost = resolved.host
             resolvedPeerPort = resolved.port
@@ -427,10 +496,13 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
                 }
             }
             connection.start(queue: queue)
-            receiveOverlayData()
         } catch {
             eventSink?("quic_overlay_connect_failed", ["error": error.localizedDescription])
-            scheduleReconnect()
+            if overlayLayerTransportAdapter?.coreLifecycleSnapshot().epoch != nil {
+                overlayLayerTransportAdapter?.handleTransportDisconnected()
+            } else {
+                scheduleReconnect()
+            }
         }
     }
 
@@ -525,6 +597,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func handleDisconnected(schedule: Bool) {
+        withdrawRemoteServiceCatalog()
         tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: currentTunPeerID())
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
@@ -543,9 +616,13 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         lowerLayerFallbackWorkItem?.cancel()
         lowerLayerFallbackWorkItem = nil
         lowerLayerFallbackDeadlineNS = nil
-        if schedule {
+        if schedule, overlayLayerTransportAdapter == nil {
             scheduleReconnect()
         }
+    }
+
+    private func withdrawRemoteServiceCatalog() {
+        serviceCatalogSink?(serviceCatalog.withdraw())
     }
 
     private func startSecureLinkDueTimer() {
@@ -573,23 +650,7 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
         }
         let protocolStats = overlayProtocolStats()
         let transmitDelayEstMS = protocolStats["transmit_delay_est_ms"] as? Double ?? 0.0
-        guard let result = adapter.transportDelayRotationDue(
-            transmitDelayEstMS: transmitDelayEstMS,
-            candidateCount: resolvedPeerCandidates.count
-        ) ?? adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
-        else {
-            return
-        }
-        eventSink?("quic_overlay_lifecycle_rotation", [
-            "epoch": result.epoch,
-            "candidate_cycle": result.candidateCycle,
-            "restart_required": result.restartRequired,
-        ])
-        guard !result.restartRequired else {
-            eventSink?("quic_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
-            return
-        }
-        handleDisconnected(schedule: true)
+        adapter.reportTransportLiveness(delayMilliseconds: transmitDelayEstMS)
     }
 
     private func flushDueSecureLinkFramesIfNeeded() {
@@ -640,10 +701,13 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     }
 
     private func receiveOverlayData() {
+        guard overlayLayerTransportAdapter == nil || coreReceiveEpoch != nil else { return }
         guard let connection = overlayConnection else { return }
+        let receiveEpoch = coreReceiveEpoch
         connection.receive(minimumIncompleteLength: 1, maximumLength: max(1, sessionMaxAppPayload + 1024)) { [weak self] data, _, isComplete, error in
             guard let self else { return }
             self.queue.async {
+                guard self.overlayLayerTransportAdapter == nil || self.coreReceiveEpoch == receiveEpoch else { return }
                 if let data, !data.isEmpty {
                     self.handleOverlayPayload(data)
                 }
@@ -694,6 +758,10 @@ final class ObstacleBridgeQuicOverlayTransportOwner {
     private func handleInboundMuxPayload(_ payload: Data) {
         guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
             eventSink?("quic_overlay_invalid_mux_frame", ["bytes": payload.count])
+            return
+        }
+        if let install = serviceCatalog.receive(frame) {
+            serviceCatalogSink?(install)
             return
         }
         if frame.proto == .tun {

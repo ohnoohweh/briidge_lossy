@@ -191,28 +191,19 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
     }
 
     func encodeClientWire(_ wire: Data) throws -> URLSessionWebSocketTask.Message {
-        let overlayWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: wire))
-        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(overlayWire, mode: corePayloadMode)
-        if case .binary(let data) = encoded {
-            return .data(data)
-        }
-        if case .text(let text) = encoded { return .string(text) }
-        throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket codec did not produce a payload")
+        try clientMessage(for: .init(kind: .application, payload: wire))
     }
 
     func encodeClientPong(echoTxNS: UInt64) throws -> URLSessionWebSocketTask.Message {
-        let overlayWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .pong, payload: ObstacleBridgeOverlayFrameCodec.pongPayload(echoTxNS: echoTxNS)))
-        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(overlayWire, mode: corePayloadMode)
-        if case .binary(let data) = encoded {
-            return .data(data)
-        }
-        if case .text(let text) = encoded { return .string(text) }
-        throw ObstacleBridgeWebSocketOverlayRuntimeError.invalidPayload("websocket codec did not produce a payload")
+        try clientMessage(for: .init(kind: .pong, payload: ObstacleBridgeOverlayFrameCodec.pongPayload(echoTxNS: echoTxNS)))
     }
 
     func encodeClientPing(txNS: UInt64, echoNS: UInt64) throws -> URLSessionWebSocketTask.Message {
-        let overlayWire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: txNS, echoNS: echoNS)))
-        let encoded = try ObstacleBridgeWebSocketPayloadCodec.encode(overlayWire, mode: corePayloadMode)
+        try clientMessage(for: .init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: txNS, echoNS: echoNS)))
+    }
+
+    private func clientMessage(for frame: ObstacleBridgeOverlayFrame) throws -> URLSessionWebSocketTask.Message {
+        let encoded = try ObstacleBridgeOverlayEnvelope.encodeWebSocket(frame, mode: corePayloadMode)
         if case .binary(let data) = encoded {
             return .data(data)
         }

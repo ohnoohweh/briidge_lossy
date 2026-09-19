@@ -12,14 +12,6 @@ struct ObstacleBridgeConnectionLifecycleEvent {
     let changedAt: TimeInterval
 }
 
-struct ObstacleBridgeConnectionRotationResult {
-    let accepted: Bool
-    let reason: String
-    let epoch: UInt64
-    let candidateCycle: Int
-    let restartRequired: Bool
-}
-
 final class ObstacleBridgeOverlayLayerTransportAdapter {
     // This is the layered application-readiness grace used by every native
     // overlay owner. Transport-up alone never makes the overlay usable.
@@ -40,23 +32,23 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     private let secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private let peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime?
     private let lifecycleTimeProvider: () -> TimeInterval
-    private let connectionRotationDelay: TimeInterval
+    private let coreCoordinator: ObstacleBridgeOverlayCoordinator
+    // Shared with native queue metrics only; Core consumes the same values for
+    // the lifecycle decision below.
     let transportDelayRotationThresholdMS: Double
     let transportDelayRotationGrace: TimeInterval
+    // The owning TCP/WebSocket adapter supplies this native-effect executor.
+    // Core never reaches into Network or URLSession directly.
+    private var coreEffectSink: (([ObstacleBridgeOverlayCoordinatorEffect]) -> Void)?
     private var transportLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var outerLifecycle: ObstacleBridgeConnectionLifecycleEvent
     private var compressionFailureEpoch: UInt64?
     private var disconnectedSince: TimeInterval?
-    private var transportDelayHighSince: TimeInterval?
-    private var rotationWaitingForNewEpoch: UInt64?
-    private var requestedRotations = 0
-    private var completedCandidateCycles = 0
 
     init(
         compressRuntime: ObstacleBridgeCompressLayerRuntime? = nil,
         secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter? = nil,
         peerAddressRuntime: ObstacleBridgePeerAddressProtocolRuntime? = nil,
-        connectionRotationDelay: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.outerReadinessGrace,
         transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS,
         transportDelayRotationGrace: TimeInterval = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationGrace,
         lifecycleTimeProvider: (() -> TimeInterval)? = nil
@@ -64,10 +56,16 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.compressRuntime = compressRuntime
         self.secureLinkAdapter = secureLinkAdapter
         self.peerAddressRuntime = peerAddressRuntime
-        self.connectionRotationDelay = max(0.0, connectionRotationDelay)
-        self.transportDelayRotationThresholdMS = max(0.0, transportDelayRotationThresholdMS)
-        self.transportDelayRotationGrace = max(0.0, transportDelayRotationGrace)
         self.lifecycleTimeProvider = lifecycleTimeProvider ?? { Date().timeIntervalSince1970 }
+        self.transportDelayRotationThresholdMS = max(0, transportDelayRotationThresholdMS)
+        self.transportDelayRotationGrace = max(0, transportDelayRotationGrace)
+        self.coreCoordinator = .init(
+            candidateCount: 1,
+            livenessPolicy: .init(
+                transportDelayThresholdMilliseconds: self.transportDelayRotationThresholdMS,
+                transportDelayGraceMilliseconds: Int(self.transportDelayRotationGrace * 1_000)
+            )
+        )
         let initial = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
             epoch: 0,
@@ -77,6 +75,35 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.transportLifecycle = initial
         self.outerLifecycle = initial
         self.disconnectedSince = initial.changedAt
+    }
+
+    func setCoreEffectSink(_ sink: @escaping ([ObstacleBridgeOverlayCoordinatorEffect]) -> Void) {
+        coreEffectSink = sink
+    }
+
+    /// Starts the portable lifecycle only after the native owner has installed
+    /// its effect executor. This prevents a constructor-time connection from
+    /// bypassing Core's epoch admission.
+    func startCoreLifecycle() {
+        applyCore(.start)
+    }
+
+    func configureCoreCandidateCount(_ count: Int) {
+        coreCoordinator.configureCandidateCount(count)
+    }
+
+    func stopCoreLifecycle() {
+        applyCore(.stop)
+    }
+
+    func retryTimerFired(token: UInt64) {
+        applyCore(.retryTimerFired(token: token))
+    }
+
+    private func applyCore(_ input: ObstacleBridgeOverlayCoordinatorInput) {
+        let transition = coreCoordinator.handle(input)
+        guard !transition.effects.isEmpty else { return }
+        coreEffectSink?(transition.effects)
     }
 
     static func appReady(from layers: [[String: Any]]) -> Bool {
@@ -159,77 +186,16 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         outerLifecycle
     }
 
-    func connectionRotationDue(candidateCount: Int) -> ObstacleBridgeConnectionRotationResult? {
-        guard outerLifecycle.state == .disconnected,
-              let disconnectedSince,
-              lifecycleTimeProvider() - disconnectedSince >= connectionRotationDelay,
-              rotationWaitingForNewEpoch == nil
-        else {
-            return nil
-        }
-
-        let candidates = max(1, candidateCount)
-        requestedRotations += 1
-        if requestedRotations % candidates == 0 {
-            completedCandidateCycles += 1
-        }
-        rotationWaitingForNewEpoch = transportLifecycle.epoch
-        return ObstacleBridgeConnectionRotationResult(
-            accepted: true,
-            reason: "channelmux_disconnected",
-            epoch: transportLifecycle.epoch,
-            candidateCycle: completedCandidateCycles,
-            restartRequired: completedCandidateCycles >= 3
-        )
+    func coreLifecycleSnapshot() -> ObstacleBridgeOverlayCoordinatorSnapshot {
+        coreCoordinator.snapshot
     }
 
-    // The owner can fail before it has actually reset or reconnected its
-    // transport (for example, a myUDP socket rebuild can be unavailable).
-    // Do not retain a wait-for-epoch latch for a rotation that never started.
-    func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult) {
-        guard rotationWaitingForNewEpoch == result.epoch else {
-            return
-        }
-        rotationWaitingForNewEpoch = nil
-    }
-
-    // A connected transport can be unusable long before it reports a hard
-    // disconnect. Rotate the normal candidate path after sustained estimated
-    // wire delay, using the same one-rotation-per-epoch accounting.
-    func transportDelayRotationDue(
-        transmitDelayEstMS: Double,
-        candidateCount: Int
-    ) -> ObstacleBridgeConnectionRotationResult? {
-        let now = lifecycleTimeProvider()
-        guard transportLifecycle.state == .connected,
-              transmitDelayEstMS >= transportDelayRotationThresholdMS
-        else {
-            transportDelayHighSince = nil
-            return nil
-        }
-        guard let highSince = transportDelayHighSince else {
-            transportDelayHighSince = now
-            return nil
-        }
-        guard now - highSince >= transportDelayRotationGrace,
-              rotationWaitingForNewEpoch == nil
-        else {
-            return nil
-        }
-        let candidates = max(1, candidateCount)
-        requestedRotations += 1
-        if requestedRotations % candidates == 0 {
-            completedCandidateCycles += 1
-        }
-        rotationWaitingForNewEpoch = transportLifecycle.epoch
-        transportDelayHighSince = nil
-        return ObstacleBridgeConnectionRotationResult(
-            accepted: true,
-            reason: "channelmux_transport_delay",
-            epoch: transportLifecycle.epoch,
-            candidateCycle: completedCandidateCycles,
-            restartRequired: completedCandidateCycles >= 3
-        )
+    /// Native timers report a measurement only. Core owns the threshold,
+    /// duration, candidate rotation, retry, and cancellation decision.
+    func reportTransportLiveness(delayMilliseconds: Double) {
+        guard let epoch = coreCoordinator.snapshot.epoch else { return }
+        let now = UInt64(max(0, lifecycleTimeProvider()) * 1_000)
+        applyCore(.transportLivenessSample(epoch: epoch, delayMilliseconds: delayMilliseconds, nowMilliseconds: now))
     }
 
     func secureLinkStatusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot? {
@@ -313,6 +279,9 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
+        if let epoch = coreCoordinator.snapshot.epoch {
+            applyCore(.transportFailed(epoch: epoch, reason: "transport_disconnected"))
+        }
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
     }
 
@@ -335,21 +304,21 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
     func beginTransportEpoch(reason: String) {
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
+        applyCore(.start)
         transportLifecycle = ObstacleBridgeConnectionLifecycleEvent(
             state: .disconnected,
             epoch: transportLifecycle.epoch + 1,
             reason: reason,
             changedAt: lifecycleTimeProvider()
         )
-        if let waitingEpoch = rotationWaitingForNewEpoch,
-           transportLifecycle.epoch > waitingEpoch {
-            rotationWaitingForNewEpoch = nil
-        }
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
     }
 
     func handleTransportConnected() throws -> OutboundSnapshot {
         observeTransportState(connected: true, reason: "transport_connected")
+        if let epoch = coreCoordinator.snapshot.epoch {
+            applyCore(.transportConnected(epoch: epoch))
+        }
         var emittedFrames = peerAddressRuntime?.handleTransportConnected() ?? []
         guard let secureLinkAdapter else {
             refreshOuterLifecycle(secureLinkStatus: nil)
@@ -430,15 +399,18 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         )
         if connected {
             compressionFailureEpoch = nil
-            rotationWaitingForNewEpoch = nil
         }
     }
 
     private func refreshOuterLifecycle(secureLinkStatus: ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot?) {
         let transportReady = transportLifecycle.state == .connected
         let secureReady = secureLinkStatus?.authenticated ?? transportReady
+        if transportReady && secureReady, let epoch = coreCoordinator.snapshot.epoch {
+            applyCore(.authenticated(epoch: epoch))
+        }
+        let coreReady = coreCoordinator.snapshot.appReady
         let compressionReady = compressionFailureEpoch != transportLifecycle.epoch
-        let connected = transportReady && secureReady && compressionReady
+        let connected = transportReady && secureReady && coreReady && compressionReady
         let nextState: ObstacleBridgeConnectionLifecycleState = connected ? .connected : .disconnected
         guard outerLifecycle.state != nextState || outerLifecycle.epoch != transportLifecycle.epoch else {
             return
@@ -463,8 +435,6 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
         )
         if nextState == .connected {
             disconnectedSince = nil
-            requestedRotations = 0
-            completedCandidateCycles = 0
         } else if disconnectedSince == nil {
             disconnectedSince = outerLifecycle.changedAt
         }

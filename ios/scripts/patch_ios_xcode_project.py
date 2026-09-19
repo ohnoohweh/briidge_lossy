@@ -22,6 +22,24 @@ DEFAULT_PROJECT = (
 GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer" / "PacketTunnelProvider.swift"
 GENERATED_APP_BUILD_STAMP_RELATIVE = Path("..") / ".." / ".." / "generated" / "ObstacleBridgeGeneratedBuildStamp.swift"
 REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
+IOS_DEFAULT_MARKETING_VERSION = "0.1.0"
+IOS_DEFAULT_BUILD_NUMBER = "1"
+
+# Briefcase's iOS utility turns leading underscores in CPython extension module
+# names into leading hyphens in a bundle-ID component (for example, `_zstd`
+# becomes `...ios.-zstd`).  App Store Connect rejects that identifier. Keep
+# the framework identifier below the app identifier and remove only those
+# invalid leading hyphens.
+PYTHON_UTILS_BUNDLE_ID_LINE = (
+    '    FRAMEWORK_BUNDLE_ID=$(echo $PRODUCT_BUNDLE_IDENTIFIER.$FULL_MODULE_NAME | tr "_" "-")\n'
+)
+PYTHON_UTILS_PREVIOUS_APP_STORE_BUNDLE_ID_LINE = (
+    '    FRAMEWORK_BUNDLE_ID="org.python.$(echo $FULL_MODULE_NAME | tr "_" "-" | sed \'s/^-//\')"\n'
+)
+PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE = (
+    '    FRAMEWORK_BUNDLE_ID=$(echo $PRODUCT_BUNDLE_IDENTIFIER.$FULL_MODULE_NAME | tr "_" "-" | sed \'s/\\.-/./g\')\n'
+)
+PYTHON_DYLIB_INFO_TEMPLATE = Path("Support") / "Python.xcframework" / "build" / "iOS-dylib-Info-template.plist"
 
 PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "\n"
@@ -58,6 +76,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C50000000000000000001A", "71C50000000000000000011A", "ObstacleBridgeAdminConfigChallenge.swift"),
     ("71C500000000000000000019", "71C500000000000000000119", "ObstacleBridgeAdminConfigSupport.swift"),
     ("71C50000000000000000001C", "71C50000000000000000011C", "ObstacleBridgeConfigSecretCodec.swift"),
+    ("71C50000000000000000003E", "71C50000000000000000013E", "ObstacleBridgeAppleServiceCatalog.swift"),
     ("71C50000000000000000001B", "71C50000000000000000011B", "ObstacleBridgeAdminSnapshotSupport.swift"),
     ("71C500000000000000000018", "71C500000000000000000118", "ObstacleBridgeAdminWebSupport.swift"),
     ("71C500000000000000000002", "71C500000000000000000102", "ObstacleBridgeChannelMuxCodec.swift"),
@@ -94,7 +113,14 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000031", "71C500000000000000000131", "ObstacleBridgeOverlayFrameCodec.swift"),
     ("71C500000000000000000032", "71C500000000000000000132", "ObstacleBridgeControlChunkCodec.swift"),
     ("71C500000000000000000033", "71C500000000000000000133", "ObstacleBridgeServiceCodec.swift"),
+    ("71C50000000000000000003F", "71C50000000000000000013F", "ObstacleBridgeServiceCatalog.swift"),
+    ("71C500000000000000000040", "71C500000000000000000140", "ObstacleBridgePacketModel.swift"),
+    ("71C500000000000000000041", "71C500000000000000000141", "ObstacleBridgeRuntimeHealth.swift"),
     ("71C500000000000000000011", "71C500000000000000000111", "ObstacleBridgeWebSocketPayloadCodec.swift"),
+    ("71C50000000000000000003A", "71C50000000000000000013A", "ObstacleBridgeOverlayCoordinator.swift"),
+    ("71C50000000000000000003C", "71C50000000000000000013C", "ObstacleBridgeOverlayBackpressure.swift"),
+    ("71C50000000000000000003B", "71C50000000000000000013B", "ObstacleBridgeOverlayEnvelope.swift"),
+    ("71C50000000000000000003D", "71C50000000000000000013D", "ObstacleBridgeChannelMuxSession.swift"),
     ("71C500000000000000000012", "71C500000000000000000112", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C500000000000000000025", "71C500000000000000000125", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
     ("71C500000000000000000013", "71C500000000000000000113", "ObstacleBridgeTcpOverlayRuntime.swift"),
@@ -112,6 +138,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000017", "71C610000000000000000117", "ObstacleBridgeAdminConfigChallenge.swift"),
     ("71C610000000000000000016", "71C610000000000000000116", "ObstacleBridgeAdminConfigSupport.swift"),
     ("71C610000000000000000019", "71C610000000000000000119", "ObstacleBridgeConfigSecretCodec.swift"),
+    ("71C61000000000000000003E", "71C61000000000000000013E", "ObstacleBridgeAppleServiceCatalog.swift"),
     ("71C610000000000000000018", "71C610000000000000000118", "ObstacleBridgeAdminSnapshotSupport.swift"),
     ("71C610000000000000000015", "71C610000000000000000115", "ObstacleBridgeAdminWebSupport.swift"),
     ("71C610000000000000000028", "71C610000000000000000128", "ObstacleBridgeChannelMuxCodec.swift"),
@@ -141,6 +168,10 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C61000000000000000000C", "71C61000000000000000010C", "ObstacleBridgeCompressLayerRuntime.swift"),
     ("71C610000000000000000027", "71C610000000000000000127", "ObstacleBridgeOverlayStackPlanner.swift"),
     ("71C61000000000000000000D", "71C61000000000000000010D", "ObstacleBridgeWebSocketPayloadCodec.swift"),
+    ("71C61000000000000000003A", "71C61000000000000000013A", "ObstacleBridgeOverlayCoordinator.swift"),
+    ("71C61000000000000000003C", "71C61000000000000000013C", "ObstacleBridgeOverlayBackpressure.swift"),
+    ("71C61000000000000000003B", "71C61000000000000000013B", "ObstacleBridgeOverlayEnvelope.swift"),
+    ("71C61000000000000000003D", "71C61000000000000000013D", "ObstacleBridgeChannelMuxSession.swift"),
     ("71C610000000000000000030", "71C610000000000000000130", "ObstacleBridgeBinaryCodec.swift"),
     ("71C610000000000000000038", "71C610000000000000000138", "ObstacleBridgeCore.swift"),
     ("71C610000000000000000037", "71C610000000000000000137", "ObstacleBridgeSecureLinkPSKTranscript.swift"),
@@ -151,6 +182,9 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000031", "71C610000000000000000131", "ObstacleBridgeOverlayFrameCodec.swift"),
     ("71C610000000000000000032", "71C610000000000000000132", "ObstacleBridgeControlChunkCodec.swift"),
     ("71C610000000000000000033", "71C610000000000000000133", "ObstacleBridgeServiceCodec.swift"),
+    ("71C61000000000000000003F", "71C61000000000000000013F", "ObstacleBridgeServiceCatalog.swift"),
+    ("71C610000000000000000040", "71C610000000000000000140", "ObstacleBridgePacketModel.swift"),
+    ("71C610000000000000000041", "71C610000000000000000141", "ObstacleBridgeRuntimeHealth.swift"),
     ("71C61000000000000000000E", "71C61000000000000000010E", "ObstacleBridgeWebSocketOverlayRuntime.swift"),
     ("71C610000000000000000020", "71C610000000000000000120", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
     ("71C61000000000000000000F", "71C61000000000000000010F", "ObstacleBridgeTcpOverlayRuntime.swift"),
@@ -180,7 +214,7 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift"}:
+    if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeOverlayCoordinator.swift", "ObstacleBridgeOverlayBackpressure.swift", "ObstacleBridgeOverlayEnvelope.swift", "ObstacleBridgeChannelMuxSession.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift", "ObstacleBridgeServiceCatalog.swift", "ObstacleBridgePacketModel.swift", "ObstacleBridgeRuntimeHealth.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     return f"../../../../native/ObstacleBridgeShared/{name}"
 
@@ -723,20 +757,23 @@ def add_core_crypto_package(text: str) -> str:
             raise ValueError(f"{target_name} native target block not found")
         if product_id in target_match.group(1):
             continue
-        pattern = (
-            rf"(\t\t[0-9A-F]{{24}} /\* {target_name} \*/ = \{{\n"
-            rf"\t\t\tisa = PBXNativeTarget;.*?)(\t\t\tname = {target_name};\n)"
-        )
-        replacement = (
-            r"\1"
+        # Briefcase template revisions may rearrange target fields.  The
+        # complete target block was found above, so insert relative to its
+        # own `name` field instead of re-matching a second broad PBX range.
+        name_pattern = re.compile(rf"\t\t\tname = \"?{re.escape(target_name)}\"?;\n")
+        # PBXNativeTarget may contain nested dictionaries in newer template
+        # versions, so the minimal block matcher above can stop before the
+        # target's name. Search forward from its unique target header instead.
+        name_match = name_pattern.search(text, target_match.start(1))
+        if not name_match:
+            raise ValueError(f"{target_name} target name field not found")
+        position = name_match.start()
+        insertion = (
             "\t\t\tpackageProductDependencies = (\n"
             f"\t\t\t\t{product_id} /* Crypto */,\n"
             "\t\t\t);\n"
-            r"\2"
         )
-        text, count = re.subn(pattern, replacement, text, count=1, flags=re.DOTALL)
-        if count != 1:
-            raise ValueError(f"{target_name} target package dependency block not found")
+        text = text[:position] + insertion + text[position:]
 
     return text
 
@@ -810,6 +847,73 @@ def patch_app_target(text: str) -> str:
     )
     text = add_app_network_extension_framework(text)
     return text
+
+
+def _ensure_configuration_setting(text: str, configuration_id: str, key: str, value: str) -> str:
+    """Set one generated target build setting without depending on its order."""
+
+    block_pattern = re.compile(
+        rf"(\t\t{re.escape(configuration_id)} /\* (?:Debug|Release) \*/ = \{{\n"
+        rf"\t\t\tisa = XCBuildConfiguration;\n"
+        rf"\t\t\tbuildSettings = \{{\n)(.*?)(\t\t\t\}};)",
+        re.DOTALL,
+    )
+
+    def replace_block(match: re.Match[str]) -> str:
+        prefix, settings, suffix = match.groups()
+        setting_pattern = re.compile(rf"^\t\t\t\t{re.escape(key)} = .*?;\n", re.MULTILINE)
+        setting = f"\t\t\t\t{key} = {value};\n"
+        if setting_pattern.search(settings):
+            settings = setting_pattern.sub(setting, settings, count=1)
+        else:
+            settings += setting
+        return prefix + settings + suffix
+
+    patched, count = block_pattern.subn(replace_block, text, count=1)
+    if count != 1:
+        raise ValueError(f"Xcode build configuration {configuration_id} not found")
+    return patched
+
+
+def ensure_ios_bundle_versions(text: str) -> str:
+    """Give both archive targets non-empty, matching manual-archive defaults."""
+
+    configuration_ids = (
+        "60796F0F19190F4100A9926B",  # ObstacleBridge Debug
+        "60796F1019190F4100A9926B",  # ObstacleBridge Release
+        "71C2000000000000000000A0",  # IPServer Debug
+        "71C2000000000000000000A1",  # IPServer Release
+    )
+    for configuration_id in configuration_ids:
+        text = _ensure_configuration_setting(
+            text,
+            configuration_id,
+            "MARKETING_VERSION",
+            IOS_DEFAULT_MARKETING_VERSION,
+        )
+        text = _ensure_configuration_setting(
+            text,
+            configuration_id,
+            "CURRENT_PROJECT_VERSION",
+            IOS_DEFAULT_BUILD_NUMBER,
+        )
+    return text
+
+
+def enforce_ios_deployment_target(text: str) -> str:
+    """Keep every generated iOS target within the supported iOS 15 baseline.
+
+    The app target compiles the shared Swift crypto implementation as well as
+    the packet-tunnel extension.  Briefcase's template currently emits iOS
+    13.0 for the app and project configurations, which makes CryptoKit HKDF
+    unavailable even though the product's supported deployment baseline is
+    iOS 15.
+    """
+    return re.sub(
+        r"(IPHONEOS_DEPLOYMENT_TARGET = )[0-9]+(?:\.[0-9]+)?;",
+        r"\g<1>15.0;",
+        text,
+    )
 
 
 def strip_legacy_ipserver_python_support(text: str) -> str:
@@ -1108,7 +1212,9 @@ def patch_pbxproj_text(text: str) -> str:
     text = patch_python_build_script(text)
     text = patch_app_target(text)
     text = patch_ipserver_target(text)
+    text = ensure_ios_bundle_versions(text)
     text = add_core_crypto_package(text)
+    text = enforce_ios_deployment_target(text)
     return text
 
 
@@ -1143,6 +1249,52 @@ def patch_pbxproj_file(path: Path) -> bool:
     return True
 
 
+def patch_python_build_utility(pbxproj_path: Path) -> bool:
+    """Give generated CPython module frameworks App Store-valid bundle IDs."""
+    utility_path = pbxproj_path.parent.parent / "Support" / "Python.xcframework" / "build" / "utils.sh"
+    if not utility_path.is_file():
+        raise ValueError(f"Python build utility is missing: {utility_path}")
+    original = utility_path.read_text(encoding="utf-8")
+    if PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE in original:
+        return False
+    if PYTHON_UTILS_PREVIOUS_APP_STORE_BUNDLE_ID_LINE in original:
+        utility_path.write_text(
+            original.replace(
+                PYTHON_UTILS_PREVIOUS_APP_STORE_BUNDLE_ID_LINE,
+                PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE,
+                1,
+            ),
+            encoding="utf-8",
+        )
+        return True
+    if PYTHON_UTILS_BUNDLE_ID_LINE not in original:
+        raise ValueError("Python build utility bundle-ID construction not found")
+    utility_path.write_text(
+        original.replace(PYTHON_UTILS_BUNDLE_ID_LINE, PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE, 1),
+        encoding="utf-8",
+    )
+    return True
+
+
+def patch_python_dylib_info_template(pbxproj_path: Path) -> bool:
+    """Mark generated CPython extension bundles as frameworks, not apps."""
+    template_path = pbxproj_path.parent.parent / PYTHON_DYLIB_INFO_TEMPLATE
+    if not template_path.is_file():
+        raise ValueError(f"Python dynamic-library plist template is missing: {template_path}")
+    original = template_path.read_text(encoding="utf-8")
+    application_package_type = "<key>CFBundlePackageType</key>\n\t<string>APPL</string>"
+    framework_package_type = "<key>CFBundlePackageType</key>\n\t<string>FMWK</string>"
+    if framework_package_type in original:
+        return False
+    if application_package_type not in original:
+        raise ValueError("Python dynamic-library plist package type not found")
+    template_path.write_text(
+        original.replace(application_package_type, framework_package_type, 1),
+        encoding="utf-8",
+    )
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pbxproj", nargs="?", type=Path, default=DEFAULT_PROJECT)
@@ -1151,7 +1303,9 @@ def main() -> int:
     if not path.is_file():
         raise SystemExit(f"Xcode project file not found: {path}")
     changed = patch_pbxproj_file(path)
-    print(f"{'patched' if changed else 'already configured'}: {path}")
+    utils_changed = patch_python_build_utility(path)
+    dylib_template_changed = patch_python_dylib_info_template(path)
+    print(f"{'patched' if changed or utils_changed or dylib_template_changed else 'already configured'}: {path}")
     return 0
 
 

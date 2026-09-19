@@ -70,6 +70,63 @@ To build for a signed device target:
 OB_APPLE_TEAM_ID=YOURTEAMID ./ios/scripts/build_ios_app.sh
 ```
 
+## Automated TestFlight release
+
+`ios/scripts/release_ios_testflight.sh` refreshes the generated project,
+archives the `ObstacleBridge` container app, exports its signed IPA, and
+uploads it to App Store Connect. `IPServer` is embedded in that archive; do
+not archive or upload the extension by itself.
+
+Add the App Store Connect API-key values to your existing untracked
+`~/.local-device-env` file (the release script imports only its
+ObstacleBridge/TestFlight variables, so unrelated local credentials are not
+passed to build or upload subprocesses):
+
+```bash
+export OB_APPLE_TEAM_ID="YOUR_TEAM_ID"
+export OB_APPSTORE_API_KEY_ID="YOUR_KEY_ID"
+export OB_APPSTORE_API_ISSUER_ID="YOUR_ISSUER_ID"
+export OB_APPSTORE_API_KEY_PATH="/absolute/path/AuthKey_YOUR_KEY_ID.p8"
+# The release script imports these into the login keychain if no distribution
+# signing identity is installed yet.
+export OB_IOS_DISTRIBUTION_CERTIFICATE_PATH="/absolute/path/ios_distribution.cer"
+export OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH="/absolute/path/distribution-private.key"
+# Optional when the account has multiple providers:
+# export OB_APPSTORE_PROVIDER_PUBLIC_ID="YOUR_PROVIDER_ID"
+# Optional overrides; the release defaults to the named beta group and the
+# container bundle identifier below.
+# export OB_TESTFLIGHT_GROUP_NAME="ObstacleBridgeTesters"
+# export OB_APPSTORE_BUNDLE_ID="com.obstaclebridge.obstacle-bridge-ios"
+```
+
+`ios/.local-device-env` and `ios/.local-testflight-env` remain optional
+untracked overrides; later files override values from the user-wide file.
+
+Run:
+
+```bash
+./ios/scripts/release_ios_testflight.sh
+```
+
+The script uses a UTC timestamp as the default numeric TestFlight build
+number, so a rebuilt commit does not collide with an earlier upload. Set
+`OB_IOS_MARKETING_VERSION`, `OB_IOS_BUILD_NUMBER`, or
+`OB_TESTFLIGHT_OUTPUT_DIR` when a release process supplies those values.
+It performs project/package preparation followed by one Release archive; no
+attached iPhone is needed. After upload, it waits for Apple processing and
+assigns the valid build to `ObstacleBridgeTesters`. The API key must have an
+App Store Connect role that can manage TestFlight builds and beta groups.
+
+### Manual Xcode archive
+
+The generated `ObstacleBridge` and embedded `IPServer` targets default to the
+same valid bundle version, `0.1.0 (1)`. Refresh the project with
+`./ios/scripts/create_ios_xcode_project.sh --no-input` before opening it in
+Xcode. For each new TestFlight upload, select the `ObstacleBridge` target and
+increment its Version/Build values; set the same values on `IPServer` before
+archiving. The archive must not contain empty or mismatched container and
+extension bundle versions.
+
 Useful build overrides:
 
 - `OB_IOS_DEVICE_ID=<device-udid>` builds for a connected physical device instead of the generic iOS destination

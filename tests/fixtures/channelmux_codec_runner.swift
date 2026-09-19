@@ -2119,7 +2119,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let local else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let inboundSnapshot = runtime.handleInboundServerData(chanID: local.chanID, body: inbound)
+        let inboundSnapshot = runtime.handleInboundServerData(chanID: local.chanID, body: inbound, counter: 1)
         return [
             "local_snapshot": localUdpServerDatagramSnapshotObject(local),
             "inbound_snapshot": inboundUdpServerDatagramSnapshotObject(inboundSnapshot),
@@ -2154,9 +2154,9 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let local else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let snapshots = fragmentsHex.compactMap(dataFromHex).map {
+        let snapshots = fragmentsHex.compactMap(dataFromHex).enumerated().map { index, fragment in
             inboundUdpServerFragmentSnapshotObject(
-                runtime.handleInboundServerFragment(chanID: local.chanID, payload: $0)
+                runtime.handleInboundServerFragment(chanID: local.chanID, payload: fragment, counter: index + 1)
             )
         }
         return [
@@ -2192,7 +2192,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let first else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let closeSnapshot = runtime.handleInboundClose(chanID: first.chanID)
+        let closeSnapshot = runtime.handleInboundClose(chanID: first.chanID, counter: 1)
         let second = try runtime.handleLocalServerDatagram(
             spec: try parseServiceSpec(specObject),
             serviceKey: serviceKey,
@@ -2249,7 +2249,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             payload: openPayload,
             peerID: (request["peer_id"] as? NSNumber)?.intValue
         )
-        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload)
+        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload, counter: 1)
         let connectSnapshot = runtime.handleClientConnected(
             chanID: chanID.intValue,
             localAddrHost: request["local_addr_host"] as? String,
@@ -2257,7 +2257,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             peerAddrHost: request["peer_addr_host"] as? String,
             peerAddrPort: (request["peer_addr_port"] as? NSNumber)?.intValue
         )
-        let immediateSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: immediatePayload)
+        let immediateSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: immediatePayload, counter: 2)
         return [
             "open_snapshot": inboundUdpClientOpenSnapshotObject(openSnapshot),
             "buffered_snapshot": inboundUdpClientDataSnapshotObject(bufferedSnapshot),
@@ -2319,9 +2319,9 @@ private func handle(_ request: [String: Any]) throws -> Any {
             peerAddrHost: request["peer_addr_host"] as? String,
             peerAddrPort: (request["peer_addr_port"] as? NSNumber)?.intValue
         )
-        let snapshots = fragmentsHex.compactMap(dataFromHex).map {
+        let snapshots = fragmentsHex.compactMap(dataFromHex).enumerated().map { index, fragment in
             inboundUdpClientFragmentSnapshotObject(
-                runtime.handleInboundClientFragment(chanID: chanID.intValue, payload: $0)
+                runtime.handleInboundClientFragment(chanID: chanID.intValue, payload: fragment, counter: index + 1)
             )
         }
         return [
@@ -2345,8 +2345,8 @@ private func handle(_ request: [String: Any]) throws -> Any {
             payload: openPayload,
             peerID: (request["peer_id"] as? NSNumber)?.intValue
         )
-        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload)
-        let closeSnapshot = runtime.handleInboundClientClose(chanID: chanID.intValue)
+        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload, counter: 1)
+        let closeSnapshot = runtime.handleInboundClientClose(chanID: chanID.intValue, counter: 2)
         return [
             "open_snapshot": inboundUdpClientOpenSnapshotObject(openSnapshot),
             "buffered_snapshot": inboundUdpClientDataSnapshotObject(bufferedSnapshot),
@@ -2395,7 +2395,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             payload: openPayload,
             peerID: (request["peer_id"] as? NSNumber)?.intValue
         )
-        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload)
+        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload, counter: 1)
         let connectSnapshot = runtime.handleClientConnected(
             chanID: chanID.intValue,
             localAddrHost: request["local_addr_host"] as? String,
@@ -2403,7 +2403,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
             peerAddrHost: request["peer_addr_host"] as? String,
             peerAddrPort: (request["peer_addr_port"] as? NSNumber)?.intValue
         )
-        let immediateSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: immediatePayload)
+        let immediateSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: immediatePayload, counter: 2)
         return [
             "open_snapshot": inboundTcpClientOpenSnapshotObject(openSnapshot),
             "buffered_snapshot": inboundTcpClientDataSnapshotObject(bufferedSnapshot),
@@ -2462,8 +2462,8 @@ private func handle(_ request: [String: Any]) throws -> Any {
             payload: openPayload,
             peerID: (request["peer_id"] as? NSNumber)?.intValue
         )
-        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload)
-        let closeSnapshot = runtime.handleInboundClientClose(chanID: chanID.intValue)
+        let bufferedSnapshot = runtime.handleInboundClientData(chanID: chanID.intValue, body: bufferedPayload, counter: 1)
+        let closeSnapshot = runtime.handleInboundClientClose(chanID: chanID.intValue, counter: 2)
         return [
             "open_snapshot": inboundTcpClientOpenSnapshotObject(openSnapshot),
             "buffered_snapshot": inboundTcpClientDataSnapshotObject(bufferedSnapshot),
@@ -2567,7 +2567,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let acceptSnapshot else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let inboundSnapshot = runtime.handleInboundServerData(chanID: acceptSnapshot.chanID, body: inbound)
+        let inboundSnapshot = runtime.handleInboundServerData(chanID: acceptSnapshot.chanID, body: inbound, counter: 1)
         return [
             "accept_snapshot": localTcpServerAcceptSnapshotObject(acceptSnapshot),
             "inbound_snapshot": inboundTcpServerDataSnapshotObject(inboundSnapshot),
@@ -2594,7 +2594,7 @@ private func handle(_ request: [String: Any]) throws -> Any {
         guard let acceptSnapshot else {
             throw ChannelMuxCodecRunnerError.invalidRequest
         }
-        let closeSnapshot = runtime.handleInboundServerClose(chanID: acceptSnapshot.chanID)
+        let closeSnapshot = runtime.handleInboundServerClose(chanID: acceptSnapshot.chanID, counter: 1)
         return [
             "accept_snapshot": localTcpServerAcceptSnapshotObject(acceptSnapshot),
             "close_snapshot": closeTcpServerSnapshotObject(closeSnapshot),

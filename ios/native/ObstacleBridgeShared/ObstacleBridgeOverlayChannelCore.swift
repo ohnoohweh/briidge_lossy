@@ -6,11 +6,7 @@ enum ObstacleBridgeOverlayChannelCore {
     // instead discarded only after ChannelMux has built it and immediately
     // before SecureLink receives it, matching the UDP loss-oriented policy.
     static let tunPostMuxTransportDelayThresholdMS: Double = 5_000.0
-    struct OverlayEgressWindowState {
-        var windowStartNS: UInt64?
-        var previousBytes: Int = 0
-        var currentBytes: Int = 0
-    }
+    typealias OverlayEgressWindowState = ObstacleBridgeOverlayBackpressureState
 
     static func simpleBackpressureSnapshot(
         bufferedFrames: Int,
@@ -36,16 +32,7 @@ enum ObstacleBridgeOverlayChannelCore {
         state: inout OverlayEgressWindowState,
         nowNS: UInt64 = DispatchTime.now().uptimeNanoseconds
     ) {
-        guard bytes > 0 else { return }
-        let windowNS: UInt64 = 1_000_000_000
-        if state.windowStartNS == nil {
-            state.windowStartNS = nowNS
-        } else if let start = state.windowStartNS, nowNS >= start + windowNS {
-            state.previousBytes = state.currentBytes
-            state.currentBytes = 0
-            state.windowStartNS = nowNS
-        }
-        state.currentBytes += bytes
+        ObstacleBridgeOverlayBackpressurePolicy.recordEgress(bytes: bytes, state: &state, nowNS: nowNS)
     }
 
     static func overlayProtocolStats(
@@ -56,15 +43,8 @@ enum ObstacleBridgeOverlayChannelCore {
         transmitDelayEstMS: Double = 0.0,
         stalled: Bool = false
     ) -> [String: Any] {
-        [
-            "waiting_count": max(0, waitingCount),
-            "inflight": max(0, inflight),
-            "max_inflight": max(0, maxInflight),
-            "egress_prev_window_bytes": max(0, egressWindow.previousBytes),
-            "egress_curr_window_bytes": max(0, egressWindow.currentBytes),
-            "transmit_delay_est_ms": max(0.0, transmitDelayEstMS),
-            "stalled": stalled,
-        ]
+        let snapshot = ObstacleBridgeOverlayBackpressurePolicy.snapshot(waitingCount: waitingCount, inflight: inflight, maxInflight: maxInflight, state: egressWindow, transmitDelayEstMS: transmitDelayEstMS, stalled: stalled)
+        return ["waiting_count": snapshot.waitingCount, "inflight": snapshot.inflight, "max_inflight": snapshot.maxInflight, "egress_prev_window_bytes": snapshot.previousWindowBytes, "egress_curr_window_bytes": snapshot.currentWindowBytes, "transmit_delay_est_ms": snapshot.transmitDelayEstMS, "stalled": snapshot.stalled]
     }
 
     static func backpressureSnapshot(
@@ -75,14 +55,8 @@ enum ObstacleBridgeOverlayChannelCore {
         transmitDelayEstMS: Double = 0.0,
         stalled: Bool = false
     ) -> ObstacleBridgeChannelMuxTunRuntime.OverlayBackpressureSnapshot {
-        simpleBackpressureSnapshot(
-            bufferedFrames: waitingCount,
-            inflight: inflight,
-            maxInflight: maxInflight,
-            transmitDelayEstMS: transmitDelayEstMS,
-            transportPrevWindowBytes: egressWindow.previousBytes,
-            stalled: stalled
-        )
+        let snapshot = ObstacleBridgeOverlayBackpressurePolicy.snapshot(waitingCount: waitingCount, inflight: inflight, maxInflight: maxInflight, state: egressWindow, transmitDelayEstMS: transmitDelayEstMS, stalled: stalled)
+        return simpleBackpressureSnapshot(bufferedFrames: snapshot.waitingCount, inflight: snapshot.inflight, maxInflight: snapshot.maxInflight, transmitDelayEstMS: snapshot.transmitDelayEstMS, transportPrevWindowBytes: snapshot.previousWindowBytes, stalled: snapshot.stalled)
     }
 
     struct TunLocalDropEvent {
@@ -614,7 +588,7 @@ enum ObstacleBridgeOverlayChannelCore {
 
         switch frame.mtype {
         case .open:
-            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body)
+            let snapshot = tunRuntime.handleInboundTunOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if snapshot.accepted {
                 activeTunChanIDs.insert(frame.chanID)
                 tunRuntime.recordSharedTunPeerBinding(peerID: currentTunPeerID, chanID: frame.chanID)
@@ -622,7 +596,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 onOpenRejected?(frame.chanID)
             }
         case .openChunk:
-            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body)
+            let snapshot = tunRuntime.handleInboundTunOpenChunk(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if snapshot.accepted {
                 activeTunChanIDs.insert(frame.chanID)
                 tunRuntime.recordSharedTunPeerBinding(peerID: currentTunPeerID, chanID: frame.chanID)
@@ -634,7 +608,8 @@ enum ObstacleBridgeOverlayChannelCore {
                 peerID: currentTunPeerID,
                 chanID: frame.chanID,
                 body: frame.body,
-                mtu: tunMTU
+                mtu: tunMTU,
+                counter: frame.counter
             )
             if !snapshot.delivered {
                 if let reason = snapshot.dropReason {
@@ -659,7 +634,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 handleDeliveredPacket(packet, chanID: frame.chanID)
             }
         case .dataFrag:
-            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU)
+            let snapshot = tunRuntime.handleInboundTunFragment(chanID: frame.chanID, payload: frame.body, mtu: tunMTU, counter: frame.counter)
             if let packet = snapshot.packet, snapshot.delivered {
                 activeTunChanIDs.insert(frame.chanID)
                 let guarded = tunRuntime.handleInboundTunDataSharedGuarded(
@@ -685,7 +660,7 @@ enum ObstacleBridgeOverlayChannelCore {
                 handleDeliveredPacket(packet, chanID: frame.chanID)
             }
         case .close:
-            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID)
+            let snapshot = tunRuntime.handleInboundTunClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 activeTunChanIDs.remove(frame.chanID)
                 tunRuntime.dropSharedTunPeerBinding(peerID: currentTunPeerID, chanID: frame.chanID)

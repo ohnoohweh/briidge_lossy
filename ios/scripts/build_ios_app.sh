@@ -34,15 +34,17 @@ echo "[build_ios_app] refreshing embedded build metadata and VPN profile timesta
 
 # Apple's CFBundleVersion must be numeric. Keep the SHA in embedded build
 # metadata while using the monotonic commit count for the installable build.
-IOS_MARKETING_VERSION="$(date -u +%Y.%m.%d)"
-IOS_BUILD_NUMBER="$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || true)"
+IOS_MARKETING_VERSION="${OB_IOS_MARKETING_VERSION:-$(date -u +%Y.%m.%d)}"
+IOS_BUILD_NUMBER="${OB_IOS_BUILD_NUMBER:-$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || true)}"
 IOS_BUILD_NUMBER="${IOS_BUILD_NUMBER:-1}"
 IOS_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || true)"
 IOS_GIT_COMMIT="${IOS_GIT_COMMIT:-unknown}"
 echo "[build_ios_app] bundle identity display=ObstacleBridge version=${IOS_MARKETING_VERSION} build=${IOS_BUILD_NUMBER} commit=${IOS_GIT_COMMIT}"
 
-if [ ! -f "${PROJECT_PBXPROJ}" ]; then
-  echo "[build_ios_app] Xcode project missing, creating it first"
+XCODE_ROOT="$(dirname "${PROJECT_FILE}")"
+PYTHON_SUPPORT_XCFRAMEWORK="${XCODE_ROOT}/Support/Python.xcframework"
+if [ ! -f "${PROJECT_PBXPROJ}" ] || [ ! -d "${PYTHON_SUPPORT_XCFRAMEWORK}" ]; then
+  echo "[build_ios_app] Xcode project or Python support missing, creating it first"
   "${IOS_DIR}/scripts/create_ios_xcode_project.sh" --no-input
 else
   echo "[build_ios_app] refreshing iOS app bundle so changed packaged sources are included"
@@ -61,14 +63,16 @@ fi
 
 # Briefcase's generated container plist can carry a literal build number while
 # IPServer expands CURRENT_PROJECT_VERSION.  Xcode requires an embedded app
-# extension's CFBundleVersion to exactly match its container, so make both
-# targets consume the one numeric version supplied to xcodebuild below.
+# extension's CFBundleVersion and CFBundleShortVersionString to exactly match
+# its container, so make both targets consume the build values supplied to
+# xcodebuild below.
 APP_INFO_PLIST="${PROJECT_FILE%/*.xcodeproj}/ObstacleBridge/ObstacleBridge-Info.plist"
 if [ ! -f "${APP_INFO_PLIST}" ]; then
   echo "[build_ios_app] generated container Info.plist is missing: ${APP_INFO_PLIST}" >&2
   exit 1
 fi
 /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)' "${APP_INFO_PLIST}"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString $(MARKETING_VERSION)' "${APP_INFO_PLIST}"
 
 RESOLVED_APPLE_TEAM_ID="${OB_APPLE_TEAM_ID:-}"
 if [ -z "${RESOLVED_APPLE_TEAM_ID}" ] && [ -f "${PROJECT_PBXPROJ}" ]; then
@@ -86,13 +90,25 @@ if [ -z "${OB_APPLE_TEAM_ID:-}" ]; then
   echo "[build_ios_app] using DEVELOPMENT_TEAM=${RESOLVED_APPLE_TEAM_ID} from project settings"
 fi
 
+# A distribution archive performs its own Release build.  Callers that only
+# need Briefcase/project preparation must not also perform a Debug device
+# build, which would otherwise require the locally configured iPhone.
+if [ "${OB_IOS_PREPARE_ONLY:-0}" = "1" ]; then
+  echo "[build_ios_app] preparation completed; skipping Debug xcodebuild"
+  exit 0
+fi
+
 if [ -n "${OB_IOS_DEVICE_ID:-}" ]; then
   DESTINATION=("id=${OB_IOS_DEVICE_ID}")
   PROVISIONING_ARGS=(-allowProvisioningUpdates)
   echo "[build_ios_app] building for connected device ${OB_IOS_DEVICE_ID}"
 else
   DESTINATION=("generic/platform=iOS")
-  PROVISIONING_ARGS=()
+  if [ "${OB_IOS_ALLOW_PROVISIONING_UPDATES:-0}" = "1" ]; then
+    PROVISIONING_ARGS=(-allowProvisioningUpdates)
+  else
+    PROVISIONING_ARGS=()
+  fi
   echo "[build_ios_app] building for generic iOS device target"
 fi
 

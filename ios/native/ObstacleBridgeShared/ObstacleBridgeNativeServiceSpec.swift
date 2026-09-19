@@ -25,6 +25,19 @@ struct ObstacleBridgeNativeServiceSpec {
         self.options = sharedSpec.options
     }
 
+    init(channelMuxSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
+        self.svcID = channelMuxSpec.svcID
+        self.name = channelMuxSpec.name
+        self.listenProtocol = channelMuxSpec.lProto
+        self.listenBind = channelMuxSpec.lBind
+        self.listenPort = channelMuxSpec.lPort
+        self.targetProtocol = channelMuxSpec.rProto
+        self.targetHost = channelMuxSpec.rHost
+        self.targetPort = channelMuxSpec.rPort
+        self.lifecycleHooks = channelMuxSpec.lifecycleHooks
+        self.options = channelMuxSpec.options
+    }
+
     func toChannelMuxServiceSpec() -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
         ObstacleBridgeChannelMuxCodec.ServiceSpec(
             svcID: svcID,

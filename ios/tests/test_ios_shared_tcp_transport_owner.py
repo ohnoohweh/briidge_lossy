@@ -47,6 +47,12 @@ def _compile_swift_tcp_transport_owner_probe(source_path: Path, binary_path: Pat
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxSession.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayCoordinator.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayEnvelope.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
@@ -474,7 +480,7 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
                             ObstacleBridgeChannelMuxCodec.MuxFrame(
                                 chanID: 41,
                                 proto: .tcp,
-                                counter: 1,
+                                counter: 0,
                                 mtype: .open,
                                 body: openPayload
                             )
@@ -489,7 +495,7 @@ def test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound
                             ObstacleBridgeChannelMuxCodec.MuxFrame(
                                 chanID: 41,
                                 proto: .tcp,
-                                counter: 2,
+                                counter: 1,
                                 mtype: .data,
                                 body: Data("hello-from-mux".utf8)
                             )

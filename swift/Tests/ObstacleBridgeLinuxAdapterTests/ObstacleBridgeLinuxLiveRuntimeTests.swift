@@ -8,6 +8,39 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func runtimeHealthPersistsCleanStopAndClassifiesNextLifetime() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let healthURL = directory.appendingPathComponent("runtime-health.json")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
+            transport: .tcp, host: "127.0.0.1", port: 1
+        )
+
+        let first = ObstacleBridgeLinuxLiveRuntime(
+            configuration: configuration,
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 1),
+            runtimeHealthURL: healthURL
+        )
+        first.start()
+        first.stop()
+        #expect(ObstacleBridgeRuntimeHealthPersistence.load(from: healthURL)?.previousLifetimeEndedCleanly == true)
+
+        let next = ObstacleBridgeLinuxLiveRuntime(
+            configuration: configuration,
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 1),
+            runtimeHealthURL: healthURL
+        )
+        next.start()
+        let started = Date().addingTimeInterval(2)
+        while next.runtimeHealthMetadataForAdmin().count == 0, Date() < started {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(next.runtimeHealthMetadataForAdmin().previousClean == true)
+        #expect(next.runtimeHealthRecentRecordsForAdmin().contains(where: { $0.event == "runtime_stopped" && $0.controlledStop }))
+        next.stop()
+    }
+
     /// Pins the subset of Python's peer lifecycle contract supported by the
     /// Linux Swift foreground runtime.  In particular, transport lifecycle
     /// and SecureLink protocol state are separate fields: an authenticated
@@ -265,8 +298,12 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
     private func assertProtectedReceiveFailureReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
+        // UDP has no close event.  A peer that closes after SecureLink ACK is
+        // therefore observed through the configured receive deadline, while
+        // TCP/WS still exercise their immediate EOF path.
+        let receiveDeadline = transport == .myudp ? 100 : 5_000
         let runtime = ObstacleBridgeLinuxLiveRuntime(
-            configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8)),
+            configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, secureLinkPSK: Data("linux-swift-psk".utf8), receiveIdleTimeoutMilliseconds: receiveDeadline),
             policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2)
         )
         let failed = DispatchSemaphore(value: 0)
