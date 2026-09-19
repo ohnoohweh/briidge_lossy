@@ -291,6 +291,7 @@ def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
     assert "app_packages/bin" in patched
     assert "_testcapi _testclinic" in patched
     assert "_remote_debugging xxlimited" in patched
+    assert "org.python.$(echo $FULL_MODULE_NAME" not in patched
     assert "Process Python libraries for IPServer" not in patched
     assert "ObstacleBridgePythonBridge.m" not in patched
     assert "IPServer-Bridging-Header.h" not in patched
@@ -335,3 +336,17 @@ def test_patch_pbxproj_file_generates_packet_tunnel_provider_copy(tmp_path, monk
     assert 'static let providerBuildDiffSHA = ""' in build_stamp
     patched = pbxproj.read_text(encoding="utf-8")
     assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched
+
+
+def test_patch_python_build_utility_uses_app_store_valid_module_bundle_ids(tmp_path) -> None:
+    xcodeproj = tmp_path / "ObstacleBridge.xcodeproj"
+    xcodeproj.mkdir(parents=True)
+    pbxproj = xcodeproj / "project.pbxproj"
+    pbxproj.write_text(BASELINE_PROJECT, encoding="utf-8")
+    utility_path = tmp_path / "Support" / "Python.xcframework" / "build" / "utils.sh"
+    utility_path.parent.mkdir(parents=True)
+    utility_path.write_text(patcher.PYTHON_UTILS_BUNDLE_ID_LINE, encoding="utf-8")
+
+    assert patcher.patch_python_build_utility(pbxproj) is True
+    assert patcher.patch_python_build_utility(pbxproj) is False
+    assert patcher.PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE in utility_path.read_text(encoding="utf-8")

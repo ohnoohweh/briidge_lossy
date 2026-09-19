@@ -25,6 +25,16 @@ REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "
 IOS_DEFAULT_MARKETING_VERSION = "0.1.0"
 IOS_DEFAULT_BUILD_NUMBER = "1"
 
+# Briefcase's iOS utility turns leading underscores in CPython extension module
+# names into leading hyphens in the last bundle-ID component (for example,
+# `_zstd` becomes `...-zstd`).  App Store Connect rejects that identifier.
+PYTHON_UTILS_BUNDLE_ID_LINE = (
+    '    FRAMEWORK_BUNDLE_ID=$(echo $PRODUCT_BUNDLE_IDENTIFIER.$FULL_MODULE_NAME | tr "_" "-")\n'
+)
+PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE = (
+    '    FRAMEWORK_BUNDLE_ID="org.python.$(echo $FULL_MODULE_NAME | tr "_" "-" | sed \'s/^-//\')"\n'
+)
+
 PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "\n"
     "# Strip CPython test/support payloads that are not needed by ObstacleBridge and\n"
@@ -1233,6 +1243,23 @@ def patch_pbxproj_file(path: Path) -> bool:
     return True
 
 
+def patch_python_build_utility(pbxproj_path: Path) -> bool:
+    """Give generated CPython module frameworks App Store-valid bundle IDs."""
+    utility_path = pbxproj_path.parent.parent / "Support" / "Python.xcframework" / "build" / "utils.sh"
+    if not utility_path.is_file():
+        raise ValueError(f"Python build utility is missing: {utility_path}")
+    original = utility_path.read_text(encoding="utf-8")
+    if PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE in original:
+        return False
+    if PYTHON_UTILS_BUNDLE_ID_LINE not in original:
+        raise ValueError("Python build utility bundle-ID construction not found")
+    utility_path.write_text(
+        original.replace(PYTHON_UTILS_BUNDLE_ID_LINE, PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE, 1),
+        encoding="utf-8",
+    )
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pbxproj", nargs="?", type=Path, default=DEFAULT_PROJECT)
@@ -1241,7 +1268,8 @@ def main() -> int:
     if not path.is_file():
         raise SystemExit(f"Xcode project file not found: {path}")
     changed = patch_pbxproj_file(path)
-    print(f"{'patched' if changed else 'already configured'}: {path}")
+    utils_changed = patch_python_build_utility(path)
+    print(f"{'patched' if changed or utils_changed else 'already configured'}: {path}")
     return 0
 
 

@@ -90,6 +90,14 @@ if [ -z "${OB_APPLE_TEAM_ID:-}" ]; then
   echo "[build_ios_app] using DEVELOPMENT_TEAM=${RESOLVED_APPLE_TEAM_ID} from project settings"
 fi
 
+# A distribution archive performs its own Release build.  Callers that only
+# need Briefcase/project preparation must not also perform a Debug device
+# build, which would otherwise require the locally configured iPhone.
+if [ "${OB_IOS_PREPARE_ONLY:-0}" = "1" ]; then
+  echo "[build_ios_app] preparation completed; skipping Debug xcodebuild"
+  exit 0
+fi
+
 if [ -n "${OB_IOS_DEVICE_ID:-}" ]; then
   DESTINATION=("id=${OB_IOS_DEVICE_ID}")
   PROVISIONING_ARGS=(-allowProvisioningUpdates)

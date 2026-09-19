@@ -89,6 +89,10 @@ export OB_APPSTORE_API_ISSUER_ID="YOUR_ISSUER_ID"
 export OB_APPSTORE_API_KEY_PATH="/absolute/path/AuthKey_YOUR_KEY_ID.p8"
 # Optional when the account has multiple providers:
 # export OB_APPSTORE_PROVIDER_PUBLIC_ID="YOUR_PROVIDER_ID"
+# Optional overrides; the release defaults to the named beta group and the
+# container bundle identifier below.
+# export OB_TESTFLIGHT_GROUP_NAME="ObstacleBridgeTesters"
+# export OB_APPSTORE_BUNDLE_ID="com.obstaclebridge.obstacle-bridge-ios"
 ```
 
 `ios/.local-device-env` and `ios/.local-testflight-env` remain optional
@@ -104,6 +108,10 @@ The script uses a UTC timestamp as the default numeric TestFlight build
 number, so a rebuilt commit does not collide with an earlier upload. Set
 `OB_IOS_MARKETING_VERSION`, `OB_IOS_BUILD_NUMBER`, or
 `OB_TESTFLIGHT_OUTPUT_DIR` when a release process supplies those values.
+It performs project/package preparation followed by one Release archive; no
+attached iPhone is needed. After upload, it waits for Apple processing and
+assigns the valid build to `ObstacleBridgeTesters`. The API key must have an
+App Store Connect role that can manage TestFlight builds and beta groups.
 
 ### Manual Xcode archive
 

@@ -23,7 +23,7 @@ load_release_environment() {
     name="${assignment%%=*}"
     value="${assignment#*=}"
     case "${name}" in
-      OB_APPLE_TEAM_ID|OB_APPSTORE_API_KEY_ID|OB_APPSTORE_API_ISSUER_ID|OB_APPSTORE_API_KEY_PATH|OB_APPSTORE_PROVIDER_PUBLIC_ID|OB_IOS_MARKETING_VERSION|OB_IOS_BUILD_NUMBER|OB_TESTFLIGHT_OUTPUT_DIR|OB_TESTFLIGHT_DERIVED_DATA_PATH)
+      OB_APPLE_TEAM_ID|OB_APPSTORE_API_KEY_ID|OB_APPSTORE_API_ISSUER_ID|OB_APPSTORE_API_KEY_PATH|OB_APPSTORE_PROVIDER_PUBLIC_ID|OB_IOS_MARKETING_VERSION|OB_IOS_BUILD_NUMBER|OB_TESTFLIGHT_OUTPUT_DIR|OB_TESTFLIGHT_DERIVED_DATA_PATH|OB_TESTFLIGHT_GROUP_NAME|OB_APPSTORE_BUNDLE_ID)
         printf -v "${name}" '%s' "${value}"
         export "${name}"
         ;;
@@ -41,7 +41,9 @@ load_release_environment() {
         OB_IOS_MARKETING_VERSION \
         OB_IOS_BUILD_NUMBER \
         OB_TESTFLIGHT_OUTPUT_DIR \
-        OB_TESTFLIGHT_DERIVED_DATA_PATH; do
+        OB_TESTFLIGHT_DERIVED_DATA_PATH \
+        OB_TESTFLIGHT_GROUP_NAME \
+        OB_APPSTORE_BUNDLE_ID; do
         if [ -n "${!name:-}" ]; then
           printf '%s=%s\n' "${name}" "${!name}"
         fi
@@ -66,7 +68,7 @@ require_value() {
   fi
 }
 
-for command in xcodebuild xcrun; do
+for command in xcodebuild xcrun security; do
   command -v "${command}" >/dev/null 2>&1 || {
     echo "[release_ios_testflight] ${command} is required" >&2
     exit 2
@@ -80,6 +82,11 @@ require_value OB_APPSTORE_API_KEY_PATH
 
 if [ ! -f "${OB_APPSTORE_API_KEY_PATH}" ]; then
   echo "[release_ios_testflight] OB_APPSTORE_API_KEY_PATH does not name a readable API key file" >&2
+  exit 2
+fi
+
+if ! security find-identity -v -p codesigning 2>/dev/null | grep -q 'Apple Distribution:'; then
+  echo "[release_ios_testflight] an installed Apple Distribution signing identity is required; import the distribution certificate and private key into this login keychain" >&2
   exit 2
 fi
 
@@ -99,6 +106,8 @@ OUTPUT_DIR="${OB_TESTFLIGHT_OUTPUT_DIR:-${IOS_DIR}/build/testflight}"
 ARCHIVE_PATH="${OUTPUT_DIR}/ObstacleBridge-${IOS_MARKETING_VERSION}-${IOS_BUILD_NUMBER}.xcarchive"
 EXPORT_DIR="${OUTPUT_DIR}/export-${IOS_MARKETING_VERSION}-${IOS_BUILD_NUMBER}"
 DERIVED_DATA_PATH="${OB_TESTFLIGHT_DERIVED_DATA_PATH:-${OUTPUT_DIR}/derived-${IOS_BUILD_NUMBER}}"
+TESTFLIGHT_GROUP_NAME="${OB_TESTFLIGHT_GROUP_NAME:-ObstacleBridgeTesters}"
+APPSTORE_BUNDLE_ID="${OB_APPSTORE_BUNDLE_ID:-com.obstaclebridge.obstacle-bridge-ios}"
 EXPORT_OPTIONS_PATH="$(mktemp "${TMPDIR:-/tmp}/obstaclebridge-testflight-export.XXXXXX.plist")"
 
 cleanup() {
@@ -119,6 +128,7 @@ mkdir -p "${OUTPUT_DIR}"
 export OB_IOS_MARKETING_VERSION="${IOS_MARKETING_VERSION}"
 export OB_IOS_BUILD_NUMBER="${IOS_BUILD_NUMBER}"
 export OB_IOS_ALLOW_PROVISIONING_UPDATES=1
+export OB_IOS_PREPARE_ONLY=1
 export DERIVED_DATA_PATH
 
 echo "[release_ios_testflight] refreshing generated app project and packaged sources"
@@ -200,6 +210,15 @@ fi
 
 echo "[release_ios_testflight] uploading IPA to App Store Connect and waiting for processing"
 xcrun altool "${UPLOAD_ARGS[@]}"
+
+echo "[release_ios_testflight] waiting for App Store Connect processing and assigning ${TESTFLIGHT_GROUP_NAME}"
+"${IOS_DIR}/scripts/assign_testflight_group.py" \
+  --key-id "${OB_APPSTORE_API_KEY_ID}" \
+  --issuer-id "${OB_APPSTORE_API_ISSUER_ID}" \
+  --private-key "${OB_APPSTORE_API_KEY_PATH}" \
+  --bundle-id "${APPSTORE_BUNDLE_ID}" \
+  --build-number "${IOS_BUILD_NUMBER}" \
+  --group-name "${TESTFLIGHT_GROUP_NAME}"
 
 echo "[release_ios_testflight] upload completed"
 echo "[release_ios_testflight] archive=${ARCHIVE_PATH}"
