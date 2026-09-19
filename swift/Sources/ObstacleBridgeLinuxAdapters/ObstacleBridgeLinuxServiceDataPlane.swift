@@ -20,159 +20,94 @@ public struct ObstacleBridgeLinuxServiceDataPlaneSnapshot: Codable, Equatable, S
     public let openedUDPChannels: Int
 }
 
-/// ChannelMux service-side state, intentionally independent from socket I/O.
-/// A POSIX listener owns descriptors and feeds this serial core; the core owns
-/// channel identities, OPEN/DATA/CLOSE encoding, bounded outbound buffering,
-/// and malformed-frame accounting.
+/// POSIX-facing translation facade.  Channel lifecycle policy is implemented
+/// by `ObstacleBridgeChannelMuxSession`; this type converts its value effects
+/// into descriptor-owner operations and performs no ChannelMux state updates.
 public final class ObstacleBridgeLinuxServiceDataPlane {
-    private struct Channel {
-        let spec: ObstacleBridgeLinuxServiceSpec
-        let protocolType: ObstacleBridgeChannelMuxProtocol
-        var counter: UInt16
-    }
-
+    private let core: ObstacleBridgeChannelMuxSession
     private let maximumQueuedFrames: Int
-    private let instanceID: UInt64
-    private let connectionSequence: UInt32
-    private var nextTCPChannel: UInt16 = 1
-    private var nextUDPChannel: UInt16 = 1
-    private var channels: [UInt16: Channel] = [:]
-    private var outbound: [ObstacleBridgeChannelMuxFrame] = []
-    private var droppedFrames = 0
-    private var malformedFrames = 0
-    private var serviceFailures = 0
-    private var openedTCPChannels = 0
-    private var openedUDPChannels = 0
+    private var pendingOutbound: [ObstacleBridgeChannelMuxFrame] = []
+    private var effectDeliveryDrops = 0
 
     public init(maximumQueuedFrames: Int = 128, instanceID: UInt64 = 0, connectionSequence: UInt32 = 0) {
         self.maximumQueuedFrames = max(1, maximumQueuedFrames)
-        self.instanceID = instanceID
-        self.connectionSequence = connectionSequence
+        core = .init(maximumQueuedFrames: maximumQueuedFrames, instanceID: instanceID, connectionSequence: connectionSequence)
     }
 
     public func acceptLocalService(_ spec: ObstacleBridgeLinuxServiceSpec) throws -> UInt16 {
-        guard spec.listenProtocol == .tcp || spec.listenProtocol == .udp,
-              spec.listenProtocol == spec.targetProtocol else {
-            serviceFailures += 1
-            throw ObstacleBridgeLinuxServiceDataPlaneError.unsupportedProtocol
-        }
-        let channelID = allocate(protocolType: spec.listenProtocol)
-        guard channels[channelID] == nil else {
-            serviceFailures += 1
-            throw ObstacleBridgeLinuxServiceDataPlaneError.duplicateChannel
-        }
-        channels[channelID] = .init(spec: spec, protocolType: spec.listenProtocol, counter: 0)
-        if spec.listenProtocol == .tcp { openedTCPChannels += 1 } else { openedUDPChannels += 1 }
-        try enqueue(.init(channelID: channelID, protocolType: spec.listenProtocol, counter: 0, messageType: .open, body: try openPayload(spec)))
-        return channelID
+        let effects = try map { try core.acceptLocal(service: coreSpec(spec)) }
+        try retainOutbound(effects)
+        guard case .outbound(let frame) = effects.first else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
+        return frame.channelID
     }
 
     public func localData(channelID: UInt16, payload: Data) throws {
-        guard var channel = channels[channelID] else {
-            serviceFailures += 1
-            throw ObstacleBridgeLinuxServiceDataPlaneError.unknownChannel
-        }
-        channel.counter &+= 1
-        channels[channelID] = channel
-        try enqueue(.init(channelID: channelID, protocolType: channel.protocolType, counter: channel.counter, messageType: .data, body: payload))
+        try retainOutbound(try map { try core.localData(channelID: channelID, payload: payload) })
     }
 
-    /// Local EOF is represented as CLOSE after all frames already queued for
-    /// that channel. The descriptor owner may then half-close its write side.
     public func localEOF(channelID: UInt16) throws {
-        guard let channel = channels.removeValue(forKey: channelID) else {
-            serviceFailures += 1
-            throw ObstacleBridgeLinuxServiceDataPlaneError.unknownChannel
-        }
-        try enqueue(.init(channelID: channelID, protocolType: channel.protocolType, counter: channel.counter &+ 1, messageType: .close, body: Data()))
+        try retainOutbound(try map { try core.localEOF(channelID: channelID) })
     }
 
-    /// Handles a peer frame and returns data to write to the local descriptor,
-    /// or an OPEN request which the descriptor owner must connect/bind.
     public func receive(_ frame: ObstacleBridgeChannelMuxFrame) throws -> ObstacleBridgeLinuxServiceDataPlaneEvent? {
-        switch frame.messageType {
-        case .open:
-            guard channels[frame.channelID] == nil, let spec = try? decodeOpenPayload(frame.body), spec.listenProtocol == frame.protocolType else {
-                malformedFrames += 1
-                throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen
-            }
-            channels[frame.channelID] = .init(spec: spec, protocolType: frame.protocolType, counter: frame.counter)
-            if frame.protocolType == .tcp { openedTCPChannels += 1 } else if frame.protocolType == .udp { openedUDPChannels += 1 }
-            return .connectRequested(channelID: frame.channelID, spec: spec)
-        case .data:
-            guard channels[frame.channelID] != nil else {
-                malformedFrames += 1
-                throw ObstacleBridgeLinuxServiceDataPlaneError.unknownChannel
-            }
-            return .deliverLocal(channelID: frame.channelID, payload: frame.body)
-        case .close:
-            guard channels.removeValue(forKey: frame.channelID) != nil else {
-                malformedFrames += 1
-                throw ObstacleBridgeLinuxServiceDataPlaneError.unknownChannel
-            }
-            return .closeLocal(channelID: frame.channelID)
-        default:
-            return nil
+        let effects = try map { try core.receive(sessionFrame(frame)) }
+        guard let effect = effects.first else { return nil }
+        switch effect {
+        case .connectLocal(let channelID, let service): return .connectRequested(channelID: channelID, spec: linuxSpec(service))
+        case .writeLocal(let channelID, let payload): return .deliverLocal(channelID: channelID, payload: payload)
+        case .writeLocalFragment: return nil
+        case .closeLocal(let channelID): return .closeLocal(channelID: channelID)
+        case .outbound: return nil
         }
     }
 
     public func drainOutbound() -> [ObstacleBridgeChannelMuxFrame] {
-        defer { outbound.removeAll(keepingCapacity: true) }
-        return outbound
+        defer { pendingOutbound.removeAll(keepingCapacity: true) }
+        return pendingOutbound
     }
 
     public func snapshot() -> ObstacleBridgeLinuxServiceDataPlaneSnapshot {
-        .init(
-            activeTCPChannels: channels.values.filter { $0.protocolType == .tcp }.count,
-            activeUDPChannels: channels.values.filter { $0.protocolType == .udp }.count,
-            queuedFrames: outbound.count,
-            droppedFrames: droppedFrames,
-            malformedFrames: malformedFrames,
-            serviceFailures: serviceFailures,
-            openedTCPChannels: openedTCPChannels,
-            openedUDPChannels: openedUDPChannels
-        )
+        let snapshot = core.snapshot()
+        return .init(activeTCPChannels: snapshot.activeTCPChannels, activeUDPChannels: snapshot.activeUDPChannels, queuedFrames: pendingOutbound.count, droppedFrames: snapshot.droppedFrames + effectDeliveryDrops, malformedFrames: snapshot.malformedFrames, serviceFailures: snapshot.serviceFailures, openedTCPChannels: snapshot.openedTCPChannels, openedUDPChannels: snapshot.openedUDPChannels)
     }
 
-    private func allocate(protocolType: ObstacleBridgeChannelMuxProtocol) -> UInt16 {
-        if protocolType == .tcp {
-            defer { nextTCPChannel = nextTCPChannel == UInt16.max ? 1 : nextTCPChannel &+ 1 }
-            return nextTCPChannel
+    private func map<T>(_ operation: () throws -> T) throws -> T {
+        do { return try operation() }
+        catch let error as ObstacleBridgeChannelMuxSessionError {
+            switch error {
+            case .unsupportedProtocol: throw ObstacleBridgeLinuxServiceDataPlaneError.unsupportedProtocol
+            case .malformedOpen: throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen
+            case .duplicateChannel: throw ObstacleBridgeLinuxServiceDataPlaneError.duplicateChannel
+            case .unknownChannel: throw ObstacleBridgeLinuxServiceDataPlaneError.unknownChannel
+            case .staleEpoch, .invalidCounter, .queueFull: throw ObstacleBridgeLinuxServiceDataPlaneError.queueFull
+            }
         }
-        defer { nextUDPChannel = nextUDPChannel == UInt16.max ? 1 : nextUDPChannel &+ 1 }
-        return nextUDPChannel
     }
 
-    private func enqueue(_ frame: ObstacleBridgeChannelMuxFrame) throws {
-        guard outbound.count < maximumQueuedFrames else {
-            droppedFrames += 1
+    private func retainOutbound(_ effects: [ObstacleBridgeChannelMuxSessionEffect]) throws {
+        let frames = effects.compactMap { effect -> ObstacleBridgeChannelMuxFrame? in
+            guard case .outbound(let frame) = effect else { return nil }
+            guard let protocolType = ObstacleBridgeChannelMuxProtocol(rawValue: frame.protocolType),
+                  let messageType = ObstacleBridgeChannelMuxMessageType(rawValue: frame.messageType) else { return nil }
+            return .init(channelID: frame.channelID, protocolType: protocolType, counter: frame.counter, messageType: messageType, body: frame.body)
+        }
+        guard pendingOutbound.count + frames.count <= maximumQueuedFrames else {
+            effectDeliveryDrops += frames.count
             throw ObstacleBridgeLinuxServiceDataPlaneError.queueFull
         }
-        outbound.append(frame)
+        pendingOutbound.append(contentsOf: frames)
     }
 
-    private func openPayload(_ spec: ObstacleBridgeLinuxServiceSpec) throws -> Data {
-        guard let core = coreSpec(spec) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-        do { return try ObstacleBridgeServiceCodec.encodeOpen(instanceID: instanceID, connectionSequence: connectionSequence, service: core) }
-        catch { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
+    private func coreSpec(_ value: ObstacleBridgeLinuxServiceSpec) -> ObstacleBridgeServiceSpec {
+        .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol.rawValue, listenHost: value.listenHost, listenPort: UInt16(clamping: value.listenPort), targetProtocol: value.targetProtocol.rawValue, targetHost: value.targetHost, targetPort: UInt16(clamping: value.targetPort))
     }
 
-    private func decodeOpenPayload(_ data: Data) throws -> ObstacleBridgeLinuxServiceSpec {
-        do {
-            let service = try ObstacleBridgeServiceCodec.decodeOpen(data).service
-            guard let result = linuxSpec(service) else { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
-            return result
-        } catch { throw ObstacleBridgeLinuxServiceDataPlaneError.malformedOpen }
+    private func linuxSpec(_ value: ObstacleBridgeServiceSpec) -> ObstacleBridgeLinuxServiceSpec {
+        .init(serviceID: value.serviceID, name: value.name, listenProtocol: .init(rawValue: value.listenProtocol)!, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: .init(rawValue: value.targetProtocol)!, targetHost: value.targetHost, targetPort: Int(value.targetPort))
     }
 
-    private func coreSpec(_ value: ObstacleBridgeLinuxServiceSpec) -> ObstacleBridgeServiceSpec? {
-        guard (1...Int(UInt16.max)).contains(value.listenPort), (1...Int(UInt16.max)).contains(value.targetPort) else { return nil }
-        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: value.listenProtocol.rawValue, listenHost: value.listenHost, listenPort: UInt16(value.listenPort), targetProtocol: value.targetProtocol.rawValue, targetHost: value.targetHost, targetPort: UInt16(value.targetPort))
-    }
-    private func linuxSpec(_ value: ObstacleBridgeServiceSpec) -> ObstacleBridgeLinuxServiceSpec? {
-        guard value.listenPort > 0, value.targetPort > 0 else { return nil }
-        guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.listenProtocol), let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.targetProtocol) else { return nil }
-        return .init(serviceID: value.serviceID, name: value.name, listenProtocol: listenProtocol, listenHost: value.listenHost, listenPort: Int(value.listenPort), targetProtocol: targetProtocol, targetHost: value.targetHost, targetPort: Int(value.targetPort))
+    private func sessionFrame(_ value: ObstacleBridgeChannelMuxFrame) -> ObstacleBridgeChannelMuxSessionFrame {
+        .init(channelID: value.channelID, protocolType: value.protocolType.rawValue, counter: value.counter, messageType: value.messageType.rawValue, body: value.body)
     }
 }
 

@@ -40,6 +40,8 @@ def _compile_swift_overlay_layer_transport_probe(source_path: Path, binary_path:
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayCoordinator.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
@@ -315,30 +317,21 @@ def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_ou
                 static func main() throws {
                     var now = 100.0
                     let adapter = ObstacleBridgeOverlayLayerTransportAdapter(
-                        connectionRotationDelay: 30.0,
+                        transportDelayRotationThresholdMS: 50.0,
+                        transportDelayRotationGrace: 0.1,
                         lifecycleTimeProvider: { now }
                     )
-                    _ = adapter.connectionLayersSnapshot(
-                        transport: "tcp",
-                        transportConnected: false
-                    )
-                    now = 130.0
-                    let rotation = adapter.connectionRotationDue(candidateCount: 2)
-                    adapter.beginTransportEpoch(reason: "peer_candidate_rotated")
-                    now = 160.0
-                    let secondRotation = adapter.connectionRotationDue(candidateCount: 2)
+                    var effects: [String] = []
+                    adapter.setCoreEffectSink { effects.append(contentsOf: $0.map { String(describing: $0) }) }
+                    adapter.startCoreLifecycle()
                     _ = try adapter.handleTransportConnected()
-                    let lifecycle = adapter.lifecycleSnapshot()
+                    adapter.reportTransportLiveness(delayMilliseconds: 50.0)
+                    now = 100.2
+                    adapter.reportTransportLiveness(delayMilliseconds: 50.0)
                     let payload: [String: Any] = [
-                        "rotation_accepted": rotation?.accepted ?? false,
-                        "rotation_reason": rotation?.reason ?? "",
-                        "rotation_epoch": rotation?.epoch ?? -1,
-                        "rotation_cycle": rotation?.candidateCycle ?? -1,
-                        "second_rotation_accepted": secondRotation?.accepted ?? false,
-                        "second_rotation_epoch": secondRotation?.epoch ?? -1,
-                        "restart_required": rotation?.restartRequired ?? true,
-                        "state": lifecycle.state.rawValue,
-                        "epoch": lifecycle.epoch,
+                        "has_cancel_receive": effects.contains { $0.contains("cancelReceive") },
+                        "has_cancel_transport": effects.contains { $0.contains("cancelTransport") },
+                        "has_retry": effects.contains { $0.contains("scheduleRetry") },
                     ]
                     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
                     FileHandle.standardOutput.write(data)
@@ -355,14 +348,4 @@ def test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_ou
             f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
         )
 
-    assert json.loads(completed.stdout) == {
-        "rotation_accepted": True,
-        "rotation_reason": "channelmux_disconnected",
-        "rotation_epoch": 0,
-        "rotation_cycle": 0,
-        "second_rotation_accepted": True,
-        "second_rotation_epoch": 1,
-        "restart_required": False,
-        "state": "connected",
-        "epoch": 2,
-    }
+    assert json.loads(completed.stdout) == {"has_cancel_receive": True, "has_cancel_transport": True, "has_retry": True}

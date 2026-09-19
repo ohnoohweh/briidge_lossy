@@ -40,6 +40,9 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert "handleAppMessage" in provider
     assert "packet_pump_forwarded_packets" in provider
     assert "ipserver-native-provider-state.json" in provider
+    assert "ipserver-runtime-health-v1.json" in provider
+    assert "ObstacleBridgeRuntimeHealthRing" in provider
+    assert "previous_runtime_lifetime_ended_cleanly" in provider
     assert "updateProviderState(" in provider
     assert "bridge_state" in provider
     assert "processMemorySnapshot()" in provider
@@ -183,10 +186,23 @@ def test_native_packet_flow_bridge_source_exists() -> None:
     assert "packet_bridge_activated" in bridge
     assert "packet_bridge_outgoing_write_completed" in bridge
     assert "packet_bridge_outgoing_write_slow" in bridge
+    assert "dropped_outgoing_packets" in bridge
+    assert "outgoingDrainGeneration" in bridge
+    assert "scheduleOutgoingDrain(provider: provider, generation: outcome.8)" in bridge
+    assert "shared.outgoingDrainGeneration == generation" in bridge
     assert "incoming_pcap_path" in bridge
     assert "outgoing_pcap_path" in bridge
     assert "ipserver-nepacketflow-in-" in bridge
     assert "ipserver-nepacketflow-out-" in bridge
+
+
+def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+
+    assert "runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()" in provider
+    assert '"runtime_health_recent_records"' in provider
+    assert '"runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? []' in provider
+    assert "runtimeHealthRecordsPayload" in provider
 
 
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:
@@ -283,10 +299,10 @@ def test_swift_overlay_epoch_reset_reopens_local_tun_channels() -> None:
 
 def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() -> None:
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    connect_overlay = owner[owner.index("    private func connectOverlay() {") : owner.index("    private func connectNetworkWebSocket(")]
+    connect_overlay = owner[owner.index("    private func connectOverlay(") : owner.index("    private func connectNetworkWebSocket(")]
 
-    assert "resetOverlayTransportEpoch()" in connect_overlay
-    assert connect_overlay.index("resetOverlayTransportEpoch()") < connect_overlay.index(
+    assert "resetOverlayTransportEpoch(notifyCore: false)" in connect_overlay
+    assert connect_overlay.index("resetOverlayTransportEpoch(notifyCore: false)") < connect_overlay.index(
         "websocketTransportGeneration += 1"
     )
 
@@ -594,6 +610,7 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert '"diff_sha": diffSHA' in provider
     assert '"build_timestamp_utc": timestamp' in provider
     assert "Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)" in build_script
+    assert "Set :CFBundleShortVersionString $(MARKETING_VERSION)" in build_script
     assert 'private func adminSnapshotCachingEnabled() -> Bool' in provider
     assert 'ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_snapshot_cache_enabled"]) ?? false' in provider
     assert "func adminStatusSnapshot() -> [String: Any] {\n        guard adminSnapshotCachingEnabled() else {\n            return adminStatusSnapshotUncached()\n        }" in provider
@@ -846,11 +863,23 @@ def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeWebSocketPayloadCodec.decode(" in runtime
     assert "ObstacleBridgeWebSocketPayloadCodec.encode(" in runtime
+    assert "ObstacleBridgeOverlayEnvelope.encodeWebSocket(" in runtime
     assert "ObstacleBridgeOverlayFrameCodec.decodeBody(" in runtime
     assert "ObstacleBridgeOverlayFrameCodec.pingPayload(" in runtime
     assert "ObstacleBridgeWebSocketPayloadCodecFactory" not in runtime
     assert "private static let appKind" not in runtime
     assert "private func appendUInt64BE" not in runtime
+
+
+def test_shared_overlay_lifecycle_reports_to_core_coordinator() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    assert "private let coreCoordinator: ObstacleBridgeOverlayCoordinator" in runtime
+    assert "applyCore(.start)" in runtime
+    assert "applyCore(.transportConnected" in runtime
+    assert "applyCore(.authenticated" in runtime
+    assert "applyCore(.transportFailed" in runtime
+    assert "let transition = coreCoordinator.handle(input)" in runtime
+    assert "let coreReady = coreCoordinator.snapshot.appReady" in runtime
 
 
 def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
@@ -948,7 +977,7 @@ def test_channel_mux_tcp_transport_owner_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeChannelMuxTCPTransportOwner" in runtime
-    assert "ControlChunkReassembler" in runtime
+    assert "handleInboundClientOpenChunk(" in runtime
     assert "acceptLocalConnection(" in runtime
     assert "handleInboundMuxFrame(" in runtime
     assert "ObstacleBridgeChannelMuxTcpRuntime" in runtime
@@ -1100,10 +1129,8 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
     assert "ObstacleBridgeCompressLayerRuntime" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
     assert "struct ObstacleBridgeConnectionLifecycleEvent" in runtime
-    assert "struct ObstacleBridgeConnectionRotationResult" in runtime
-    assert "func connectionRotationDue(candidateCount: Int)" in runtime
-    assert "func transportDelayRotationDue(" in runtime
-    assert "func rotationAttemptRejected(_ result: ObstacleBridgeConnectionRotationResult)" in runtime
+    assert "func reportTransportLiveness(delayMilliseconds: Double)" in runtime
+    assert "transportLivenessSample" in runtime
     assert "defaultTransportDelayRotationGrace: TimeInterval = 30.0" in runtime
     assert "let transportDelayRotationGrace: TimeInterval" in runtime
     assert "transportDelayRotationThresholdMS: Double = ObstacleBridgeOverlayLayerTransportAdapter.defaultTransportDelayRotationThresholdMS" in runtime
@@ -1173,6 +1200,15 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     assert "installReadSource()" in owner
     assert "udp_overlay_socket_rebuilt" in owner
     assert "guard rebuildSocketForPeerRotation() else" in owner
+    # A peer that completed its initial handshake must still rotate after a
+    # later receive outage; anchoring only at selection time permanently
+    # suppresses that recovery path.
+    assert "let idleAnchorNS = max(currentPeerSelectedAtNS, lastInboundDatagramNS)" in owner
+    assert "nowNS - idleAnchorNS < Self.peerFallbackIdleNS" in owner
+    assert 'snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters' in owner
+    assert 'snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]' in owner
+    assert 'tunMuxFrameCounters["data_delivered", default: 0] += 1' in owner
+    assert 'tunMuxFrameCounters["data_dropped", default: 0] += 1' in owner
 
 
 def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:

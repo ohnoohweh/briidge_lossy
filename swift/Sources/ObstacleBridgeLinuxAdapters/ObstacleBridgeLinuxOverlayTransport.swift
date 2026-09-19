@@ -179,7 +179,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     }
 
     private func tcpWire(_ payload: Data) throws -> Data {
-        try ObstacleBridgeOverlayFrameCodec.encodeTCP(.init(kind: .application, payload: payload))
+        try ObstacleBridgeOverlayEnvelope.encodeTCP(.init(kind: .application, payload: payload))
     }
 
     private func readTCPApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {
@@ -193,13 +193,12 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             let length = try headerReader.readUInt32()
             guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
             let body = try connection.readExactly(Int(length))
-            let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(header + body)
-            switch frame.kind {
-            case .application:
-                return frame.payload
-            case .ping:
-                try connection.write(try ObstacleBridgeOverlayFrameCodec.encodeTCP(ObstacleBridgeOverlayFrameCodec.pong(forPing: frame)))
-            case .pong:
+            switch try ObstacleBridgeOverlayEnvelope.decodeTCP(header + body) {
+            case .application(let payload):
+                return payload
+            case .reply(let frame):
+                try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(frame))
+            case .ignore:
                 // A PONG completes a lower-layer liveness exchange and carries
                 // no application payload for this client.
                 break
@@ -255,13 +254,12 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
 
     private func readWebSocketApplicationPayload(_ connection: POSIXStreamConnection) throws -> Data {
         while true {
-            let frame = try ObstacleBridgeOverlayFrameCodec.decodeBody(try ObstacleBridgeWebSocketPayloadCodec.decode(try readWebSocketApplicationFrame(connection), mode: wsPayloadMode))
-            switch frame.kind {
-            case .application: return frame.payload
-            case .ping:
-                let pong = try ObstacleBridgeWebSocketPayloadCodec.encode(try ObstacleBridgeOverlayFrameCodec.encodeBody(ObstacleBridgeOverlayFrameCodec.pong(forPing: frame)), mode: wsPayloadMode)
+            switch try ObstacleBridgeOverlayEnvelope.decodeWebSocket(try readWebSocketApplicationFrame(connection), mode: wsPayloadMode) {
+            case .application(let payload): return payload
+            case .reply(let frame):
+                let pong = try ObstacleBridgeOverlayEnvelope.encodeWebSocket(frame, mode: wsPayloadMode)
                 switch pong { case .binary(let data): try connection.write(webSocketClientFrame(opcode: 0x2, payload: data)); case .text(let text): try connection.write(webSocketClientFrame(opcode: 0x1, payload: Data(text.utf8))) }
-            case .pong:
+            case .ignore:
                 break
             }
         }

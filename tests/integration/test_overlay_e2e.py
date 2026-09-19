@@ -2300,6 +2300,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayStackPlanner.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressResolver.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeBinaryCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgePacketModel.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxFrameCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayFrameCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeControlChunkCodec.swift'),
@@ -7769,7 +7770,19 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
         with socket.socket(socket.AF_INET, socket_type) as client:
             client.settimeout(4.0)
-            client.connect(('127.0.0.1', service_port))
+            # App readiness confirms the protected overlay.  The accepted
+            # catalog is applied asynchronously, so a TCP listener may bind
+            # shortly afterwards.  Do not mistake that bounded publication
+            # window for a failed data plane, and never retry after sending.
+            listener_deadline = time.time() + 8.0
+            while True:
+                try:
+                    client.connect(('127.0.0.1', service_port))
+                    break
+                except ConnectionRefusedError:
+                    if time.time() >= listener_deadline:
+                        raise
+                    time.sleep(0.1)
             payload = b'linux-swift-to-python-runtime'
             if service_protocol == 'tcp':
                 client.sendall(payload)

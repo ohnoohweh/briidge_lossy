@@ -4,6 +4,7 @@ import Network
 final class ObstacleBridgeTcpOverlayTransportOwner {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
@@ -23,6 +24,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
+    private let serviceCatalogSink: ServiceCatalogSink?
     private let serviceNameByID: [Int: String]
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
@@ -38,11 +40,14 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     private let muxConnectionSeq: UInt32
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
+    private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private var overlayListener: NWListener?
     private var overlayConnection: NWConnection?
     private var overlayPeerID: Int?
     private var overlayConnected = false
+    private var coreReceiveEpoch: UInt64?
+    private var coreRetryToken: UInt64?
     private var receiveBuffer = Data()
     private var pendingOutboundWires: [Data] = []
     private var outboundSendInFlight = false
@@ -124,7 +129,8 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
-        eventSink: EventSink? = nil
+        eventSink: EventSink? = nil,
+        serviceCatalogSink: ServiceCatalogSink? = nil
     ) {
         self.peerHost = peerHost
         self.peerPort = peerPort
@@ -152,6 +158,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.serviceCatalogSink = serviceCatalogSink
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
@@ -171,6 +178,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
             )
         }
+        overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
+            self?.queue.async { self?.applyCoreEffects(effects) }
+        }
     }
 
     func start() {
@@ -183,7 +193,14 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         started = true
         startSecureLinkDueTimer()
         if !peerHost.isEmpty, peerPort > 0 {
-            connectOverlay()
+            if let overlayLayerTransportAdapter {
+                let candidates = (try? resolvePeerCandidates()) ?? []
+                if !candidates.isEmpty { peerCandidates = candidates }
+                overlayLayerTransportAdapter.configureCoreCandidateCount(max(1, candidates.count))
+                overlayLayerTransportAdapter.startCoreLifecycle()
+            } else {
+                connectOverlay()
+            }
             return
         }
         startOverlayListener()
@@ -228,6 +245,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+        coreReceiveEpoch = nil
+        coreRetryToken = nil
+        overlayLayerTransportAdapter?.stopCoreLifecycle()
         resetOverlayTransportEpoch()
     }
 
@@ -466,9 +486,58 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         return true
     }
 
-    private func connectOverlay() {
+    /// Executes only the native mechanics requested by the portable Core
+    /// coordinator. Retry timing, candidate selection, and receive admission
+    /// are deliberately not decided in this owner.
+    private func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect]) {
+        for effect in effects {
+            switch effect {
+            case .openTransport(_, let candidateIndex, _):
+                guard started else { continue }
+                connectOverlay(coreCandidateIndex: candidateIndex)
+            case .cancelTransport:
+                overlayConnection?.cancel()
+                overlayConnection = nil
+                overlayConnected = false
+            case .startReceive(let epoch):
+                guard coreReceiveEpoch == nil else { continue }
+                coreReceiveEpoch = epoch
+                receiveFromOverlay()
+            case .cancelReceive(let epoch):
+                guard coreReceiveEpoch == epoch else { continue }
+                coreReceiveEpoch = nil
+            case .scheduleRetry(let token, let delay):
+                reconnectWorkItem?.cancel()
+                coreRetryToken = token
+                reconnectScheduled = true
+                nextReconnectAttemptDeadlineNS = DispatchTime.now().uptimeNanoseconds + UInt64(delay) * 1_000_000
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self, self.coreRetryToken == token else { return }
+                    self.reconnectScheduled = false
+                    self.nextReconnectAttemptDeadlineNS = nil
+                    self.reconnectWorkItem = nil
+                    self.coreRetryToken = nil
+                    self.overlayLayerTransportAdapter?.retryTimerFired(token: token)
+                }
+                reconnectWorkItem = workItem
+                queue.asyncAfter(deadline: .now() + .milliseconds(delay), execute: workItem)
+            case .cancelRetry(let token):
+                guard coreRetryToken == token else { continue }
+                reconnectWorkItem?.cancel()
+                reconnectWorkItem = nil
+                coreRetryToken = nil
+                reconnectScheduled = false
+                nextReconnectAttemptDeadlineNS = nil
+            }
+        }
+    }
+
+    private func connectOverlay(coreCandidateIndex: Int? = nil) {
         guard started else {
             return
+        }
+        if let coreCandidateIndex, !peerCandidates.isEmpty {
+            peerCandidateIndex = coreCandidateIndex % peerCandidates.count
         }
         let resolved: ResolvedAddress
         do {
@@ -571,7 +640,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             overlayPeerID = snapshot.peerID
             overlayConnected = snapshot.overlayConnected
             maybePrimeSecureLinkHandshake()
-            receiveFromOverlay()
+            if overlayLayerTransportAdapter == nil { receiveFromOverlay() }
         case .failed(let error):
             eventSink?("tcp_overlay_server_connection_failed", ["error": error.localizedDescription])
             closeAcceptedOverlayConnection(connection)
@@ -616,7 +685,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
             maybePrimeSecureLinkHandshake()
             maybeSendStartupMuxFrames()
             maybeOpenConfiguredTunIfReady()
-            receiveFromOverlay()
+            if overlayLayerTransportAdapter == nil { receiveFromOverlay() }
         case .failed(let error):
             overlayConnected = false
             overlayConnection = nil
@@ -643,6 +712,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func scheduleReconnect() {
+        // An installed layered adapter reports the failure to Core during
+        // resetOverlayTransportEpoch(). Core returns the bounded retry effect.
+        if overlayLayerTransportAdapter != nil { return }
         guard started, !peerHost.isEmpty, peerPort > 0 else {
             return
         }
@@ -710,13 +782,15 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func receiveFromOverlay() {
-        guard started, let connection = overlayConnection else {
+        guard started, let connection = overlayConnection,
+              overlayLayerTransportAdapter == nil || coreReceiveEpoch != nil else {
             return
         }
         connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             self?.queue.async {
                 guard let self, self.started else { return }
                 guard self.overlayConnection === connection else { return }
+                guard self.overlayLayerTransportAdapter == nil || self.coreReceiveEpoch != nil else { return }
                 if let data, !data.isEmpty {
                     self.receiveBuffer.append(data)
                     let snapshot = self.overlayRuntime.handleInboundBytes(self.receiveBuffer)
@@ -728,6 +802,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                     }
                 }
                 if isComplete || error != nil {
+                    self.coreReceiveEpoch = nil
                     if self.peerHost.isEmpty {
                         self.closeAcceptedOverlayConnection(connection)
                     } else {
@@ -805,27 +880,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
         let protocolStats = overlayProtocolStats()
         let transmitDelayEstMS = protocolStats["transmit_delay_est_ms"] as? Double ?? 0.0
-        guard let result = adapter.transportDelayRotationDue(
-            transmitDelayEstMS: transmitDelayEstMS,
-            candidateCount: peerCandidates.count
-        ) ?? adapter.connectionRotationDue(candidateCount: peerCandidates.count)
-        else {
-            return
-        }
-        eventSink?("tcp_overlay_lifecycle_rotation", [
-            "epoch": result.epoch,
-            "candidate_cycle": result.candidateCycle,
-            "restart_required": result.restartRequired,
-        ])
-        guard !result.restartRequired else {
-            eventSink?("tcp_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
-            return
-        }
-        overlayConnection?.cancel()
-        overlayConnection = nil
-        overlayConnected = false
-        resetOverlayTransportEpoch()
-        scheduleReconnect()
+        adapter.reportTransportLiveness(delayMilliseconds: transmitDelayEstMS)
     }
 
     private func flushDueSecureLinkFramesIfNeeded() {
@@ -847,6 +902,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
     }
 
     private func resetOverlayTransportEpoch() {
+        withdrawRemoteServiceCatalog()
         overlayLayerTransportAdapter?.handleTransportDisconnected()
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
@@ -859,6 +915,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         pendingOutboundWires.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+    }
+
+    private func withdrawRemoteServiceCatalog() {
+        serviceCatalogSink?(serviceCatalog.withdraw())
     }
 
     private func updateLowerLayerFallback() {
@@ -967,6 +1027,10 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
             return
         }
+        if let install = serviceCatalog.receive(frame) {
+            serviceCatalogSink?(install)
+            return
+        }
         switch frame.proto {
         case .tun:
             handleInboundTunMuxFrame(frame)
@@ -1002,19 +1066,19 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         if let connection = udpServerConnections[frame.chanID] {
             switch frame.mtype {
             case .data:
-                let snapshot = udpRuntime.handleInboundServerData(chanID: frame.chanID, body: frame.body)
+                let snapshot = udpRuntime.handleInboundServerData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .dataFrag:
-                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body)
+                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .close:
-                let snapshot = udpRuntime.handleInboundClose(chanID: frame.chanID)
+                let snapshot = udpRuntime.handleInboundClose(chanID: frame.chanID, counter: frame.counter)
                 if snapshot.closed {
                     udpServerConnections.removeValue(forKey: frame.chanID)
                     connection.cancel()
@@ -1027,9 +1091,9 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
         switch frame.mtype {
         case .open:
-            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body)
+            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
         case .data:
-            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body)
+            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1037,7 +1101,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 }
             }
         case .dataFrag:
-            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body)
+            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1045,7 +1109,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
                 }
             }
         case .close:
-            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID)
+            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 closeUDPClientConnection(chanID: frame.chanID)
             }
@@ -1054,11 +1118,11 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
     }
 
-    private func handleInboundUDPClientOpen(chanID: Int, payload: Data) {
+    private func handleInboundUDPClientOpen(chanID: Int, payload: Data, counter: Int) {
         guard let parsed = ObstacleBridgeChannelMuxCodec.parseOpenPayload(payload) else {
             return
         }
-        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload)
+        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
         guard snapshot.accepted else {
             return
         }

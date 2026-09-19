@@ -24,9 +24,11 @@ def _compile_swift_udp_tun_probe(source_path: Path, binary_path: Path) -> None:
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxSession.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketModel.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
@@ -163,21 +165,21 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                             }
                             switch muxFrame.mtype {
                             case .open:
-                                _ = muxRuntime.handleInboundTunOpen(chanID: muxFrame.chanID, payload: muxFrame.body)
+                                _ = muxRuntime.handleInboundTunOpen(chanID: muxFrame.chanID, payload: muxFrame.body, counter: muxFrame.counter)
                             case .openChunk:
-                                _ = muxRuntime.handleInboundTunOpenChunk(chanID: muxFrame.chanID, payload: muxFrame.body)
+                                _ = muxRuntime.handleInboundTunOpenChunk(chanID: muxFrame.chanID, payload: muxFrame.body, counter: muxFrame.counter)
                             case .data:
-                                let tunSnapshot = muxRuntime.handleInboundTunData(chanID: muxFrame.chanID, body: muxFrame.body, mtu: mtu)
+                                let tunSnapshot = muxRuntime.handleInboundTunData(chanID: muxFrame.chanID, body: muxFrame.body, mtu: mtu, counter: muxFrame.counter)
                                 if let packet = tunSnapshot.packet, tunSnapshot.delivered {
                                     packets.append(packet)
                                 }
                             case .dataFrag:
-                                let tunSnapshot = muxRuntime.handleInboundTunFragment(chanID: muxFrame.chanID, payload: muxFrame.body, mtu: mtu)
+                                let tunSnapshot = muxRuntime.handleInboundTunFragment(chanID: muxFrame.chanID, payload: muxFrame.body, mtu: mtu, counter: muxFrame.counter)
                                 if let packet = tunSnapshot.packet, tunSnapshot.delivered {
                                     packets.append(packet)
                                 }
                             case .close:
-                                _ = muxRuntime.handleInboundTunClose(chanID: muxFrame.chanID)
+                                _ = muxRuntime.handleInboundTunClose(chanID: muxFrame.chanID, counter: muxFrame.counter)
                             default:
                                 continue
                             }
@@ -198,7 +200,9 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                     )
                     let initialProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
                     let duplicateProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
+                    let replayedOpen = try proactiveRuntime.reannounceLocalTunChannel(spec: proactiveSpec)
                     proactiveRuntime.resetTransportEpoch()
+                    let replayAfterReset = try proactiveRuntime.reannounceLocalTunChannel(spec: proactiveSpec)
                     let recoveredProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
 
                     let sender = SwiftUDPTunBridgeHarness(
@@ -239,6 +243,10 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                         },
                         "proactive_open_channel": initialProactiveOpen?.chanID ?? -1,
                         "proactive_open_duplicate": duplicateProactiveOpen != nil,
+                        "proactive_replay_frame": replayedOpen.flatMap { ObstacleBridgeChannelMuxCodec.unpackMux($0) }.map {
+                            ["chan_id": $0.chanID, "mtype": mtypeName($0.mtype), "counter": $0.counter] as [String: Any]
+                        } ?? [:],
+                        "proactive_replay_after_reset": replayAfterReset != nil,
                         "proactive_recovered_frame_types": try (recoveredProactiveOpen?.frames ?? []).map { frameData in
                             guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(frameData) else {
                                 throw ProbeError.badState("failed to unpack recovered proactive mux frame")
@@ -280,6 +288,8 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
     assert payload["proactive_open_frame_types"] == ["open"]
     assert payload["proactive_open_channel"] == 1
     assert payload["proactive_open_duplicate"] is False
+    assert payload["proactive_replay_frame"] == {"chan_id": 1, "mtype": "open", "counter": 0}
+    assert payload["proactive_replay_after_reset"] is False
     assert payload["proactive_recovered_frame_types"] == ["open"]
     assert payload["proactive_connection_seq"] == 0x30303031
     assert payload["first_send_mux_frames"] == [

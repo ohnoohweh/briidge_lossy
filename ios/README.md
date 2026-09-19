@@ -70,6 +70,51 @@ To build for a signed device target:
 OB_APPLE_TEAM_ID=YOURTEAMID ./ios/scripts/build_ios_app.sh
 ```
 
+## Automated TestFlight release
+
+`ios/scripts/release_ios_testflight.sh` refreshes the generated project,
+archives the `ObstacleBridge` container app, exports its signed IPA, and
+uploads it to App Store Connect. `IPServer` is embedded in that archive; do
+not archive or upload the extension by itself.
+
+Add the App Store Connect API-key values to your existing untracked
+`~/.local-device-env` file (the release script imports only its
+ObstacleBridge/TestFlight variables, so unrelated local credentials are not
+passed to build or upload subprocesses):
+
+```bash
+export OB_APPLE_TEAM_ID="YOUR_TEAM_ID"
+export OB_APPSTORE_API_KEY_ID="YOUR_KEY_ID"
+export OB_APPSTORE_API_ISSUER_ID="YOUR_ISSUER_ID"
+export OB_APPSTORE_API_KEY_PATH="/absolute/path/AuthKey_YOUR_KEY_ID.p8"
+# Optional when the account has multiple providers:
+# export OB_APPSTORE_PROVIDER_PUBLIC_ID="YOUR_PROVIDER_ID"
+```
+
+`ios/.local-device-env` and `ios/.local-testflight-env` remain optional
+untracked overrides; later files override values from the user-wide file.
+
+Run:
+
+```bash
+./ios/scripts/release_ios_testflight.sh
+```
+
+The script uses a UTC timestamp as the default numeric TestFlight build
+number, so a rebuilt commit does not collide with an earlier upload. Set
+`OB_IOS_MARKETING_VERSION`, `OB_IOS_BUILD_NUMBER`, or
+`OB_TESTFLIGHT_OUTPUT_DIR` when a release process supplies those values.
+
+### Manual Xcode archive
+
+The generated `ObstacleBridge` and embedded `IPServer` targets default to the
+same valid bundle version, `0.1.0 (1)`. Refresh the project with
+`./ios/scripts/create_ios_xcode_project.sh --no-input` before opening it in
+Xcode. For each new TestFlight upload, select the `ObstacleBridge` target and
+increment its Version/Build values; set the same values on `IPServer` before
+archiving. The archive must not contain empty or mismatched container and
+extension bundle versions.
+
 Useful build overrides:
 
 - `OB_IOS_DEVICE_ID=<device-udid>` builds for a connected physical device instead of the generic iOS destination

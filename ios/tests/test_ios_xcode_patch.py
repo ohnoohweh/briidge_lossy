@@ -202,6 +202,8 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     patched = patch_pbxproj_text(BASELINE_PROJECT)
 
     assert "IPServer.appex" in patched
+    assert "IPHONEOS_DEPLOYMENT_TARGET = 13.0;" not in patched
+    assert patched.count("IPHONEOS_DEPLOYMENT_TARGET = 15.0;") == 2
     assert 'PBXNativeTarget "IPServer"' in patched
     assert "NetworkExtension.framework" in patched
     assert "Embed App Extensions" in patched
@@ -222,6 +224,8 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxFrameCodec.swift" in patched
@@ -258,11 +262,24 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeProxyServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
     assert "native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" in patched
+
+
+def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
+    generated_style = BASELINE_PROJECT.replace(
+        "\t\t\tname = ObstacleBridge;\n",
+        "\t\t\tname = \"ObstacleBridge\";\n",
+        1,
+    )
+    patched = patch_pbxproj_text(generated_style)
+
+    assert "packageProductDependencies = (" in patched
+    assert "71C700000000000000000002 /* Crypto */" in patched
     assert "build/generated/ObstacleBridgeGeneratedBuildStamp.swift" in patched
     assert "ObstacleBridgeHostRunner.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in IPServer Sources" in patched
     assert "CURRENT_PROJECT_VERSION = 1;" in patched
+    assert "MARKETING_VERSION = 0.1.0;" in patched
     assert "ObstacleBridgeMacOSTunAdapter.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperContract.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperXPCTransport.swift in Sources" in patched
@@ -285,6 +302,13 @@ def test_patch_pbxproj_text_is_idempotent() -> None:
     twice = patch_pbxproj_text(once)
 
     assert once == twice
+
+
+def test_patch_pbxproj_text_gives_app_and_extension_matching_bundle_defaults() -> None:
+    patched = patch_pbxproj_text(BASELINE_PROJECT)
+
+    assert patched.count("MARKETING_VERSION = 0.1.0;") >= 4
+    assert patched.count("CURRENT_PROJECT_VERSION = 1;") >= 4
 
 
 def test_patch_pbxproj_file_generates_packet_tunnel_provider_copy(tmp_path, monkeypatch) -> None:

@@ -16,7 +16,7 @@ struct ObstacleBridgeLinuxServiceDataPlaneTests {
         #expect(Data(frames[0].body.dropFirst(10).prefix(4)) == Data([0, 0, 0, 4]))
         #expect(frames[1].body == Data("hello".utf8))
 
-        let peer = ObstacleBridgeLinuxServiceDataPlane()
+        let peer = ObstacleBridgeLinuxServiceDataPlane(instanceID: 9, connectionSequence: 4)
         let event = try peer.receive(frames[0])
         #expect(event == .connectRequested(channelID: id, spec: service))
         #expect(try peer.receive(frames[1]) == .deliverLocal(channelID: id, payload: Data("hello".utf8)))

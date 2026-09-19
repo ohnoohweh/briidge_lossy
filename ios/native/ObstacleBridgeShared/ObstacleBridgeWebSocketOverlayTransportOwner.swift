@@ -6,6 +6,7 @@ import Darwin
 final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWebSocketDelegate, URLSessionTaskDelegate {
     typealias EventSink = (String, [String: Any]) -> Void
     typealias TunPacketSink = (Data) -> Void
+    typealias ServiceCatalogSink = (ObstacleBridgeAppleServiceCatalog.Install) -> Void
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let queueSpecificKey = DispatchSpecificKey<Int>()
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
@@ -27,6 +28,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let sessionMaxAppPayload: Int
     private let queue: DispatchQueue
     private let eventSink: EventSink?
+    private let serviceCatalogSink: ServiceCatalogSink?
     private let serviceNameByID: [Int: String]
     private let tunServiceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec?
     private let tunIfname: String?
@@ -42,12 +44,15 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     private let muxConnectionSeq: UInt32
 
     private var udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
+    private let serviceCatalog = ObstacleBridgeAppleServiceCatalog()
     private var tunRuntime: ObstacleBridgeChannelMuxTunRuntime?
     private var websocketSession: URLSession?
     private var websocketTask: URLSessionWebSocketTask?
     private var websocketConnection: NWConnection?
     private var websocketTransportGeneration = 0
     private var overlayConnected = false
+    private var coreReceiveEpoch: UInt64?
+    private var coreRetryToken: UInt64?
     private var udpServerConnections: [Int: NWConnection] = [:]
     private var udpClientConnections: [Int: NWConnection] = [:]
     private var udpClientDrivers: [Int: ObstacleBridgeUDPClientConnectionDriver] = [:]
@@ -136,7 +141,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         tunPacketSink: TunPacketSink? = nil,
         muxInstanceID: UInt64 = UInt64.random(in: 1...UInt64.max),
         muxConnectionSeq: UInt32 = UInt32.random(in: 1...UInt32.max),
-        eventSink: EventSink? = nil
+        eventSink: EventSink? = nil,
+        serviceCatalogSink: ServiceCatalogSink? = nil
     ) {
         self.peerHost = peerHost
         self.peerAddresses = peerAddresses
@@ -168,6 +174,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         self.muxInstanceID = muxInstanceID
         self.muxConnectionSeq = muxConnectionSeq
         self.eventSink = eventSink
+        self.serviceCatalogSink = serviceCatalogSink
         self.queue.setSpecific(key: Self.queueSpecificKey, value: 1)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(
             instanceID: muxInstanceID,
@@ -187,13 +194,24 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 sharedTunDisableScopedThrottle: self.sharedTunDisableScopedThrottle
             )
         }
+        super.init()
+        overlayLayerTransportAdapter?.setCoreEffectSink { [weak self] effects in
+            self?.queue.async { self?.applyCoreEffects(effects) }
+        }
     }
 
     func start() {
         guard !started else { return }
         guard !peerHost.isEmpty, peerPort > 0 else { return }
         started = true
-        connectOverlay()
+        if let overlayLayerTransportAdapter {
+            let candidates = (try? resolvePeerCandidates()) ?? []
+            if !candidates.isEmpty { resolvedPeerCandidates = candidates }
+            overlayLayerTransportAdapter.configureCoreCandidateCount(max(1, candidates.count))
+            overlayLayerTransportAdapter.startCoreLifecycle()
+        } else {
+            connectOverlay()
+        }
     }
 
     func stop() {
@@ -226,11 +244,14 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         udpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-        resetOverlayTransportEpoch()
+        resetOverlayTransportEpoch(notifyCore: false)
         connectedURI = ""
         pendingOutboundMessages.removeAll(keepingCapacity: false)
         outboundSendInFlight = false
         overlayEgressWindow = ObstacleBridgeOverlayChannelCore.OverlayEgressWindowState()
+        coreReceiveEpoch = nil
+        coreRetryToken = nil
+        overlayLayerTransportAdapter?.stopCoreLifecycle()
         tunDebugLocalForwards = 0
         tunDebugLocalDrops = 0
         tunDebugInboundDelivers = 0
@@ -529,8 +550,56 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
     }
 
-    private func connectOverlay() {
+    private func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect]) {
+        for effect in effects {
+            switch effect {
+            case .openTransport(_, let candidateIndex, _):
+                guard started else { continue }
+                connectOverlay(coreCandidateIndex: candidateIndex)
+            case .cancelTransport:
+                websocketTask?.cancel(with: .goingAway, reason: nil)
+                websocketConnection?.cancel()
+                websocketTask = nil
+                websocketConnection = nil
+                overlayConnected = false
+            case .startReceive(let epoch):
+                guard coreReceiveEpoch == nil else { continue }
+                coreReceiveEpoch = epoch
+                receiveFromOverlay()
+            case .cancelReceive(let epoch):
+                guard coreReceiveEpoch == epoch else { continue }
+                coreReceiveEpoch = nil
+            case .scheduleRetry(let token, let delay):
+                reconnectWorkItem?.cancel()
+                coreRetryToken = token
+                reconnectScheduled = true
+                nextReconnectAttemptDeadlineNS = DispatchTime.now().uptimeNanoseconds + UInt64(delay) * 1_000_000
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self, self.coreRetryToken == token else { return }
+                    self.reconnectScheduled = false
+                    self.nextReconnectAttemptDeadlineNS = nil
+                    self.reconnectWorkItem = nil
+                    self.coreRetryToken = nil
+                    self.overlayLayerTransportAdapter?.retryTimerFired(token: token)
+                }
+                reconnectWorkItem = workItem
+                queue.asyncAfter(deadline: .now() + .milliseconds(delay), execute: workItem)
+            case .cancelRetry(let token):
+                guard coreRetryToken == token else { continue }
+                reconnectWorkItem?.cancel()
+                reconnectWorkItem = nil
+                coreRetryToken = nil
+                reconnectScheduled = false
+                nextReconnectAttemptDeadlineNS = nil
+            }
+        }
+    }
+
+    private func connectOverlay(coreCandidateIndex: Int? = nil) {
         guard started else { return }
+        if let coreCandidateIndex, !resolvedPeerCandidates.isEmpty {
+            resolvedPeerCandidateIndex = coreCandidateIndex % resolvedPeerCandidates.count
+        }
         reconnectScheduled = false
         nextReconnectAttemptDeadlineNS = nil
         reconnectWorkItem?.cancel()
@@ -544,7 +613,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         // emit DATA without the OPEN required to bind Shared TUN routing.
         // Reset before allocating the task so the first local packet on this
         // connection necessarily emits a fresh TUN OPEN followed by DATA.
-        resetOverlayTransportEpoch()
+        resetOverlayTransportEpoch(notifyCore: false)
         websocketTransportGeneration += 1
         let generation = websocketTransportGeneration
         do {
@@ -670,7 +739,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         maybeSendStartupMuxFrames()
         maybeOpenConfiguredTunIfReady()
         scheduleNextRTTPing(generation: generation)
-        receiveFromOverlay()
+        if overlayLayerTransportAdapter == nil { receiveFromOverlay() }
     }
 
     private func handleNetworkWebSocketFailure(
@@ -690,6 +759,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func scheduleReconnect() {
+        if overlayLayerTransportAdapter != nil { return }
         guard started, !peerHost.isEmpty, peerPort > 0 else { return }
         advancePeerCandidate()
         reconnectWorkItem?.cancel()
@@ -779,6 +849,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func receiveFromOverlay() {
+        guard overlayLayerTransportAdapter == nil || coreReceiveEpoch != nil else { return }
         if let connection = websocketConnection {
             receiveFromNetworkWebSocket(connection: connection, generation: websocketTransportGeneration)
             return
@@ -786,7 +857,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard started, let task = websocketTask else { return }
         task.receive { [weak self] result in
             self?.queue.async {
-                guard let self, self.started, self.websocketTask === task else { return }
+                guard let self, self.started, self.websocketTask === task,
+                      self.overlayLayerTransportAdapter == nil || self.coreReceiveEpoch != nil else { return }
                 switch result {
                 case .success(let message):
                     do {
@@ -798,6 +870,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                         self.receiveFromOverlay()
                     }
                 case .failure(let error):
+                    self.coreReceiveEpoch = nil
                     self.tunRuntime?.cleanupSharedTunPeerStateOnDisconnect(peerID: self.currentTunPeerID())
                     self.overlayConnected = false
                     self.websocketTask = nil
@@ -812,12 +885,14 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
     }
 
     private func receiveFromNetworkWebSocket(connection: NWConnection, generation: Int) {
-        guard started, websocketConnection === connection, websocketTransportGeneration == generation else { return }
+        guard started, websocketConnection === connection, websocketTransportGeneration == generation,
+              overlayLayerTransportAdapter == nil || coreReceiveEpoch != nil else { return }
         connection.receiveMessage { [weak self, weak connection] content, context, _isComplete, error in
             self?.queue.async {
                 guard let self, let connection, self.started,
                       self.websocketConnection === connection,
-                      self.websocketTransportGeneration == generation else { return }
+                      self.websocketTransportGeneration == generation,
+                      self.overlayLayerTransportAdapter == nil || self.coreReceiveEpoch != nil else { return }
                 if let error {
                     self.handleNetworkWebSocketFailure(error, connection: connection, generation: generation)
                     return
@@ -914,8 +989,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
     }
 
-    private func resetOverlayTransportEpoch() {
-        overlayLayerTransportAdapter?.handleTransportDisconnected()
+    private func resetOverlayTransportEpoch(notifyCore: Bool = true) {
+        withdrawRemoteServiceCatalog()
+        if notifyCore { overlayLayerTransportAdapter?.handleTransportDisconnected() }
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
         secureLinkHandshakePrimed = false
@@ -930,6 +1006,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         lastPeerPingTxNS = 0
         lastRttOkNS = 0
         rttEstMS = nil
+    }
+
+    private func withdrawRemoteServiceCatalog() {
+        serviceCatalogSink?(serviceCatalog.withdraw())
     }
 
     private func updateLowerLayerFallback() {
@@ -1231,27 +1311,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard let adapter = overlayLayerTransportAdapter else {
             return
         }
-        guard let result = adapter.transportDelayRotationDue(
-            transmitDelayEstMS: transmitDelayEstMSValue() ?? 0.0,
-            candidateCount: resolvedPeerCandidates.count
-        ) ?? adapter.connectionRotationDue(candidateCount: resolvedPeerCandidates.count)
-        else {
-            return
-        }
-        eventSink?("ws_overlay_lifecycle_rotation", [
-            "epoch": result.epoch,
-            "candidate_cycle": result.candidateCycle,
-            "restart_required": result.restartRequired,
-        ])
-        guard !result.restartRequired else {
-            eventSink?("ws_overlay_lifecycle_restart_required", ["candidate_cycle": result.candidateCycle])
-            return
-        }
-        websocketTask?.cancel(with: .goingAway, reason: nil)
-        websocketConnection?.cancel()
-        overlayConnected = false
-        resetOverlayTransportEpoch()
-        scheduleReconnect()
+        adapter.reportTransportLiveness(delayMilliseconds: transmitDelayEstMSValue() ?? 0.0)
     }
 
     private func recordRTTPong(echoTxNS: UInt64) {
@@ -1383,6 +1443,10 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
             return
         }
+        if let install = serviceCatalog.receive(frame) {
+            serviceCatalogSink?(install)
+            return
+        }
         switch frame.proto {
         case .tun:
             handleInboundTunMuxFrame(frame)
@@ -1401,19 +1465,19 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         if let connection = udpServerConnections[frame.chanID] {
             switch frame.mtype {
             case .data:
-                let snapshot = udpRuntime.handleInboundServerData(chanID: frame.chanID, body: frame.body)
+                let snapshot = udpRuntime.handleInboundServerData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .dataFrag:
-                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body)
+                let snapshot = udpRuntime.handleInboundServerFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
                 if let packet = snapshot.packet, snapshot.delivered {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
                     recordInbound(proto: "udp", chanID: frame.chanID, bytes: packet.count)
                 }
             case .close:
-                let snapshot = udpRuntime.handleInboundClose(chanID: frame.chanID)
+                let snapshot = udpRuntime.handleInboundClose(chanID: frame.chanID, counter: frame.counter)
                 if snapshot.closed {
                     udpServerConnections.removeValue(forKey: frame.chanID)
                     connection.cancel()
@@ -1426,9 +1490,9 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         }
         switch frame.mtype {
         case .open:
-            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body)
+            handleInboundUDPClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
         case .data:
-            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body)
+            let snapshot = udpRuntime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1436,7 +1500,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
             }
         case .dataFrag:
-            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body)
+            let snapshot = udpRuntime.handleInboundClientFragment(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
             if let connection = udpClientConnections[frame.chanID] {
                 for packet in snapshot.sentPackets {
                     sendOnUDPConnection(connection, payload: packet, chanID: frame.chanID)
@@ -1444,7 +1508,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
             }
         case .close:
-            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID)
+            let snapshot = udpRuntime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 closeUDPClientConnection(chanID: frame.chanID)
             }
@@ -1496,11 +1560,11 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         )
     }
 
-    private func handleInboundUDPClientOpen(chanID: Int, payload: Data) {
+    private func handleInboundUDPClientOpen(chanID: Int, payload: Data, counter: Int) {
         guard let parsed = ObstacleBridgeChannelMuxCodec.parseOpenPayload(payload) else {
             return
         }
-        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload)
+        let snapshot = udpRuntime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
         guard snapshot.accepted else {
             return
         }

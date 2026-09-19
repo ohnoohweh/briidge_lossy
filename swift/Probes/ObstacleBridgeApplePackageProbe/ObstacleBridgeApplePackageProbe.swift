@@ -27,6 +27,12 @@ public enum ObstacleBridgeApplePackageProbe {
         guard try ObstacleBridgeServiceCodec.decodeOpen(open).service == service else {
             throw ObstacleBridgeApplePackageProbeError.invalidResult
         }
+        let catalog = ObstacleBridgeServiceCatalogStore()
+        guard try catalog.install(instanceID: 1, connectionSequence: 1, services: [service]).accepted,
+              !(try catalog.install(instanceID: 1, connectionSequence: 1, services: []).accepted)
+        else {
+            throw ObstacleBridgeApplePackageProbeError.invalidResult
+        }
         guard !(try ObstacleBridgeControlChunkCodec.chunk(transactionID: 1, maximumApplicationPayload: 32, payload: Data("chunk".utf8))).isEmpty else {
             throw ObstacleBridgeApplePackageProbeError.invalidResult
         }

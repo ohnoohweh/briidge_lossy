@@ -48,7 +48,6 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     private let overlayConnectedProvider: () -> Bool
     private let activateClientOnReady: Bool
     private let maxReadSize: Int
-    private let openChunkReassembler = ObstacleBridgeChannelMuxCodec.ControlChunkReassembler()
 
     private var serverConnections: [Int: NWConnection] = [:]
     private var pendingServerOpenFrames: [Int: [Data]] = [:]
@@ -182,13 +181,13 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         if let connection = serverConnections[frame.chanID] {
             switch frame.mtype {
             case .data:
-                let snapshot = runtime.handleInboundServerData(chanID: frame.chanID, body: frame.body)
+                let snapshot = runtime.handleInboundServerData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
                 for buffer in snapshot.writtenBuffers {
                     enqueueTCPWrite(connection, payload: buffer, chanID: frame.chanID, role: .server, event: "\(eventPrefix)_tcp_server_write_failed")
                     transportEventSink?(.serverInbound(chanID: frame.chanID, bytes: buffer.count))
                 }
             case .close:
-                let snapshot = runtime.handleInboundServerClose(chanID: frame.chanID)
+                let snapshot = runtime.handleInboundServerClose(chanID: frame.chanID, counter: frame.counter)
                 if snapshot.localConnectionClosed {
                     cancelTCPWriteDrain(chanID: frame.chanID)
                     serverConnections.removeValue(forKey: frame.chanID)
@@ -204,12 +203,12 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         switch frame.mtype {
         case .open:
             eventSink?("\(eventPrefix)_tcp_client_open_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
-            handleInboundClientOpen(chanID: frame.chanID, payload: frame.body)
+            handleInboundClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
         case .openChunk:
             eventSink?("\(eventPrefix)_tcp_client_open_chunk_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
-            handleInboundClientOpenChunk(chanID: frame.chanID, payload: frame.body)
+            handleInboundClientOpenChunk(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
         case .data:
-            let snapshot = runtime.handleInboundClientData(chanID: frame.chanID, body: frame.body)
+            let snapshot = runtime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
             eventSink?("\(eventPrefix)_tcp_client_data_received", [
                 "chan_id": frame.chanID,
                 "bytes": frame.body.count,
@@ -227,7 +226,7 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
                 transportEventSink?(.clientInbound(chanID: frame.chanID, bytes: frame.body.count))
             }
         case .close:
-            let snapshot = runtime.handleInboundClientClose(chanID: frame.chanID)
+            let snapshot = runtime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
             if snapshot.closed {
                 cancelTCPWriteDrain(chanID: frame.chanID)
                 if let connection = clientConnections.removeValue(forKey: frame.chanID) {
@@ -312,28 +311,36 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         transportEventSink?(.serverClosed(chanID: chanID))
     }
 
-    private func handleInboundClientOpen(chanID: Int, payload: Data) {
-        guard let parsed = ObstacleBridgeChannelMuxCodec.parseOpenPayload(payload) else {
-            eventSink?("\(eventPrefix)_tcp_client_open_parse_failed", ["chan_id": chanID])
+    private func handleInboundClientOpen(chanID: Int, payload: Data, counter: Int = 0) {
+        let snapshot = runtime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
+        handleAdmittedClientOpen(chanID: chanID, snapshot: snapshot)
+    }
+
+    private func handleAdmittedClientOpen(chanID: Int, snapshot: ObstacleBridgeChannelMuxTcpRuntime.InboundClientOpenSnapshot) {
+        guard let spec = runtime.clientServiceSpec(chanID: chanID) else {
+            if !snapshot.accepted {
+                eventSink?("\(eventPrefix)_tcp_client_open_rejected", ["chan_id": chanID])
+            } else {
+                eventSink?("\(eventPrefix)_tcp_client_open_parse_failed", ["chan_id": chanID])
+            }
             return
         }
-        let snapshot = runtime.handleInboundClientOpen(chanID: chanID, payload: payload)
         eventSink?("\(eventPrefix)_tcp_client_open_parsed", [
             "chan_id": chanID,
-            "service_id": parsed.spec.svcID,
-            "service_name": parsed.spec.name ?? "",
-            "target_host": parsed.spec.rHost,
-            "target_port": parsed.spec.rPort,
+            "service_id": spec.svcID,
+            "service_name": spec.name ?? "",
+            "target_host": spec.rHost,
+            "target_port": spec.rPort,
             "accepted": snapshot.accepted,
             "connect_requested": snapshot.connectRequested,
             "connected": snapshot.connected,
             "pending_count": snapshot.pendingCount,
         ])
         if snapshot.accepted {
-            transportEventSink?(.clientAccepted(chanID: chanID, spec: parsed.spec, connected: snapshot.connected))
+            transportEventSink?(.clientAccepted(chanID: chanID, spec: spec, connected: snapshot.connected))
         }
         if snapshot.accepted && snapshot.connectRequested {
-            startOutboundConnection(chanID: chanID, spec: parsed.spec)
+            startOutboundConnection(chanID: chanID, spec: spec)
             return
         }
         if !snapshot.accepted {
@@ -341,17 +348,11 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         }
     }
 
-    private func handleInboundClientOpenChunk(chanID: Int, payload: Data) {
-        guard let assembled = openChunkReassembler.consume(
-            chanID: chanID,
-            proto: .tcp,
-            mtype: .open,
-            payload: payload,
-            peerID: nil
-        ) else {
+    private func handleInboundClientOpenChunk(chanID: Int, payload: Data, counter: Int) {
+        guard let snapshot = runtime.handleInboundClientOpenChunk(chanID: chanID, payload: payload, counter: counter) else {
             return
         }
-        handleInboundClientOpen(chanID: chanID, payload: assembled)
+        handleAdmittedClientOpen(chanID: chanID, snapshot: snapshot)
     }
 
     private func startOutboundConnection(chanID: Int, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {

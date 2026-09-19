@@ -20,6 +20,13 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPSKTranscript.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayFrameCodec.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift",
@@ -79,6 +86,7 @@
       "owner": "ObstacleBridgeAppleAdapters",
       "disposition": "retain-or-split",
       "files": [
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAppleServiceCatalog.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
         "swift/Probes/ObstacleBridgeApplePackageProbe/ObstacleBridgeApplePackageProbe.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift",
@@ -129,7 +137,7 @@
       "id": "overlay-client-transports",
       "requirements": ["REQ-OVL-001", "REQ-OVL-002", "REQ-OVL-003", "REQ-OVL-004", "REQ-OVL-006", "REQ-OVL-007"],
       "python_implementations": ["src/obstacle_bridge/bridge_transport_udp.py", "src/obstacle_bridge/bridge_transport_tcp.py", "src/obstacle_bridge/bridge_transport_ws.py", "src/obstacle_bridge/bridge_runner.py"],
-      "swift_implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift"],
       "python_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic"],
       "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpFramingRoundTripsAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer"],
       "parity_tests": ["tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip"],
@@ -345,6 +353,54 @@
       "mixed_runtime_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::enabledCompressionCarriesProtectedRequestAndResponseAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::disabledAndPassiveCompressionPoliciesInteroperateAgainstPythonPeer", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::protectedUnsolicitedChannelMuxFrameReachesOneReceiveOwner"]
     }
   ],
+  "r006_overlay_traceability": {
+    "reference_behavior": "Python overlay lifecycle admits one receive owner per epoch, rotates the resolved candidate after a bounded failure, rejects stale callbacks, and keeps application readiness below authenticated transport state.",
+    "core": {
+      "status": "complete",
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayCoordinator.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::authenticatedEpochStartsExactlyOneReceiveOwner", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::staleGenerationCannotChangeReplacementEpoch", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayCoordinatorTests.swift::sustainedTransportDelayIsCoreOwnedAndInvalidatesTheEpoch"]
+    },
+    "linux": {
+      "status": "complete",
+      "implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxReconnectSupervisor.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::silentProtectedPythonPeersUseDeadlineRetryFreshReadinessAndRejectRetiredEpoch", "tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle"]
+    },
+    "macos": {
+      "status": "complete",
+      "implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayLayerTransportAdapter.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift"],
+      "tests": ["ios/tests/test_macos_swift_host_runner.py::test_swift_overlay_owners_share_channelmux_tun_core", "ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect"]
+    },
+    "ios": {
+      "status": "physical-device-qualified",
+      "tests": ["ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect"],
+      "device_evidence": {
+        "date": "2026-09-17",
+        "deployment": "A freshly rebuilt iOS app and IPServer extension were deployed and reported running on a physical device.",
+        "webadmin_endpoint": "http://37.1.192.30:13081/",
+        "verification": "The macOS qualification host received HTTP 200 and the ObstacleBridge WebAdmin HTML document from this endpoint."
+      }
+    }
+  },
+  "r007_channelmux_traceability": {
+    "reference_behavior": "Python ChannelMux assigns service channels, serializes OPEN/DATA/CLOSE lifecycle, bounds pending output, and rejects malformed or stale channel traffic before local I/O.",
+    "core": {
+      "status": "in-progress",
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::localLifecycleIsEmittedAsPortableEffects", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::epochCountersAndChannelAllocationAreOwnedByCore", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::fragmentsShareThePortableChannelCounterSequence", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::tunLifecycleUsesThePortableSessionCountersAndEffects", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::oversizedOpenUsesCoreControlChunksAndReassembles", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxSessionTests.swift::controlChunkCountersAreAdmittedBeforeServiceCreation", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeServiceCatalogTests.swift::replacementIsAtomicAndRejectsSameEpochReplays", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::parsesBoundedIPv4AndIPv6Packets", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::sourceReplacementAndChecksumAreDeterministic", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::ipv6ExtensionHeadersLocateTransportForChecksumRepair", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::fragmentReassemblyIsBoundedAndRejectsOverlap", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::tunChannelStateOwnsBindingPreferenceAndEpochReset", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::sharedTunBindingPolicyIsDeterministicAcrossDropAndDisconnect", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::sharedTunRoutingPolicySelectsOwnedUnicastAndBoundedBroadcast", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::sharedTunInboundAdmissionUsesConfiguredAddressOwnership", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::tunDropLedgerBoundsRecentEventsAndKeepsReasonTotals", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::tunThrottleStateRollsWindowsAndTracksForwardedBytes", "swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePacketModelTests.swift::tunThrottlePolicyRequiresEveryActiveScopeToFit", "tests/unit/test_channel_mux_listener_mode.py::ChannelMuxListenerModeTests::test_local_tun_packet_source_normalizes_ipv6_destination_options_udp", "tests/unit/test_channel_mux_component_parity.py::test_swift_component_normalizes_ipv6_destination_options_udp_like_python"]
+    },
+    "linux": {
+      "status": "in-progress",
+      "implementations": ["swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift", "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceCatalog.swift"],
+      "tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceDataPlaneTests.swift::localTcpConnectionProducesOpenDataAndClose", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceDataPlaneTests.swift::boundedQueueCountsBackpressureDrop", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceCatalogTests.swift::catalogReplacesAndWithdrawsOnlyNewPeerEpochs"]
+    },
+    "apple": {
+      "status": "in-progress",
+      "implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeAppleServiceCatalog.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTcpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"],
+      "tests": ["ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths", "ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_epoch", "ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path", "tests/unit/test_channel_mux_component_parity.py::test_swift_component_inbound_tun_fragment_sequence_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_udp_server_fragmented_datagram_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_server_open_then_inbound_fragment_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_client_open_connect_then_inbound_fragment_matches_python", "ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_applies_core_catalog_listener_replacements", "ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_installs_and_replaces_inbound_remote_catalog", "ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_overlay_owner_forwards_inbound_tcp_and_udp_mux", "ios/scripts/build_ios_app.sh::generic-device unsigned Xcode build"],
+      "qualification_evidence": {"date": "2026-09-18", "macos_build": "The local macOS app bundle passed strict deep code-sign verification.", "ios_device": "The physical iOS packet tunnel reports an active packet pump, app-ready myUDP runtime, one TUN channel, and nonzero bidirectional packet and byte counters through the live mapped WebAdmin endpoint.", "linux_peer": "The live Linux-native helper reports an opened network-applied TUN interface; peer 0:51 is connected with one TUN channel and nonzero ChannelMux traffic."},
+      "gap": "TCP, UDP, and TUN ChannelMux lifecycle records execute Core session effects. The packet model provides bounded fragment framing/reassembly and TUN policy decisions; Apple adapters retain only local socket or packet-device ownership, transport measurements, and accepted I/O. The macOS host applies Core-backed catalog replacement and transport-epoch withdrawal to catalog-owned TCP/UDP listeners; connection-drain qualification across Apple owners remains open."
+    }
+  },
   "known_differences": [
     {"area": "myudp trailing bytes", "python_wins": "accept the declared frame and leave outer trailing bytes to the caller", "swift_gap": "portable Linux decoder requires exact length"},
     {"area": "myudp CONTROL missing list", "python_wins": "derive the bounded capacity from the wire payload budget", "swift_gap": "portable Linux codec caps entries at 64"},
