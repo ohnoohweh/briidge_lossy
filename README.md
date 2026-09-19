@@ -1543,7 +1543,7 @@ The current Python-side TUN helper focus includes Linux-native lifecycle hardeni
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
-Configured server-owned shared TUN interfaces stay open while overlay peers reconnect: the runtime clears peer channels and pauses admission without removing the helper-managed interface or its host-network state.
+Configured server-owned shared TUN interfaces stay open while overlay peers reconnect: the runtime clears peer channels and pauses admission without removing the helper-managed interface or its host-network state. A listener return packet is admitted only through an active peer binding that resolves to that shared device; iOS retains its local TUN channel and makes bounded OPEN reannouncements only while outbound traffic lacks inbound delivery.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
@@ -1552,16 +1552,16 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `63` | `978` |
+| Python CLI/runtime, including macOS Python | `63` | `980` |
 | macOS Swift app | `1` | `66` |
-| iOS app/extension | `28` | `186` |
+| iOS app/extension | `29` | `190` |
 
 #### Requirement traceability
 
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
-| macOS Swift app | `3/92 = 3.3%` | `8/92 = 8.7%` | `11/92 = 12.0%` |
+| macOS Swift app | `3/92 = 3.3%` | `9/92 = 9.8%` | `12/92 = 13.0%` |
 | iOS app/extension | `10/92 = 10.9%` | `24/92 = 26.1%` | `26/92 = 28.3%` |
 
 #### Architecture traceability
@@ -1594,9 +1594,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `65` | `0` | `65` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `66` | `0` | `66` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `77` | `152` | `229` |
+| Total parity-oriented evidence | Sum of the lanes above | `78` | `152` | `230` |
 
 Important caveat:
 

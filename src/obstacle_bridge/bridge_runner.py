@@ -50,8 +50,15 @@ class RunnerMuxAggregate:
         tun_local_reply_stage_counts: dict[str, int] = {}
         tun_probe_last_timeout_diag: dict[str, Any] = {}
         tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        tun_receive_by_peer: dict[str, dict[str, int]] = {}
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
+            for peer_id, counters in dict(snap.get("tun_receive_by_peer") or {}).items():
+                label = f"{idx}:{peer_id}"
+                tun_receive_by_peer[label] = {
+                    str(stage): int(count or 0)
+                    for stage, count in dict(counters or {}).items()
+                }
             udp_rows.extend(snap.get("udp", []))
             tcp_rows.extend(snap.get("tcp", []))
             tun_rows.extend(snap.get("tun", []))
@@ -96,6 +103,7 @@ class RunnerMuxAggregate:
             "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
             "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
             "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
+            "tun_receive_by_peer": tun_receive_by_peer,
         }
 
     @staticmethod
@@ -1829,11 +1837,17 @@ class Runner:
         tun_local_reply_stage_counts: dict[str, int] = {}
         tun_probe_last_timeout_diag: dict[str, Any] = {}
         tun_probe_last_timeout_diag_by_transport: dict[str, dict[str, Any]] = {}
+        tun_receive_by_peer: dict[str, dict[str, int]] = {}
         session_labels = list(getattr(self, "_session_labels", []) or [])
         mux_index_by_id = {id(mux): index for index, mux in enumerate(self._muxes)}
 
         for idx, mux in enumerate(self._muxes):
             snap = mux.snapshot_connections()
+            for peer_id, counters in dict(snap.get("tun_receive_by_peer") or {}).items():
+                tun_receive_by_peer[f"{idx}:{peer_id}"] = {
+                    str(stage): int(count or 0)
+                    for stage, count in dict(counters or {}).items()
+                }
             mux_udp_rows = list(snap.get("udp", []))
             mux_tcp_rows = list(snap.get("tcp", []))
             mux_tun_rows = list(snap.get("tun", []))
@@ -2018,6 +2032,7 @@ class Runner:
             "tun_local_reply_stage_counts": tun_local_reply_stage_counts,
             "tun_probe_last_timeout_diag": tun_probe_last_timeout_diag,
             "tun_probe_last_timeout_diag_by_transport": tun_probe_last_timeout_diag_by_transport,
+            "tun_receive_by_peer": tun_receive_by_peer,
         }
 
     def get_config_snapshot(self, include_secrets: bool = False) -> dict:

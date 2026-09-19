@@ -11,6 +11,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private typealias ResolvedAddress = ObstacleBridgeResolvedAddress
     private static let peerFallbackIdleNS: UInt64 = 3_000_000_000
     private static let reconnectProbeIntervalNS: UInt64 = 1_000_000_000
+    private static let tunOpenReplayIntervalNS: UInt64 = 10_000_000_000
     private static let secureLinkHandshakeRetryIntervalNS: UInt64 = 1_000_000_000
     private static let secureLinkHandshakeStaleNS: UInt64 = 5_000_000_000
     private static let lowerLayerUnavailableFallbackNS: UInt64 = UInt64(
@@ -89,6 +90,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     private var tcpConnectionStates: [Int: ObstacleBridgeOverlayConnectionState] = [:]
     private var activeTunChanIDs: Set<Int> = []
     private var tunStats: [String: Int] = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+    private var lastTunOutboundNS: UInt64 = 0
+    private var lastTunInboundNS: UInt64 = 0
+    private var lastTunOpenAnnouncementNS: UInt64 = 0
+    private var tunOpenReplayCount = 0
     // Bounded, payload-free evidence for the ChannelMux-to-packet-device
     // boundary.  This distinguishes an absent inbound frame from a rejected
     // or successfully delivered one when qualifying a physical tunnel.
@@ -373,6 +378,10 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         tcpConnectionStates.removeAll()
         activeTunChanIDs.removeAll()
         tunStats = ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
+        lastTunOutboundNS = 0
+        lastTunInboundNS = 0
+        lastTunOpenAnnouncementNS = 0
+        tunOpenReplayCount = 0
         tunMuxFrameCounters = [
             "inbound_open": 0,
             "inbound_open_chunk": 0,
@@ -496,6 +505,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             snapshot["client_udp_channels"] = udpConnectionStates.count
             snapshot["tun_channels"] = activeTunChanIDs.count
             snapshot["tun_stats"] = tunStats
+            snapshot["tun_open_replay_count"] = tunOpenReplayCount
             snapshot["tun_mux_frame_counters"] = tunMuxFrameCounters
             snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]
             snapshot["established_ns"] = overlayRuntime.establishedNS
@@ -560,6 +570,8 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     func sendLocalTunPacket(_ packet: Data) {
+        let previousTunTx = tunStats["tx_msgs", default: 0]
+        let hadTunChannel = !activeTunChanIDs.isEmpty
         let protocolStats = overlayRuntime.protocolStatsSnapshot()
         let backpressure = ObstacleBridgeOverlayChannelCore.backpressureSnapshot(
             waitingCount: Int(protocolStats["waiting_count"] as? Int ?? 0),
@@ -585,6 +597,12 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
                 sendMuxFrames: sendMuxFrames,
                 startupMuxFramesForNewTunOpen: startupMuxFramesForNewTunOpen
             )
+            if tunStats["tx_msgs", default: 0] > previousTunTx {
+                lastTunOutboundNS = monotonicNowNS()
+                if !hadTunChannel && !activeTunChanIDs.isEmpty {
+                    lastTunOpenAnnouncementNS = lastTunOutboundNS
+                }
+            }
         } catch {
             eventSink?("udp_overlay_tun_send_failed", [
                 "error": error.localizedDescription,
@@ -732,6 +750,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         let nowNS = monotonicNowNS()
         handleTransportLiveness(nowNS: nowNS)
+        maybeReplayTunOpen(nowNS: nowNS)
         handleLifecycleRotationIfDue(nowNS: nowNS)
         flushDueSecureLinkFramesIfNeeded()
         let snapshot = overlayRuntime.handleControlTimerTick(nowNS: nowNS, sendPortPresent: currentPeerAddress != nil)
@@ -976,6 +995,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         overlayRuntime.resetTransportEpoch()
         tunRuntime?.resetTransportEpoch()
         activeTunChanIDs.removeAll()
+        lastTunOutboundNS = 0
+        lastTunInboundNS = 0
+        lastTunOpenAnnouncementNS = 0
         secureLinkHandshakePrimed = false
         lastSecureLinkPrimeNS = 0
         startupMuxFramesSent = false
@@ -1077,9 +1099,30 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             ) else { return }
             let startupFrames = startupMuxFramesForNewTunOpen()
             sendMuxFrames(startupFrames + snapshot.frames)
+            lastTunOpenAnnouncementNS = monotonicNowNS()
             eventSink?("udp_overlay_proactive_tun_open", ["chan_id": snapshot.chanID])
         } catch {
             eventSink?("udp_overlay_proactive_tun_open_failed", ["error": error.localizedDescription])
+        }
+    }
+
+    private func maybeReplayTunOpen(nowNS: UInt64) {
+        guard appReady(), !activeTunChanIDs.isEmpty,
+              lastTunOutboundNS > lastTunInboundNS,
+              lastTunOpenAnnouncementNS != 0,
+              nowNS >= lastTunOpenAnnouncementNS,
+              nowNS - lastTunOpenAnnouncementNS >= Self.tunOpenReplayIntervalNS,
+              let tunRuntime, let tunIfname, tunMTU > 0 else { return }
+        let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: tunMTU)
+        do {
+            guard let frame = try tunRuntime.reannounceLocalTunChannel(spec: spec) else { return }
+            lastTunOpenAnnouncementNS = nowNS
+            tunOpenReplayCount += 1
+            sendMuxFrames([frame])
+            eventSink?("udp_overlay_tun_open_replayed", ["count": tunOpenReplayCount])
+        } catch {
+            lastTunOpenAnnouncementNS = nowNS
+            eventSink?("udp_overlay_tun_open_replay_failed", ["error": error.localizedDescription])
         }
     }
 
@@ -1152,6 +1195,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             },
             onInboundDeliver: { [weak self] _ in
                 self?.tunMuxFrameCounters["data_delivered", default: 0] += 1
+                self?.lastTunInboundNS = self?.monotonicNowNS() ?? 0
             },
             onOpenRejected: { [weak self] chanID in
                 self?.tunMuxFrameCounters["open_rejected", default: 0] += 1

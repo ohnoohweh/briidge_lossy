@@ -200,7 +200,9 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                     )
                     let initialProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
                     let duplicateProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
+                    let replayedOpen = try proactiveRuntime.reannounceLocalTunChannel(spec: proactiveSpec)
                     proactiveRuntime.resetTransportEpoch()
+                    let replayAfterReset = try proactiveRuntime.reannounceLocalTunChannel(spec: proactiveSpec)
                     let recoveredProactiveOpen = try proactiveRuntime.openLocalTunChannelIfNeeded(spec: proactiveSpec)
 
                     let sender = SwiftUDPTunBridgeHarness(
@@ -241,6 +243,10 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                         },
                         "proactive_open_channel": initialProactiveOpen?.chanID ?? -1,
                         "proactive_open_duplicate": duplicateProactiveOpen != nil,
+                        "proactive_replay_frame": replayedOpen.flatMap { ObstacleBridgeChannelMuxCodec.unpackMux($0) }.map {
+                            ["chan_id": $0.chanID, "mtype": mtypeName($0.mtype), "counter": $0.counter] as [String: Any]
+                        } ?? [:],
+                        "proactive_replay_after_reset": replayAfterReset != nil,
                         "proactive_recovered_frame_types": try (recoveredProactiveOpen?.frames ?? []).map { frameData in
                             guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(frameData) else {
                                 throw ProbeError.badState("failed to unpack recovered proactive mux frame")
@@ -282,6 +288,8 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
     assert payload["proactive_open_frame_types"] == ["open"]
     assert payload["proactive_open_channel"] == 1
     assert payload["proactive_open_duplicate"] is False
+    assert payload["proactive_replay_frame"] == {"chan_id": 1, "mtype": "open", "counter": 0}
+    assert payload["proactive_replay_after_reset"] is False
     assert payload["proactive_recovered_frame_types"] == ["open"]
     assert payload["proactive_connection_seq"] == 0x30303031
     assert payload["first_send_mux_frames"] == [

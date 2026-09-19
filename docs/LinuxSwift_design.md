@@ -58,6 +58,15 @@ ingress-shedding state. Apple adapters supply configured address bytes,
 transport measurements, and packet-device I/O, then render typed results for
 native diagnostics.
 
+Server-owned shared TUN readers route a return packet through the peer-specific
+binding established by that peer's authenticated TUN OPEN. A listener has no
+single global overlay readiness state, so return admission is authorized only
+when the process-shared registry resolves that binding to the same active TUN
+device. Normal client and unbound/disconnected paths retain the ordinary
+lifecycle gate. Apple owners retain their local channel across lower-layer
+continuity and reannounce its OPEN at a bounded interval only while local TUN
+traffic has no inbound delivery; successful inbound delivery stops replays.
+
 ## Linux operator projection
 
 The local `/api/status` and `/api/peers` endpoints expose a redacted
@@ -123,12 +132,6 @@ memory, scheduler behavior, and termination policy differ by platform.
   evidence exist.
 - Linux does not provide TLS WebSocket, QUIC, proxy, package/service-manager,
   or multi-peer myudp-listener support.
-- The physical iOS myudp shared-TUN path can authenticate and exchange raw
-  overlay traffic while failing to deliver peer-to-client TUN packets to
-  `NEPacketTunnelFlow`. Its repeated peer and global probes therefore time
-  out despite an active lower-layer session. The ChannelMux TUN return-path
-  binding and delivery decision need packet-level qualification before iOS
-  data-plane load evidence can be accepted.
 - Physical-device threshold qualification remains open. Live Admin data alone
   cannot diagnose an abrupt runtime loss; retained health evidence must be
   correlated with platform crash, watchdog, and memory-termination reports.

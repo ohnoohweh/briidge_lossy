@@ -2260,7 +2260,11 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
         # server-owned mux keeps the one TUN reader.  Its routing state must
         # therefore receive the peer binding and use its listener session for
         # replies.
-        self.mux._tun_admission_epoch = self.mux._connection_lifecycle_epoch
+        # A server listener has no globally connected overlay. Its shared
+        # reader must instead admit replies for an authenticated child binding.
+        self.mux._overlay_connected = False
+        self.mux._accepting_enabled = False
+        self.mux._tun_admission_epoch = None
         mux2._tun_admission_epoch = mux2._connection_lifecycle_epoch
         setattr(dev, '_reader_mux', self.mux)
         dev.reader_registered = True
@@ -2291,6 +2295,10 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertNotIn((svc_key, shared_peer_id), self.mux._shared_tun_runtime_by_peer)
         self.assertNotIn((svc_key, shared_peer_id), mux2._shared_tun_runtime_by_peer)
+        self.assertFalse(self.mux._shared_tun_reader_admission_allowed(dev))
+        with patch.object(mux2, '_send_mux') as disconnected_send:
+            self.mux._on_local_tun_packet(dev, _ipv4_packet('192.168.106.1', '192.168.106.2'))
+        disconnected_send.assert_not_called()
 
     async def test_first_shared_tun_peer_open_activates_stable_reader_owner_before_reverse_route(self):
         """A proactive Swift TUN OPEN must not beat deferred listener startup.
@@ -2351,6 +2359,32 @@ class ChannelMuxRemoteCatalogTests(unittest.IsolatedAsyncioTestCase):
             _ipv4_packet("192.168.106.1", "192.168.106.4"),
             peer_id=4,
         )
+
+    async def test_shared_tun_reply_recovers_missing_reverse_index_from_bound_peer(self):
+        svc_key = ("local", 0, 1)
+        spec = ChannelMux.ServiceSpec(
+            1, "tun", "obtun0", 1600, "tun", "obtun0", 1600,
+            options={"shared_tun_ownership": {"mode": "server_shared", "peers": [
+                {"peer_ref": "iphone-client", "ipv4": ["192.168.106.4"]},
+            ]}},
+        )
+        self.mux._install_shared_tun_ownership_for_service(svc_key, spec)
+        self.mux._record_shared_tun_peer_binding(svc_key, 4, 1)
+        self.mux._shared_tun_peer_ref_by_peer[(svc_key, 4)] = "iphone-client"
+        packet = _ipv4_packet("192.168.106.1", "192.168.106.4")
+
+        route = self.mux._shared_tun_plan_local_delivery(svc_key, packet)
+
+        self.assertTrue(route["routed"])
+        self.assertEqual(route["selected_peer_ids"], [4])
+        self.assertEqual(route["selected_chan_ids"], [1])
+
+        self.mux._record_shared_tun_peer_binding(svc_key, 5, 2)
+        self.mux._shared_tun_peer_ref_by_peer[(svc_key, 5)] = "iphone-client"
+        self.mux._shared_tun_peer_id_by_ref.clear()
+        ambiguous_route = self.mux._shared_tun_plan_local_delivery(svc_key, packet)
+        self.assertFalse(ambiguous_route["routed"])
+        self.assertEqual(ambiguous_route["drop_reason"], "destination_peer_unmapped")
 
     async def test_local_tun_packet_source_normalizes_to_configured_ipv4_tunnel_address(self):
         self.mux.args = argparse.Namespace(

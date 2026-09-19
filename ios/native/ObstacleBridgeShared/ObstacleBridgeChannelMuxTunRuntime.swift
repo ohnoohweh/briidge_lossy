@@ -475,6 +475,27 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         )
     }
 
+    /// Reannounce the existing channel after a remote mux restart that did not
+    /// break the local overlay socket. Keep its DATA counter and channel ID.
+    func reannounceLocalTunChannel(spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) throws -> Data? {
+        guard let chanID = channelState.preferredChannel else { return nil }
+        let payload = try ObstacleBridgeChannelMuxCodec.buildOpenPayload(
+            instanceID: instanceID,
+            connectionSeq: connectionSeq,
+            spec: spec
+        )
+        guard payload.count + ObstacleBridgeChannelMuxCodec.muxHeaderSize <= sessionMaxAppPayload else {
+            return nil
+        }
+        return try ObstacleBridgeChannelMuxCodec.packMux(
+            chanID: chanID,
+            proto: .tun,
+            counter: 0,
+            mtype: .open,
+            body: payload
+        )
+    }
+
     func handleLocalTunPacket(
         packet: Data,
         mtu: Int,
