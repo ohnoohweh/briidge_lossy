@@ -70,6 +70,36 @@ To build for a signed device target:
 OB_APPLE_TEAM_ID=YOURTEAMID ./ios/scripts/build_ios_app.sh
 ```
 
+## Automated TestFlight release
+
+`ios/scripts/release_ios_testflight.sh` refreshes the generated project,
+archives the `ObstacleBridge` container app, exports its signed IPA, and
+uploads it to App Store Connect. `IPServer` is embedded in that archive; do
+not archive or upload the extension by itself.
+
+Create the untracked `ios/.local-testflight-env` file with your signing and
+App Store Connect API-key values:
+
+```bash
+export OB_APPLE_TEAM_ID="YOUR_TEAM_ID"
+export OB_APPSTORE_API_KEY_ID="YOUR_KEY_ID"
+export OB_APPSTORE_API_ISSUER_ID="YOUR_ISSUER_ID"
+export OB_APPSTORE_API_KEY_PATH="/absolute/path/AuthKey_YOUR_KEY_ID.p8"
+# Optional when the account has multiple providers:
+# export OB_APPSTORE_PROVIDER_PUBLIC_ID="YOUR_PROVIDER_ID"
+```
+
+Run:
+
+```bash
+./ios/scripts/release_ios_testflight.sh
+```
+
+The script uses a UTC timestamp as the default numeric TestFlight build
+number, so a rebuilt commit does not collide with an earlier upload. Set
+`OB_IOS_MARKETING_VERSION`, `OB_IOS_BUILD_NUMBER`, or
+`OB_TESTFLIGHT_OUTPUT_DIR` when a release process supplies those values.
+
 Useful build overrides:
 
 - `OB_IOS_DEVICE_ID=<device-udid>` builds for a connected physical device instead of the generic iOS destination

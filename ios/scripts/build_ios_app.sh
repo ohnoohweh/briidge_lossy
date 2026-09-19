@@ -34,8 +34,8 @@ echo "[build_ios_app] refreshing embedded build metadata and VPN profile timesta
 
 # Apple's CFBundleVersion must be numeric. Keep the SHA in embedded build
 # metadata while using the monotonic commit count for the installable build.
-IOS_MARKETING_VERSION="$(date -u +%Y.%m.%d)"
-IOS_BUILD_NUMBER="$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || true)"
+IOS_MARKETING_VERSION="${OB_IOS_MARKETING_VERSION:-$(date -u +%Y.%m.%d)}"
+IOS_BUILD_NUMBER="${OB_IOS_BUILD_NUMBER:-$(git -C "${REPO_ROOT}" rev-list --count HEAD 2>/dev/null || true)}"
 IOS_BUILD_NUMBER="${IOS_BUILD_NUMBER:-1}"
 IOS_GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || true)"
 IOS_GIT_COMMIT="${IOS_GIT_COMMIT:-unknown}"
@@ -96,7 +96,11 @@ if [ -n "${OB_IOS_DEVICE_ID:-}" ]; then
   echo "[build_ios_app] building for connected device ${OB_IOS_DEVICE_ID}"
 else
   DESTINATION=("generic/platform=iOS")
-  PROVISIONING_ARGS=()
+  if [ "${OB_IOS_ALLOW_PROVISIONING_UPDATES:-0}" = "1" ]; then
+    PROVISIONING_ARGS=(-allowProvisioningUpdates)
+  else
+    PROVISIONING_ARGS=()
+  fi
   echo "[build_ios_app] building for generic iOS device target"
 fi
 
