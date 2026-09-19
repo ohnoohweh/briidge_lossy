@@ -25,7 +25,10 @@ def test_testflight_release_archives_container_and_uploads_with_api_key() -> Non
     assert 'OB_TESTFLIGHT_GROUP_NAME:-ObstacleBridgeTesters' in source
     assert 'assign_testflight_group.py' in source
     assert '--group-name "${TESTFLIGHT_GROUP_NAME}"' in source
-    assert "Apple Distribution signing identity is required" in source
+    assert 'OB_IOS_DISTRIBUTION_CERTIFICATE_PATH' in source
+    assert 'OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH' in source
+    assert 'security import "${OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH}"' in source
+    assert "(Apple|iPhone) Distribution:" in source
     assert 'validate_bundle_version' in source
     assert 'container and IPServer bundle versions differ' in source
     assert 'load_release_environment "${HOME}/.local-device-env"' in source

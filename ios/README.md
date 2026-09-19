@@ -87,6 +87,10 @@ export OB_APPLE_TEAM_ID="YOUR_TEAM_ID"
 export OB_APPSTORE_API_KEY_ID="YOUR_KEY_ID"
 export OB_APPSTORE_API_ISSUER_ID="YOUR_ISSUER_ID"
 export OB_APPSTORE_API_KEY_PATH="/absolute/path/AuthKey_YOUR_KEY_ID.p8"
+# The release script imports these into the login keychain if no distribution
+# signing identity is installed yet.
+export OB_IOS_DISTRIBUTION_CERTIFICATE_PATH="/absolute/path/ios_distribution.cer"
+export OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH="/absolute/path/distribution-private.key"
 # Optional when the account has multiple providers:
 # export OB_APPSTORE_PROVIDER_PUBLIC_ID="YOUR_PROVIDER_ID"
 # Optional overrides; the release defaults to the named beta group and the

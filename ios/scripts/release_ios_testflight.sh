@@ -23,7 +23,7 @@ load_release_environment() {
     name="${assignment%%=*}"
     value="${assignment#*=}"
     case "${name}" in
-      OB_APPLE_TEAM_ID|OB_APPSTORE_API_KEY_ID|OB_APPSTORE_API_ISSUER_ID|OB_APPSTORE_API_KEY_PATH|OB_APPSTORE_PROVIDER_PUBLIC_ID|OB_IOS_MARKETING_VERSION|OB_IOS_BUILD_NUMBER|OB_TESTFLIGHT_OUTPUT_DIR|OB_TESTFLIGHT_DERIVED_DATA_PATH|OB_TESTFLIGHT_GROUP_NAME|OB_APPSTORE_BUNDLE_ID)
+      OB_APPLE_TEAM_ID|OB_APPSTORE_API_KEY_ID|OB_APPSTORE_API_ISSUER_ID|OB_APPSTORE_API_KEY_PATH|OB_APPSTORE_PROVIDER_PUBLIC_ID|OB_IOS_DISTRIBUTION_CERTIFICATE_PATH|OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH|OB_IOS_MARKETING_VERSION|OB_IOS_BUILD_NUMBER|OB_TESTFLIGHT_OUTPUT_DIR|OB_TESTFLIGHT_DERIVED_DATA_PATH|OB_TESTFLIGHT_GROUP_NAME|OB_APPSTORE_BUNDLE_ID)
         printf -v "${name}" '%s' "${value}"
         export "${name}"
         ;;
@@ -38,6 +38,8 @@ load_release_environment() {
         OB_APPSTORE_API_ISSUER_ID \
         OB_APPSTORE_API_KEY_PATH \
         OB_APPSTORE_PROVIDER_PUBLIC_ID \
+        OB_IOS_DISTRIBUTION_CERTIFICATE_PATH \
+        OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH \
         OB_IOS_MARKETING_VERSION \
         OB_IOS_BUILD_NUMBER \
         OB_TESTFLIGHT_OUTPUT_DIR \
@@ -85,8 +87,23 @@ if [ ! -f "${OB_APPSTORE_API_KEY_PATH}" ]; then
   exit 2
 fi
 
-if ! security find-identity -v -p codesigning 2>/dev/null | grep -q 'Apple Distribution:'; then
-  echo "[release_ios_testflight] an installed Apple Distribution signing identity is required; import the distribution certificate and private key into this login keychain" >&2
+has_distribution_identity() {
+  security find-identity -v -p codesigning 2>/dev/null | grep -Eq '(Apple|iPhone) Distribution:'
+}
+
+if ! has_distribution_identity; then
+  require_value OB_IOS_DISTRIBUTION_CERTIFICATE_PATH
+  require_value OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH
+  if [ ! -f "${OB_IOS_DISTRIBUTION_CERTIFICATE_PATH}" ] || [ ! -f "${OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH}" ]; then
+    echo "[release_ios_testflight] distribution certificate and private-key paths must name readable files" >&2
+    exit 2
+  fi
+  echo "[release_ios_testflight] importing configured distribution identity into the login keychain"
+  security import "${OB_IOS_DISTRIBUTION_PRIVATE_KEY_PATH}" -k "${HOME}/Library/Keychains/login.keychain-db" -T /usr/bin/codesign
+  security import "${OB_IOS_DISTRIBUTION_CERTIFICATE_PATH}" -k "${HOME}/Library/Keychains/login.keychain-db" -T /usr/bin/codesign
+fi
+if ! has_distribution_identity; then
+  echo "[release_ios_testflight] no usable Apple or iPhone Distribution signing identity is installed after import" >&2
   exit 2
 fi
 
