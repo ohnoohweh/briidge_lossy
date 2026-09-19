@@ -108,6 +108,14 @@ trap cleanup EXIT
 
 mkdir -p "${OUTPUT_DIR}"
 
+# mktemp creates a zero-length file.  PlistBuddy only edits an existing plist,
+# so initialize the temporary path before adding the App Store export settings.
+/usr/bin/plutil -create xml1 "${EXPORT_OPTIONS_PATH}"
+/usr/libexec/PlistBuddy -c 'Add :method string app-store-connect' "${EXPORT_OPTIONS_PATH}"
+/usr/libexec/PlistBuddy -c 'Add :signingStyle string automatic' "${EXPORT_OPTIONS_PATH}"
+/usr/libexec/PlistBuddy -c "Add :teamID string ${OB_APPLE_TEAM_ID}" "${EXPORT_OPTIONS_PATH}"
+/usr/bin/plutil -lint "${EXPORT_OPTIONS_PATH}" >/dev/null
+
 export OB_IOS_MARKETING_VERSION="${IOS_MARKETING_VERSION}"
 export OB_IOS_BUILD_NUMBER="${IOS_BUILD_NUMBER}"
 export OB_IOS_ALLOW_PROVISIONING_UPDATES=1
@@ -134,10 +142,6 @@ xcodebuild \
   CURRENT_PROJECT_VERSION="${IOS_BUILD_NUMBER}" \
   CODE_SIGN_STYLE=Automatic \
   archive
-
-/usr/libexec/PlistBuddy -c 'Add :method string app-store-connect' "${EXPORT_OPTIONS_PATH}"
-/usr/libexec/PlistBuddy -c 'Add :signingStyle string automatic' "${EXPORT_OPTIONS_PATH}"
-/usr/libexec/PlistBuddy -c "Add :teamID string ${OB_APPLE_TEAM_ID}" "${EXPORT_OPTIONS_PATH}"
 
 echo "[release_ios_testflight] exporting App Store IPA"
 xcodebuild -exportArchive \

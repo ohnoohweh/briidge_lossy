@@ -12,6 +12,9 @@ def test_testflight_release_archives_container_and_uploads_with_api_key() -> Non
     assert 'CURRENT_PROJECT_VERSION="${IOS_BUILD_NUMBER}"' in source
     assert 'MARKETING_VERSION="${IOS_MARKETING_VERSION}"' in source
     assert 'app-store-connect' in source
+    assert '/usr/bin/plutil -create xml1 "${EXPORT_OPTIONS_PATH}"' in source
+    assert '/usr/bin/plutil -lint "${EXPORT_OPTIONS_PATH}" >/dev/null' in source
+    assert source.index('plutil -create xml1') < source.index('Add :method string app-store-connect')
     assert '--upload-package "${IPA_PATH}"' in source
     assert '--api-key "${OB_APPSTORE_API_KEY_ID}"' in source
     assert '--api-issuer "${OB_APPSTORE_API_ISSUER_ID}"' in source
