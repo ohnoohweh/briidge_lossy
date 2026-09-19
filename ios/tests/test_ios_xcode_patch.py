@@ -350,3 +350,8 @@ def test_patch_python_build_utility_uses_app_store_valid_module_bundle_ids(tmp_p
     assert patcher.patch_python_build_utility(pbxproj) is True
     assert patcher.patch_python_build_utility(pbxproj) is False
     assert patcher.PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE in utility_path.read_text(encoding="utf-8")
+    assert "sed 's/\\.-/./g'" in patcher.PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE
+
+    utility_path.write_text(patcher.PYTHON_UTILS_PREVIOUS_APP_STORE_BUNDLE_ID_LINE, encoding="utf-8")
+    assert patcher.patch_python_build_utility(pbxproj) is True
+    assert patcher.PYTHON_UTILS_APP_STORE_BUNDLE_ID_LINE in utility_path.read_text(encoding="utf-8")
