@@ -146,6 +146,34 @@ xcodebuild -exportArchive \
   -exportOptionsPlist "${EXPORT_OPTIONS_PATH}" \
   -allowProvisioningUpdates
 
+validate_bundle_version() {
+  local bundle_path="$1"
+  local short_version
+  local build_version
+
+  short_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${bundle_path}/Info.plist")"
+  build_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "${bundle_path}/Info.plist")"
+  if ! [[ "${short_version}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    echo "[release_ios_testflight] invalid CFBundleShortVersionString in ${bundle_path}" >&2
+    exit 1
+  fi
+  if ! [[ "${build_version}" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]]; then
+    echo "[release_ios_testflight] invalid CFBundleVersion in ${bundle_path}" >&2
+    exit 1
+  fi
+  printf '%s|%s\n' "${short_version}" "${build_version}"
+}
+
+APP_BUNDLE_PATH="${ARCHIVE_PATH}/Products/Applications/ObstacleBridge.app"
+EXTENSION_BUNDLE_PATH="${APP_BUNDLE_PATH}/PlugIns/IPServer.appex"
+APP_VERSION="$(validate_bundle_version "${APP_BUNDLE_PATH}")"
+EXTENSION_VERSION="$(validate_bundle_version "${EXTENSION_BUNDLE_PATH}")"
+if [ "${APP_VERSION}" != "${EXTENSION_VERSION}" ]; then
+  echo "[release_ios_testflight] container and IPServer bundle versions differ" >&2
+  exit 1
+fi
+echo "[release_ios_testflight] validated bundle version ${APP_VERSION%%|*} (${APP_VERSION#*|})"
+
 IPA_PATH="${EXPORT_DIR}/ObstacleBridge.ipa"
 if [ ! -f "${IPA_PATH}" ]; then
   IPA_PATH="$(find "${EXPORT_DIR}" -maxdepth 1 -type f -name '*.ipa' -print -quit)"

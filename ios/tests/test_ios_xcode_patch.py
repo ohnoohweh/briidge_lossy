@@ -279,6 +279,7 @@ def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
     assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in IPServer Sources" in patched
     assert "CURRENT_PROJECT_VERSION = 1;" in patched
+    assert "MARKETING_VERSION = 0.1.0;" in patched
     assert "ObstacleBridgeMacOSTunAdapter.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperContract.swift in Sources" in patched
     assert "ObstacleBridgeTunHelperXPCTransport.swift in Sources" in patched
@@ -301,6 +302,13 @@ def test_patch_pbxproj_text_is_idempotent() -> None:
     twice = patch_pbxproj_text(once)
 
     assert once == twice
+
+
+def test_patch_pbxproj_text_gives_app_and_extension_matching_bundle_defaults() -> None:
+    patched = patch_pbxproj_text(BASELINE_PROJECT)
+
+    assert patched.count("MARKETING_VERSION = 0.1.0;") >= 4
+    assert patched.count("CURRENT_PROJECT_VERSION = 1;") >= 4
 
 
 def test_patch_pbxproj_file_generates_packet_tunnel_provider_copy(tmp_path, monkeypatch) -> None:

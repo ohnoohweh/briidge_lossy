@@ -105,6 +105,16 @@ number, so a rebuilt commit does not collide with an earlier upload. Set
 `OB_IOS_MARKETING_VERSION`, `OB_IOS_BUILD_NUMBER`, or
 `OB_TESTFLIGHT_OUTPUT_DIR` when a release process supplies those values.
 
+### Manual Xcode archive
+
+The generated `ObstacleBridge` and embedded `IPServer` targets default to the
+same valid bundle version, `0.1.0 (1)`. Refresh the project with
+`./ios/scripts/create_ios_xcode_project.sh --no-input` before opening it in
+Xcode. For each new TestFlight upload, select the `ObstacleBridge` target and
+increment its Version/Build values; set the same values on `IPServer` before
+archiving. The archive must not contain empty or mismatched container and
+extension bundle versions.
+
 Useful build overrides:
 
 - `OB_IOS_DEVICE_ID=<device-udid>` builds for a connected physical device instead of the generic iOS destination

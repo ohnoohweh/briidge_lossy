@@ -22,6 +22,8 @@ DEFAULT_PROJECT = (
 GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer" / "PacketTunnelProvider.swift"
 GENERATED_APP_BUILD_STAMP_RELATIVE = Path("..") / ".." / ".." / "generated" / "ObstacleBridgeGeneratedBuildStamp.swift"
 REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
+IOS_DEFAULT_MARKETING_VERSION = "0.1.0"
+IOS_DEFAULT_BUILD_NUMBER = "1"
 
 PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "\n"
@@ -831,6 +833,57 @@ def patch_app_target(text: str) -> str:
     return text
 
 
+def _ensure_configuration_setting(text: str, configuration_id: str, key: str, value: str) -> str:
+    """Set one generated target build setting without depending on its order."""
+
+    block_pattern = re.compile(
+        rf"(\t\t{re.escape(configuration_id)} /\* (?:Debug|Release) \*/ = \{{\n"
+        rf"\t\t\tisa = XCBuildConfiguration;\n"
+        rf"\t\t\tbuildSettings = \{{\n)(.*?)(\t\t\t\}};)",
+        re.DOTALL,
+    )
+
+    def replace_block(match: re.Match[str]) -> str:
+        prefix, settings, suffix = match.groups()
+        setting_pattern = re.compile(rf"^\t\t\t\t{re.escape(key)} = .*?;\n", re.MULTILINE)
+        setting = f"\t\t\t\t{key} = {value};\n"
+        if setting_pattern.search(settings):
+            settings = setting_pattern.sub(setting, settings, count=1)
+        else:
+            settings += setting
+        return prefix + settings + suffix
+
+    patched, count = block_pattern.subn(replace_block, text, count=1)
+    if count != 1:
+        raise ValueError(f"Xcode build configuration {configuration_id} not found")
+    return patched
+
+
+def ensure_ios_bundle_versions(text: str) -> str:
+    """Give both archive targets non-empty, matching manual-archive defaults."""
+
+    configuration_ids = (
+        "60796F0F19190F4100A9926B",  # ObstacleBridge Debug
+        "60796F1019190F4100A9926B",  # ObstacleBridge Release
+        "71C2000000000000000000A0",  # IPServer Debug
+        "71C2000000000000000000A1",  # IPServer Release
+    )
+    for configuration_id in configuration_ids:
+        text = _ensure_configuration_setting(
+            text,
+            configuration_id,
+            "MARKETING_VERSION",
+            IOS_DEFAULT_MARKETING_VERSION,
+        )
+        text = _ensure_configuration_setting(
+            text,
+            configuration_id,
+            "CURRENT_PROJECT_VERSION",
+            IOS_DEFAULT_BUILD_NUMBER,
+        )
+    return text
+
+
 def enforce_ios_deployment_target(text: str) -> str:
     """Keep every generated iOS target within the supported iOS 15 baseline.
 
@@ -1143,6 +1196,7 @@ def patch_pbxproj_text(text: str) -> str:
     text = patch_python_build_script(text)
     text = patch_app_target(text)
     text = patch_ipserver_target(text)
+    text = ensure_ios_bundle_versions(text)
     text = add_core_crypto_package(text)
     text = enforce_ios_deployment_target(text)
     return text
