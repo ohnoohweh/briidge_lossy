@@ -132,6 +132,11 @@ memory, scheduler behavior, and termination policy differ by platform.
 - Physical-device threshold qualification remains open. Live Admin data alone
   cannot diagnose an abrupt runtime loss; retained health evidence must be
   correlated with platform crash, watchdog, and memory-termination reports.
+- A supervised server restart can leave its bridge child alive after graceful
+  termination, while the launcher and Admin endpoint have already exited.
+  Shutdown must have a bounded completion path, report the blocking owner, and
+  prevent orphaned packet or socket workers before a replacement instance is
+  admitted.
 
 ## R007 delivery packages
 
@@ -142,7 +147,7 @@ Only unfinished packages are listed here.
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
 | `LSW-R007.5` | Physical runtime-load qualification | On a signed physical iPhone and each released host owner, controlled sustained traffic demonstrates bounded packet admission without self-termination. Retained health records and redacted Admin snapshots capture both packet directions, queue/inflight high-water, drops, slow writes, lifecycle classification, and the matching platform termination or watchdog evidence. The recorded operating threshold and authenticated remote-WebAdmin evidence location are reproducible without protocol changes. |
-| `LSW-R007.6` | Product qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
+| `LSW-R007.6` | Product lifecycle qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. Each supervised restart reaches a bounded, observable shutdown without orphaned workers before its replacement admits traffic. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
 
 ## Follow-on Linux packages
 
