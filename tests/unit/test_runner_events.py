@@ -77,6 +77,35 @@ class RunnerEventBindingTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.wait_for(runner._restart_requested.wait(), timeout=0.1)
         self.assertEqual(runner._restart_exit_code, RESTART_EXIT_CODE_DELAYED)
 
+    async def test_run_allows_bounded_stop_sequence_to_finish(self):
+        runner = Runner.__new__(Runner)
+        runner.log = mock.Mock()
+        runner._stop = asyncio.Event()
+        runner._restart_requested = asyncio.Event()
+        runner._restart_requested_flag = False
+        runner._restart_exit_code = RESTART_EXIT_CODE_IMMEDIATE
+        runner._shutdown_exit_code = None
+        runner._shutdown_reason = ""
+
+        stop_finished = False
+
+        async def _start():
+            return None
+
+        async def _stop(*, reason=""):
+            nonlocal stop_finished
+            await asyncio.sleep(2.05)
+            stop_finished = True
+
+        runner.start = _start
+        runner.stop = _stop
+        task = asyncio.create_task(runner.run())
+        await asyncio.sleep(0)
+        runner._stop.set()
+
+        await asyncio.wait_for(task, timeout=3.0)
+        self.assertTrue(stop_finished)
+
 
 if __name__ == '__main__':
     unittest.main()
@@ -123,26 +152,36 @@ class RunnerProcessBreadcrumbTests(unittest.TestCase):
         runner = Runner(self._make_args())
         log = mock.Mock()
         installed_handlers = {}
+        timer = mock.Mock()
 
         def _fake_signal(signum, handler):
             installed_handlers[int(signum)] = handler
             return None
 
         with mock.patch.object(bridge_runner._process_signal, "getsignal", return_value="previous"), \
-             mock.patch.object(bridge_runner._process_signal, "signal", side_effect=_fake_signal):
+             mock.patch.object(bridge_runner._process_signal, "signal", side_effect=_fake_signal), \
+             mock.patch.object(bridge_runner.threading, "Timer", return_value=timer) as timer_cls:
             installed = bridge_runner._install_process_signal_handlers(runner, log)
+            self.assertEqual(sorted(signum for signum, _ in installed), sorted([int(signal.SIGINT), int(signal.SIGTERM)]))
+            installed_handlers[int(signal.SIGTERM)](int(signal.SIGTERM), None)
+            installed_handlers[int(signal.SIGTERM)](int(signal.SIGTERM), None)
 
-        self.assertEqual(sorted(signum for signum, _ in installed), sorted([int(signal.SIGINT), int(signal.SIGTERM)]))
-        installed_handlers[int(signal.SIGTERM)](int(signal.SIGTERM), None)
-        self.assertTrue(runner._stop_requested)
-        self.assertEqual(runner._shutdown_exit_code, 128 + int(signal.SIGTERM))
-        self.assertEqual(runner._shutdown_reason, "signal:SIGTERM")
-        log.warning.assert_called_with(
-            "[RUNNER] process signal received signum=%d signame=%s exit_code=%d",
-            int(signal.SIGTERM),
-            bridge_runner._signal_name(int(signal.SIGTERM)),
-            128 + int(signal.SIGTERM),
-        )
+            self.assertTrue(runner._stop_requested)
+            self.assertEqual(runner._shutdown_exit_code, 128 + int(signal.SIGTERM))
+            self.assertEqual(runner._shutdown_reason, "signal:SIGTERM")
+            log.warning.assert_any_call(
+                "[RUNNER] process signal received signum=%d signame=%s exit_code=%d",
+                int(signal.SIGTERM),
+                bridge_runner._signal_name(int(signal.SIGTERM)),
+                128 + int(signal.SIGTERM),
+            )
+            timer_cls.assert_called_once_with(
+                bridge_runner.PROCESS_SIGNAL_SHUTDOWN_DEADLINE_S,
+                mock.ANY,
+            )
+            timer.start.assert_called_once_with()
+            bridge_runner._cancel_process_shutdown_deadline(runner)
+            timer.cancel.assert_called_once_with()
 
     def test_main_logs_system_exit_code(self):
         args = self._make_args()
