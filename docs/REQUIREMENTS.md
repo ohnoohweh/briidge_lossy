@@ -524,4 +524,9 @@ The shared Python/Swift ChannelMux parity fixture supplies explicit inbound
 counters for server and client DATA/CLOSE frames, so the portable Core replay
 contract is exercised rather than bypassed by an absent counter.
 
+Cross-runtime service qualification treats authenticated overlay readiness and
+local listener publication as separate observable states; it waits a bounded
+interval for an accepted TCP listener to bind before declaring the data plane
+unavailable.
+
 The supporting product-requirement traceability manifest is maintained in [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml). It is stored with the repository's CI/support metadata rather than in `docs/`, but it continues to trace these product requirements to their defending tests.

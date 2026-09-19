@@ -1549,6 +1549,9 @@ The shared Python/Swift ChannelMux fixture passes explicit inbound DATA and
 CLOSE counters for server and client paths to preserve the portable Core replay
 contract in parity tests.
 
+Cross-runtime service qualification separately observes protected-overlay
+readiness and asynchronous local TCP-listener publication before sending data.
+
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
 
