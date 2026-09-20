@@ -261,11 +261,11 @@ Important behaviors:
 - an accepted Python WebSocket listener peer has its own RTT liveness guard: failure to become live within 60 seconds, or loss after it was live, closes only that peer socket and withdraws its lower-transport readiness; native Swift WebSocket code is peer-client-only and has no listener-peer ownership surface
 - every overlay transport must publish one transport-agnostic backpressure view upward: queue depth, inflight state where available, recent egress throughput, and delay/progress estimates
 
-The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md).
+The current WebSocket-specific listener split, including direct static HTTP handling and same-socket upgrade considerations, is documented in [WEBSOCKET_DESIGN.md](WEBSOCKET_DESIGN.md).
 
 Representative implementation area:
 
-- [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+- [bridge.py](../src/obstacle_bridge/bridge.py)
 
 Important proxy expectation:
 
@@ -532,7 +532,7 @@ Current status:
   - bounded reconnect/failure throttling after repeated client-side auth failures
   - admin/API visibility of secure-link state and stronger operational diagnostics
 - certificate-mode trust-anchor validation, detached signature verification, richer peer identity semantics, and trust-failure visibility are now delivered
-- the design baseline and remaining planned work for this component are documented in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
+- the design baseline and remaining planned work for this component are documented in [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md)
 
 ## 2.5 Compression layer
 
@@ -560,7 +560,7 @@ Technology boundary:
 
 ### Functional decomposition for secure-link status visibility
 
-This decomposition applies to the delivered `REQ-AUT-004`, `REQ-AUT-008`, and `REQ-AUT-009` items in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md), and remains relevant for the planned certificate-mode follow-up.
+This decomposition applies to the delivered `REQ-AUT-004`, `REQ-AUT-008`, and `REQ-AUT-009` items in [REQUIREMENTS.md](REQUIREMENTS.md), and remains relevant for the planned certificate-mode follow-up.
 
 | Component ID | Contribution to secure-link status visibility |
 |---|---|
@@ -570,7 +570,7 @@ This decomposition applies to the delivered `REQ-AUT-004`, `REQ-AUT-008`, and `R
 
 The webpage is therefore an explicit contributor to the overall function, not only the API payloads behind it.
 
-The supporting architecture traceability manifest is maintained in [.github/architecture_traceability.yaml](/home/ohnoohweh/quic_br/.github/architecture_traceability.yaml).
+The supporting architecture traceability manifest is maintained in [.github/architecture_traceability.yaml](../.github/architecture_traceability.yaml).
 
 ## 3. Reliability and framing layer
 
@@ -591,7 +591,7 @@ Important behaviors:
 - keep counters and state needed for admin visibility
 - preserve message integrity for large payloads
 
-This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+This layer is especially important for the `myudp` requirements in [REQUIREMENTS.md](REQUIREMENTS.md).
 
 ### Overload and freshness policy
 
@@ -1032,4 +1032,4 @@ This architecture implies a testing split:
 - integration tests primarily defend requirements at the transport, listener, reconnect, and admin behavior level
 - unit tests primarily defend component contracts such as ChannelMux scoping, snapshot formatting, runner event wiring, and websocket-specific behavior
 
-The first traceability mappings for integration and unit coverage are maintained in [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md), and should refer to the stable component IDs above where architecture-level traceability is needed.
+The first traceability mappings for integration and unit coverage are maintained in [README_TESTING.md](README_TESTING.md), and should refer to the stable component IDs above where architecture-level traceability is needed.
