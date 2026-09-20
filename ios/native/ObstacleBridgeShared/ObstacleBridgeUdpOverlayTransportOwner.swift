@@ -208,6 +208,13 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         overlayRuntime.isConnected() && currentPeerAddress != nil
     }
 
+    /// The requested local UDP source port. Zero asks the OS for an
+    /// ephemeral port; the Packet Tunnel connector's local bind port is a
+    /// separate contract and is not represented here.
+    var configuredSourceBindPort: Int {
+        bindPort
+    }
+
     func start() throws {
         guard !started else {
             return

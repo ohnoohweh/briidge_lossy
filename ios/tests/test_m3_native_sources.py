@@ -1489,3 +1489,13 @@ def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     assert "let protocolStats = overlayRuntime.protocolStatsSnapshot()" in udp_owner
     assert 'snapshot["protocol_stats"] = protocolStats' in udp_owner
+
+
+def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> None:
+    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    macos_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert '"iOS_TUN_connector": [' in runtime
+    for key in ("packetflow_connector", "bind_host", "bind_port", "peer_host", "peer_port", "ifname", "mtu"):
+        assert f'schemaItem(key: "{key}"' in runtime
+    assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner

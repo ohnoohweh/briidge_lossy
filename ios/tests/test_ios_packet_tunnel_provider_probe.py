@@ -201,6 +201,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeHealth.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"),
@@ -1581,6 +1582,88 @@ def test_ios_packet_tunnel_provider_probe_swift_udp_empty_connector_peer_falls_b
     assert payload["bind_host"] == "127.0.0.1"
     assert payload["overlay_bind_host"] == "::"
     assert payload["bind_port"] == 5555
+
+
+def test_ios_packet_tunnel_provider_probe_uses_ephemeral_myudp_client_source_port(tmp_path: Path) -> None:
+    source_path = tmp_path / "PacketTunnelProviderMyUDPSourcePortProbe.swift"
+    binary_path = tmp_path / "packet-tunnel-provider-myudp-source-port-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            @main
+            struct PacketTunnelProviderMyUDPSourcePortProbeMain {
+                static func main() throws {
+                    let configPayload: [String: Any] = [
+                        "overlay_transport": "myudp",
+                        "udp_peer": "198.51.100.88",
+                        "udp_peer_port": 4433,
+                        "iOS_TUN_connector": [
+                            "packetflow_connector": "swift_udp",
+                            "bind_port": 5555,
+                            "peer_host": "127.0.0.1",
+                            "peer_port": 5556,
+                        ],
+                    ]
+                    guard let config = ObstacleBridgeRuntimeConfig.swiftUDPPeerConfig(
+                        from: configPayload,
+                        defaultMTU: 1600
+                    ) else {
+                        throw NSError(domain: "PacketTunnelProviderProbe", code: 1)
+                    }
+                    let connectorRows = ObstacleBridgeRuntimeConfig.configSchemaSnapshot()["iOS_TUN_connector"] as? [[String: Any]] ?? []
+                    let connectorKeys = connectorRows.compactMap { $0["key"] as? String }.sorted()
+                    let result: [String: Any] = [
+                        "configured": 5555,
+                        "ephemeral_source": PacketTunnelProvider.myUDPClientSourceBindPort(
+                            runtimeConfig: ["udp_own_port": 0]
+                        ),
+                        "fixed_source": PacketTunnelProvider.myUDPClientSourceBindPort(
+                            runtimeConfig: ["udp_own_port": 5566]
+                        ),
+                        "overlay_peer_host": config.peerHost,
+                        "overlay_peer_port": config.peerPort,
+                        "connector_schema_keys": connectorKeys,
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: result, options: [.sortedKeys])
+                    FileHandle.standardOutput.write(data)
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_packet_tunnel_provider_probe(source_path, binary_path)
+    completed = subprocess.run(
+        [str(binary_path)],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload == {
+        "configured": 5555,
+        "ephemeral_source": 0,
+        "fixed_source": 5566,
+        "overlay_peer_host": "198.51.100.88",
+        "overlay_peer_port": 4433,
+        "connector_schema_keys": [
+            "bind_host",
+            "bind_port",
+            "ifname",
+            "mtu",
+            "packetflow_connector",
+            "peer_host",
+            "peer_port",
+        ],
+    }
 
 
 def test_ios_packet_tunnel_provider_probe_swift_udp_missing_connector_defaults_to_overlay_peer(tmp_path: Path) -> None:

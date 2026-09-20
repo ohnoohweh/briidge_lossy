@@ -425,6 +425,15 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "compress_layer_min_bytes", description: "Minimum payload size before compression", defaultValue: 64),
                 schemaItem(key: "compress_layer_types", description: "Comma-separated message types eligible for compression", defaultValue: "data,data_frag"),
             ],
+            "iOS_TUN_connector": [
+                schemaItem(key: "packetflow_connector", description: "Packet Tunnel connector implementation. swift_udp is the native iOS provider path; swift_host_runner is the macOS Swift host path.", defaultValue: "", choices: ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"]),
+                schemaItem(key: "bind_host", description: "Local PacketFlow/helper connector bind address. This is not an overlay transport bind address.", defaultValue: "127.0.0.1"),
+                schemaItem(key: "bind_port", description: "Local PacketFlow/helper connector port. This is not the MyUDP source port.", defaultValue: 5555),
+                schemaItem(key: "peer_host", description: "Local PacketFlow/helper connector peer address. Native Swift overlay peers use the selected transport configuration.", defaultValue: ""),
+                schemaItem(key: "peer_port", description: "Local PacketFlow/helper connector peer port. Native Swift overlay peers use the selected transport configuration.", defaultValue: 0),
+                schemaItem(key: "ifname", description: "Logical packet-tunnel interface name used by the connector.", defaultValue: "ios-utun"),
+                schemaItem(key: "mtu", description: "PacketFlow/helper connector MTU.", defaultValue: 1280),
+            ],
             "tun_execution": [
                 schemaItem(key: "tun_execution_mode", description: "Desktop local TUN execution topology: inline current-process ownership or helper-backed ownership.", defaultValue: "inline", choices: ["inline", "helper"]),
                 schemaItem(key: "tun_helper_backend", description: "Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.", defaultValue: "linux-native"),
@@ -1504,19 +1513,6 @@ enum ObstacleBridgeRuntimeConfig {
         )
     }
 
-    private static func isLegacySwiftUDPShimPeer(host: String?, port: Int?, bindPort: Int) -> Bool {
-        guard let host = host?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              !host.isEmpty,
-              let port
-        else {
-            return false
-        }
-        guard host == "127.0.0.1" || host == "::1" || host == "localhost" else {
-            return false
-        }
-        return port == 5556 || port == bindPort + 1
-    }
-
     private static func normalizedPacketflowBindHost(_ host: Any?, connectorMode: String) -> String {
         let raw = stringValue(from: host)
         let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
@@ -1588,22 +1584,18 @@ enum ObstacleBridgeRuntimeConfig {
             .split(separator: ",")
             .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty }) ?? "myudp"
-        let explicitPeerHostRaw = stringValue(from: experiment["peer_host"])
-        let explicitPeerHost = explicitPeerHostRaw?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
-            ? explicitPeerHostRaw?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // `iOS_TUN_connector` describes the local Packet Tunnel/helper
+        // boundary. Native Swift UDP gets its remote overlay endpoint only
+        // from the selected transport's configuration.
+        let peerHost = connectorMode == "swift_udp"
+            ? peerHost(for: selectedTransport, payload: payload)
             : nil
-        let explicitPeerPortRaw = intValue(from: experiment["peer_port"])
-        let explicitPeerPort = (explicitPeerPortRaw ?? 0) > 0 ? explicitPeerPortRaw : nil
-        let useOverlayPeerFallback =
-            connectorMode == "swift_udp"
-            && isLegacySwiftUDPShimPeer(host: explicitPeerHost, port: explicitPeerPort, bindPort: bindPort)
-        let peerHost = (useOverlayPeerFallback ? nil : explicitPeerHost)
-            ?? (connectorMode == "swift_udp" ? peerHost(for: selectedTransport, payload: payload) : nil)
         guard let peerHost else {
             return nil
         }
-        let peerPort = (useOverlayPeerFallback ? nil : explicitPeerPort)
-            ?? (connectorMode == "swift_udp" ? (peerPort(for: selectedTransport, payload: payload) ?? 0) : 0)
+        let peerPort = connectorMode == "swift_udp"
+            ? (peerPort(for: selectedTransport, payload: payload) ?? 0)
+            : 0
         guard peerPort > 0 else {
             return nil
         }
