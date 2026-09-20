@@ -376,7 +376,7 @@
       "device_evidence": {
         "date": "2026-09-17",
         "deployment": "A freshly rebuilt iOS app and IPServer extension were deployed and reported running on a physical device.",
-        "webadmin_endpoint": "http://37.1.192.30:13081/",
+        "webadmin_endpoint": "http://example.invalid:13081/",
         "verification": "The macOS qualification host received HTTP 200 and the ObstacleBridge WebAdmin HTML document from this endpoint."
       }
     }

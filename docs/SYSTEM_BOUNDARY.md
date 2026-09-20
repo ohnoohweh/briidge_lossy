@@ -6,7 +6,7 @@ This document separates three things that are easy to mix together:
 2. external assumptions and dependencies
 3. project-owned behavior
 
-Only the third category belongs in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md) as a normative project requirement.
+Only the third category belongs in [REQUIREMENTS.md](REQUIREMENTS.md) as a normative project requirement.
 
 ## How to read the boundary
 
@@ -162,11 +162,11 @@ More concretely:
 
 ## Relationship to the other project documents
 
-- [README.md](/home/ohnoohweh/quic_br/README.md):
+- [README.md](../README.md):
   - user-facing use-cases and assumptions
-- [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md):
+- [REQUIREMENTS.md](REQUIREMENTS.md):
   - project-owned black-box requirements only
-- [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md):
+- [ARCHITECTURE.md](ARCHITECTURE.md):
   - component and responsibility decomposition inside the project
-- [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md):
+- [README_TESTING.md](README_TESTING.md):
   - test evidence mapped to those project-owned requirements

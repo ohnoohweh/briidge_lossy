@@ -10,13 +10,13 @@ That loop is effective for progress, but by itself it does not guarantee that th
 
 ## Process measures
 
-These measures describe how the project is developed and validated. They are intentionally kept outside [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md) because they are not operator-visible delivery promises.
+These measures describe how the project is developed and validated. They are intentionally kept outside [REQUIREMENTS.md](REQUIREMENTS.md) because they are not operator-visible delivery promises.
 
 - `PROC-TST-001`: User-visible transport behavior should be defended primarily by integration tests, and the relevant regression suites should be executed before documentation or repository guards are treated as evidence of correctness.
   Measure:
   - run the most relevant targeted tests during iteration
   - run `pytest -q -n 16 tests/integration/test_overlay_e2e.py -m "not windows_only"` before push or PR when the shared integration harness is materially affected
-  - keep the top-level [README.md](/home/ohnoohweh/quic_br/README.md) coverage snapshot aligned with the current product requirement set, but keep detailed requirement and design prose in the dedicated docs instead of duplicating it in the snapshot
+  - keep the top-level [README.md](../README.md) coverage snapshot aligned with the current product requirement set, but keep detailed requirement and design prose in the dedicated docs instead of duplicating it in the snapshot
 - `PROC-TST-002`: Important local invariants and component contracts should be defended by unit tests.
   Measure:
   - add or update focused tests under `tests/unit/` when internal state handling, parser behavior, or component-local contracts change
@@ -58,7 +58,7 @@ Example:
 - "A myudp listener shall support multiple concurrent peer clients and show them as distinct peers in the admin API."
 - "Auxiliary activity on a shared listener endpoint, such as a plain HTTP read on a WebSocket listener, shall stay scoped to the originating request and shall not disturb other peers."
 
-The durable home for these statements is [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md).
+The durable home for these statements is [REQUIREMENTS.md](REQUIREMENTS.md).
 
 ### 2. Place the change in the architecture
 
@@ -70,11 +70,11 @@ Typical component questions:
 - Which API or callback is the boundary?
 - Which component should not know about this concern?
 
-The durable home for this reasoning is [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
+The durable home for this reasoning is [ARCHITECTURE.md](ARCHITECTURE.md).
 
 When a component has local design tradeoffs, protocol asymmetries, library constraints, or boundary-specific behavior, document those actively in the corresponding component design note such as `..._DESIGN.md` rather than leaving that reasoning only in code review or commit history.
 
-Typical examples are [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md) and [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md).
+Typical examples are [WEBSOCKET_DESIGN.md](WEBSOCKET_DESIGN.md) and [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md).
 
 ### 3. Implement
 
@@ -172,9 +172,9 @@ Correctness improves when:
 
 When different artifacts disagree, resolve in this order:
 
-1. [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+1. [REQUIREMENTS.md](REQUIREMENTS.md)
 2. integration tests
-3. [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
+3. [ARCHITECTURE.md](ARCHITECTURE.md)
 4. unit tests
 5. implementation
 
@@ -185,22 +185,22 @@ If a requirement is missing, add it first instead of letting code or tests silen
 After implementing a new feature or fixing a bug:
 
 - run the most relevant targeted tests early while iterating so regressions are detected from runtime behavior, not from documentation or guard failures
-- when [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py) changes, run the full integration gate `pytest -q -n 16 tests/integration/test_overlay_e2e.py` before pushing or opening a PR
-- when [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py) changes, strongly prefer the same full integration run before pushing or opening a PR, even if targeted `-k` runs were used during iteration
+- when [bridge.py](../src/obstacle_bridge/bridge.py) changes, run the full integration gate `pytest -q -n 16 tests/integration/test_overlay_e2e.py` before pushing or opening a PR
+- when [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py) changes, strongly prefer the same full integration run before pushing or opening a PR, even if targeted `-k` runs were used during iteration
 - when integration requirements are OS-specific, mark them explicitly and keep CI split so Linux runs the shared suite while Windows runs the Windows-only subset
-- record the observable behavior in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- keep [requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml) aligned so changed requirements still point at real tests
-- update [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) if responsibilities changed
-- add or adjust integration tests in [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+- record the observable behavior in [REQUIREMENTS.md](REQUIREMENTS.md)
+- keep [requirements_traceability.yaml](../.github/requirements_traceability.yaml) aligned so changed requirements still point at real tests
+- update [ARCHITECTURE.md](ARCHITECTURE.md) if responsibilities changed
+- add or adjust integration tests in [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
 - add or adjust unit tests if a local invariant changed
-- update [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md) traceability when a new requirement is covered
-- update [README.md](/home/ohnoohweh/quic_br/README.md) when requirements, implementation, or the test set changes so its links and requirement-coverage snapshot remain current; do not treat it as the durable home for detailed requirement narratives
+- update [README_TESTING.md](README_TESTING.md) traceability when a new requirement is covered
+- update [README.md](../README.md) when requirements, implementation, or the test set changes so its links and requirement-coverage snapshot remain current; do not treat it as the durable home for detailed requirement narratives
 
 Repository guards now enforce three parts of this discipline, but they should be treated as the final safety net rather than the primary detector of degradation:
 
-- behavior, test, or architecture changes must update [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- requirements, implementation, or test-set changes must update [README.md](/home/ohnoohweh/quic_br/README.md) so its snapshot counts and links stay current
-- requirement changes must update [requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml), and the referenced tests must exist
+- behavior, test, or architecture changes must update [REQUIREMENTS.md](REQUIREMENTS.md)
+- requirements, implementation, or test-set changes must update [README.md](../README.md) so its snapshot counts and links stay current
+- requirement changes must update [requirements_traceability.yaml](../.github/requirements_traceability.yaml), and the referenced tests must exist
 
 This keeps the project understandable even when development continues in prompt-driven iterations.
 
@@ -219,10 +219,10 @@ This wires `core.hooksPath=.githooks` and runs the following checks on every com
 
 The checks enforce that test/architecture/requirements changes come with matching updates in:
 
-- [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
-- [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml)
-- [.github/architecture_traceability.yaml](/home/ohnoohweh/quic_br/.github/architecture_traceability.yaml)
-- [README.md](/home/ohnoohweh/quic_br/README.md) coverage snapshot
+- [README_TESTING.md](README_TESTING.md)
+- [.github/requirements_traceability.yaml](../.github/requirements_traceability.yaml)
+- [.github/architecture_traceability.yaml](../.github/architecture_traceability.yaml)
+- [README.md](../README.md) coverage snapshot
 
 ## Mitigating legacy single-peer assumptions
 

@@ -651,6 +651,8 @@ ARC-CMP-005:
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
     - tests/unit/test_runtime_health.py::test_ring_is_bounded_and_classifies_only_the_last_lifecycle_marker
     - tests/unit/test_runtime_health.py::test_runner_lifecycle_persists_and_reports_redacted_health
+    - tests/unit/test_runtime_qualification_capture.py::test_preflight_requires_health_counters_and_ready_secure_link
+    - tests/unit/test_runtime_qualification_capture.py::test_capture_writes_redacted_admin_snapshots_and_delta
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::recordUsesPortableRedactedSchema
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::ringIsBoundedAndClassifiesOnlyTheLastLifecycleMarker
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
