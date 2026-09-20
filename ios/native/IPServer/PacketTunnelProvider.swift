@@ -1248,7 +1248,10 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         rekeyAfterSeconds: rekeyAfterSeconds
                     ),
                     retryBackoffInitialMS: retryBackoffInitialMS,
-                    retryBackoffMaxMS: retryBackoffMaxMS
+                    retryBackoffMaxMS: retryBackoffMaxMS,
+                    diagnosticSink: { [weak self] event, fields in
+                        self?.recordNativeEvent(event, fields: fields)
+                    }
                 )
                 summary["secure_link_runtime"] = "ready"
                 summary["secure_link_rekey_after_frames"] = rekeyAfterFrames
@@ -1400,6 +1403,19 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private static func peerHost(for transport: String, payload: [String: Any]) -> String? {
         ObstacleBridgeRuntimeConfig.peerHost(for: transport, payload: payload)
+    }
+
+    /// A myUDP client must acquire a new endpoint after its Network Extension
+    /// process restarts. The listener keys its reliability state by UDP
+    /// endpoint, whereas the restarted client begins a new stream sequence.
+    /// `udp_own_port`, when explicitly configured, is the source-port
+    /// authority; the packet-flow connector bind port is not.
+    static func myUDPClientSourceBindPort(runtimeConfig: [String: Any]) -> Int {
+        if let configuredSourcePort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["udp_own_port"]),
+           configuredSourcePort >= 0 {
+            return configuredSourcePort
+        }
+        return 0
     }
 
     private static func jsonDictionary(from value: Any?) -> [String: ObstacleBridgeChannelMuxCodec.JSONValue]? {
@@ -3349,9 +3365,12 @@ private final class SwiftSimpleUDPPeerBridge {
                 self.socketFamily = resolvedPeers.socketFamily
                 self.peerCandidates = resolvedPeers.peerCandidates
                 self.peerAddress = resolvedPeers.peerAddress
+                let overlaySourceBindPort = PacketTunnelProvider.myUDPClientSourceBindPort(
+                    runtimeConfig: settings.runtimeConfig
+                )
                 self.udpOverlayTransportOwner = ObstacleBridgeUdpOverlayTransportOwner(
                     bindHost: settings.overlayBindHost,
-                    bindPort: settings.bindPort,
+                    bindPort: overlaySourceBindPort,
                     peerHost: settings.peerHost,
                     peerPort: settings.peerPort,
                     peerResolveFamily: settings.peerResolveFamily,
@@ -3436,9 +3455,10 @@ private final class SwiftSimpleUDPPeerBridge {
         provider.recordPacketBridgeEvent(
             "swift_simple_udp_started",
             fields: [
-                "bind_host": settings.bindHost,
+                "packetflow_bind_host": settings.bindHost,
                 "overlay_bind_host": settings.overlayBindHost,
-                "bind_port": settings.bindPort,
+                "packetflow_bind_port": settings.bindPort,
+                "overlay_source_bind_port": udpOverlayTransportOwner?.configuredSourceBindPort ?? NSNull(),
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
                 "peer_resolve_family": settings.peerResolveFamily,
@@ -3525,9 +3545,10 @@ private final class SwiftSimpleUDPPeerBridge {
             let resolvedPeerCandidateCount = Self.runtimeIntValue(selectedRuntime["overlay_peer_candidate_count"]) ?? peerCandidates.count
             return [
                 "active": started,
-                "bind_host": settings.bindHost,
+                "packetflow_bind_host": settings.bindHost,
                 "overlay_bind_host": settings.overlayBindHost,
-                "bind_port": settings.bindPort,
+                "packetflow_bind_port": settings.bindPort,
+                "overlay_source_bind_port": udpOverlayTransportOwner?.configuredSourceBindPort ?? NSNull(),
                 "peer_host": settings.peerHost,
                 "peer_port": settings.peerPort,
                 "peer_resolve_family": settings.peerResolveFamily,

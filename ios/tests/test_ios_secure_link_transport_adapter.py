@@ -1128,3 +1128,103 @@ def test_ios_secure_link_transport_adapter_times_out_pending_rekey(tmp_path: Pat
         "event": "auth_failed_lifecycle",
         "rekey_in_progress": False,
     }
+
+
+def test_ios_secure_link_transport_adapter_records_payload_free_handshake_diagnostics(tmp_path: Path) -> None:
+    source_path = tmp_path / "SecureLinkTransportDiagnosticsProbe.swift"
+    binary_path = tmp_path / "secure-link-transport-diagnostics-probe"
+    source_path.write_text(
+        textwrap.dedent(
+            r"""
+            import Foundation
+
+            enum ProbeError: Error {
+                case badState(String)
+            }
+
+            @main
+            struct SecureLinkTransportDiagnosticsProbe {
+                static func main() throws {
+                    var now: TimeInterval = 100.0
+                    var events: [[String: Any]] = []
+                    let client = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: true,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x11, count: count) },
+                            sessionIDProvider: { 0x0102030405060708 },
+                            timeProvider: { now }
+                        ),
+                        timeProvider: { now },
+                        diagnosticSink: { event, fields in
+                            var row = fields
+                            row["event"] = event
+                            events.append(row)
+                        }
+                    )
+                    let server = ObstacleBridgeSecureLinkPskTransportAdapter(
+                        runtime: ObstacleBridgeSecureLinkPskRuntime(
+                            clientMode: false,
+                            psk: "shared-psk",
+                            randomBytes: { count in Data(repeating: 0x22, count: count) },
+                            sessionIDProvider: { 0 },
+                            timeProvider: { now }
+                        ),
+                        timeProvider: { now }
+                    )
+
+                    let hello = try client.handleTransportConnected().emittedFrames.first!
+                    now += 0.1
+                    let serverHello = server.handleInboundFrame(hello).emittedFrames.first!
+                    now += 0.1
+                    let proof = client.handleInboundFrame(serverHello).emittedFrames.first!
+                    now += 0.1
+                    let acknowledgement = server.handleInboundFrame(proof).emittedFrames.first!
+                    now += 0.1
+                    _ = client.handleInboundFrame(acknowledgement)
+                    guard client.statusSnapshot().authenticated else {
+                        throw ProbeError.badState("authentication did not complete")
+                    }
+                    let payload: [String: Any] = [
+                        "events": events.map { String(describing: $0["event"] ?? "") },
+                        "handshake_started": events.first(where: { String(describing: $0["event"] ?? "") == "secure_link_handshake_started" }) ?? [:],
+                        "authenticated": events.first(where: { String(describing: $0["event"] ?? "") == "secure_link_authenticated" }) ?? [:],
+                    ]
+                    FileHandle.standardOutput.write(
+                        try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+                    )
+                }
+            }
+            """
+        ),
+        encoding="utf-8",
+    )
+    _compile_swift_secure_link_transport_probe(source_path, binary_path)
+    completed = subprocess.run([str(binary_path)], capture_output=True, text=True, check=False, timeout=30)
+    if completed.returncode != 0:
+        raise AssertionError(
+            f"probe failed with exit code {completed.returncode}:\nSTDOUT:\n{completed.stdout}\nSTDERR:\n{completed.stderr}"
+        )
+
+    payload = json.loads(completed.stdout)
+    assert payload["events"] == [
+        "secure_link_handshake_started",
+        "secure_link_frame_received",
+        "secure_link_frame_received",
+        "secure_link_authenticated",
+    ]
+    assert payload["handshake_started"] == {
+        "event": "secure_link_handshake_started",
+        "frame_types": [1],
+        "handshake_attempt": 1,
+        "reason": "transport_connected",
+        "session_id": "72623859790382856",
+        "transport_connected_age_ms": 0,
+    }
+    assert payload["authenticated"] == {
+        "event": "secure_link_authenticated",
+        "handshake_attempt": 1,
+        "handshake_duration_ms": pytest.approx(400.0),
+        "session_id": "72623859790382856",
+        "transport_connected_age_ms": pytest.approx(400.0),
+    }
