@@ -1209,6 +1209,20 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
     assert 'snapshot["shared_tun"] = tunRuntime?.sharedTunRuntimeSnapshot() ?? [:]' in owner
     assert 'tunMuxFrameCounters["data_delivered", default: 0] += 1' in owner
     assert 'tunMuxFrameCounters["data_dropped", default: 0] += 1' in owner
+    assert 'tunMuxFrameCounters["data_counter_discontinuity", default: 0] += 1' in owner
+    assert '"udp_overlay_tun_data_counter_discontinuity"' in owner
+
+
+def test_shared_tun_counter_discontinuity_is_diagnostic_not_delivery_gate() -> None:
+    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    overlay_core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+
+    assert "catch ObstacleBridgeChannelMuxSessionError.invalidCounter" in tun_runtime
+    assert "var counterDiscontinuity = false" in tun_runtime
+    assert "counterDiscontinuity = true" in tun_runtime
+    assert "guard isBound, body.count <= mtu" in tun_runtime
+    assert "onInboundCounterDiscontinuity" in overlay_core
+    assert "if snapshot.counterDiscontinuity" in overlay_core
 
 
 def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:

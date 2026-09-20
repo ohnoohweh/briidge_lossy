@@ -519,6 +519,7 @@ enum ObstacleBridgeOverlayChannelCore {
         onInboundDrop: ((TunInboundDropEvent) -> Void)? = nil,
         onInboundRelay: ((TunInboundRelayEvent) -> Void)? = nil,
         onInboundDeliver: ((TunInboundDeliverEvent) -> Void)? = nil,
+        onInboundCounterDiscontinuity: ((Int, Int) -> Void)? = nil,
         onOpenRejected: ((Int) -> Void)? = nil,
         onOpenChunkRejected: ((Int) -> Void)? = nil
     ) {
@@ -623,6 +624,9 @@ enum ObstacleBridgeOverlayChannelCore {
                     )
                 }
                 return
+            }
+            if snapshot.counterDiscontinuity {
+                onInboundCounterDiscontinuity?(frame.chanID, frame.counter)
             }
             if let packet = snapshot.packet {
                 tunRuntime.recordSharedTunPeerTraffic(

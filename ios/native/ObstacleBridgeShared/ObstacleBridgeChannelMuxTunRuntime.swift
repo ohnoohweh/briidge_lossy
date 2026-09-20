@@ -46,6 +46,10 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     struct InboundTunDataSnapshot {
         var delivered: Bool
         var packet: Data?
+        /// SecureLink and the reliable transport have already admitted the
+        /// record. ChannelMux counters are sender-local on a shared-TUN
+        /// server, so they may skip for an individual receiving peer.
+        var counterDiscontinuity: Bool = false
     }
 
     struct GuardedInboundTunDataSnapshot {
@@ -55,6 +59,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         var sourceIP: String?
         var destinationIP: String?
         var dropReason: String?
+        var counterDiscontinuity: Bool = false
     }
 
     struct SharedTunActivePeerBinding {
@@ -1015,12 +1020,21 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         boundChanID: Int? = nil,
         counter: Int? = nil
     ) -> InboundTunDataSnapshot {
-        if let counter,
-           (try? session.receive(.init(
-                channelID: UInt16(clamping: chanID), protocolType: ObstacleBridgeChannelMuxSessionProtocol.tun.rawValue,
-                counter: UInt16(clamping: counter), messageType: ObstacleBridgeChannelMuxSessionMessageType.data.rawValue, body: body
-           ))) == nil {
-            return .init(delivered: false, packet: nil)
+        var counterDiscontinuity = false
+        if let counter {
+            do {
+                _ = try session.receive(.init(
+                    channelID: UInt16(clamping: chanID), protocolType: ObstacleBridgeChannelMuxSessionProtocol.tun.rawValue,
+                    counter: UInt16(clamping: counter), messageType: ObstacleBridgeChannelMuxSessionMessageType.data.rawValue, body: body
+                ))
+            } catch ObstacleBridgeChannelMuxSessionError.invalidCounter {
+                // The Python shared-TUN sender uses a counter stream that is
+                // not scoped to this receiving peer. Retain it as telemetry,
+                // but do not starve an authenticated, bound TUN channel.
+                counterDiscontinuity = true
+            } catch {
+                return .init(delivered: false, packet: nil)
+            }
         }
         let isBound: Bool
         if let boundChanID {
@@ -1029,9 +1043,9 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             isBound = channelState.isBound(chanID)
         }
         guard isBound, body.count <= mtu else {
-            return InboundTunDataSnapshot(delivered: false, packet: nil)
+            return InboundTunDataSnapshot(delivered: false, packet: nil, counterDiscontinuity: counterDiscontinuity)
         }
-        return InboundTunDataSnapshot(delivered: true, packet: body)
+        return InboundTunDataSnapshot(delivered: true, packet: body, counterDiscontinuity: counterDiscontinuity)
     }
 
     func handleInboundTunDataGuarded(
@@ -1050,7 +1064,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
                 ipVersion: nil,
                 sourceIP: nil,
                 destinationIP: nil,
-                dropReason: nil
+                dropReason: nil,
+                counterDiscontinuity: base.counterDiscontinuity
             )
         }
         guard let parsed = Self.parsePacketEndpoints(body) else {
@@ -1060,7 +1075,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
                 ipVersion: nil,
                 sourceIP: nil,
                 destinationIP: nil,
-                dropReason: Self.parsePacketDropReason(body)
+                dropReason: Self.parsePacketDropReason(body),
+                counterDiscontinuity: base.counterDiscontinuity
             )
         }
         if !ObstacleBridgeTunInboundAdmissionPolicy.admits(
@@ -1073,7 +1089,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
                 ipVersion: parsed.ipVersion,
                 sourceIP: parsed.sourceIP,
                 destinationIP: parsed.destinationIP,
-                dropReason: "source_not_owned_by_peer"
+                dropReason: "source_not_owned_by_peer",
+                counterDiscontinuity: base.counterDiscontinuity
             )
         }
         return GuardedInboundTunDataSnapshot(
@@ -1082,7 +1099,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
             ipVersion: parsed.ipVersion,
             sourceIP: parsed.sourceIP,
             destinationIP: parsed.destinationIP,
-            dropReason: nil
+            dropReason: nil,
+            counterDiscontinuity: base.counterDiscontinuity
         )
     }
 

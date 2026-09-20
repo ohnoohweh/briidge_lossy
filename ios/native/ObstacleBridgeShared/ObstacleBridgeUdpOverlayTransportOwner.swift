@@ -108,6 +108,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         "open_chunk_rejected": 0,
         "data_delivered": 0,
         "data_dropped": 0,
+        "data_counter_discontinuity": 0,
     ]
     private var udpServerDrivers: [ObjectIdentifier: ObstacleBridgeUDPServerConnectionDriver] = [:]
     private var started = false
@@ -400,6 +401,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             "open_chunk_rejected": 0,
             "data_delivered": 0,
             "data_dropped": 0,
+            "data_counter_discontinuity": 0,
         ]
         currentPeerAddress = fixedPeerAddress
         peerCandidates.removeAll()
@@ -1203,6 +1205,13 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             onInboundDeliver: { [weak self] _ in
                 self?.tunMuxFrameCounters["data_delivered", default: 0] += 1
                 self?.lastTunInboundNS = self?.monotonicNowNS() ?? 0
+            },
+            onInboundCounterDiscontinuity: { [weak self] chanID, counter in
+                self?.tunMuxFrameCounters["data_counter_discontinuity", default: 0] += 1
+                self?.eventSink?("udp_overlay_tun_data_counter_discontinuity", [
+                    "chan_id": chanID,
+                    "counter": counter,
+                ])
             },
             onOpenRejected: { [weak self] chanID in
                 self?.tunMuxFrameCounters["open_rejected", default: 0] += 1

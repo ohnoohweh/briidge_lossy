@@ -226,6 +226,17 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                     let replySend = try receiver.sendLocalPacket(receiverReply, nowNS: 3_000_000)
                     let senderPackets = try sender.receiveDatagrams(replySend.datagrams, nowNS: 4_000_000)
 
+                    // Shared-TUN server traffic for a sibling peer can consume
+                    // a sender-local ChannelMux counter. The receiver must
+                    // retain the bound authenticated TUN channel rather than
+                    // blackholing all later packets after that gap.
+                    let discontinuousInbound = receiver.muxRuntime.handleInboundTunData(
+                        chanID: 1,
+                        body: Data("packet-after-sibling-peer".utf8),
+                        mtu: 1400,
+                        counter: 3
+                    )
+
                     let payload: [String: Any] = [
                         "tun_spec": [
                             "l_proto": sender.tunSpec.lProto,
@@ -260,6 +271,11 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
                         "reply_send_mux_frames": replySend.muxFrames.map { $0.jsonObject() },
                         "reply_send_overlay_frame_count": replySend.datagrams.count,
                         "sender_packets": senderPackets.map { String(data: $0, encoding: .utf8) ?? "" },
+                        "discontinuous_inbound": [
+                            "delivered": discontinuousInbound.delivered,
+                            "counter_discontinuity": discontinuousInbound.counterDiscontinuity,
+                            "packet_text": discontinuousInbound.packet.flatMap { String(data: $0, encoding: .utf8) } ?? "",
+                        ],
                     ]
                     let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
                     FileHandle.standardOutput.write(data)
@@ -318,3 +334,8 @@ def test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path(tmp_path: Path)
     ]
     assert payload["reply_send_overlay_frame_count"] == 1
     assert payload["sender_packets"] == ["packet-from-receiver"]
+    assert payload["discontinuous_inbound"] == {
+        "delivered": True,
+        "counter_discontinuity": True,
+        "packet_text": "packet-after-sibling-peer",
+    }
