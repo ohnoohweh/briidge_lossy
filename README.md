@@ -1129,6 +1129,9 @@ What the admin web shows:
 | `--log-file-backup-count` | `5` | Number of rotated log files to keep when `--log-file-max-bytes` is enabled |
 | `--console-level` | `INFO` | console (stdout) logging level (default INFO) |
 | `--file-level` | `DEBUG` | file logging level (default: same as --log) |
+| `--log-udp-target` | unset | Best-effort UDP log receiver `host:port`; transport failures drop records. |
+| `--log-udp-only` | `false` | Use only the UDP sender, isolating runtime work from local logging sinks. |
+| `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
 ### Runner

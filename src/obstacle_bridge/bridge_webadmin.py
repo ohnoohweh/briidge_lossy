@@ -1836,13 +1836,33 @@ class AdminWebUI:
                     if k == "limit":
                         limit = int(v)
                         break
-        try:
-            lines = self._call_runner(self.runner.get_debug_logs, limit=limit, timeout=0.5)
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
-            return
-        payload = {"ok": True, "lines": lines, "count": len(lines)}
-        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
+        if bool(getattr(self.args, "log_udp_only", False)):
+            try:
+                from .bridge_logging_ipc import fetch_remote_log_lines
+
+                remote = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_remote_log_lines, limit), timeout=0.2
+                )
+            except Exception:
+                remote = None
+            remote = remote or {"available": False, "lines": [], "error": "logger unavailable"}
+            result = {
+                "lines": list(remote.get("lines", [])),
+                "source": "remote_udp",
+                "logger_available": bool(remote.get("available", False)),
+                "logger_error": str(remote.get("error", "") or ""),
+            }
+        else:
+            try:
+                lines = self._call_runner(self.runner.get_debug_logs, limit=limit, timeout=0.5)
+            except concurrent.futures.TimeoutError:
+                await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+                return
+            result = {"lines": lines, "source": "local", "logger_available": True, "logger_error": ""}
+        payload = {"ok": True, "lines": result["lines"], "count": len(result["lines"]),
+                   "source": result["source"], "logger_available": result["logger_available"],
+                   "logger_error": result["logger_error"]}
+        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(result['lines'])}")
         await self._send_json(writer, 200, payload)
 
     async def _handle_secure_link_rekey(self, writer, method: str, body: bytes):
