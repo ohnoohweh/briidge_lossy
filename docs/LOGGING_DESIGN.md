@@ -186,7 +186,13 @@ size limits, priority classes, and metadata validation as Python. Its Swift
 tests load the canonical vector from `docs/TELEMETRY_V1_VECTORS.json`, exercise
 event and batch round trips, and reject malformed, secret-bearing, empty, and
 oversized values. The macOS build script and generated iOS project include the
-source in their application and extension targets.
+source in their application and extension targets. `ObstacleBridgeTelemetryEmitter`
+provides a fixed-capacity immediate-loss queue with low-priority eviction for
+critical evidence. `ObstacleBridgeTelemetrySpool` provides private atomic
+checksum segments, corruption quarantine, bounded priority-aware eviction, and
+installation/session-scoped acknowledgement. Its tests cover saturation,
+concurrent emission, corrupt recovery, capacity eviction, and unavailable
+storage setup.
 
 The remaining packages bring macOS and iOS from the contract to an isolated
 telemetry path. A package remains here only until its definition of done has
@@ -194,7 +200,6 @@ evidence in the repository; completed capabilities move to the status section.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |
-| S2 — isolated producer and spool | Add a bounded, nonblocking event producer and private app-group-capable spool with atomic commit, checksum recovery, corruption quarantine, priority-aware eviction, and acknowledgement-scoped deletion. | Saturation, concurrent emission, partial write, corrupt segment, full capacity, and unavailable-directory tests prove producer calls remain bounded and do not throw into packet or lifecycle callbacks. |
 | S3 — mTLS uploader | Add one low-priority Swift uploader with TLS-only HTTPS, client credentials, bounded batches, one in-flight request, acknowledgement handling, timeout, jittered backoff, and byte budget. | A controlled local collector verifies mTLS and acknowledgement semantics; offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart tests keep the spool bounded and preserve the runtime path. |
 | S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. |
 | S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Device or simulator evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |

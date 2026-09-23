@@ -25,6 +25,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTelemetry.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTelemetrySpool.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift",
