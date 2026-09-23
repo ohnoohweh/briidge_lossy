@@ -226,6 +226,8 @@ The host runner also records a bounded startup-failure marker after the
 telemetry queue is available, without forwarding exception text.
 The Packet Tunnel uses stable error codes for post-initialization startup
 failures and preserves exception detail only in its local runtime evidence.
+On shutdown, both runtimes persist their final queued marker without starting a
+new request and cancel any outstanding URLSession upload.
 Controlled-collector coverage and restart/network-failure qualification remain
 required.
 

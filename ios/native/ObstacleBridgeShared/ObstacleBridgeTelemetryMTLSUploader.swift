@@ -42,6 +42,14 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
         }.resume()
     }
 
+    /// Cancels outstanding network work during runtime shutdown. The spool
+    /// remains authoritative, so a later runtime can retry its unacknowledged
+    /// batch without waiting for this session to finish.
+    func cancel() {
+        policy.fail()
+        session.invalidateAndCancel()
+    }
+
     func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge, completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
         if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodClientCertificate {
             completionHandler(.useCredential, credential)

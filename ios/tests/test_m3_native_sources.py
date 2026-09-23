@@ -35,13 +35,17 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "ObstacleBridgeTelemetryAdminStatus" in source
     assert "SecItemCopyMatching" in source
     assert "return (result as! SecIdentity)" in source
+    assert "func cancel()" in source
+    assert "session.invalidateAndCancel()" in source
     assert '"identity_available": identityAvailable' in source
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)' in provider
     assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
     assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
-    assert "private func flushTelemetry()" in provider
+    assert "private func flushTelemetry(startUpload: Bool = true)" in provider
+    assert "flushTelemetry(startUpload: false)" in provider
+    assert "telemetryUploader?.cancel()" in provider
     assert "private func enqueueTelemetryHealth(" in provider
     assert 'event: "runtime.health"' in provider
     assert '"memory_bytes": .integer(memoryBytes)' in provider

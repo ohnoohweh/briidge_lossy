@@ -61,6 +61,7 @@ def test_macos_build_includes_mtls_telemetry_transport() -> None:
     assert "connectionProxyDictionary = [:]" in source
     assert "SecItemCopyMatching" in source
     assert "return (result as! SecIdentity)" in source
+    assert "session.invalidateAndCancel()" in source
 
 
 def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
@@ -88,11 +89,13 @@ def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert 'DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")' in source
     assert "startTelemetryIfConfigured()" in source
-    assert "private func flushTelemetry()" in source
+    assert "private func flushTelemetry(startUpload: Bool = true)" in source
     assert "private func enqueueTelemetryHealth(state: String, counter: UInt64)" in source
     assert 'event: "runtime.health"' in source
     assert "enqueueTelemetryHealth(state: event, counter: sequence)" in source
     assert 'enqueueTelemetryHealth(state: "startup_failed", counter: 0)' in source
+    assert "flushTelemetry(startUpload: false)" in source
+    assert "telemetryUploader?.cancel()" in source
 
 
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:

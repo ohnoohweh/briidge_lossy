@@ -530,17 +530,18 @@ final class ObstacleBridgeHostRunner {
         }
     }
 
-    private func flushTelemetry() {
+    private func flushTelemetry(startUpload: Bool = true) {
         guard let emitter = telemetryEmitter, let spool = telemetrySpool, let uploader = telemetryUploader else { return }
         for event in emitter.drain() { _ = spool.append(event) }
-        uploader.uploadOnce()
+        if startUpload { uploader.uploadOnce() }
     }
 
     private func stopTelemetry() {
         telemetryTimer?.cancel(); telemetryTimer = nil
         telemetryQueue.sync { [weak self] in
             self?.telemetryEmitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
-            self?.flushTelemetry()
+            self?.flushTelemetry(startUpload: false)
+            self?.telemetryUploader?.cancel()
         }
         telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
     }
