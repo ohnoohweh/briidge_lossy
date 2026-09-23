@@ -63,7 +63,7 @@ enum ObstacleBridgeTelemetryIdentityStore {
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let result
         else { return nil }
-        return result as! SecIdentity
+        return (result as! SecIdentity)
     }
 }
 #endif

@@ -34,6 +34,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "performDefaultHandling" in source
     assert "ObstacleBridgeTelemetryAdminStatus" in source
     assert "SecItemCopyMatching" in source
+    assert "return (result as! SecIdentity)" in source
     assert '"identity_available": identityAvailable' in source
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)' in provider
