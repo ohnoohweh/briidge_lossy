@@ -78,6 +78,13 @@ def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
     assert "ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)" in source
 
 
+def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")' in source
+    assert "startTelemetryIfConfigured()" in source
+    assert "private func flushTelemetry()" in source
+
+
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
 

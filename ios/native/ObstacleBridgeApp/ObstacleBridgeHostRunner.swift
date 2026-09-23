@@ -143,6 +143,7 @@ final class ObstacleBridgeHostRunner {
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
     private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
+    private let telemetryQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -191,6 +192,10 @@ final class ObstacleBridgeHostRunner {
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
     private var runtimeHealthTimer: DispatchSourceTimer?
+    private var telemetryTimer: DispatchSourceTimer?
+    private var telemetryEmitter: ObstacleBridgeTelemetryEmitter?
+    private var telemetrySpool: ObstacleBridgeTelemetrySpool?
+    private var telemetryUploader: ObstacleBridgeTelemetryMTLSUploader?
     private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
@@ -460,6 +465,7 @@ final class ObstacleBridgeHostRunner {
         startAdminSnapshotPublisher()
         startClientRestartWatchdog()
         startRuntimeHealthHeartbeat()
+        startTelemetryIfConfigured()
     }
 
     func stop() {
@@ -481,6 +487,7 @@ final class ObstacleBridgeHostRunner {
         controlServer?.stop()
         controlServer = nil
         stopRuntimeHealthHeartbeat()
+        stopTelemetry()
         appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
     }
 
@@ -488,6 +495,45 @@ final class ObstacleBridgeHostRunner {
         URL(fileURLWithPath: runtimeConfigPath)
             .deletingLastPathComponent()
             .appendingPathComponent(".ObstacleBridgeHostRunner.runtime-health-v1.json")
+    }
+
+    private func startTelemetryIfConfigured() {
+        stopTelemetry()
+        guard Self.boolValue(from: runtimeConfig["telemetry_enabled"]) ?? false,
+              let endpointText = Self.stringValue(from: runtimeConfig["telemetry_endpoint"]),
+              let endpoint = URL(string: endpointText), endpoint.scheme?.lowercased() == "https",
+              let installationID = Self.stringValue(from: runtimeConfig["telemetry_installation_id"]),
+              let identityLabel = Self.stringValue(from: runtimeConfig["telemetry_mtls_identity_label"]),
+              let identity = ObstacleBridgeTelemetryIdentityStore.identity(label: identityLabel)
+        else { return }
+        let spoolURL = Self.stringValue(from: runtimeConfig["telemetry_spool_directory"]).map(URL.init(fileURLWithPath:))
+            ?? URL(fileURLWithPath: runtimeConfigPath).deletingLastPathComponent().appendingPathComponent(".ObstacleBridge.telemetry-v1", isDirectory: true)
+        guard let emitter = try? ObstacleBridgeTelemetryEmitter(installationID: installationID, sessionID: UUID().uuidString),
+              let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
+              let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
+        else { return }
+        telemetryEmitter = emitter; telemetrySpool = spool
+        telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
+        _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
+        let timer = DispatchSource.makeTimerSource(queue: telemetryQueue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
+        timer.setEventHandler { [weak self] in self?.flushTelemetry() }
+        telemetryTimer = timer; timer.resume()
+    }
+
+    private func flushTelemetry() {
+        guard let emitter = telemetryEmitter, let spool = telemetrySpool, let uploader = telemetryUploader else { return }
+        for event in emitter.drain() { _ = spool.append(event) }
+        uploader.uploadOnce()
+    }
+
+    private func stopTelemetry() {
+        telemetryTimer?.cancel(); telemetryTimer = nil
+        telemetryQueue.sync { [weak self] in
+            self?.telemetryEmitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
+            self?.flushTelemetry()
+        }
+        telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
     }
 
     private func beginRuntimeHealthLifetime() {

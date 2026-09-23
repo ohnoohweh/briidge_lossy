@@ -208,8 +208,13 @@ an HTTPS endpoint, and a Keychain identity label are configured; it never
 returns the identity label, endpoint path, credentials, or event data.
 On Apple platforms it also reports a boolean Keychain lookup result for the
 configured label without returning the identity or certificate details.
-Controlled-collector coverage, runtime invocation, and restart/network-failure
-qualification remain required.
+The macOS host runner has an in-progress dedicated telemetry queue that creates
+the emitter, spool, policy, and mTLS uploader only after this configuration is
+valid, then drains it on a five-second timer outside service work. The matching
+Packet Tunnel queue uses the app-group `telemetry-v1` spool and the same
+five-second scheduling boundary, without packet-flow callback I/O.
+Controlled-collector coverage and restart/network-failure qualification remain
+required.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |

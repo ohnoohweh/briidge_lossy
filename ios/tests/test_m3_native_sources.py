@@ -36,6 +36,10 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert '"identity_available": identityAvailable' in source
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)' in provider
+    assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
+    assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
+    assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
+    assert "private func flushTelemetry()" in provider
 
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
