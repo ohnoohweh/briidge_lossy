@@ -346,6 +346,17 @@ class TelemetrySpool:
                     removed += 1
         return removed
 
+    def status(self) -> Dict[str, Any]:
+        events = self.recover(MAX_BATCH_EVENTS)
+        return {
+            "pending_events": len(self._segments()),
+            "pending_bytes": self._usage(),
+            "oldest_sequence": events[0]["sequence"] if events else None,
+            "newest_sequence": events[-1]["sequence"] if events else None,
+            "priorities": dict(Counter(event["priority"] for event in events)),
+            "drops": dict(self.dropped),
+        }
+
 
 class _suppress_os_error:
     def __enter__(self):

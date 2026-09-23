@@ -74,6 +74,13 @@ def test_spool_recovers_atomic_events_and_acknowledges_them(tmp_path):
     assert spool.recover() == []
 
 
+def test_spool_status_is_bounded_and_redacted(tmp_path):
+    spool = TelemetrySpool(str(tmp_path / "spool")); assert spool.append(VECTORS["event"])
+    status = spool.status()
+    assert status["pending_events"] == 1
+    assert "fields" not in status and "installation_id" not in status
+
+
 def test_spool_ignores_partial_write_and_quarantines_corrupt_segment(tmp_path):
     spool = TelemetrySpool(str(tmp_path / "spool"))
     (spool.directory / ".event-00000000000000000001.tmp").write_bytes(b"partial")

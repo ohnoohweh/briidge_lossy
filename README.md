@@ -1141,6 +1141,7 @@ the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
+The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
 
 ### Runner
 | Option(s) | Default | Description |

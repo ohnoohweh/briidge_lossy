@@ -108,7 +108,7 @@ class TelemetryIngestStore:
         return {"ok": True, "accepted_through": sequences[-1], "accepted_count": len(normalized)}
 
     def health(self) -> Dict[str, Any]:
-        return {"ok": True, "accepted_batches": self.accepted_batches, "rejected_batches": self.rejected_batches}
+        return {"ok": True, "accepted_batches": self.accepted_batches, "rejected_batches": self.rejected_batches, "spool": self.spool.status()}
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):

@@ -169,11 +169,12 @@ allowlist parser/serializer, canonical vector, bounded P1 producer, P2 atomic
 local spool, a P3 TLS-required local-reference ingest process with durable
 batch acknowledgement, P4 local mTLS issuance plus revocation verification,
 P5 single-flight mTLS uploader with acknowledgement-scoped spool removal, and
-P6 durable replay rejection plus per-identity/source admission buckets.
+P6 durable replay rejection plus per-identity/source admission buckets, and P7
+redacted local spool/collector evidence CLI.
 The P0 security review, P1 benchmark/concurrency evidence, P2 fault-injection
 qualification, P3–P6 operations qualification, enrollment/rotation governance,
 P5 network-policy/budget qualification, and P6 adversarial/load qualification
-remain required acceptance work; P7–P8 remain unimplemented.
+remain required acceptance work; P7 Admin integration and P8 remain unimplemented.
 
 | Package | Concrete deliverable | Definition of done |
 | --- | --- | --- |

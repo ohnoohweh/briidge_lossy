@@ -1482,6 +1482,7 @@ REQ-ADM-001:
     - tests/unit/test_telemetry.py::test_mtls_ingest_accepts_matching_client_identity
     - tests/unit/test_telemetry.py::test_uploader_requires_https_and_respects_backoff
     - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
+    - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
     - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
