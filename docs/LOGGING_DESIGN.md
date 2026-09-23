@@ -168,11 +168,12 @@ Delivered local foundation: `bridge_telemetry.py` provides the P0 `telemetry/v1`
 allowlist parser/serializer, canonical vector, bounded P1 producer, P2 atomic
 local spool, a P3 TLS-required local-reference ingest process with durable
 batch acknowledgement, P4 local mTLS issuance plus revocation verification,
-and P5 single-flight mTLS uploader with acknowledgement-scoped spool removal.
+P5 single-flight mTLS uploader with acknowledgement-scoped spool removal, and
+P6 durable replay rejection plus per-identity/source admission buckets.
 The P0 security review, P1 benchmark/concurrency evidence, P2 fault-injection
-qualification, P3–P5 operations qualification, enrollment/rotation governance,
-and P5 network-policy/budget qualification remain required acceptance work;
-P6–P8 remain unimplemented.
+qualification, P3–P6 operations qualification, enrollment/rotation governance,
+P5 network-policy/budget qualification, and P6 adversarial/load qualification
+remain required acceptance work; P7–P8 remain unimplemented.
 
 | Package | Concrete deliverable | Definition of done |
 | --- | --- | --- |

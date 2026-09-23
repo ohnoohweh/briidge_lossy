@@ -16,7 +16,7 @@ from obstacle_bridge.bridge_telemetry import (
     encode_event,
 )
 from obstacle_bridge import bridge_telemetry_ingest as ingest
-from obstacle_bridge.bridge_telemetry_ingest import TelemetryIngestStore, build_tls_context
+from obstacle_bridge.bridge_telemetry_ingest import TelemetryAdmissionControl, TelemetryIngestStore, build_tls_context
 from obstacle_bridge.bridge_telemetry_credentials import TelemetryRevocationList, generate_ca, issue_client_certificate, issue_server_certificate
 from obstacle_bridge.bridge_telemetry_uploader import TelemetryUploader
 
@@ -105,6 +105,17 @@ def test_ingest_store_acknowledges_only_valid_ordered_durable_batch(tmp_path):
     bad["sequence"] = 0
     with pytest.raises(TelemetryValidationError):
         store.accept(json.dumps({"v": 1, "kind": "telemetry.batch", "events": [bad]}).encode("utf-8"), "install-01", 1)
+
+
+def test_ingest_rejects_replay_and_admission_exhaustion(tmp_path):
+    payload = json.dumps({"v": 1, "kind": "telemetry.batch", "events": [VECTORS["event"]]}).encode("utf-8")
+    store = TelemetryIngestStore(str(tmp_path / "ingest"), admission=TelemetryAdmissionControl(capacity=1, refill_per_sec=0.1))
+    assert store.accept(payload, "install-01", 1, "source-a")["ok"]
+    with pytest.raises(TelemetryValidationError, match="admission"):
+        store.accept(payload, "install-01", 1, "source-a")
+    replay = TelemetryIngestStore(str(tmp_path / "ingest"), admission=TelemetryAdmissionControl())
+    with pytest.raises(TelemetryValidationError, match="replayed"):
+        replay.accept(payload, "install-01", 1, "source-b")
 
 
 def test_ingest_requires_tls_material(tmp_path):

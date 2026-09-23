@@ -685,6 +685,7 @@ ARC-CMP-005:
     - tests/unit/test_telemetry.py::test_ingest_store_acknowledges_only_valid_ordered_durable_batch
     - tests/unit/test_telemetry.py::test_mtls_ingest_accepts_matching_client_identity
     - tests/unit/test_telemetry.py::test_uploader_requires_https_and_respects_backoff
+    - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates

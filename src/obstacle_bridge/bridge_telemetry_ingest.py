@@ -5,6 +5,9 @@ import argparse
 import http.server
 import json
 import ssl
+import os
+import time
+from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from cryptography import x509
@@ -16,16 +19,57 @@ from .bridge_telemetry_credentials import TelemetryRevocationList
 MAX_REQUEST_BYTES = MAX_EVENT_BYTES * MAX_BATCH_EVENTS
 
 
+class TelemetryReplayStore:
+    def __init__(self, path: str):
+        self.path = Path(path)
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._values = self._load()
+
+    def _load(self) -> Dict[str, int]:
+        try:
+            return {str(k): int(v) for k, v in json.loads(self.path.read_text(encoding="utf-8")).items()}
+        except Exception:
+            return {}
+
+    def last(self, identity: str) -> int:
+        return self._values.get(identity, 0)
+
+    def advance(self, identity: str, sequence: int) -> None:
+        self._values[identity] = int(sequence)
+        temporary = self.path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(self._values, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        os.replace(str(temporary), str(self.path))
+
+
+class TelemetryAdmissionControl:
+    def __init__(self, capacity: int = 32, refill_per_sec: float = 4.0):
+        self.capacity, self.refill_per_sec = max(1, int(capacity)), max(0.1, float(refill_per_sec))
+        self._buckets: Dict[str, tuple[float, float]] = {}
+
+    def allow(self, identity: str, source: str, now: Optional[float] = None) -> bool:
+        current = time.monotonic() if now is None else now
+        key = "%s|%s" % (identity, source)
+        tokens, previous = self._buckets.get(key, (float(self.capacity), current))
+        tokens = min(float(self.capacity), tokens + max(0.0, current - previous) * self.refill_per_sec)
+        if tokens < 1.0:
+            self._buckets[key] = (tokens, current)
+            return False
+        self._buckets[key] = (tokens - 1.0, current)
+        return True
+
+
 class TelemetryIngestStore:
     """Durably accepts one validated batch before reporting acknowledgement."""
 
-    def __init__(self, spool_directory: str, revocations: Optional[TelemetryRevocationList] = None):
+    def __init__(self, spool_directory: str, revocations: Optional[TelemetryRevocationList] = None, replay_store: Optional[TelemetryReplayStore] = None, admission: Optional[TelemetryAdmissionControl] = None):
         self.spool = TelemetrySpool(spool_directory)
         self.revocations = revocations
+        self.replay_store = replay_store or TelemetryReplayStore(str(Path(spool_directory) / "replay.json"))
+        self.admission = admission or TelemetryAdmissionControl()
         self.accepted_batches = 0
         self.rejected_batches = 0
 
-    def accept(self, payload: bytes, installation_id: Optional[str] = None, certificate_serial: Optional[int] = None) -> Dict[str, Any]:
+    def accept(self, payload: bytes, installation_id: Optional[str] = None, certificate_serial: Optional[int] = None, source: str = "local") -> Dict[str, Any]:
         if not isinstance(payload, bytes) or not payload or len(payload) > MAX_REQUEST_BYTES:
             self.rejected_batches += 1
             raise TelemetryValidationError("invalid request size")
@@ -47,8 +91,14 @@ class TelemetryIngestStore:
                 raise TelemetryValidationError("client identity mismatch")
             if certificate_serial is None or (self.revocations and self.revocations.is_revoked(certificate_serial)):
                 raise TelemetryValidationError("client credential rejected")
+            identity_key = "%s/%s" % next(iter(identities))
+            if not self.admission.allow(identity_key, source):
+                raise TelemetryValidationError("admission limited")
+            if sequences[0] <= self.replay_store.last(identity_key):
+                raise TelemetryValidationError("replayed batch")
             if not self.spool.append_many(normalized):
                 raise TelemetryValidationError("durable queue unavailable")
+            self.replay_store.advance(identity_key, sequences[-1])
         except Exception as exc:
             self.rejected_batches += 1
             if isinstance(exc, TelemetryValidationError):
@@ -101,7 +151,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             attributes = parsed.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
             if len(attributes) != 1:
                 raise TelemetryValidationError("client identity missing")
-            self._json(202, self.store.accept(self.rfile.read(length), attributes[0].value, parsed.serial_number))
+            self._json(202, self.store.accept(self.rfile.read(length), attributes[0].value, parsed.serial_number, self.client_address[0]))
         except TelemetryValidationError as exc:
             self._json(401, {"ok": False, "error": str(exc)})
 
