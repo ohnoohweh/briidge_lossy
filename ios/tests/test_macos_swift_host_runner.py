@@ -6016,6 +6016,77 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
             )
 
 
+def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_path: Path) -> None:
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime_telemetry_configuration.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "runner": {"overlay_transport": "myudp"},
+                "udp_session": {"udp_bind": "127.0.0.1", "udp_own_port": 0},
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": status_port,
+                    "admin_web_dir": str((ROOT / "admin_web").resolve()),
+                    "admin_web_auth_disable": True,
+                },
+                "telemetry": {
+                    "telemetry_enabled": True,
+                    "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
+                    "telemetry_installation_id": "installation-private-id",
+                    "telemetry_mtls_identity_label": "unavailable-test-identity",
+                    "telemetry_spool_directory": str(tmp_path / "private-spool"),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [str(artifact.binary_path), "--runtime-config", str(runtime_config_path), "--hold-sec", "20"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        status = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status", timeout_sec=20.0)
+        config = _http_json(f"http://127.0.0.1:{status_port}/api/config")
+        telemetry = status["telemetry"]
+        assert telemetry == {
+            "enabled": True,
+            "configured": True,
+            "endpoint_scheme": "https",
+            "endpoint_host": "collector.example.invalid",
+            "identity_configured": True,
+            "identity_available": False,
+        }
+        telemetry_keys = {str(item["key"]) for item in config["schema"]["telemetry"]}
+        assert telemetry_keys == {
+            "telemetry_enabled",
+            "telemetry_endpoint",
+            "telemetry_installation_id",
+            "telemetry_mtls_identity_label",
+            "telemetry_spool_directory",
+        }
+        assert config["config"]["telemetry_enabled"] is True
+        for key in telemetry_keys - {"telemetry_enabled"}:
+            assert config["config"][key] == ""
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
 def test_macos_swift_host_runner_bootstraps_quic_stack_and_serves_status(tmp_path: Path) -> None:
     artifact = build_macos_swift_artifact()
     binary_path = artifact.binary_path
