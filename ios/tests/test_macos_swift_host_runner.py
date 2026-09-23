@@ -76,8 +76,11 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
 
 def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert '"telemetry": telemetryStatusSnapshot()' in source
     assert "ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)" in source
+    assert '"telemetry": [' in runtime_config
+    assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
 
 
 def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:

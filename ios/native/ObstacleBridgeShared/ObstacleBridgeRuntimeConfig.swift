@@ -307,6 +307,7 @@ enum ObstacleBridgeRuntimeConfig {
         "TUN_routing",
         "admin_web",
         "debug_logging",
+        "telemetry",
         "channel_mux",
         "iOS_TUN_connector",
         "proxy_provider",
@@ -356,6 +357,13 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "log_file", description: "Debug log file path", defaultValue: ""),
                 schemaItem(key: "log_file_max_bytes", description: "Maximum size of each log file before rotation", defaultValue: 1_048_576),
                 schemaItem(key: "log_file_backup_count", description: "Number of rotated log files to keep", defaultValue: 5),
+            ],
+            "telemetry": [
+                schemaItem(key: "telemetry_enabled", description: "Enable bounded HTTPS telemetry upload outside the bridge and packet paths.", defaultValue: false),
+                schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: "", secret: true),
+                schemaItem(key: "telemetry_installation_id", description: "Pseudonymous installation identifier scoped to telemetry collection.", defaultValue: "", secret: true),
+                schemaItem(key: "telemetry_mtls_identity_label", description: "Keychain label of the enrolled telemetry client identity.", defaultValue: "", secret: true),
+                schemaItem(key: "telemetry_spool_directory", description: "Optional macOS telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: "", secret: true),
             ],
             "runner": [
                 schemaItem(key: "overlay_transport", description: "Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances.", defaultValue: "myudp"),

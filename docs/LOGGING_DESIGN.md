@@ -208,7 +208,10 @@ an HTTPS endpoint, and a Keychain identity label are configured; it never
 returns the identity label, endpoint path, credentials, or event data.
 Masked Admin configuration also clears the telemetry endpoint, installation
 identifier, Keychain identity label, and spool location while retaining the
-enabled flag.
+enabled flag. The shared Apple configuration schema exposes a disabled-by-
+default `telemetry` section; its collector endpoint, pseudonymous installation
+identifier, Keychain identity label, and macOS spool location are secret-at-
+rest settings.
 On Apple platforms it also reports a boolean Keychain lookup result for the
 configured label without returning the identity or certificate details.
 The macOS host runner has an in-progress dedicated telemetry queue that creates
