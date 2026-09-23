@@ -206,6 +206,9 @@ backoff after a failure. The Apple transport presents only a supplied enrolled
 validation enabled. The macOS status snapshot exposes only whether telemetry,
 an HTTPS endpoint, and a Keychain identity label are configured; it never
 returns the identity label, endpoint path, credentials, or event data.
+Masked Admin configuration also clears the telemetry endpoint, installation
+identifier, Keychain identity label, and spool location while retaining the
+enabled flag.
 On Apple platforms it also reports a boolean Keychain lookup result for the
 configured label without returning the identity or certificate details.
 The macOS host runner has an in-progress dedicated telemetry queue that creates

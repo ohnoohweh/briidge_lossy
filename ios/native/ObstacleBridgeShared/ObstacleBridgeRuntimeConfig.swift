@@ -741,7 +741,14 @@ enum ObstacleBridgeRuntimeConfig {
         if payload["compress_layer_types"] == nil {
             payload["compress_layer_types"] = "data,data_frag"
         }
-        for key in ["admin_web_password", "secure_link_psk"] where payload[key] != nil {
+        for key in [
+            "admin_web_password",
+            "secure_link_psk",
+            "telemetry_endpoint",
+            "telemetry_installation_id",
+            "telemetry_mtls_identity_label",
+            "telemetry_spool_directory",
+        ] where payload[key] != nil {
             payload[key] = ""
         }
         return payload

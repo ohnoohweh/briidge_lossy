@@ -58,6 +58,7 @@ def test_macos_build_includes_mtls_telemetry_transport() -> None:
     assert "ObstacleBridgeTelemetryMTLSUploader.swift" in build_script
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "connectionProxyDictionary = [:]" in source
+    assert "SecItemCopyMatching" in source
 
 
 def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:

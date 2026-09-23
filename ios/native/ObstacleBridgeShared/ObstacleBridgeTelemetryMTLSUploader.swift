@@ -60,8 +60,10 @@ enum ObstacleBridgeTelemetryIdentityStore {
             kSecMatchLimit: kSecMatchLimitOne,
         ]
         var result: CFTypeRef?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
-        return result as? SecIdentity
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let result
+        else { return nil }
+        return result as! SecIdentity
     }
 }
 #endif

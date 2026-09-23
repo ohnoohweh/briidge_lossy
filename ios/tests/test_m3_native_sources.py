@@ -28,6 +28,7 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
 
 def test_shared_mtls_telemetry_transport_source_exists() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "SecIdentity" in source
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "performDefaultHandling" in source
@@ -40,6 +41,13 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
     assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
     assert "private func flushTelemetry()" in provider
+    for key in [
+        "telemetry_endpoint",
+        "telemetry_installation_id",
+        "telemetry_mtls_identity_label",
+        "telemetry_spool_directory",
+    ]:
+        assert f'"{key}",' in runtime_config
 
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:

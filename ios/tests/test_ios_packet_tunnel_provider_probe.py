@@ -2155,6 +2155,11 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                             "ws_peer": "",
                             "ws_peer_port": 8080,
                         ] as [String: Any],
+                        "telemetry_enabled": true,
+                        "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
+                        "telemetry_installation_id": "installation-private-id",
+                        "telemetry_mtls_identity_label": "telemetry-client-identity",
+                        "telemetry_spool_directory": "/private/telemetry-spool",
                     ]
                     let saved = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
                         currentRawConfig: freshRawConfig,
@@ -2238,6 +2243,11 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
     assert payload["masked"]["secure_link"] is True
     assert payload["masked"]["secure_link_mode"] == "psk"
     assert payload["masked"]["secure_link_psk"] == ""
+    assert payload["masked"]["telemetry_enabled"] is True
+    assert payload["masked"]["telemetry_endpoint"] == ""
+    assert payload["masked"]["telemetry_installation_id"] == ""
+    assert payload["masked"]["telemetry_mtls_identity_label"] == ""
+    assert payload["masked"]["telemetry_spool_directory"] == ""
     assert payload["masked"]["compress_layer"] is True
     assert payload["masked"]["compress_layer_level"] == 5
 
