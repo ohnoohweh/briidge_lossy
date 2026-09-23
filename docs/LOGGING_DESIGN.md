@@ -157,73 +157,52 @@ and supports HTTPS, not custom UDP transport.
 | Failure evidence | Bounded heartbeat/counter snapshots plus markers around settings apply, start, reassert, stop, and fatal errors. Correlate last persisted provider event with iOS tunnel status and next restart. |
 | Operations | Signed configuration and rollback for pins, credentials, schema, sampling, priorities, and kill switches. Alert on auth/replay failures, upload backlog, spool eviction, and ingest shedding. |
 
-### Python hardened reference implementation sequence
+### Python reference status
 
-Python is the required reference implementation. Swift/iOS work does not begin
-until Python packages P0 through P7 are complete and P8 has passed its release
-gate. These packages create an independently deployable Internet telemetry
-path; they do not modify, expose, or upgrade the private UDP receiver.
+The Python reference implementation supplies a complete local, testable
+telemetry path for the public-Internet design. It is a reference and
+pre-production qualification target, not an approval to expose a collector to
+the Internet. It is separate from, and does not alter, the private UDP logging
+receiver.
 
-Delivered local foundation: `bridge_telemetry.py` provides the P0 `telemetry/v1`
-allowlist parser/serializer, canonical vector, bounded P1 producer, P2 atomic
-local spool, a P3 TLS-required local-reference ingest process with durable
-batch acknowledgement, P4 local mTLS issuance plus revocation verification,
-P5 single-flight mTLS uploader with acknowledgement-scoped spool removal, and
-P6 durable replay rejection plus per-identity/source admission buckets, and P7
-redacted local spool/collector evidence CLI plus authenticated Admin status.
-The P0 security review, P1 benchmark/concurrency evidence, P2 fault-injection
-qualification, P3–P6 operations qualification, enrollment/rotation governance,
-P5 network-policy/budget qualification, and P6 adversarial/load qualification
-remain required acceptance work; P7 deployment/authorization review and P8
-production gates remain unimplemented. The repository provides the P8 local
-pre-qualification command `python scripts/qualify_telemetry.py`; it measures
-bounded saturated-producer latency and drops but does not substitute for a
-production load/security/operations review.
-
-| Package | Concrete deliverable | Definition of done |
-| --- | --- | --- |
-| P0 — freeze security contract | Versioned `telemetry/v1` event and batch schema, threat model, redaction allowlist, size limits, priority classes, error taxonomy, and test vectors in `docs/` plus Python parser/serializer. | Security review signs the threat model; schema vectors round-trip deterministically; unknown fields, oversized values, secrets, invalid timestamps, duplicate sequence numbers, and malformed encodings are rejected; no payload-bearing field is representable. |
-| P1 — bounded Python producer | A `TelemetryEmitter` with a nonblocking `emit()` API, fixed-capacity in-memory queue, monotonic counters, drop accounting, and runtime lifecycle/load probes. The existing logging handler may mirror only allowlisted records into it. | Microbenchmark proves the hot path performs no DNS, disk, network, lock contention beyond its bounded queue operation, or unbounded allocation; a full queue drops according to documented priority; producer/transport exceptions never reach bridge or TUN callbacks; focused tests cover saturation and concurrent emitters. |
-| P2 — crash-safe local spool | A private-permission, rotating Python spool with atomic segment commit, bounded total bytes/files, checksummed envelopes, recovery scan, and oldest-low-priority-first eviction. | Power-loss/partial-write and corrupt-segment tests recover every committed event at most once locally and never block producer progress; full-disk, permission failure, and rotation failure become counters/health events; spool limits are enforced under stress. |
-| P3 — hardened HTTPS ingest service | A separately runnable Python collector process with `POST /v1/telemetry/batches`, strict TLS configuration, request/body/time limits, schema validation, durable accepted-batch queue, and health/metrics endpoint. No log retrieval endpoint is public. | Plain HTTP is refused; malformed/oversized/compressed-bomb requests are rejected within configured CPU/memory bounds; accepted batches are durably acknowledged only after queue commit; restart recovery preserves queue integrity; integration tests exercise TLS, IPv4/IPv6, and collector restart. |
-| P4 — enrollment and client authentication | Per-installation credential model, enrollment service/CLI, mTLS certificate issuance or short-lived signed token issuance, scoped credentials, server-side revocation list, and dual-pin rotation configuration. | Anonymous ingest, expired credential, wrong scope, revoked credential, and invalid chain are rejected; valid credential acceptance is audited; credential and pin rotation succeeds with overlap then rejects retired material; private keys never appear in logs, config dumps, or Admin APIs. |
-| P5 — authenticated uploader | One Python uploader worker reading the spool, batching by byte/count/time cap, using TLS-authenticated HTTPS, idempotency key and sequence range, one in-flight upload, timeout, jittered backoff, and network/byte budgets. | Offline, DNS failure, TLS failure, slow collector, 429/5xx, duplicate acknowledgement, and restart tests preserve bounded behavior and eventual accepted delivery when connectivity returns; no retry executes on the logging or packet path; upload acknowledgement advances the spool only for the accepted range. |
-| P6 — replay, quota, and abuse controls | Server replay store, per-credential/source token buckets, concurrency caps, deadline propagation, structured reject reasons, and collector-side overload shedding. | Replay, out-of-window clock, forged identity, credential spray, request flood, slow-client, and response-amplification tests show bounded CPU/memory and correct rejection metrics; one abusive identity cannot prevent a valid identity from ingesting within its quota. |
-| P7 — operator evidence plane | Authenticated Admin/CLI read model for local spool and collector status: last accepted sequence, last upload attempt/acknowledgement, drops by reason, queue/spool occupancy, and lifecycle timeline. | Read access uses existing authenticated admin policy or separate collector auth; responses are bounded/redacted; an unavailable collector is reported as data; UI/API tests prove no secret or payload disclosure and no blocking call on the bridge runtime loop. |
-| P8 — release qualification | Reproducible deployment, configuration reference, key/pin rotation and incident runbooks, metrics/alerts, retention job, privacy review, external security test, and soak/load harness. | Sustained overload and fault-injection tests demonstrate bridge/TUN throughput and latency stay within agreed baseline tolerance while telemetry is continuously rejected, delayed, or unavailable; security review and operational owner approve production exposure; rollback and credential-revocation drills succeed. |
-
-P0–P2 are local-only and safe to develop without Internet exposure. P3–P8 use a
-non-production collector and test credentials until P8 is complete. The first
-iOS implementation package starts only after P8 and reuses the frozen P0 wire
-schema, P2 spool semantics, P4 enrollment model, and P5 acknowledgement rules.
-
-### Open measures and definition of done
-
-No public deployment is permitted until every applicable DoD is met.
-
-| Work package | Definition of done |
+| Capability | Present implementation |
 | --- | --- |
-| Extension instrumentation | Swift provider emits the redacted lifecycle, heartbeat, load, queue/drop, and fatal-error schema from a bounded non-packet-callback path. Tests prove secret exclusion and no packet-flow delay under a saturated diagnostic path. |
-| Crash-safe spool | Bounded, rotating, corruption-tolerant app-group spool survives termination and is read after restart. Tests cover partial writes, full storage, repeated launch, and eviction. |
-| Authenticated ingest | HTTPS service accepts only authenticated, schema-validated, size-limited batches. Enrollment, credential/pin rotation, revocation, replay rejection, audit logging, integration tests, and security review are complete. |
-| iOS uploader | One low-priority shared-container uploader resumes the spool with backoff/jitter and network-cost policy. Device coverage includes termination, offline-to-online, VPN up/down, cellular, and Low Data Mode; it is not treated as immediate last-gasp delivery. |
-| Abuse resistance | Adversarial/load tests prove quotas, parser bounds, replay handling, no unauthenticated query/reflection, overload shedding, and isolation from collector/storage. SLOs define accepted loss and ingest latency. |
-| Correlation | UI/API shows session timeline, last heartbeat, last upload acknowledgement, spool drops, provider stop reason, and ingest acceptance/rejection reason without secrets. A high-load qualification reproduces the suspected loss class and preserves classifying pre-loss evidence. |
-| Privacy/operations | Data inventory, deletion/retention policy, access controls, redaction tests, key/pin rotation runbook, kill switch, rollback, monitoring, and on-call alerting are reviewed and exercised. |
+| Event contract | `telemetry/v1` has an allowlist-only parser/serializer, bounded fields and event size, priority classes, secret-bearing field rejection, and canonical vectors in `docs/TELEMETRY_V1_VECTORS.json`. |
+| Producer and spool | `TelemetryEmitter` uses a fixed-capacity queue and nonblocking emission. `TelemetrySpool` writes bounded, checksummed atomic segments, recovers valid segments, quarantines corrupt ones, evicts lower-priority data first, and removes only acknowledged sequence ranges. |
+| Ingest | `bridge_telemetry_ingest` accepts only TLS connections on `POST /v1/telemetry/batches`, validates batches before durable acceptance, and exposes only `/healthz`; it has no public log-query endpoint. |
+| Authentication and replay | The reference credential CLI creates a local CA and scoped mTLS certificates, supports revocation, verifies the client identity against the installation ID, and persists replay sequence state. |
+| Uploader | `bridge_telemetry_uploader` performs single-flight mTLS HTTPS uploads with bounded batches, acknowledgement-scoped cleanup, timeout, jittered backoff, and a local byte budget. It is not on the logging, bridge, or packet path. |
+| Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
+| Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
+| Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
 
-The iOS work packages remain follow-on work after the Python reference release;
-they are not an alternative path to public deployment. The existing UDP sender
-remains for trusted local/private-network diagnostics.
-A future encrypted UDP mode, if needed, must meet the same enrollment,
-authenticated-encryption, anti-replay, anti-amplification, rate-limit,
-key-rotation, and independent security-review DoD; it is not a shortcut around
-the HTTPS ingest work.
+### Residual work before public deployment
+
+**Public-Internet deployment is not approved.** The remaining work is
+operational and security qualification around the reference implementation;
+none of it may be bypassed by exposing the UDP receiver.
+
+| Residual work | Definition of done |
+| --- | --- |
+| Independent security review | A documented threat model and independent review cover schema/privacy boundaries, mTLS trust, replay, denial of service, operator access, and deployment topology; material findings are resolved or formally accepted by the security owner. |
+| Production collector edge | Deploy a managed TLS edge with request/body/deadline/concurrency limits, WAF/DDoS protection, distributed rate limits, durable queue/storage, restricted health access, monitoring, and no retrieval/reflection endpoint. Exercise overload and failover. |
+| Credential lifecycle | Replace local reference issuance with authenticated, rate-limited enrollment; define secure client-key storage, scoped issuance, audit trails, revocation propagation, expiry, overlapping server-pin rotation, and rollback. Prove normal rotation and emergency revocation in a drill. |
+| Uploader policy | Persist and reset byte-budget accounting deliberately, define scheduling and network-cost rules, and qualify DNS, IPv4/IPv6, captive portal, cellular, Low Data Mode, TLS failure, slow/429/5xx responses, restart, and offline-to-online behavior without affecting bridge latency. |
+| Abuse and persistence qualification | Test multi-instance and restart behavior, request floods, credential spray, slow clients, malformed/compressed inputs, storage failure, and replay after collector restart. Show that one abusive identity cannot prevent a valid identity from ingesting within its quota. |
+| Privacy and operations | Approve data inventory, retention/deletion, pseudonymous-identifier handling, access control, audit policy, configuration signing, kill switch, alerts, runbooks, ownership, and on-call response. Exercise rollback and incident response. |
+| Deployment performance gate | In a production-like environment, sustain telemetry rejection, delay, loss, and collector failure while measuring bridge/TUN throughput and latency against an agreed baseline. Preserve enough redacted lifecycle evidence to classify the suspected high-load provider-loss case. |
+| iOS follow-on | After the preceding gate passes, implement the same schema, bounded app-group spool, mTLS uploader, route exclusion, and redacted Admin evidence in Swift. Device qualification covers extension termination, restart recovery, VPN up/down, and network transitions. |
+
+The existing UDP sender remains restricted to trusted local or private-network
+diagnostics. A future encrypted UDP mode would still require authenticated
+enrollment, authenticated encryption, replay and amplification protection,
+rate limits, key rotation, and independent review; it is not a shortcut around
+the HTTPS telemetry path.
 
 ## Compatibility and remaining work
 
 Existing logging CLI options and default local behavior are unchanged. The UDP
-wire format is versioned (`v=1`) but is a private observability interface,
-not an overlay protocol or Python/Swift behavior surface. The Swift/iOS
-runtime does not implement the private UDP sender/receiver pair or the public
-HTTPS telemetry design; the iOS work packages above are its required parity and
-hardening plan.
+wire format is versioned (`v=1`) but is a private observability interface, not
+an overlay protocol or Python/Swift behavior surface. The Swift/iOS runtime
+does not implement the private UDP sender/receiver pair or the HTTPS telemetry
+reference; its required work is the residual iOS follow-on described above.
