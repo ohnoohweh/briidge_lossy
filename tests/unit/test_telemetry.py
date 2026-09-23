@@ -11,6 +11,7 @@ from obstacle_bridge.bridge_telemetry import (
     encode_batch,
     encode_event,
 )
+from obstacle_bridge.bridge_telemetry_ingest import TelemetryIngestStore, build_tls_context
 
 
 VECTORS = json.loads((Path(__file__).parents[2] / "docs" / "TELEMETRY_V1_VECTORS.json").read_text(encoding="utf-8"))
@@ -85,3 +86,20 @@ def test_spool_evicts_low_priority_before_rejecting_critical_event(tmp_path):
     assert spool.append(critical)
     assert spool.recover() == [critical]
     assert spool.dropped["evicted_low"] == 1
+
+
+def test_ingest_store_acknowledges_only_valid_ordered_durable_batch(tmp_path):
+    event = dict(VECTORS["event"])
+    payload = json.dumps({"v": 1, "kind": "telemetry.batch", "events": [event]}).encode("utf-8")
+    store = TelemetryIngestStore(str(tmp_path / "ingest"))
+    assert store.accept(payload) == {"ok": True, "accepted_through": 1, "accepted_count": 1}
+    assert store.spool.recover() == [event]
+    bad = dict(event)
+    bad["sequence"] = 0
+    with pytest.raises(TelemetryValidationError):
+        store.accept(json.dumps({"v": 1, "kind": "telemetry.batch", "events": [bad]}).encode("utf-8"))
+
+
+def test_ingest_requires_tls_material(tmp_path):
+    with pytest.raises(ValueError):
+        build_tls_context("", "")

@@ -1478,6 +1478,7 @@ REQ-ADM-001:
     - tests/unit/test_debug_logging_aliases.py::test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call
     - tests/unit/test_telemetry.py::test_v1_vector_round_trips_canonically
     - tests/unit/test_telemetry.py::test_spool_recovers_atomic_events_and_acknowledges_them
+    - tests/unit/test_telemetry.py::test_ingest_store_acknowledges_only_valid_ordered_durable_batch
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
     - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback

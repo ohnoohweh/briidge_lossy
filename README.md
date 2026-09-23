@@ -1136,8 +1136,8 @@ What the admin web shows:
 
 The optional private UDP logger is isolated best-effort diagnostics only. The
 Python telemetry foundation additionally provides a bounded, allowlisted local
-event producer and crash-safe spool; public-Internet telemetry remains gated by
-the HTTPS/authentication hardening sequence in
+event producer, crash-safe spool, and TLS-required reference ingest process;
+public-Internet telemetry remains gated by the authentication hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
 
 ### Runner

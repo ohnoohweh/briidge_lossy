@@ -220,6 +220,11 @@ class TelemetrySpool:
             return -1
 
     @staticmethod
+    def _event_key(event: Mapping[str, Any]) -> str:
+        identity = "%s\x00%s\x00%s" % (event["installation_id"], event["session_id"], event["sequence"])
+        return hashlib.sha256(identity.encode("utf-8")).hexdigest()[:16]
+
+    @staticmethod
     def _read_segment(path: Path) -> Dict[str, Any]:
         raw = path.read_bytes()
         wrapped = json.loads(raw.decode("utf-8"))
@@ -254,9 +259,8 @@ class TelemetrySpool:
             segments = self._segments()
         return True
 
-    def append(self, event: Mapping[str, Any]) -> bool:
+    def _append_normalized(self, normalized: Mapping[str, Any]) -> Optional[Path]:
         try:
-            normalized = validate_event(event)
             event_bytes = encode_event(normalized)
             wrapped = json.dumps(
                 {"event": normalized, "sha256": hashlib.sha256(event_bytes).hexdigest()},
@@ -264,15 +268,16 @@ class TelemetrySpool:
             ).encode("utf-8")
         except Exception:
             self.dropped["invalid_event"] += 1
-            return False
+            return None
         if not self._evict_for(len(wrapped), normalized["priority"]):
-            return False
+            return None
         sequence = normalized["sequence"]
-        final = self.directory / ("event-%020d-%s.json" % (sequence, normalized["priority"]))
-        temporary = self.directory / (".event-%020d.tmp" % sequence)
+        key = self._event_key(normalized)
+        final = self.directory / ("event-%020d-%s-%s.json" % (sequence, key, normalized["priority"]))
+        temporary = self.directory / (".event-%020d-%s.tmp" % (sequence, key))
         if final.exists():
             self.dropped["duplicate_sequence"] += 1
-            return False
+            return None
         try:
             fd = os.open(str(temporary), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
             with os.fdopen(fd, "wb") as handle:
@@ -282,12 +287,37 @@ class TelemetrySpool:
             os.replace(str(temporary), str(final))
             with _suppress_os_error():
                 os.chmod(str(final), 0o600)
-            return True
+            return final
         except Exception:
             self.dropped["write_failure"] += 1
             with _suppress_os_error():
                 temporary.unlink()
+            return None
+
+    def append(self, event: Mapping[str, Any]) -> bool:
+        try:
+            normalized = validate_event(event)
+        except Exception:
+            self.dropped["invalid_event"] += 1
             return False
+        return self._append_normalized(normalized) is not None
+
+    def append_many(self, events: Iterable[Mapping[str, Any]]) -> bool:
+        try:
+            normalized = [validate_event(event) for event in events]
+        except Exception:
+            self.dropped["invalid_event"] += 1
+            return False
+        written: List[Path] = []
+        for event in normalized:
+            path = self._append_normalized(event)
+            if path is None:
+                for created in written:
+                    with _suppress_os_error():
+                        created.unlink()
+                return False
+            written.append(path)
+        return True
 
     def recover(self, limit: int = MAX_BATCH_EVENTS) -> List[Dict[str, Any]]:
         recovered: List[Dict[str, Any]] = []
