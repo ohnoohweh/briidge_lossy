@@ -201,8 +201,10 @@ evidence in the repository; completed capabilities move to the status section.
 S3 has an in-progress shared upload policy that accepts only HTTPS endpoints,
 forms one identity-scoped batch at a time, enforces a byte budget, validates
 acknowledgement ranges before deleting spool data, and schedules jittered
-backoff after a failure. The Apple mTLS transport, its controlled collector
-coverage, and restart/network-failure qualification remain required.
+backoff after a failure. The Apple transport presents only a supplied enrolled
+`SecIdentity` for a client-certificate challenge and leaves normal server-trust
+validation enabled. Controlled-collector coverage and restart/network-failure
+qualification remain required.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |

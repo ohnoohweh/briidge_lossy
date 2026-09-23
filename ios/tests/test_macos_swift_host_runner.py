@@ -52,6 +52,14 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
+def test_macos_build_includes_mtls_telemetry_transport() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeTelemetryMTLSUploader.swift" in build_script
+    assert "NSURLAuthenticationMethodClientCertificate" in source
+    assert "connectionProxyDictionary = [:]" in source
+
+
 def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 

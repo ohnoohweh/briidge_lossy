@@ -99,6 +99,7 @@
         "ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"

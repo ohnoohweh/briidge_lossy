@@ -26,6 +26,13 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
     assert 'schema: String = "obstaclebridge.ios.packet-tunnel.v1"' in shared
 
 
+def test_shared_mtls_telemetry_transport_source_exists() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+    assert "SecIdentity" in source
+    assert "NSURLAuthenticationMethodClientCertificate" in source
+    assert "performDefaultHandling" in source
+
+
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
