@@ -206,6 +206,8 @@ backoff after a failure. The Apple transport presents only a supplied enrolled
 validation enabled. The macOS status snapshot exposes only whether telemetry,
 an HTTPS endpoint, and a Keychain identity label are configured; it never
 returns the identity label, endpoint path, credentials, or event data.
+On Apple platforms it also reports a boolean Keychain lookup result for the
+configured label without returning the identity or certificate details.
 Controlled-collector coverage, runtime invocation, and restart/network-failure
 qualification remain required.
 

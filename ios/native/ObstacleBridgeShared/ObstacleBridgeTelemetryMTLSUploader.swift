@@ -50,6 +50,20 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
         }
     }
 }
+
+enum ObstacleBridgeTelemetryIdentityStore {
+    static func identity(label: String) -> SecIdentity? {
+        let query: [CFString: Any] = [
+            kSecClass: kSecClassIdentity,
+            kSecAttrLabel: label,
+            kSecReturnRef: true,
+            kSecMatchLimit: kSecMatchLimitOne,
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? SecIdentity
+    }
+}
 #endif
 
 enum ObstacleBridgeTelemetryAdminStatus {
@@ -58,12 +72,18 @@ enum ObstacleBridgeTelemetryAdminStatus {
         let endpoint = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_endpoint"])
         let identityLabel = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_mtls_identity_label"])
         let parsed = endpoint.flatMap(URL.init(string:))
+        #if canImport(Security)
+        let identityAvailable = identityLabel.flatMap(ObstacleBridgeTelemetryIdentityStore.identity(label:)) != nil
+        #else
+        let identityAvailable = false
+        #endif
         return [
             "enabled": enabled,
             "configured": enabled && parsed?.scheme?.lowercased() == "https" && identityLabel != nil,
             "endpoint_scheme": parsed?.scheme?.lowercased() ?? "",
             "endpoint_host": parsed?.host ?? "",
             "identity_configured": identityLabel != nil,
+            "identity_available": identityAvailable,
         ]
     }
 }
