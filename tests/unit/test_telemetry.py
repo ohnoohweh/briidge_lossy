@@ -1,4 +1,8 @@
 import json
+import http.client
+import ssl
+import threading
+import http.server
 from pathlib import Path
 
 import pytest
@@ -11,7 +15,9 @@ from obstacle_bridge.bridge_telemetry import (
     encode_batch,
     encode_event,
 )
+from obstacle_bridge import bridge_telemetry_ingest as ingest
 from obstacle_bridge.bridge_telemetry_ingest import TelemetryIngestStore, build_tls_context
+from obstacle_bridge.bridge_telemetry_credentials import TelemetryRevocationList, generate_ca, issue_client_certificate, issue_server_certificate
 
 
 VECTORS = json.loads((Path(__file__).parents[2] / "docs" / "TELEMETRY_V1_VECTORS.json").read_text(encoding="utf-8"))
@@ -92,14 +98,45 @@ def test_ingest_store_acknowledges_only_valid_ordered_durable_batch(tmp_path):
     event = dict(VECTORS["event"])
     payload = json.dumps({"v": 1, "kind": "telemetry.batch", "events": [event]}).encode("utf-8")
     store = TelemetryIngestStore(str(tmp_path / "ingest"))
-    assert store.accept(payload) == {"ok": True, "accepted_through": 1, "accepted_count": 1}
+    assert store.accept(payload, "install-01", 1) == {"ok": True, "accepted_through": 1, "accepted_count": 1}
     assert store.spool.recover() == [event]
     bad = dict(event)
     bad["sequence"] = 0
     with pytest.raises(TelemetryValidationError):
-        store.accept(json.dumps({"v": 1, "kind": "telemetry.batch", "events": [bad]}).encode("utf-8"))
+        store.accept(json.dumps({"v": 1, "kind": "telemetry.batch", "events": [bad]}).encode("utf-8"), "install-01", 1)
 
 
 def test_ingest_requires_tls_material(tmp_path):
     with pytest.raises(ValueError):
-        build_tls_context("", "")
+        build_tls_context("", "", "")
+
+
+def test_mtls_credential_issue_and_revocation(tmp_path):
+    ca_key, ca_cert = generate_ca("test-ca")
+    _, client_cert, serial = issue_client_certificate(ca_key, ca_cert, "install-01")
+    assert b"BEGIN CERTIFICATE" in client_cert
+    revocations = TelemetryRevocationList(str(tmp_path / "revocations.json"))
+    assert not revocations.is_revoked(serial)
+    revocations.revoke(serial)
+    assert revocations.is_revoked(serial)
+
+
+def test_mtls_ingest_accepts_matching_client_identity(tmp_path):
+    ca_key, ca_cert = generate_ca("test-ca")
+    server_key, server_cert = issue_server_certificate(ca_key, ca_cert, "localhost")
+    client_key, client_cert, _ = issue_client_certificate(ca_key, ca_cert, "install-01")
+    paths = {name: tmp_path / name for name in ("ca.pem", "server.key", "server.pem", "client.key", "client.pem")}
+    paths["ca.pem"].write_bytes(ca_cert); paths["server.key"].write_bytes(server_key); paths["server.pem"].write_bytes(server_cert)
+    paths["client.key"].write_bytes(client_key); paths["client.pem"].write_bytes(client_cert)
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), ingest._Handler)
+    server.RequestHandlerClass.store = TelemetryIngestStore(str(tmp_path / "spool"), TelemetryRevocationList(str(tmp_path / "revoke.json")))
+    server.socket = build_tls_context(str(paths["server.pem"]), str(paths["server.key"]), str(paths["ca.pem"])).wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever); thread.start()
+    try:
+        context = ssl.create_default_context(cafile=str(paths["ca.pem"])); context.check_hostname = False
+        context.load_cert_chain(str(paths["client.pem"]), str(paths["client.key"]))
+        connection = http.client.HTTPSConnection("127.0.0.1", server.server_address[1], context=context, timeout=2)
+        connection.request("POST", "/v1/telemetry/batches", json.dumps({"v": 1, "kind": "telemetry.batch", "events": [VECTORS["event"]]}).encode("utf-8"), {"Content-Type": "application/json"})
+        assert connection.getresponse().status == 202
+    finally:
+        server.shutdown(); thread.join(timeout=2); server.server_close()

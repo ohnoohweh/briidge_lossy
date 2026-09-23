@@ -7,7 +7,11 @@ import json
 import ssl
 from typing import Any, Dict, Iterable, Mapping, Optional
 
+from cryptography import x509
+from cryptography.x509.oid import NameOID
+
 from .bridge_telemetry import MAX_BATCH_EVENTS, MAX_EVENT_BYTES, TelemetrySpool, TelemetryValidationError, validate_event
+from .bridge_telemetry_credentials import TelemetryRevocationList
 
 MAX_REQUEST_BYTES = MAX_EVENT_BYTES * MAX_BATCH_EVENTS
 
@@ -15,12 +19,13 @@ MAX_REQUEST_BYTES = MAX_EVENT_BYTES * MAX_BATCH_EVENTS
 class TelemetryIngestStore:
     """Durably accepts one validated batch before reporting acknowledgement."""
 
-    def __init__(self, spool_directory: str):
+    def __init__(self, spool_directory: str, revocations: Optional[TelemetryRevocationList] = None):
         self.spool = TelemetrySpool(spool_directory)
+        self.revocations = revocations
         self.accepted_batches = 0
         self.rejected_batches = 0
 
-    def accept(self, payload: bytes) -> Dict[str, Any]:
+    def accept(self, payload: bytes, installation_id: Optional[str] = None, certificate_serial: Optional[int] = None) -> Dict[str, Any]:
         if not isinstance(payload, bytes) or not payload or len(payload) > MAX_REQUEST_BYTES:
             self.rejected_batches += 1
             raise TelemetryValidationError("invalid request size")
@@ -38,6 +43,10 @@ class TelemetryIngestStore:
             sequences = [event["sequence"] for event in normalized]
             if len(identities) != 1 or sequences != sorted(sequences) or len(set(sequences)) != len(sequences):
                 raise TelemetryValidationError("invalid batch ordering")
+            if not installation_id or next(iter(identities))[0] != installation_id:
+                raise TelemetryValidationError("client identity mismatch")
+            if certificate_serial is None or (self.revocations and self.revocations.is_revoked(certificate_serial)):
+                raise TelemetryValidationError("client credential rejected")
             if not self.spool.append_many(normalized):
                 raise TelemetryValidationError("durable queue unavailable")
         except Exception as exc:
@@ -85,25 +94,34 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._json(413, {"ok": False, "error": "invalid request size"})
             return
         try:
-            self._json(202, self.store.accept(self.rfile.read(length)))
+            certificate = self.connection.getpeercert(binary_form=True)
+            if not certificate:
+                raise TelemetryValidationError("client credential required")
+            parsed = x509.load_der_x509_certificate(certificate)
+            attributes = parsed.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+            if len(attributes) != 1:
+                raise TelemetryValidationError("client identity missing")
+            self._json(202, self.store.accept(self.rfile.read(length), attributes[0].value, parsed.serial_number))
         except TelemetryValidationError as exc:
-            self._json(400, {"ok": False, "error": str(exc)})
+            self._json(401, {"ok": False, "error": str(exc)})
 
 
-def build_tls_context(certfile: str, keyfile: str) -> ssl.SSLContext:
-    if not certfile or not keyfile:
-        raise ValueError("TLS certificate and key are required")
+def build_tls_context(certfile: str, keyfile: str, client_ca: str) -> ssl.SSLContext:
+    if not certfile or not keyfile or not client_ca:
+        raise ValueError("TLS certificate, key, and client CA are required")
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.minimum_version = ssl.TLSVersion.TLSv1_2
     context.options |= ssl.OP_NO_COMPRESSION
     context.load_cert_chain(certfile=certfile, keyfile=keyfile)
+    context.load_verify_locations(cafile=client_ca)
+    context.verify_mode = ssl.CERT_REQUIRED
     return context
 
 
-def serve(bind: str, port: int, spool_directory: str, certfile: str, keyfile: str) -> None:
+def serve(bind: str, port: int, spool_directory: str, certfile: str, keyfile: str, client_ca: str, revocations: str) -> None:
     server = http.server.ThreadingHTTPServer((bind, int(port)), _Handler)
-    server.RequestHandlerClass.store = TelemetryIngestStore(spool_directory)
-    server.socket = build_tls_context(certfile, keyfile).wrap_socket(server.socket, server_side=True)
+    server.RequestHandlerClass.store = TelemetryIngestStore(spool_directory, TelemetryRevocationList(revocations))
+    server.socket = build_tls_context(certfile, keyfile, client_ca).wrap_socket(server.socket, server_side=True)
     server.serve_forever()
 
 
@@ -114,8 +132,10 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     parser.add_argument("--spool-directory", required=True)
     parser.add_argument("--tls-cert", required=True)
     parser.add_argument("--tls-key", required=True)
+    parser.add_argument("--client-ca", required=True)
+    parser.add_argument("--revocations", required=True)
     args = parser.parse_args(argv)
-    serve(args.bind, args.port, args.spool_directory, args.tls_cert, args.tls_key)
+    serve(args.bind, args.port, args.spool_directory, args.tls_cert, args.tls_key, args.client_ca, args.revocations)
     return 0
 
 
