@@ -167,10 +167,12 @@ path; they do not modify, expose, or upgrade the private UDP receiver.
 Delivered local foundation: `bridge_telemetry.py` provides the P0 `telemetry/v1`
 allowlist parser/serializer, canonical vector, bounded P1 producer, P2 atomic
 local spool, a P3 TLS-required local-reference ingest process with durable
-batch acknowledgement, and P4 local mTLS issuance plus revocation verification.
+batch acknowledgement, P4 local mTLS issuance plus revocation verification,
+and P5 single-flight mTLS uploader with acknowledgement-scoped spool removal.
 The P0 security review, P1 benchmark/concurrency evidence, P2 fault-injection
-qualification, P3/P4 operations qualification, and enrollment/rotation
-governance remain required acceptance work; P5–P8 remain unimplemented.
+qualification, P3–P5 operations qualification, enrollment/rotation governance,
+and P5 network-policy/budget qualification remain required acceptance work;
+P6–P8 remain unimplemented.
 
 | Package | Concrete deliverable | Definition of done |
 | --- | --- | --- |

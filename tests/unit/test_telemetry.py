@@ -18,6 +18,7 @@ from obstacle_bridge.bridge_telemetry import (
 from obstacle_bridge import bridge_telemetry_ingest as ingest
 from obstacle_bridge.bridge_telemetry_ingest import TelemetryIngestStore, build_tls_context
 from obstacle_bridge.bridge_telemetry_credentials import TelemetryRevocationList, generate_ca, issue_client_certificate, issue_server_certificate
+from obstacle_bridge.bridge_telemetry_uploader import TelemetryUploader
 
 
 VECTORS = json.loads((Path(__file__).parents[2] / "docs" / "TELEMETRY_V1_VECTORS.json").read_text(encoding="utf-8"))
@@ -123,7 +124,7 @@ def test_mtls_credential_issue_and_revocation(tmp_path):
 
 def test_mtls_ingest_accepts_matching_client_identity(tmp_path):
     ca_key, ca_cert = generate_ca("test-ca")
-    server_key, server_cert = issue_server_certificate(ca_key, ca_cert, "localhost")
+    server_key, server_cert = issue_server_certificate(ca_key, ca_cert, "127.0.0.1")
     client_key, client_cert, _ = issue_client_certificate(ca_key, ca_cert, "install-01")
     paths = {name: tmp_path / name for name in ("ca.pem", "server.key", "server.pem", "client.key", "client.pem")}
     paths["ca.pem"].write_bytes(ca_cert); paths["server.key"].write_bytes(server_key); paths["server.pem"].write_bytes(server_cert)
@@ -138,5 +139,16 @@ def test_mtls_ingest_accepts_matching_client_identity(tmp_path):
         connection = http.client.HTTPSConnection("127.0.0.1", server.server_address[1], context=context, timeout=2)
         connection.request("POST", "/v1/telemetry/batches", json.dumps({"v": 1, "kind": "telemetry.batch", "events": [VECTORS["event"]]}).encode("utf-8"), {"Content-Type": "application/json"})
         assert connection.getresponse().status == 202
+        second = dict(VECTORS["event"]); second["sequence"] = 2
+        upload_spool = TelemetrySpool(str(tmp_path / "upload-spool")); assert upload_spool.append(second)
+        uploader = TelemetryUploader(upload_spool, "https://127.0.0.1:%s/v1/telemetry/batches" % server.server_address[1], str(paths["ca.pem"]), str(paths["client.pem"]), str(paths["client.key"]))
+        result = uploader.upload_once()
+        assert result == {"ok": True, "accepted_count": 1, "accepted_through": 2}, uploader.last_error
     finally:
         server.shutdown(); thread.join(timeout=2); server.server_close()
+
+
+def test_uploader_requires_https_and_respects_backoff(tmp_path):
+    spool = TelemetrySpool(str(tmp_path / "spool")); assert spool.append(VECTORS["event"])
+    with pytest.raises(ValueError):
+        TelemetryUploader(spool, "http://invalid", "", "", "")

@@ -5,6 +5,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import ipaddress
 from pathlib import Path
 from typing import Dict, Iterable, Optional, Tuple
 
@@ -84,10 +85,18 @@ def issue_server_certificate(ca_key_pem: bytes, ca_cert_pem: bytes, hostname: st
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.AuthorityKeyIdentifier(authority_key_id.key_identifier, None, None), critical=False)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-        .add_extension(x509.SubjectAlternativeName([x509.DNSName(hostname)]), critical=False)
+        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(hostname))] if _is_ip(hostname) else [x509.DNSName(hostname)]), critical=False)
         .sign(ca_key, algorithm=None)
     )
     return (key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), certificate.public_bytes(serialization.Encoding.PEM))
+
+
+def _is_ip(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except ValueError:
+        return False
 
 
 class TelemetryRevocationList:

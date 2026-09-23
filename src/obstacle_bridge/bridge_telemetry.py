@@ -332,10 +332,15 @@ class TelemetrySpool:
                     os.replace(str(segment), str(segment.with_suffix(".corrupt")))
         return recovered
 
-    def acknowledge_through(self, sequence: int) -> int:
+    def acknowledge_through(self, sequence: int, installation_id: Optional[str] = None, session_id: Optional[str] = None) -> int:
         removed = 0
         for segment in self._segments():
-            if self._segment_sequence(segment) <= int(sequence):
+            try:
+                event = self._read_segment(segment)
+            except Exception:
+                continue
+            identity_matches = (installation_id is None or event["installation_id"] == installation_id) and (session_id is None or event["session_id"] == session_id)
+            if identity_matches and self._segment_sequence(segment) <= int(sequence):
                 with _suppress_os_error():
                     segment.unlink()
                     removed += 1
