@@ -2,6 +2,8 @@ import json
 import http.client
 import ssl
 import threading
+import subprocess
+import sys
 import http.server
 from pathlib import Path
 
@@ -170,3 +172,10 @@ def test_uploader_requires_https_and_respects_backoff(tmp_path):
     spool = TelemetrySpool(str(tmp_path / "spool")); assert spool.append(VECTORS["event"])
     with pytest.raises(ValueError):
         TelemetryUploader(spool, "http://invalid", "", "", "")
+
+
+def test_telemetry_qualification_harness_reports_bounded_emit_latency():
+    completed = subprocess.run([sys.executable, "scripts/qualify_telemetry.py", "--events", "200", "--max-p99-ms", "20"], capture_output=True, text=True, check=True)
+    result = json.loads(completed.stdout)
+    assert result["p99_emit_ms"] <= 20
+    assert result["drops"]["queue_full"] > 0

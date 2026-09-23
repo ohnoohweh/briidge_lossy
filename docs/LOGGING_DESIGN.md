@@ -175,7 +175,10 @@ The P0 security review, P1 benchmark/concurrency evidence, P2 fault-injection
 qualification, P3–P6 operations qualification, enrollment/rotation governance,
 P5 network-policy/budget qualification, and P6 adversarial/load qualification
 remain required acceptance work; P7 deployment/authorization review and P8
-remain unimplemented.
+production gates remain unimplemented. The repository provides the P8 local
+pre-qualification command `python scripts/qualify_telemetry.py`; it measures
+bounded saturated-producer latency and drops but does not substitute for a
+production load/security/operations review.
 
 | Package | Concrete deliverable | Definition of done |
 | --- | --- | --- |

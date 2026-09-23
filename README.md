@@ -1143,6 +1143,7 @@ replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
 The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
+Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner
 | Option(s) | Default | Description |
