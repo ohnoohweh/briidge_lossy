@@ -16,6 +16,7 @@ import threading
 import time
 import contextlib
 import textwrap
+import uuid
 import urllib.error
 import urllib.request
 import zlib
@@ -6019,6 +6020,7 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
 def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_path: Path) -> None:
     artifact = build_macos_swift_artifact()
     status_port = _unused_tcp_port()
+    identity_label = f"unavailable-telemetry-test-{uuid.uuid4()}"
     runtime_config_path = tmp_path / "runtime_telemetry_configuration.json"
     runtime_config_path.write_text(
         json.dumps(
@@ -6036,7 +6038,7 @@ def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_pa
                     "telemetry_enabled": True,
                     "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
                     "telemetry_installation_id": "installation-private-id",
-                    "telemetry_mtls_identity_label": "unavailable-test-identity",
+                    "telemetry_mtls_identity_label": identity_label,
                     "telemetry_spool_directory": str(tmp_path / "private-spool"),
                 },
             },
