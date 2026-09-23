@@ -449,6 +449,7 @@ final class ObstacleBridgeHostRunner {
         beginRuntimeHealthLifetime()
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
+        var startupFailed = false
         do {
             try startProxyProviderIfConfigured()
             try startOwnServers()
@@ -461,11 +462,15 @@ final class ObstacleBridgeHostRunner {
             NSLog("[ObstacleBridgeHostRunner][startup_failed] %@", error.localizedDescription)
             bootstrapState["startup_status"] = "failed"
             bootstrapState["startup_error"] = error.localizedDescription
+            startupFailed = true
         }
         startAdminSnapshotPublisher()
         startClientRestartWatchdog()
         startRuntimeHealthHeartbeat()
         startTelemetryIfConfigured()
+        if startupFailed {
+            enqueueTelemetryHealth(state: "startup_failed", counter: 0)
+        }
     }
 
     func stop() {

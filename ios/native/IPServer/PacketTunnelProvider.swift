@@ -676,6 +676,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                                 "startTunnel_admin_web_failed",
                                 extraFields: ["error": error.localizedDescription]
                             )
+                            self.enqueueTelemetryFailure(errorCode: "admin_web_start")
                             self.stopProxyProvider()
                             completionHandler(error)
                             return
@@ -705,6 +706,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                         "startTunnel_unsupported_runtime_mode",
                         extraFields: ["mode": connectorMode]
                     )
+                    self.enqueueTelemetryFailure(errorCode: "unsupported_runtime_mode")
                     self.stopProxyProvider()
                     completionHandler(error)
                     return
@@ -753,6 +755,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                             "startTunnel_admin_web_failed",
                             extraFields: ["error": error.localizedDescription]
                         )
+                        self.enqueueTelemetryFailure(errorCode: "admin_web_start")
                         self.stopProxyProvider()
                         completionHandler(error)
                         return
@@ -804,6 +807,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                             "mode": swiftSettings.runtimeMode,
                         ]
                     )
+                    self.enqueueTelemetryFailure(errorCode: "bridge_start")
                     self.stopProxyProvider()
                     completionHandler(error)
                     return
@@ -1190,6 +1194,20 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                     "state": .string("heartbeat"),
                 ],
                 priority: .low
+            )
+        }
+    }
+
+    private func enqueueTelemetryFailure(errorCode: String) {
+        telemetryQueue.async { [weak self] in
+            guard let emitter = self?.telemetryEmitter else { return }
+            _ = emitter.emit(
+                event: "runtime.lifecycle",
+                fields: [
+                    "error_code": .string(errorCode),
+                    "state": .string("failed"),
+                ],
+                priority: .critical
             )
         }
     }

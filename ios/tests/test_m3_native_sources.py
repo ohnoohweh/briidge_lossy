@@ -47,6 +47,8 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert '"memory_bytes": .integer(memoryBytes)' in provider
     assert '"queue_depth": .integer(queueDepth)' in provider
     assert '"dropped": .integer(dropped)' in provider
+    assert "private func enqueueTelemetryFailure(errorCode: String)" in provider
+    assert 'enqueueTelemetryFailure(errorCode: "bridge_start")' in provider
     for key in [
         "telemetry_endpoint",
         "telemetry_installation_id",

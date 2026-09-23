@@ -222,6 +222,10 @@ five-second scheduling boundary, without packet-flow callback I/O.
 The host runner queues compact lifecycle and runtime-health sequence evidence;
 the Packet Tunnel queues rate-limited health counters for memory footprint,
 packet backlog, packet drops, and heartbeat state from its utility heartbeat.
+The host runner also records a bounded startup-failure marker after the
+telemetry queue is available, without forwarding exception text.
+The Packet Tunnel uses stable error codes for post-initialization startup
+failures and preserves exception detail only in its local runtime evidence.
 Controlled-collector coverage and restart/network-failure qualification remain
 required.
 
