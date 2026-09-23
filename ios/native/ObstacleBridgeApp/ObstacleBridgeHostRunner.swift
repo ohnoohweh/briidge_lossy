@@ -512,13 +512,17 @@ final class ObstacleBridgeHostRunner {
               let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
               let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
         else { return }
-        telemetryEmitter = emitter; telemetrySpool = spool
-        telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
-        _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
         let timer = DispatchSource.makeTimerSource(queue: telemetryQueue)
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
         timer.setEventHandler { [weak self] in self?.flushTelemetry() }
-        telemetryTimer = timer; timer.resume()
+        telemetryQueue.sync {
+            telemetryEmitter = emitter
+            telemetrySpool = spool
+            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
+            _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
+            telemetryTimer = timer
+            timer.resume()
+        }
     }
 
     private func flushTelemetry() {
@@ -536,6 +540,20 @@ final class ObstacleBridgeHostRunner {
         telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
     }
 
+    private func enqueueTelemetryHealth(state: String, counter: UInt64) {
+        telemetryQueue.async { [weak self] in
+            guard let emitter = self?.telemetryEmitter else { return }
+            _ = emitter.emit(
+                event: "runtime.health",
+                fields: [
+                    "counter": .integer(Int(clamping: counter)),
+                    "state": .string(state),
+                ],
+                priority: .low
+            )
+        }
+    }
+
     private func beginRuntimeHealthLifetime() {
         runtimeHealthQueue.sync {
             let previous = ObstacleBridgeRuntimeHealthPersistence.load(from: runtimeHealthURL)
@@ -551,7 +569,7 @@ final class ObstacleBridgeHostRunner {
         let secureLinkState = sharedSecureLinkPskTransportAdapter == nil
             ? "off"
             : (overlayCurrentlyConnected() == true ? "authenticated" : "disconnected")
-        runtimeHealthQueue.sync {
+        let sequence: UInt64 = runtimeHealthQueue.sync {
             runtimeHealthSequence += 1
             runtimeHealthRing.append(.init(
                 sequence: runtimeHealthSequence,
@@ -562,7 +580,9 @@ final class ObstacleBridgeHostRunner {
                 secureLinkState: secureLinkState
             ))
             try? ObstacleBridgeRuntimeHealthPersistence.save(runtimeHealthRing, to: runtimeHealthURL)
+            return runtimeHealthSequence
         }
+        enqueueTelemetryHealth(state: event, counter: sequence)
     }
 
     private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {

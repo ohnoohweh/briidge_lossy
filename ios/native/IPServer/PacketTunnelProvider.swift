@@ -572,6 +572,13 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
                 )
             }
             if shouldUpdateState {
+                self.enqueueTelemetryHealth(
+                    counter: self.heartbeatTickCount,
+                    bridgeSnapshot: ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
+                    processMemory: processMemory
+                )
+            }
+            if shouldUpdateState {
                 self.updateProviderState("heartbeat")
             }
         }
@@ -1131,13 +1138,17 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
               let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
               let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
         else { return }
-        telemetryEmitter = emitter; telemetrySpool = spool
-        telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
-        _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
         let timer = DispatchSource.makeTimerSource(queue: telemetryQueue)
         timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
         timer.setEventHandler { [weak self] in self?.flushTelemetry() }
-        telemetryTimer = timer; timer.resume()
+        telemetryQueue.sync {
+            telemetryEmitter = emitter
+            telemetrySpool = spool
+            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
+            _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
+            telemetryTimer = timer
+            timer.resume()
+        }
     }
 
     private func flushTelemetry() {
@@ -1153,6 +1164,34 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             self?.flushTelemetry()
         }
         telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
+    }
+
+    private func enqueueTelemetryHealth(
+        counter: Int,
+        bridgeSnapshot: [String: Any],
+        processMemory: [String: Any]
+    ) {
+        let queueDepth = Int(clamping: (Self.runtimeHealthUInt64(bridgeSnapshot["queued_packets"]) ?? 0)
+            + (Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_queued_packets"]) ?? 0))
+        let dropped = Int(clamping: (Self.runtimeHealthUInt64(bridgeSnapshot["dropped_incoming_packets"]) ?? 0)
+            + (Self.runtimeHealthUInt64(bridgeSnapshot["dropped_outgoing_packets"]) ?? 0))
+        let memoryBytes = Int(clamping: Self.runtimeHealthUInt64(processMemory["phys_footprint"])
+            ?? Self.runtimeHealthUInt64(processMemory["resident_size"])
+            ?? 0)
+        telemetryQueue.async { [weak self] in
+            guard let emitter = self?.telemetryEmitter else { return }
+            _ = emitter.emit(
+                event: "runtime.health",
+                fields: [
+                    "counter": .integer(counter),
+                    "dropped": .integer(dropped),
+                    "memory_bytes": .integer(memoryBytes),
+                    "queue_depth": .integer(queueDepth),
+                    "state": .string("heartbeat"),
+                ],
+                priority: .low
+            )
+        }
     }
 
     private func sharedAdminWebDirectoryURL() -> URL? {

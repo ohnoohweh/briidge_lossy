@@ -42,6 +42,11 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
     assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
     assert "private func flushTelemetry()" in provider
+    assert "private func enqueueTelemetryHealth(" in provider
+    assert 'event: "runtime.health"' in provider
+    assert '"memory_bytes": .integer(memoryBytes)' in provider
+    assert '"queue_depth": .integer(queueDepth)' in provider
+    assert '"dropped": .integer(dropped)' in provider
     for key in [
         "telemetry_endpoint",
         "telemetry_installation_id",

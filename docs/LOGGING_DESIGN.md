@@ -219,6 +219,9 @@ the emitter, spool, policy, and mTLS uploader only after this configuration is
 valid, then drains it on a five-second timer outside service work. The matching
 Packet Tunnel queue uses the app-group `telemetry-v1` spool and the same
 five-second scheduling boundary, without packet-flow callback I/O.
+The host runner queues compact lifecycle and runtime-health sequence evidence;
+the Packet Tunnel queues rate-limited health counters for memory footprint,
+packet backlog, packet drops, and heartbeat state from its utility heartbeat.
 Controlled-collector coverage and restart/network-failure qualification remain
 required.
 

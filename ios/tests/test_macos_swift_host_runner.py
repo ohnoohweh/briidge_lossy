@@ -89,6 +89,9 @@ def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
     assert 'DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")' in source
     assert "startTelemetryIfConfigured()" in source
     assert "private func flushTelemetry()" in source
+    assert "private func enqueueTelemetryHealth(state: String, counter: UInt64)" in source
+    assert 'event: "runtime.health"' in source
+    assert "enqueueTelemetryHealth(state: event, counter: sequence)" in source
 
 
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:
