@@ -198,6 +198,12 @@ The remaining packages bring macOS and iOS from the contract to an isolated
 telemetry path. A package remains here only until its definition of done has
 evidence in the repository; completed capabilities move to the status section.
 
+S3 has an in-progress shared upload policy that accepts only HTTPS endpoints,
+forms one identity-scoped batch at a time, enforces a byte budget, validates
+acknowledgement ranges before deleting spool data, and schedules jittered
+backoff after a failure. The Apple mTLS transport, its controlled collector
+coverage, and restart/network-failure qualification remain required.
+
 | Package | Scope | Definition of done |
 | --- | --- | --- |
 | S3 — mTLS uploader | Add one low-priority Swift uploader with TLS-only HTTPS, client credentials, bounded batches, one in-flight request, acknowledgement handling, timeout, jittered backoff, and byte budget. | A controlled local collector verifies mTLS and acknowledgement semantics; offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart tests keep the spool bounded and preserve the runtime path. |

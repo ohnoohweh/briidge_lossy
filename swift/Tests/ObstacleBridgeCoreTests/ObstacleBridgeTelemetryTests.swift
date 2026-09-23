@@ -132,4 +132,42 @@ struct ObstacleBridgeTelemetryTests {
         let emitter = try ObstacleBridgeTelemetryEmitter(installationID: "install-01", sessionID: "session-01")
         #expect(emitter.emit(event: "runtime.lifecycle", priority: .critical))
     }
+
+    @Test func uploadPolicyScopesBatchAcknowledgementsAndBackoff() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let spool = try ObstacleBridgeTelemetrySpool(directory: directory)
+        let first = try vectorEvent()
+        let second = try ObstacleBridgeTelemetryEvent(installationID: first.installationID, sessionID: first.sessionID, sequence: 2, monotonicNanoseconds: 2, wallTime: 2, priority: .normal, event: "runtime.load", fields: ["queue_depth": .integer(2)])
+        #expect(spool.append(first)); #expect(spool.append(second))
+        var clock = 0.0
+        let policy = try ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: try #require(URL(string: "https://collector.example/v1/telemetry/batches")), clock: { clock }, random: { 0 })
+        let request = try #require(policy.nextRequest())
+        #expect(try ObstacleBridgeTelemetry.decodeBatch(request.payload).events.map(\.sequence) == [1, 2])
+        #expect(policy.accept(acceptedThrough: 1) == 1)
+        #expect(spool.recover().map(\.sequence) == [2])
+        let retry = try #require(policy.nextRequest())
+        #expect(retry.firstSequence == 2)
+        policy.fail()
+        #expect(policy.nextRequest() == nil)
+        clock = 2
+        #expect(policy.nextRequest()?.firstSequence == 2)
+    }
+
+    @Test func uploadPolicyRejectsPlainHTTPAndOverBudgetRequests() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let spool = try ObstacleBridgeTelemetrySpool(directory: directory)
+        #expect(throws: ObstacleBridgeTelemetryError.invalidBatch) {
+            try ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: try #require(URL(string: "http://collector.example")))
+        }
+        let event = try vectorEvent()
+        for sequence in 1...4 {
+            let queued = try ObstacleBridgeTelemetryEvent(installationID: event.installationID, sessionID: event.sessionID, sequence: UInt64(sequence), monotonicNanoseconds: UInt64(sequence), wallTime: Double(sequence), priority: .normal, event: "runtime.load", fields: ["reason": .string(String(repeating: "x", count: 256))])
+            #expect(spool.append(queued))
+        }
+        let policy = try ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: try #require(URL(string: "https://collector.example")), byteBudgetPerDay: 1)
+        #expect(policy.nextRequest() == nil)
+        #expect(spool.recover().count == 4)
+    }
 }
