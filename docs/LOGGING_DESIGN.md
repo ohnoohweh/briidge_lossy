@@ -164,6 +164,12 @@ until Python packages P0 through P7 are complete and P8 has passed its release
 gate. These packages create an independently deployable Internet telemetry
 path; they do not modify, expose, or upgrade the private UDP receiver.
 
+Delivered local foundation: `bridge_telemetry.py` provides the P0 `telemetry/v1`
+allowlist parser/serializer, canonical vector, bounded P1 producer, and P2
+atomic local spool. The P0 security review, P1 benchmark/concurrency evidence,
+and P2 fault-injection qualification remain required acceptance work; P3–P8
+remain unimplemented.
+
 | Package | Concrete deliverable | Definition of done |
 | --- | --- | --- |
 | P0 — freeze security contract | Versioned `telemetry/v1` event and batch schema, threat model, redaction allowlist, size limits, priority classes, error taxonomy, and test vectors in `docs/` plus Python parser/serializer. | Security review signs the threat model; schema vectors round-trip deterministically; unknown fields, oversized values, secrets, invalid timestamps, duplicate sequence numbers, and malformed encodings are rejected; no payload-bearing field is representable. |

@@ -1134,6 +1134,12 @@ What the admin web shows:
 | `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
+The optional private UDP logger is isolated best-effort diagnostics only. The
+Python telemetry foundation additionally provides a bounded, allowlisted local
+event producer and crash-safe spool; public-Internet telemetry remains gated by
+the HTTPS/authentication hardening sequence in
+[docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
+
 ### Runner
 | Option(s) | Default | Description |
 |---|---:|---|
