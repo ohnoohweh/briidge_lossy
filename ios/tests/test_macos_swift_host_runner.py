@@ -72,6 +72,12 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
 
 
+def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert '"telemetry": telemetryStatusSnapshot()' in source
+    assert "ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)" in source
+
+
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:
     codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
 

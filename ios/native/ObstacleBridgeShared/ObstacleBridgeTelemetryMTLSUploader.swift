@@ -51,3 +51,19 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
     }
 }
 #endif
+
+enum ObstacleBridgeTelemetryAdminStatus {
+    static func snapshot(runtimeConfig: [String: Any]) -> [String: Any] {
+        let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["telemetry_enabled"]) ?? false
+        let endpoint = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_endpoint"])
+        let identityLabel = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_mtls_identity_label"])
+        let parsed = endpoint.flatMap(URL.init(string:))
+        return [
+            "enabled": enabled,
+            "configured": enabled && parsed?.scheme?.lowercased() == "https" && identityLabel != nil,
+            "endpoint_scheme": parsed?.scheme?.lowercased() ?? "",
+            "endpoint_host": parsed?.host ?? "",
+            "identity_configured": identityLabel != nil,
+        ]
+    }
+}

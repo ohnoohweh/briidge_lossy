@@ -31,6 +31,9 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "SecIdentity" in source
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "performDefaultHandling" in source
+    assert "ObstacleBridgeTelemetryAdminStatus" in source
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)' in provider
 
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:

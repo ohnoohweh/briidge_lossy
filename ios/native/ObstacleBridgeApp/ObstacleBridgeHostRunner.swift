@@ -1355,6 +1355,7 @@ final class ObstacleBridgeHostRunner {
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
             "proxy_provider": proxyProviderSnapshot(),
+            "telemetry": telemetryStatusSnapshot(),
             "secure_link_material_generation": 0,
             "secure_link_last_reload_unix_ts": NSNull(),
             "secure_link_last_reload_scope": "",
@@ -1362,6 +1363,10 @@ final class ObstacleBridgeHostRunner {
             "secure_link_last_reload_detail": "",
             "secure_link_peers_dropped_total": 0,
         ]
+    }
+
+    private func telemetryStatusSnapshot() -> [String: Any] {
+        ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {

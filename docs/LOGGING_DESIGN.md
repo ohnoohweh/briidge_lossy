@@ -203,7 +203,10 @@ forms one identity-scoped batch at a time, enforces a byte budget, validates
 acknowledgement ranges before deleting spool data, and schedules jittered
 backoff after a failure. The Apple transport presents only a supplied enrolled
 `SecIdentity` for a client-certificate challenge and leaves normal server-trust
-validation enabled. Controlled-collector coverage and restart/network-failure
+validation enabled. The macOS status snapshot exposes only whether telemetry,
+an HTTPS endpoint, and a Keychain identity label are configured; it never
+returns the identity label, endpoint path, credentials, or event data.
+Controlled-collector coverage, runtime invocation, and restart/network-failure
 qualification remain required.
 
 | Package | Scope | Definition of done |

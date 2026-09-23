@@ -1706,6 +1706,7 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
                 "bridge_state": ObstacleBridgePacketFlowBridge.bridgeStateSnapshot(),
                 "shared_overlay_bootstrap_state": sharedOverlayBootstrapState,
                 "proxy_provider": proxyProviderSnapshot(),
+                "telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig),
                 "build": buildSummary(),
             ]
         )
