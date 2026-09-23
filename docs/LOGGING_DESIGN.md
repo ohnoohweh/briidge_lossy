@@ -176,6 +176,29 @@ receiver.
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
 
+### Swift/macOS implementation sequence
+
+The Apple source tree has runtime-health snapshots and local `NSLog` calls, but
+does not expose the private UDP logging protocol or the HTTPS telemetry
+reference. `ObstacleBridgeTelemetry` in the portable Swift core provides the
+`telemetry/v1` event and batch contract. It applies the same field allowlist,
+size limits, priority classes, and metadata validation as Python. Its Swift
+tests load the canonical vector from `docs/TELEMETRY_V1_VECTORS.json`, exercise
+event and batch round trips, and reject malformed, secret-bearing, empty, and
+oversized values. The macOS build script and generated iOS project include the
+source in their application and extension targets.
+
+The remaining packages bring macOS and iOS from the contract to an isolated
+telemetry path. A package remains here only until its definition of done has
+evidence in the repository; completed capabilities move to the status section.
+
+| Package | Scope | Definition of done |
+| --- | --- | --- |
+| S2 — isolated producer and spool | Add a bounded, nonblocking event producer and private app-group-capable spool with atomic commit, checksum recovery, corruption quarantine, priority-aware eviction, and acknowledgement-scoped deletion. | Saturation, concurrent emission, partial write, corrupt segment, full capacity, and unavailable-directory tests prove producer calls remain bounded and do not throw into packet or lifecycle callbacks. |
+| S3 — mTLS uploader | Add one low-priority Swift uploader with TLS-only HTTPS, client credentials, bounded batches, one in-flight request, acknowledgement handling, timeout, jittered backoff, and byte budget. | A controlled local collector verifies mTLS and acknowledgement semantics; offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart tests keep the spool bounded and preserve the runtime path. |
+| S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. |
+| S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Device or simulator evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |
+
 ### Residual work before public deployment
 
 **Public-Internet deployment is not approved.** The remaining work is
@@ -191,7 +214,6 @@ none of it may be bypassed by exposing the UDP receiver.
 | Abuse and persistence qualification | Test multi-instance and restart behavior, request floods, credential spray, slow clients, malformed/compressed inputs, storage failure, and replay after collector restart. Show that one abusive identity cannot prevent a valid identity from ingesting within its quota. |
 | Privacy and operations | Approve data inventory, retention/deletion, pseudonymous-identifier handling, access control, audit policy, configuration signing, kill switch, alerts, runbooks, ownership, and on-call response. Exercise rollback and incident response. |
 | Deployment performance gate | In a production-like environment, sustain telemetry rejection, delay, loss, and collector failure while measuring bridge/TUN throughput and latency against an agreed baseline. Preserve enough redacted lifecycle evidence to classify the suspected high-load provider-loss case. |
-| iOS follow-on | After the preceding gate passes, implement the same schema, bounded app-group spool, mTLS uploader, route exclusion, and redacted Admin evidence in Swift. Device qualification covers extension termination, restart recovery, VPN up/down, and network transitions. |
 
 The existing UDP sender remains restricted to trusted local or private-network
 diagnostics. A future encrypted UDP mode would still require authenticated
@@ -205,4 +227,4 @@ Existing logging CLI options and default local behavior are unchanged. The UDP
 wire format is versioned (`v=1`) but is a private observability interface, not
 an overlay protocol or Python/Swift behavior surface. The Swift/iOS runtime
 does not implement the private UDP sender/receiver pair or the HTTPS telemetry
-reference; its required work is the residual iOS follow-on described above.
+reference; its implementation sequence is defined above.
