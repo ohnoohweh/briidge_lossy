@@ -1176,11 +1176,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         bridgeSnapshot: [String: Any],
         processMemory: [String: Any]
     ) {
-        let queueDepth = Int(clamping: (Self.runtimeHealthUInt64(bridgeSnapshot["queued_packets"]) ?? 0)
+        let queueDepth = Int64(clamping: (Self.runtimeHealthUInt64(bridgeSnapshot["queued_packets"]) ?? 0)
             + (Self.runtimeHealthUInt64(bridgeSnapshot["outgoing_queued_packets"]) ?? 0))
-        let dropped = Int(clamping: (Self.runtimeHealthUInt64(bridgeSnapshot["dropped_incoming_packets"]) ?? 0)
+        let dropped = Int64(clamping: (Self.runtimeHealthUInt64(bridgeSnapshot["dropped_incoming_packets"]) ?? 0)
             + (Self.runtimeHealthUInt64(bridgeSnapshot["dropped_outgoing_packets"]) ?? 0))
-        let memoryBytes = Int(clamping: Self.runtimeHealthUInt64(processMemory["phys_footprint"])
+        let memoryBytes = Int64(clamping: Self.runtimeHealthUInt64(processMemory["phys_footprint"])
             ?? Self.runtimeHealthUInt64(processMemory["resident_size"])
             ?? 0)
         telemetryQueue.async { [weak self] in
@@ -1188,7 +1188,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
             _ = emitter.emit(
                 event: "runtime.health",
                 fields: [
-                    "counter": .integer(counter),
+                    "counter": .integer(Int64(counter)),
                     "dropped": .integer(dropped),
                     "memory_bytes": .integer(memoryBytes),
                     "queue_depth": .integer(queueDepth),

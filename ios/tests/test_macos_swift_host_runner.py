@@ -92,6 +92,7 @@ def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
     assert "private func flushTelemetry(startUpload: Bool = true)" in source
     assert "private func enqueueTelemetryHealth(state: String, counter: UInt64)" in source
     assert 'event: "runtime.health"' in source
+    assert '"counter": .integer(Int64(clamping: counter))' in source
     assert "enqueueTelemetryHealth(state: event, counter: sequence)" in source
     assert 'enqueueTelemetryHealth(state: "startup_failed", counter: 0)' in source
     assert "flushTelemetry(startUpload: false)" in source

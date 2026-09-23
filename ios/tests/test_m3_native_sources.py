@@ -48,6 +48,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "telemetryUploader?.cancel()" in provider
     assert "private func enqueueTelemetryHealth(" in provider
     assert 'event: "runtime.health"' in provider
+    assert "let memoryBytes = Int64(clamping:" in provider
     assert '"memory_bytes": .integer(memoryBytes)' in provider
     assert '"queue_depth": .integer(queueDepth)' in provider
     assert '"dropped": .integer(dropped)' in provider

@@ -552,7 +552,7 @@ final class ObstacleBridgeHostRunner {
             _ = emitter.emit(
                 event: "runtime.health",
                 fields: [
-                    "counter": .integer(Int(clamping: counter)),
+                    "counter": .integer(Int64(clamping: counter)),
                     "state": .string(state),
                 ],
                 priority: .low
