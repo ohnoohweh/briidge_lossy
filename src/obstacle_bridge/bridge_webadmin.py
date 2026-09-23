@@ -587,6 +587,10 @@ class AdminWebUI:
                 await self._handle_logs(writer, raw_path)
                 return
 
+            if path == "/api/telemetry":
+                await self._handle_telemetry(writer)
+                return
+
             if path == "/api/peers":
                 await self._handle_peers(writer)
                 return
@@ -1863,6 +1867,24 @@ class AdminWebUI:
                    "source": result["source"], "logger_available": result["logger_available"],
                    "logger_error": result["logger_error"]}
         self._log_api_response("/api/logs", 200, payload, summary=f"count={len(result['lines'])}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_telemetry(self, writer):
+        spool_directory = str(getattr(self.args, "telemetry_spool_directory", "") or "").strip()
+        if not spool_directory:
+            await self._send_json(writer, 404, {"ok": False, "error": "telemetry status disabled"})
+            return
+        try:
+            from .bridge_telemetry import TelemetrySpool
+
+            status = await asyncio.wait_for(
+                asyncio.to_thread(lambda: TelemetrySpool(spool_directory).status()), timeout=0.2
+            )
+        except Exception:
+            await self._send_json(writer, 503, {"ok": False, "error": "telemetry status unavailable", "retryable": True})
+            return
+        payload = {"ok": True, "telemetry": status}
+        self._log_api_response("/api/telemetry", 200, payload, summary="redacted spool status")
         await self._send_json(writer, 200, payload)
 
     async def _handle_secure_link_rekey(self, writer, method: str, body: bytes):

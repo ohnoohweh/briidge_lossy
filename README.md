@@ -1132,6 +1132,7 @@ What the admin web shows:
 | `--log-udp-target` | unset | Best-effort UDP log receiver `host:port`; transport failures drop records. |
 | `--log-udp-only` | `false` | Use only the UDP sender, isolating runtime work from local logging sinks. |
 | `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
+| `--telemetry-spool-directory` | unset | Enables local telemetry spooling and authenticated redacted `/api/telemetry` status. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
 The optional private UDP logger is isolated best-effort diagnostics only. The

@@ -134,3 +134,17 @@ def test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call():
         "ok": True, "lines": [], "count": 0, "source": "remote_udp",
         "logger_available": False, "logger_error": "logger unavailable",
     }
+
+
+def test_admin_telemetry_status_is_redacted_and_does_not_call_runner(tmp_path):
+    from obstacle_bridge.bridge_telemetry import TelemetrySpool
+
+    spool = TelemetrySpool(str(tmp_path / "spool"))
+    assert spool.append({"v": 1, "kind": "telemetry.event", "installation_id": "install", "session_id": "session", "sequence": 1, "monotonic_ns": 1, "wall_time": 1.0, "priority": "normal", "event": "runtime.load", "fields": {"queue_depth": 1}})
+    ui = AdminWebUI(SimpleNamespace(telemetry_spool_directory=str(spool.directory)), mock.Mock())
+    ui._send_json = mock.AsyncMock(); ui._log_api_response = mock.Mock(); ui._call_runner = mock.Mock()
+    asyncio.run(ui._handle_telemetry(mock.Mock()))
+    ui._call_runner.assert_not_called()
+    payload = ui._send_json.await_args.args[2]
+    assert payload["ok"] and payload["telemetry"]["pending_events"] == 1
+    assert "installation_id" not in payload["telemetry"]
