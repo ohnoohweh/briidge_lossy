@@ -176,11 +176,11 @@ receiver.
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
 
-### Swift/macOS implementation sequence
+### Swift/macOS implementation status
 
-The Apple source tree has runtime-health snapshots and local `NSLog` calls, but
-does not expose the private UDP logging protocol or the HTTPS telemetry
-reference. `ObstacleBridgeTelemetry` in the portable Swift core provides the
+The Apple source tree has runtime-health snapshots and local `NSLog` calls. It
+does not expose the private UDP logging protocol or operate the Python
+collector/helper processes. `ObstacleBridgeTelemetry` in the portable Swift core provides the
 `telemetry/v1` event and batch contract. It applies the same field allowlist,
 size limits, priority classes, and metadata validation as Python. Its Swift
 tests load the canonical vector from `docs/TELEMETRY_V1_VECTORS.json`, exercise
@@ -228,14 +228,18 @@ The Packet Tunnel uses stable error codes for post-initialization startup
 failures and preserves exception detail only in its local runtime evidence.
 On shutdown, both runtimes persist their final queued marker without starting a
 new request and cancel any outstanding URLSession upload.
-Controlled-collector coverage and restart/network-failure qualification remain
-required.
+A native macOS build of these sources completes successfully. Runtime
+qualification is reserved for physical Apple devices: a simulator is not a
+qualification target for this work because its resource cost on the available
+machine is disproportionate and it cannot demonstrate Packet Tunnel behavior.
+Controlled-collector coverage and device restart/network-failure qualification
+remain required.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |
 | S3 — mTLS uploader | Add one low-priority Swift uploader with TLS-only HTTPS, client credentials, bounded batches, one in-flight request, acknowledgement handling, timeout, jittered backoff, and byte budget. | A controlled local collector verifies mTLS and acknowledgement semantics; offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart tests keep the spool bounded and preserve the runtime path. |
 | S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. |
-| S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Device or simulator evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |
+| S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Physical-device evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |
 
 ### Residual work before public deployment
 
