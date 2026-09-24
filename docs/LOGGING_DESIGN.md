@@ -256,12 +256,42 @@ python -m obstacle_bridge.bridge_telemetry_credentials issue-client \
   --installation-id <installation-id> ...
 ```
 
-It does not create the collector server certificate.  The operator supplies a
-normal server certificate and private key whose DNS/IP subject alternative
-name matches `telemetry_endpoint`.  The server process receives that pair,
-the client-CA certificate, and the revocation-list path as its own protected
-files.  A client private key is never put in `ObstacleBridge.cfg`, the app
-Documents directory, the iOS App Group, a log spool, or an Admin response.
+For the Linux Python-to-Python deployment, the repository also supplies three
+non-overwriting PEM-generation scripts.  Each private key is created with mode
+`0600`; the target directory is created with mode `0700`.
+
+```text
+python scripts/generate_telemetry_ca.py \
+  --common-name ObstacleBridge-Telemetry-CA \
+  --key-out /var/lib/obstaclebridge/telemetry-ca/ca.key.pem \
+  --cert-out /var/lib/obstaclebridge/telemetry-ca/ca.cert.pem
+
+python scripts/generate_telemetry_server_certificate.py \
+  --ca-key /var/lib/obstaclebridge/telemetry-ca/ca.key.pem \
+  --ca-cert /var/lib/obstaclebridge/telemetry-ca/ca.cert.pem \
+  --hostname telemetry.example.net \
+  --key-out /etc/obstaclebridge/telemetry/server.key.pem \
+  --cert-out /etc/obstaclebridge/telemetry/server.cert.pem
+
+python scripts/generate_telemetry_client_certificate.py \
+  --ca-key /var/lib/obstaclebridge/telemetry-ca/ca.key.pem \
+  --ca-cert /var/lib/obstaclebridge/telemetry-ca/ca.cert.pem \
+  --installation-id linux-client-01 \
+  --key-out /var/lib/obstaclebridge/telemetry-client/client.key.pem \
+  --cert-out /var/lib/obstaclebridge/telemetry-client/client.cert.pem
+```
+
+The CA private key belongs in an offline, root-owned issuance location, such
+as `/var/lib/obstaclebridge/telemetry-ca`, and is not deployed to either the
+collector or client service.  The collector server certificate/key belongs in
+its root-owned configuration directory, such as
+`/etc/obstaclebridge/telemetry`; the collector receives that pair, the public
+client-CA certificate, and its revocation-list path.  The client certificate,
+key, and public collector-CA certificate belong in a directory owned only by
+the separate uploader account, such as
+`/var/lib/obstaclebridge/telemetry-client`.  A client private key is never put
+in `ObstacleBridge.cfg`, the app Documents directory, the iOS App Group, a log
+spool, or an Admin response.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
