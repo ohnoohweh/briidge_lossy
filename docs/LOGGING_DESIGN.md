@@ -348,12 +348,12 @@ key. The peer bridge process needs none of these private keys.
 
 The SSH deployment scripts use a private remote staging directory, install
 only the named role material with restrictive ownership/modes, and never copy
-`ca.key.pem`. They use the invoking user as the SSH account, acquire remote
-`sudo` before changing protected target paths, and require a pre-existing
-`obstaclebridge` service account. They use the project VPS SSH default port
-`18022`. Override `USER_NAME`, `PORT`, `REMOTE_SUDO`, `CONNECT_TIMEOUT`,
-`SERVICE_USER`, `SERVICE_GROUP`, and `SSH_IDENTITY` as needed. They do not
-start or restart a bridge, uploader, or collector.
+`ca.key.pem`. They use the project VPS default SSH account `root`, acquire
+remote `sudo` before changing protected target paths, and require a
+pre-existing `obstaclebridge` service account. They use the project VPS SSH
+default port `18022`. Override `USER_NAME`, `PORT`, `REMOTE_SUDO`,
+`CONNECT_TIMEOUT`, `SERVICE_USER`, `SERVICE_GROUP`, and `SSH_IDENTITY` as
+needed. They do not start or restart a bridge, uploader, or collector.
 
 The scripts default to the generation paths listed above. A normal deployment
 therefore needs only the remote host:

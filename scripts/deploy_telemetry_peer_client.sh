@@ -6,7 +6,7 @@
 set -euo pipefail
 
 PORT="${PORT:-18022}"
-USER_NAME="${USER_NAME:-${USER}}"
+USER_NAME="${USER_NAME:-root}"
 HOST="${HOST:?set HOST to the peer-client address}"
 CA_CERT="${CA_CERT:-/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem}"
 CLIENT_KEY="${CLIENT_KEY:-/var/lib/obstaclebridge/telemetry-client/client.key.pem}"
