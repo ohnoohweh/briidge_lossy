@@ -602,6 +602,15 @@ enum ObstacleBridgeRuntimeConfig {
     static func maskedConfigSnapshot(_ runtimeConfig: [String: Any]) -> [String: Any] {
         var payload = runtimeConfig
         normalizeFlatPayloadForSchema(&payload)
+        // The admin configuration form posts every visible telemetry field.
+        // Older configurations have no telemetry section, and early builds
+        // could persist JSON null for an unset field.  Return schema-typed
+        // defaults in both cases so a read-modify-save cycle never submits a
+        // null where the schema requires an empty string.
+        for (key, defaultValue) in defaultTelemetryConfig()
+            where payload[key] == nil || payload[key] is NSNull {
+            payload[key] = defaultValue
+        }
         if payload["overlay_transport"] == nil {
             payload["overlay_transport"] = "myudp"
         }
