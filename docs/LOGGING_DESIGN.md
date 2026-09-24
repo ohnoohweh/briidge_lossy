@@ -376,6 +376,86 @@ so a non-root SSH user can enter its remote sudo password on hosts that require
 one; the installation disables TTY echo while it receives the scripted input.
 Set `LOCAL_SUDO` when the local privilege command is not `sudo`.
 
+#### Commissioning the installed Python reference
+
+Certificate deployment and telemetry configuration are two separate steps.
+The following procedure commissions the collector and proves its mTLS boundary
+for a Python peer server and Python peer client. It does not expose the
+private UDP logging receiver.
+
+1. On the peer server, start the collector under the dedicated service account.
+   Select the bind address deliberately: `127.0.0.1` accepts only same-host
+   clients; `0.0.0.0` accepts IPv4 clients after the host firewall permits TCP
+   port `18443` only from intended sources. The certificate must have a SAN for
+   the exact FQDN or IP address used in the endpoint.
+
+   ```bash
+   sudo -u obstaclebridge /path/to/venv/bin/python \
+     -m obstacle_bridge.bridge_telemetry_ingest \
+     --bind 0.0.0.0 --port 18443 \
+     --spool-directory /var/lib/obstaclebridge/telemetry-ingest \
+     --tls-cert /etc/obstaclebridge/telemetry/server.cert.pem \
+     --tls-key /etc/obstaclebridge/telemetry/server.key.pem \
+     --client-ca /etc/obstaclebridge/telemetry/client-ca.cert.pem \
+     --revocations /var/lib/obstaclebridge/telemetry-ingest/revocations.json
+   ```
+
+   Run this command through a service manager for an enduring deployment. The
+   reference collector has no installed unit file and must not run as the peer
+   bridge process or as root merely to use port `18443`.
+
+2. On the peer client, set the visible **Telemetry** configuration values as
+   follows. The installation identifier is not arbitrary: it must exactly
+   equal the common name in
+   `/etc/obstaclebridge/telemetry-client/client.cert.pem`.
+
+   | Setting | Python peer-client value |
+   | --- | --- |
+   | `telemetry_enabled` | `true` |
+   | `telemetry_endpoint` | `https://<collector-FQDN-or-SAN-IP>:18443/v1/telemetry/batches` |
+   | `telemetry_installation_id` | the client-certificate CN, for example `linux-client-01` |
+   | `telemetry_mtls_identity_label` | an operator label for that identity, for example `linux-client-01`; it is not a PEM path |
+   | `telemetry_spool_directory` | `/var/lib/obstaclebridge/telemetry-client` |
+
+   `127.0.0.1` is valid in the endpoint only when this client and the collector
+   are on the same operating-system host. A remote Python peer uses the
+   collector FQDN or its certificate SAN IP address instead. The endpoint must
+   retain the `/v1/telemetry/batches` path and use `https`, never `http`.
+
+3. From the client host, verify the deployed credentials and the collector
+   independently of the bridge with an authenticated health request:
+
+   ```bash
+   curl --fail --silent --show-error \
+     --cacert /etc/obstaclebridge/telemetry-client/collector-ca.cert.pem \
+     --cert /etc/obstaclebridge/telemetry-client/client.cert.pem \
+     --key /etc/obstaclebridge/telemetry-client/client.key.pem \
+     https://<collector-FQDN-or-SAN-IP>:18443/healthz
+   ```
+
+   A JSON health response proves TCP reachability, server-certificate
+   validation, client-certificate acceptance, and the collector's writable
+   state directory. It does not upload an event.
+
+The Python reference has `TelemetryEmitter`, `TelemetrySpool`, and
+`TelemetryUploader` components, but the peer bridge does not yet create or
+schedule them from these five saved configuration values. Consequently,
+setting `telemetry_enabled=true` in Python Admin Web currently records the
+operator intent but does **not** start an uploader or produce a batch. There
+is also no supported uploader service or CLI that maps the installed PEM files
+to the saved settings. The remaining Python commissioning work is to provide
+that separate supervised emitter/uploader service, connect it to the visible
+settings, and demonstrate one acknowledged batch. Until then, the `curl`
+check above is the complete deployable Python verification; it must not be
+represented as end-to-end telemetry collection.
+
+For Apple clients, the endpoint, installation ID, identity label, and enable
+flag use the same values. The iPhone label must resolve to an already-installed
+extension-accessible Keychain `SecIdentity`; copying these PEM files to the
+phone or App Group does not provision that identity. The current iOS identity
+enrolment/import gap therefore also prevents end-to-end commissioning on an
+iPhone, even when the collector health check succeeds from Linux.
+
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA only to the separate Python telemetry-uploader service account. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the uploader account. The peer bridge process does not need either private key. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, service-manager credentials, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
