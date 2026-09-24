@@ -979,6 +979,46 @@ def test_websocket_overlay_transport_owner_source_exists() -> None:
     assert "sendMuxFrames(" in runtime
 
 
+def test_onboarding_invites_keep_all_client_transport_options() -> None:
+    onboarding = (SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift").read_text(encoding="utf-8")
+
+    for key in [
+        "udp_bind",
+        "udp_own_port",
+        "udp_peer_resolve_family",
+        "max_inflight",
+        "tcp_bind",
+        "tcp_own_port",
+        "tcp_peer_resolve_family",
+        "tcp_bp_wbuf_threshold",
+        "quic_bind",
+        "quic_own_port",
+        "quic_peer_resolve_family",
+        "quic_alpn",
+        "quic_insecure",
+        "quic_max_size",
+        "ws_bind",
+        "ws_own_port",
+        "ws_peer_addresses",
+        "ws_path",
+        "ws_payload_mode",
+        "ws_peer_resolve_family",
+        "ws_proxy_auth",
+        "ws_proxy_host",
+        "ws_proxy_mode",
+        "ws_proxy_port",
+        "ws_reconnect_grace",
+        "ws_send_timeout",
+        "ws_subprotocol",
+        "ws_tcp_user_timeout_ms",
+        "ws_tls",
+        "ws_max_size",
+    ]:
+        assert f'"{key}"' in onboarding
+    assert 'profile["transport_options"]' in onboarding
+    assert 'connection["transport_options"]' in onboarding
+
+
 def test_tcp_overlay_runtime_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift").read_text(encoding="utf-8")
 

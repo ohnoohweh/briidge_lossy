@@ -21,11 +21,68 @@ class AdminWebUI:
     ONBOARDING_TOKEN_PREFIX = "ob1."
     PING_VERIFICATION_CACHE_TTL_SEC = 2.0
     TUN_ROUTING_SUMMARY_MARKER = "tun-summary-marker-2026-08-16a"
+    # Invite tokens describe the receiving peer.  These are the transport
+    # options that affect that peer's outbound connection. Existing client
+    # profiles additionally retain their local bind/port. Static asset paths
+    # and server key material stay local.
+    ONBOARDING_TRANSPORT_OPTION_KEYS = {
+        "myudp": (
+            "udp_bind",
+            "udp_own_port",
+            "udp_peer_resolve_family",
+            "max_inflight",
+        ),
+        "tcp": (
+            "tcp_bind",
+            "tcp_own_port",
+            "tcp_peer_resolve_family",
+            "tcp_bp_wbuf_threshold",
+        ),
+        "quic": (
+            "quic_bind",
+            "quic_own_port",
+            "quic_peer_resolve_family",
+            "quic_alpn",
+            "quic_insecure",
+            "quic_max_size",
+        ),
+        "ws": (
+            "ws_bind",
+            "ws_own_port",
+            "ws_peer_addresses",
+            "ws_path",
+            "ws_payload_mode",
+            "ws_peer_resolve_family",
+            "ws_proxy_auth",
+            "ws_proxy_host",
+            "ws_proxy_mode",
+            "ws_proxy_port",
+            "ws_reconnect_grace",
+            "ws_send_timeout",
+            "ws_subprotocol",
+            "ws_tcp_user_timeout_ms",
+            "ws_tls",
+            "ws_max_size",
+        ),
+    }
+    ONBOARDING_TRANSPORT_LOCAL_OPTION_KEYS = {
+        "myudp": ("udp_bind", "udp_own_port"),
+        "tcp": ("tcp_bind", "tcp_own_port"),
+        "quic": ("quic_bind", "quic_own_port"),
+        "ws": ("ws_bind", "ws_own_port"),
+    }
 
     @staticmethod
     def _transport_attr_prefix(transport: str) -> str:
         t = str(transport or "").strip().lower()
         return "udp" if t in {"udp", "myudp"} else t
+
+    def _onboarding_transport_options(self, transport: str) -> dict:
+        return {
+            key: value
+            for key in self.ONBOARDING_TRANSPORT_OPTION_KEYS.get(transport, ())
+            if (value := getattr(self.args, key, None)) is not None
+        }
 
     @staticmethod
     def register_cli(p):
@@ -1333,6 +1390,11 @@ class AdminWebUI:
             if transport == "ws":
                 profile["ws_path"] = str(getattr(self.args, "ws_path", "/") or "/")
                 profile["ws_tls"] = bool(getattr(self.args, "ws_tls", False))
+            transport_options = self._onboarding_transport_options(transport)
+            if role != "client":
+                for key in self.ONBOARDING_TRANSPORT_LOCAL_OPTION_KEYS.get(transport, ()):
+                    transport_options.pop(key, None)
+            profile["transport_options"] = transport_options
             profiles.append(profile)
         try:
             peers_payload = self.runner.get_peer_connections_snapshot() or {}
@@ -1439,6 +1501,11 @@ class AdminWebUI:
                 port_i = int(port)
                 if 1 <= port_i <= 65535:
                     updates[f"{attr_prefix}_peer_port"] = port_i
+        transport_options = conn.get("transport_options")
+        if isinstance(transport_options, dict):
+            for key in AdminWebUI.ONBOARDING_TRANSPORT_OPTION_KEYS.get(transport, ()):
+                if key in transport_options:
+                    updates[key] = transport_options[key]
         secure_mode = str(payload.get("secure_link_mode", "") or "").strip().lower()
         if secure_mode in {"off", "none", "psk", "cert"}:
             updates["secure_link_mode"] = "off" if secure_mode in {"off", "none"} else secure_mode

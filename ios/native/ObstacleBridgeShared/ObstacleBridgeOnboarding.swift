@@ -1,6 +1,49 @@
 import Foundation
 
 enum ObstacleBridgeOnboarding {
+    // An invite configures an outbound peer. Existing client profiles retain
+    // their local bind/port; local static asset paths and server key material
+    // are deliberately not portable.
+    private static func transportOptionKeys(_ transport: String) -> [String] {
+        switch transport {
+        case "myudp":
+            return ["udp_bind", "udp_own_port", "udp_peer_resolve_family", "max_inflight"]
+        case "tcp":
+            return ["tcp_bind", "tcp_own_port", "tcp_peer_resolve_family", "tcp_bp_wbuf_threshold"]
+        case "quic":
+            return ["quic_bind", "quic_own_port", "quic_peer_resolve_family", "quic_alpn", "quic_insecure", "quic_max_size"]
+        case "ws":
+            return [
+                "ws_bind", "ws_own_port", "ws_peer_addresses", "ws_path", "ws_payload_mode", "ws_peer_resolve_family",
+                "ws_proxy_auth", "ws_proxy_host", "ws_proxy_mode", "ws_proxy_port",
+                "ws_reconnect_grace", "ws_send_timeout", "ws_subprotocol",
+                "ws_tcp_user_timeout_ms", "ws_tls", "ws_max_size",
+            ]
+        default:
+            return []
+        }
+    }
+
+    private static func transportLocalOptionKeys(_ transport: String) -> [String] {
+        switch transport {
+        case "myudp": return ["udp_bind", "udp_own_port"]
+        case "tcp": return ["tcp_bind", "tcp_own_port"]
+        case "quic": return ["quic_bind", "quic_own_port"]
+        case "ws": return ["ws_bind", "ws_own_port"]
+        default: return []
+        }
+    }
+
+    private static func transportOptions(transport: String, runtimeConfig: [String: Any]) -> [String: Any] {
+        var options: [String: Any] = [:]
+        for key in transportOptionKeys(transport) {
+            if let value = runtimeConfig[key], !(value is NSNull) {
+                options[key] = value
+            }
+        }
+        return options
+    }
+
     static func tokenRuntimeConfig(runtimeConfig: [String: Any], requestPayload: [String: Any]) -> [String: Any] {
         var effective = runtimeConfig
         let adminWebName = (requestPayload["admin_web_name"] as? String ?? "")
@@ -80,6 +123,13 @@ enum ObstacleBridgeOnboarding {
                 profile["ws_path"] = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["ws_path"]) ?? "/"
                 profile["ws_tls"] = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["ws_tls"]) ?? false
             }
+            var transportOptions = transportOptions(transport: transport, runtimeConfig: runtimeConfig)
+            if role != "client" {
+                for key in transportLocalOptionKeys(transport) {
+                    transportOptions.removeValue(forKey: key)
+                }
+            }
+            profile["transport_options"] = transportOptions
             profiles.append(profile)
         }
         return profiles
@@ -305,6 +355,13 @@ enum ObstacleBridgeOnboarding {
             updates["\(prefix)_peer"] = host
             if let port, (1...65535).contains(port) {
                 updates["\(prefix)_peer_port"] = port
+            }
+        }
+        if let transportOptions = connection["transport_options"] as? [String: Any] {
+            for key in transportOptionKeys(transport) {
+                if let value = transportOptions[key] {
+                    updates[key] = value
+                }
             }
         }
         let secureMode = (ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_mode"]) ?? "").lowercased()
