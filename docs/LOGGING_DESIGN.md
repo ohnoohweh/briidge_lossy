@@ -299,6 +299,53 @@ the separate uploader account, such as
 in `ObstacleBridge.cfg`, the app Documents directory, the iOS App Group, a log
 spool, or an Admin response.
 
+#### Linux Python reference artefact placement
+
+The following is the required artefact inventory for the Python peer-server /
+Python peer-client deployment. `ca.cert.pem`, `client-ca.cert.pem`, and
+`collector-ca.cert.pem` contain the same public CA certificate in this
+single-CA reference topology. They are deliberately named by their local
+purpose, rather than copying the CA private-key directory to runtime hosts.
+
+**Safe storage / certificate-issuing entity (offline, root-owned)**
+
+```text
+/var/lib/obstaclebridge/telemetry-ca/ca.key.pem       CA private key; issuance only; never deployed
+/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem      CA public certificate; source for runtime copies
+```
+
+**Peer server instance (Python collector)**
+
+```text
+/etc/obstaclebridge/telemetry/server.key.pem          collector TLS private key
+/etc/obstaclebridge/telemetry/server.cert.pem         collector TLS public certificate
+/etc/obstaclebridge/telemetry/client-ca.cert.pem      trusted public CA for mTLS client validation
+/var/lib/obstaclebridge/telemetry-ingest/revocations.json  revoked client-certificate serials
+/var/lib/obstaclebridge/telemetry-ingest/replay.json       accepted installation/session sequence state
+/var/lib/obstaclebridge/telemetry-ingest/event-*.json      accepted telemetry spool segments
+```
+
+Run `bridge_telemetry_ingest` with the server certificate/key, the
+`client-ca.cert.pem` copy, the revocation file, and the
+`telemetry-ingest` directory as its spool directory. The collector account
+must read only the TLS material it needs and write only its ingest-state
+directory; it must not have the CA private key.
+
+**Peer client instance (Python telemetry uploader)**
+
+```text
+/etc/obstaclebridge/telemetry-client/client.key.pem   client mTLS private key
+/etc/obstaclebridge/telemetry-client/client.cert.pem  client mTLS public certificate
+/etc/obstaclebridge/telemetry-client/collector-ca.cert.pem  trusted public CA for the collector
+/var/lib/obstaclebridge/telemetry-client/event-*.json       pending telemetry spool segments
+```
+
+Construct `TelemetryUploader` with the client certificate/key and the
+`collector-ca.cert.pem` copy; configure its `TelemetrySpool` with
+`/var/lib/obstaclebridge/telemetry-client`. The uploader account must have no
+access to the collector private key, collector ingest state, or CA private
+key. The peer bridge process needs none of these private keys.
+
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA only to the separate Python telemetry-uploader service account. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the uploader account. The peer bridge process does not need either private key. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, service-manager credentials, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
