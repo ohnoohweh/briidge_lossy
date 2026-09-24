@@ -335,8 +335,8 @@ enum ObstacleBridgeRuntimeConfig {
     static func defaultTelemetryConfig() -> [String: Any] {
         [
             "telemetry_enabled": false,
-            "telemetry_endpoint": "",
-            "telemetry_spool_directory": "",
+            "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
         ]
     }
 
@@ -368,8 +368,8 @@ enum ObstacleBridgeRuntimeConfig {
             ],
             "telemetry_client": [
                 schemaItem(key: "telemetry_enabled", description: "Enable bounded HTTPS telemetry upload outside the bridge and packet paths.", defaultValue: false),
-                schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: ""),
-                schemaItem(key: "telemetry_spool_directory", description: "Optional macOS telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: ""),
+                schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: "https://127.0.0.1:18443/v1/telemetry/batches"),
+                schemaItem(key: "telemetry_spool_directory", description: "Telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: "/var/lib/obstaclebridge/telemetry-client"),
             ],
             "runner": [
                 schemaItem(key: "overlay_transport", description: "Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances.", defaultValue: "myudp"),

@@ -215,8 +215,8 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
         },
         "telemetry_client": {
             "telemetry_enabled": False,
-            "telemetry_endpoint": "",
-            "telemetry_spool_directory": "",
+            "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
         },
         "channel_mux": {
             "own_servers": [],

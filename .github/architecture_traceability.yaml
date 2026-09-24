@@ -639,17 +639,17 @@ ARC-CMP-004:
 
 ARC-CMP-005:
   # Admin status resilience includes the minimal live-session fallback used
-  # before a cached status payload exists. Admin payload coverage here guards
-  # the supported peer-scoped summary contract rather than retired
-  # SecureLink-specific handshake-debug telemetry fields, including persistent
+  # before a cached status payload exists. The supported peer-scoped summary
+  # contract excludes retired SecureLink-specific handshake-debug telemetry,
+  # including persistent
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
   # and peer-scoped wrapper status.
-  # Telemetry configuration coverage keeps the three Python producer settings
-  # aligned with the macOS/iOS contract and keeps Python-only certificate
-  # directory, family policy, and supervised collector settings visible in
-  # the same operational section.
+  # Telemetry configuration coverage keeps the loopback collector endpoint and
+  # client-spool defaults aligned with macOS/iOS, while Python exposes its
+  # certificate directory, family policy, and supervised collector settings
+  # in separate client and server sections.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema

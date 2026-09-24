@@ -47,12 +47,12 @@ class TelemetryRuntimeSettings:
         )
         group.add_argument(
             "--telemetry-endpoint",
-            default="",
+            default="https://127.0.0.1:18443/v1/telemetry/batches",
             help="HTTPS collector endpoint for telemetry batches",
         )
         group.add_argument(
             "--telemetry-spool-directory",
-            default="",
+            default="/var/lib/obstaclebridge/telemetry-client",
             help="Local directory for bounded telemetry spool segments",
         )
         group.add_argument(

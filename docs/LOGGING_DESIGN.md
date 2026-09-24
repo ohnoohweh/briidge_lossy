@@ -27,13 +27,14 @@ private UDP receiver shown above. Apple does not implement that UDP protocol;
 it records bounded telemetry health/lifecycle events to its private spool and,
 when enabled and provisioned, uploads batches through HTTPS.
 
-`telemetry_endpoint` is already the client-side remote-address option. It is a
-complete HTTPS URL, including the port and `/v1/telemetry/batches` path. For a
-Python client and collector on the same machine, it may be
-`https://127.0.0.1:18443/v1/telemetry/batches`. On an iPhone,
+`telemetry_endpoint` is already the client-side remote-address option. Its
+default is `https://127.0.0.1:18443/v1/telemetry/batches`, and the client spool
+default is `/var/lib/obstaclebridge/telemetry-client`. The endpoint is a
+complete HTTPS URL, including the port and `/v1/telemetry/batches` path. On an iPhone,
 `127.0.0.1` means the phone itself, not the Mac or Python peer; the endpoint
-must therefore name the collector host. The collector currently starts as a
-separate Python service, not as part of a peer bridge process.
+must therefore be changed to name the collector host. The Python collector is
+supervised alongside an enabled peer bridge, but remains a separate HTTPS
+process with no overlay or Admin Web listener role.
 
 The sender is configured with `--log-udp-target HOST:PORT`. Combining it with
 `--log-udp-only` removes local stdout, file, stderr-mirror, and Admin-ring
@@ -229,10 +230,10 @@ The telemetry endpoint is the common point where a peer client and a
 peer-server-operated diagnostics service meet. An operator may host the
 collector beside a bridge server, but it is a separate HTTPS collector process;
 the peer bridge does not accept telemetry on its overlay or Admin Web ports.
-Every client uses that same visible `telemetry_endpoint`, a unique visible
-installation identifier, and its enrolled mTLS identity reference. The
-collector trusts the corresponding client credentials and records the supplied
-installation identifier with the bounded event batch.
+Every client uses that same visible `telemetry_endpoint` and its enrolled mTLS
+identity. The installation identifier is derived from that client certificate's
+common name. The collector trusts the corresponding client credentials and
+records the supplied installation identifier with the bounded event batch.
 
 The private UDP logger remains a Python-only trusted-network facility. A
 Python client can target the independent UDP receiver running beside a peer

@@ -65,6 +65,8 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert '"telemetry_client": [' in runtime_config
     assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
     assert "static func defaultTelemetryConfig()" in runtime_config
+    assert '"telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches"' in runtime_config
+    assert '"telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client"' in runtime_config
     assert "for (key, defaultValue) in defaultTelemetryConfig()" in runtime_config
     assert "payload[key] == nil || payload[key] is NSNull" in runtime_config
 

@@ -1133,8 +1133,8 @@ What the admin web shows:
 | `--log-udp-only` | `false` | Use only the UDP sender, isolating runtime work from local logging sinks. |
 | `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
 | `--telemetry-enabled` | `false` | Enable bounded HTTPS telemetry configuration outside bridge and packet paths. |
-| `--telemetry-endpoint` | unset | HTTPS collector endpoint for telemetry batches. |
-| `--telemetry-spool-directory` | unset | Local bounded telemetry spool directory. |
+| `--telemetry-endpoint` | `https://127.0.0.1:18443/v1/telemetry/batches` | HTTPS collector endpoint for telemetry batches. Replace loopback with the reachable collector address for remote clients. |
+| `--telemetry-spool-directory` | `/var/lib/obstaclebridge/telemetry-client` | Local bounded telemetry spool directory. |
 | `--telemetry-client-certificate-directory` | `/etc/obstaclebridge/telemetry-client` | Python uploader client certificate, key, and collector-CA directory. |
 | `--telemetry-client-address-family` | `prefer-ipv6` | Python uploader endpoint policy: IPv6 preferred with IPv4 fallback, IPv6 only, or IPv4 only. |
 | `--telemetry-collector-enabled` | `false` | Enable this host's separate HTTPS telemetry collector service. |

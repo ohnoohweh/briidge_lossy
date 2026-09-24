@@ -91,8 +91,8 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert "log_file" in config["debug_logging"]
     assert config["telemetry_client"] == {
         "telemetry_enabled": False,
-        "telemetry_endpoint": "",
-        "telemetry_spool_directory": "",
+        "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
+        "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
     }
 
 

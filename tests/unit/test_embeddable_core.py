@@ -280,6 +280,14 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             },
         )
         self.assertFalse(client_rows["telemetry_enabled"]["default"])
+        self.assertEqual(
+            client_rows["telemetry_endpoint"]["default"],
+            "https://127.0.0.1:18443/v1/telemetry/batches",
+        )
+        self.assertEqual(
+            client_rows["telemetry_spool_directory"]["default"],
+            "/var/lib/obstaclebridge/telemetry-client",
+        )
         self.assertFalse(server_rows["telemetry_collector_enabled"]["default"])
         for row in [*client_rows.values(), *server_rows.values()]:
             self.assertFalse(row.get("secret", False))

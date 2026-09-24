@@ -84,6 +84,8 @@ def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
     assert "ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)" in source
     assert '"telemetry_client": [' in runtime_config
     assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
+    assert 'defaultValue: "https://127.0.0.1:18443/v1/telemetry/batches"' in runtime_config
+    assert 'defaultValue: "/var/lib/obstaclebridge/telemetry-client"' in runtime_config
     assert '"telemetry_client": ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()' in app_main
 
 
