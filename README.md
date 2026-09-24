@@ -53,7 +53,7 @@ The project currently targets six platform families:
 ## For Users
 
 ### Whitepaper
-The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
+The complete whitepaper is available in [`docs/WHITEPAPER.html`](docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
 - Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
 - The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
@@ -78,11 +78,11 @@ For new users, the simplest path is to download the project from GitHub, install
 1. Download the source from GitHub:
 
 ```bash
-git clone https://github.com/ohnoohweh/briidge_lossy.git
+git clone https://github.com/<account>/<repository>.git
 cd briidge_lossy
 ```
 
-If you do not use `git`, download the ZIP from `https://github.com/ohnoohweh/briidge_lossy`, extract it, and open a terminal in the extracted project directory.
+If you do not use `git`, download the ZIP from the repository's GitHub page, extract it, and open a terminal in the extracted project directory.
 
 2. Create and activate a local Python virtual environment:
 
@@ -305,7 +305,7 @@ Solution with an ObstacleBridge WebSocket bridge:
 ```json
 {
   "overlay_transport": "ws",
-  "ws_peer": "ohnoohweh.synology.me",
+  "ws_peer": "peer.example.net",
   "ws_peer_addresses": ["203.0.113.20", "2001:db8::20"],
   "ws_peer_port": 443,
   "ws_tls": true,
@@ -1559,9 +1559,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `63` | `980` |
+| Python CLI/runtime, including macOS Python | `64` | `982` |
 | macOS Swift app | `1` | `66` |
-| iOS app/extension | `29` | `190` |
+| iOS app/extension | `30` | `197` |
 
 #### Requirement traceability
 
@@ -1602,8 +1602,8 @@ This section is intentionally narrower than product coverage. It shows the evide
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
 | Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `66` | `0` | `66` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `78` | `152` | `230` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
+| Total parity-oriented evidence | Sum of the lanes above | `78` | `154` | `232` |
 
 Important caveat:
 
@@ -1685,6 +1685,6 @@ For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime 
 - `docs/SECURE_LINK_DESIGN.md` — Phase 0 design baseline for transport-independent tunnel authentication and encryption.
 - `docs/refered_docs/` — referenced examples, diagrams, images, and the smoke-test cheat sheet.
 - `.github/requirements_traceability.yaml` — product-requirement to test traceability manifest used by the requirements guard and coverage report.
-- `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
+- `docs/WHITEPAPER.html` — full project whitepaper.
 - `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.

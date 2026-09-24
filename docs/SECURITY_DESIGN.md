@@ -6,9 +6,9 @@ This document summarizes the security measures that exist across ObstacleBridge 
 
 It is an umbrella design note. More detailed behavior remains owned by the narrower design documents:
 
-- [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md) for peer authentication, tunnel encryption, replay protection, rekeying, and certificate policy
-- [WEBADMIN_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBADMIN_DESIGN.md) for WebAdmin authentication, session handling, guarded config writes, and admin API behavior
-- [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) for what ObstacleBridge owns versus what the surrounding operating system, browser, network, and crypto libraries must provide
+- [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md) for peer authentication, tunnel encryption, replay protection, rekeying, and certificate policy
+- [WEBADMIN_DESIGN.md](WEBADMIN_DESIGN.md) for WebAdmin authentication, session handling, guarded config writes, and admin API behavior
+- [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md) for what ObstacleBridge owns versus what the surrounding operating system, browser, network, and crypto libraries must provide
 
 The goal is to make the security posture readable in one place without duplicating every implementation detail.
 

@@ -30,10 +30,10 @@ It covers:
 
 It does not redefine:
 
-- product requirements already owned by [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- transport/session behavior already owned by [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
-- secure-link handshake and trust behavior already owned by [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md)
-- WebSocket transport splitting already owned by [WEBSOCKET_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBSOCKET_DESIGN.md)
+- product requirements already owned by [REQUIREMENTS.md](REQUIREMENTS.md)
+- transport/session behavior already owned by [ARCHITECTURE.md](ARCHITECTURE.md)
+- secure-link handshake and trust behavior already owned by [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md)
+- WebSocket transport splitting already owned by [WEBSOCKET_DESIGN.md](WEBSOCKET_DESIGN.md)
 
 ## Current boundary
 
@@ -406,7 +406,7 @@ Future changes to WebAdmin should preserve these externally visible behaviors:
 - secure-link and peer state remain peer-scoped in `/api/peers` and the WebAdmin page
 - `/api/peers` continues to expose peer-local age/diagnostic information such as `last_incoming_age_seconds` for non-listening peer rows when the runtime has observed inbound traffic from that peer
 
-The current regression anchors live in [tests/unit/test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py) and the admin-web integration cases in [tests/integration/test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py).
+The current regression anchors live in [tests/unit/test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py) and the admin-web integration cases in [tests/integration/test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py).
 
 ## Tradeoffs and future options
 

@@ -120,6 +120,16 @@ Runtime owners do not self-terminate to enforce these limits. Physical
 qualification selects and records operating thresholds because available
 memory, scheduler behavior, and termination policy differ by platform.
 
+`scripts/capture_runtime_qualification.py` captures a version-pinned Admin
+evidence bundle without creating traffic or retaining packet contents. Its
+required inputs bind the signed build identifier, authenticated Admin endpoint,
+sampling interval, traffic source, output directory, and platform
+termination-report location. It samples status, peer, and TUN/routing
+projections, records owner packet-direction deltas, and rejects a missing
+health ring, packet counters, or authenticated ready SecureLink. Platform
+termination evidence and the traffic-generator record remain external,
+timestamp-correlated inputs to the same bundle.
+
 ## Known open gaps
 
 - Packet policy does not yet admit IPv6 jumbograms or encrypted payloads,
@@ -143,14 +153,14 @@ memory, scheduler behavior, and termination policy differ by platform.
 
 ## R007 delivery packages
 
-The packages are consecutive. A package may start only after all completion
-conditions of its predecessor have evidence in the traceability inventory.
-Only unfinished packages are listed here.
+The packages are consecutive. Each produces an evidence bundle that is the
+entry condition for the next package. Only unfinished packages are listed.
 
 | Package | Deliverable | Definition of done |
 | --- | --- | --- |
-| `LSW-R007.5` | Physical runtime-load qualification | On a signed physical iPhone and each released host owner, controlled sustained traffic demonstrates bounded packet admission without self-termination. Retained health records and redacted Admin snapshots capture both packet directions, queue/inflight high-water, drops, slow writes, lifecycle classification, and the matching platform termination or watchdog evidence. The recorded operating threshold and authenticated remote-WebAdmin evidence location are reproducible without protocol changes. |
-| `LSW-R007.6` | Product lifecycle qualification | Linux privileged TUN, signed macOS, and physical iOS exercise the common service and packet paths that each capability admits. Each supervised restart reaches a bounded, observable shutdown without orphaned workers before its replacement admits traffic. The inventory links Python-reference behavior to executable platform evidence and records every remaining capability limit. |
+| `LSW-R007.5b` | iOS physical load evidence | A signed physical iPhone carries controlled sustained bidirectional tunnel traffic for the selected operating threshold. The evidence bundle contains the pre/post redacted Admin snapshots, retained health-ring tail, packet-flow queue/inflight high-water, drop and slow-write totals, and the correlated iOS termination, watchdog, or no-termination report. |
+| `LSW-R007.5c` | Released-host load evidence | Each released host owner carries the same controlled sustained traffic for its selected threshold. Its evidence bundle contains the host health-ring tail, bounded-admission measurements, packet directions, and the matching platform process/termination evidence. |
+| `LSW-R007.6` | Product lifecycle qualification | Linux privileged TUN, signed macOS, and physical iOS each execute the common service and packet paths their capability set admits. For every supervised restart, the evidence records the shutdown initiator, completion bound, child-process result, replacement readiness, and pre/post health classification; no replacement admits traffic while an owner from the preceding lifetime remains. The inventory links the executable evidence to Python-reference behavior and records each capability limit. |
 
 ## Follow-on Linux packages
 

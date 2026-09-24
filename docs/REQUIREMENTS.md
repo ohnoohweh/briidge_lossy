@@ -2,7 +2,7 @@
 
 This document captures black-box requirements for the project. These are intentionally phrased as observable behavior, not implementation detail.
 
-These statements are limited to project-owned behavior. They are not a catalog of end-user goals, deployment recipes, infrastructure prerequisites, operating-system capabilities, browser guarantees, or third-party library contracts. Those boundaries are described in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md).
+These statements are limited to project-owned behavior. They are not a catalog of end-user goals, deployment recipes, infrastructure prerequisites, operating-system capabilities, browser guarantees, or third-party library contracts. Those boundaries are described in [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md).
 
 ## Scope
 
@@ -14,7 +14,7 @@ ObstacleBridge is expected to:
 - expose runtime state and configuration through the admin web interface
 - remain testable under reconnect, restart, concurrency, and lossy-path scenarios
 
-The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](/home/ohnoohweh/quic_br/README.md). The requirement IDs below describe what the project itself is expected to do inside that broader system context.
+The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](../README.md). The requirement IDs below describe what the project itself is expected to do inside that broader system context.
 
 Secure-link authentication and encryption work now has three delivered requirement slices in this document:
 
@@ -22,13 +22,13 @@ Secure-link authentication and encryption work now has three delivered requireme
 - active `REQ-AUT-*` items for the delivered certificate-based Phase 2 trust model and validation slice
 - active `REQ-AUT-*` items for the delivered Phase 3 operational-control slice around live certificate/revocation reload and enforcement
 
-The detailed realization concept remains in [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md), and the component ownership boundary remains in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
+The detailed realization concept remains in [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md), and the component ownership boundary remains in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-Security controls that span multiple requirement areas, including WebAdmin authentication, guarded config writes, encrypted persisted secrets, controlled secret reveal, and threat scenarios, are summarized in [SECURITY_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURITY_DESIGN.md).
+Security controls that span multiple requirement areas, including WebAdmin authentication, guarded config writes, encrypted persisted secrets, controlled secret reveal, and threat scenarios, are summarized in [SECURITY_DESIGN.md](SECURITY_DESIGN.md).
 
 ## Runtime compatibility requirements
 
-- `REQ-RUN-001`: ObstacleBridge shall maintain Python 3.8 compatibility for Synology DSM deployments. Runtime code shall avoid syntax and import-time evaluated type expressions that require Python 3.9 or newer. The package metadata shall declare this support with `requires-python = ">=3.8"` in [pyproject.toml](/home/ohnoohweh/quic_br/pyproject.toml).
+- `REQ-RUN-001`: ObstacleBridge shall maintain Python 3.8 compatibility for Synology DSM deployments. Runtime code shall avoid syntax and import-time evaluated type expressions that require Python 3.9 or newer. The package metadata shall declare this support with `requires-python = ">=3.8"` in [pyproject.toml](../pyproject.toml).
 - `REQ-RUN-002`: The repository shall provide a buildable first-pass Synology DSM `.spk` wrapper for the Python runtime. That wrapper shall package the existing Python-first payload rather than a separate native Synology application, include the shared ObstacleBridge application icon in the generated SPK metadata, mark the package as beta until the Synology deployment path reaches a final release, emit a DSM-acceptable SPK container layout with one top-level `INFO`, one `package.tgz`, and the expected lifecycle metadata files without duplicate archive members, seed a default persistent config location for DSM-managed installs, declare the maintained Synology interpreter dependency on SynoCommunity `python314`, bootstrap the required Python runtime packages into package-managed storage for that interpreter, and provide DSM service lifecycle hooks that can start, stop, and report the package service while failing clearly when the maintained Synology Python runtime or required Python packages are unavailable. The DSM service wrapper shall also honor the bridge runtime's dedicated restart exit codes so operator-triggered restarts remain under DSM service control instead of being treated as a final stop. The same first-pass wrapper may also prototype a helper-oriented privilege split by preparing a dedicated helper interpreter copy for helper-mode launches, by prestarting package-user helper handoff metadata and socket state through DSM lifecycle hooks, by passing package-written helper socket/token metadata into the runtime through `OBSTACLEBRIDGE_PRESTARTED_TUN_HELPER_CONFIG`, and by pointing the existing Linux helper subprocess at that copy when a package-managed helper executable override is available. On current installable DSM 7.x packages, that helper-handoff prototype shall remain package-user-only unless a Synology-signed or development-token path is available, so the SPK shall not require an install-blocking root-privileged package declaration.
 Implementation note: the current Synology service runner keeps shell `errexit` enabled for the wrapper as a whole, but must temporarily disable it around the bridge subprocess invocation so restart exit codes `75` and `77` can be captured and translated into immediate or delayed wrapper-managed relaunch instead of terminating the DSM service loop early.
 
@@ -92,7 +92,7 @@ This section covers the delivered PSK-based Phase 1 secure-link slice and the de
 
 Functional decomposition note:
 
-- `REQ-AUT-001` through `REQ-AUT-003`, `REQ-AUT-005`, `REQ-AUT-006`, and `REQ-AUT-007` are realized jointly by the secure-link runtime slice in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) (`ARC-CMP-006`), with lifecycle/config/snapshot wiring contributed by the runner/process orchestration layer (`ARC-CMP-004`).
+- `REQ-AUT-001` through `REQ-AUT-003`, `REQ-AUT-005`, `REQ-AUT-006`, and `REQ-AUT-007` are realized jointly by the secure-link runtime slice in [ARCHITECTURE.md](ARCHITECTURE.md) (`ARC-CMP-006`), with lifecycle/config/snapshot wiring contributed by the runner/process orchestration layer (`ARC-CMP-004`).
 - `REQ-AUT-004`, `REQ-AUT-008`, `REQ-AUT-009`, and `REQ-AUT-010` are realized jointly by:
   - the secure-link runtime slice (`ARC-CMP-006`), which owns the underlying authentication/encryption state and failure categories
   - the runner/process orchestration layer (`ARC-CMP-004`), which gathers and shapes snapshot data
@@ -106,9 +106,9 @@ Functional decomposition note:
   - the runner/process orchestration layer (`ARC-CMP-004`), which wires peer-session wrappers and per-peer compression parameters
   - the admin web and observability layer (`ARC-CMP-005`), which exposes peer-scoped compression telemetry in `/api/peers`
 
-The component ownership boundary for these secure-link requirements is documented in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md).
+The component ownership boundary for these secure-link requirements is documented in [ARCHITECTURE.md](ARCHITECTURE.md).
 
-The certificate/profile details that ObstacleBridge expects as input are documented in [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md), because they describe requirements on supplied key material and crypto support rather than black-box delivery of the current runtime.
+The certificate/profile details that ObstacleBridge expects as input are documented in [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md), because they describe requirements on supplied key material and crypto support rather than black-box delivery of the current runtime.
 
 Current implementation note:
 
@@ -443,7 +443,7 @@ It also completes when that peer delays the protected application reply by a
 bounded interval below the client receive timeout.
 - `REQ-MYU-007`: The myudp transport shall expose an averaged transmit-delay metric for acknowledged `DATA` frames, derived from first-send time minus half of the current RTT estimate, so operators can distinguish payload delivery delay from raw RTT. When an idle RTT refresh updates the active session RTT estimate without a new acknowledged `DATA` frame, the runtime shall re-base `transmit_delay_est_ms` to half of the refreshed RTT estimate so stale delay spikes do not persist indefinitely during idle periods.
 
-Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](/home/ohnoohweh/quicbr_test/docs/MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
+Implementation note: the transport-envelope RTT and retransmission details for the delivered `myudp` runtime are documented in [MYUDP_DESIGN.md](MYUDP_DESIGN.md). In particular, retransmission must rebuild a fresh protocol envelope for each actual wire send so `tx_ns` and `echo_ns` reflect the resend attempt rather than a stale raw datagram image.
 Implementation note: current focused regression coverage for the `REQ-MYU-*` slice also includes semantic log-replay and transport-edge checks that preserve fresh retransmit frame rebuilding, protect receiver gap state across sender reset, clear stale receiver/control state across full transport-epoch reset, keep log-based repro analysis aligned to the same observed session epoch, keep a frame that was reported missing on a persistent RTT-paced retry path until cumulative ACK progress actually clears that gap, verify that acknowledged `DATA` frames publish an EWMA transmit-delay estimate through the runtime status/dashboard path, and verify that idle RTT refresh rebases the live transmit-delay estimate back to half-RTT when no fresh `DATA` ACK has arrived yet. Python and Swift default the `myudp` send window to `max_inflight=200` unless runtime config explicitly overrides it, while still clamping configured values to the supported session range.
 
 Implementation note: the myUDP2 codec boundary is defined by a bounded `u32` stream-record serializer/deserializer and a strict DATA_BATCH parser/encoder that consumes the frozen wire vectors, rejects invalid record lengths and trailing bytes, and enforces the IPv6-safe batch budget. The Python and shared Swift myudp runtimes carry those stream bytes in DATA_BATCH datagrams, schedule complete chunks within the batch budget, and retransmit each missing chunk in a freshly built batch envelope. The Python E2E harness records sanitized DATA_BATCH framing metadata and qualifies concurrent small-record coalescing plus exact-once recovery after a dropped multi-record batch. `get_stream_record_limit()` is the upper-layer budget contract: ChannelMux uses it for read and fragment sizing, Compression forwards it, and SecureLink reserves protected-frame overhead. The `myudp.budget` peer-status object and transport metrics report stream bytes, chunks, batches, queue bytes/age, retransmitted chunks, malformed batches, and malformed stream records. Swift macOS/iOS device and mixed-runtime qualification remains required before this wire format is eligible for a distributed-network release; there is no runtime wire-format fallback.
@@ -458,7 +458,7 @@ Apple myUDP peer-runtime queue budgeting consumes Core-owned batch-header,
 record-length, and chunk-header constants through a compatibility facade, so
 that scheduling boundary cannot retain a divergent platform-local layout.
 Implementation note: stream-style transports that do not maintain a separate ACK-derived payload-delay estimator (`tcp`, `quic`, and `ws`) shall publish `transmit_delay_est_ms` as `rtt_est_ms / 2` on their session metric surface so operator dashboards and ChannelMux policy can consume one consistent delay field across transports.
-Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md) now also defines the overload/freshness policy that future transport work is expected to follow: bounded queues, admission-side shedding for freshness-sensitive datagram traffic, ingress-side backpressure for TCP streams, and observability of queue pressure/drop state rather than unbounded stale backlog growth.
+Implementation note: [ARCHITECTURE.md](ARCHITECTURE.md) now also defines the overload/freshness policy that future transport work is expected to follow: bounded queues, admission-side shedding for freshness-sensitive datagram traffic, ingress-side backpressure for TCP streams, and observability of queue pressure/drop state rather than unbounded stale backlog growth.
 
 ## Admin web requirements
 
@@ -473,8 +473,13 @@ Implementation note: [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE
   its runtime-config directory, and the iOS packet-tunnel provider uses its
   App Group. Packet contents, credentials, keys, nonces, and peer traffic
   detail are not retained. A new runtime lifetime retains the bounded prior
-  evidence before appending its start marker. Physical-device load-threshold qualification remains
-  open.
+  evidence before appending its start marker. `scripts/capture_runtime_qualification.py`
+  captures only those existing redacted Admin projections for a physical-load
+  evidence bundle. It requires the build identifier, controlled traffic-source
+  identifier, and external platform termination-report location, records the
+  repository revision and owner packet-counter delta, and rejects missing
+  retained health evidence, owner counters, or an authenticated ready
+  SecureLink. Physical-device load-threshold qualification remains open.
 - `REQ-ADM-002`: When admin authentication is disabled, the admin API shall remain available without login.
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.
 - `REQ-ADM-004`: After correct authentication, the admin API shall become available to that authenticated client.
@@ -510,9 +515,9 @@ Implementation note: accepted listener-peer snapshots retain child-session metri
 
 - Implementation note: the admin web challenge-response login shall remain usable over plain HTTP as well as HTTPS. When the page is not in a secure context, the browser-side proof generation shall fall back to an equivalent client-side SHA-256 implementation so the login flow still works without requiring `window.crypto.subtle`.
 
-Development-process measures such as test-execution discipline, regression-writing policy, and CI split strategy are documented in [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md). They intentionally do not appear here because they govern how the project is built and validated, not what the delivered project promises to an operator.
+Development-process measures such as test-execution discipline, regression-writing policy, and CI split strategy are documented in [DEVELOPMENT_PROCESS.md](DEVELOPMENT_PROCESS.md). They intentionally do not appear here because they govern how the project is built and validated, not what the delivered project promises to an operator.
 
-Repository governance update (process change): the project now documents and requires a consistent PR style and a repository PR template to improve review quality and traceability. See [DEVELOPMENT_PROCESS.md](/home/ohnoohweh/quic_br/docs/DEVELOPMENT_PROCESS.md) and `.github/PULL_REQUEST_TEMPLATE.md` for the required PR structure and checklist. This administrative change is intended to improve reviewer efficiency and traceability when implementation, tests, or architecture documents are modified. The top-level [README.md](/home/ohnoohweh/quic_br/README.md) is intentionally treated as a compact entrypoint and coverage snapshot; detailed requirement, design, system-boundary, and test-catalog narrative belongs in the dedicated docs rather than being duplicated in that snapshot. When behavior, tests, or architecture/process guidance changes, the snapshot is expected to stay current while the durable explanation remains in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md), [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md), [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md), and [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md).
+Repository governance update (process change): the project now documents and requires a consistent PR style and a repository PR template to improve review quality and traceability. See [DEVELOPMENT_PROCESS.md](DEVELOPMENT_PROCESS.md) and `.github/PULL_REQUEST_TEMPLATE.md` for the required PR structure and checklist. This administrative change is intended to improve reviewer efficiency and traceability when implementation, tests, or architecture documents are modified. The top-level [README.md](../README.md) is intentionally treated as a compact entrypoint and coverage snapshot; detailed requirement, design, system-boundary, and test-catalog narrative belongs in the dedicated docs rather than being duplicated in that snapshot. When behavior, tests, or architecture/process guidance changes, the snapshot is expected to stay current while the durable explanation remains in [REQUIREMENTS.md](REQUIREMENTS.md), [ARCHITECTURE.md](ARCHITECTURE.md), [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md), and [README_TESTING.md](README_TESTING.md).
 
 Repository governance update (testability): the unit-test traceability snapshot now includes focused unit coverage for the remaining requirement IDs that were previously defended only by integration tests. The added unit coverage protects Admin Web authentication gate behavior, accepted-peer reporting identity across listener transports, UDP IPv4/IPv6 peer labeling, and core `myudp` reliability/session invariants while preserving the integration suite as the full black-box signal for end-to-end overlay behavior.
 
@@ -529,4 +534,4 @@ local listener publication as separate observable states; it waits a bounded
 interval for an accepted TCP listener to bind before declaring the data plane
 unavailable.
 
-The supporting product-requirement traceability manifest is maintained in [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml). It is stored with the repository's CI/support metadata rather than in `docs/`, but it continues to trace these product requirements to their defending tests.
+The supporting product-requirement traceability manifest is maintained in [.github/requirements_traceability.yaml](../.github/requirements_traceability.yaml). It is stored with the repository's CI/support metadata rather than in `docs/`, but it continues to trace these product requirements to their defending tests.

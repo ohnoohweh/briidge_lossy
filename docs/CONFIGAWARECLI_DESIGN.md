@@ -25,8 +25,8 @@ This document covers:
 
 It does not redefine:
 
-- the black-box requirements in [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
-- the runtime ownership split in [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
+- the black-box requirements in [REQUIREMENTS.md](REQUIREMENTS.md)
+- the runtime ownership split in [ARCHITECTURE.md](ARCHITECTURE.md)
 - the behavior of any particular transport, secure-link, or admin feature
 
 ## Current boundary
