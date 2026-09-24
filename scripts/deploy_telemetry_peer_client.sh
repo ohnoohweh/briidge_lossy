@@ -78,6 +78,12 @@ set -euo pipefail
 stage="$1"
 owner="$2"
 group="$3"
+if ! getent group "$group" >/dev/null; then
+    groupadd --system "$group"
+fi
+if ! id -u "$owner" >/dev/null 2>&1; then
+    useradd --system --no-create-home --gid "$group" --shell /usr/sbin/nologin "$owner"
+fi
 install -d -o "$owner" -g "$group" -m 0750 /etc/obstaclebridge/telemetry-client
 install -d -o "$owner" -g "$group" -m 0700 /var/lib/obstaclebridge/telemetry-client
 install -o "$owner" -g "$group" -m 0600 "$stage/source-client.key.pem" /etc/obstaclebridge/telemetry-client/client.key.pem.new
