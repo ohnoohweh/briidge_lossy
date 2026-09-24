@@ -6,7 +6,7 @@
 set -euo pipefail
 
 PORT="${PORT:-18022}"
-USER_NAME="${USER_NAME:-root}"
+USER_NAME="${USER_NAME:-${USER}}"
 HOST="${HOST:?set HOST to the peer-server address}"
 CA_CERT="${CA_CERT:-/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem}"
 SERVER_KEY="${SERVER_KEY:-/etc/obstaclebridge/telemetry/server.key.pem}"
@@ -15,7 +15,10 @@ SERVICE_USER="${SERVICE_USER:-obstaclebridge}"
 SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
 SSH_IDENTITY="${SSH_IDENTITY:-}"
 LOCAL_SUDO="${LOCAL_SUDO:-sudo}"
+REMOTE_SUDO="${REMOTE_SUDO:-sudo}"
+CONNECT_TIMEOUT="${CONNECT_TIMEOUT:-10}"
 
+echo "Checking local telemetry material (local sudo may be requested)."
 for source_file in "$CA_CERT" "$SERVER_KEY" "$SERVER_CERT"; do
     [[ -f "$source_file" ]] || "$LOCAL_SUDO" test -f "$source_file" || {
         echo "missing regular file: $source_file" >&2
@@ -27,14 +30,16 @@ done
     exit 2
 }
 
-SSH=(ssh -p "$PORT")
-SCP=(scp -P "$PORT")
+[[ "$REMOTE_SUDO" =~ ^[A-Za-z0-9_./-]+$ ]] || { echo "REMOTE_SUDO must be a command path" >&2; exit 2; }
+SSH=(ssh -p "$PORT" -o "ConnectTimeout=$CONNECT_TIMEOUT" -o ConnectionAttempts=1)
+SCP=(scp -P "$PORT" -o "ConnectTimeout=$CONNECT_TIMEOUT" -o ConnectionAttempts=1)
 if [[ -n "$SSH_IDENTITY" ]]; then
     SSH+=(-i "$SSH_IDENTITY")
     SCP+=(-i "$SSH_IDENTITY")
 fi
 REMOTE="${USER_NAME}@${HOST}"
 
+echo "Preparing protected local telemetry material."
 local_stage="$(mktemp -d "${TMPDIR:-/tmp}/obstaclebridge-telemetry-server.XXXXXX")"
 chmod 0700 "$local_stage"
 remote_stage=""
@@ -58,12 +63,17 @@ copy_source "$CA_CERT" source-ca.cert.pem
 copy_source "$SERVER_KEY" source-server.key.pem
 copy_source "$SERVER_CERT" source-server.cert.pem
 
+echo "Connecting to $REMOTE on SSH port $PORT and acquiring remote privilege."
+"${SSH[@]}" "$REMOTE" "$REMOTE_SUDO" -v
+echo "Creating private remote staging directory."
 remote_stage="$("${SSH[@]}" "$REMOTE" 'umask 077; mktemp -d /tmp/obstaclebridge-telemetry-server.XXXXXX')"
 
+echo "Uploading collector TLS material."
 "${SCP[@]}" "$local_stage/source-ca.cert.pem" "$REMOTE:$remote_stage/source-ca.cert.pem"
 "${SCP[@]}" "$local_stage/source-server.key.pem" "$REMOTE:$remote_stage/source-server.key.pem"
 "${SCP[@]}" "$local_stage/source-server.cert.pem" "$REMOTE:$remote_stage/source-server.cert.pem"
-"${SSH[@]}" "$REMOTE" bash -s -- "$remote_stage" "$SERVICE_USER" "$SERVICE_GROUP" <<'REMOTE_SCRIPT'
+echo "Installing collector TLS material."
+"${SSH[@]}" "$REMOTE" "$REMOTE_SUDO" bash -s -- "$remote_stage" "$SERVICE_USER" "$SERVICE_GROUP" <<'REMOTE_SCRIPT'
 set -euo pipefail
 stage="$1"
 owner="$2"
