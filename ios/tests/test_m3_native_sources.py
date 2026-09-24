@@ -967,6 +967,7 @@ def test_websocket_overlay_transport_owner_source_exists() -> None:
     assert "NWProtocolWebSocket.Options" in runtime
     assert "sec_protocol_options_set_tls_server_name" in runtime
     assert 'headers.append((name: "Host"' in runtime
+    assert "let useNetworkWebSocket = useTLS || !peerAddresses.isEmpty" in runtime
     assert "peerAddresses.isEmpty" in runtime
     assert 'peerAddresses: ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: settings.runtimeConfig["ws_peer_addresses"])' in provider
     assert 'let peerAddresses = ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: runtimeConfig["ws_peer_addresses"])' in host_runner
