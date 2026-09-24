@@ -280,10 +280,10 @@ python scripts/generate_telemetry_client_certificate.py \
   --cert-out /var/lib/obstaclebridge/telemetry-client/client.cert.pem
 ```
 
-The server-certificate script asks whether the collector has an FQDN, then
-asks separately for its static IPv4 and static IPv6 addresses.  Every supplied
-value is included in the certificate subject alternative name extension, so
-one collector certificate works for direct IPv4, direct IPv6, and FQDN access.
+The server-certificate script asks separately for an optional FQDN and optional
+static IPv4 and IPv6 addresses; Enter omits any value. Every supplied value is
+included in the certificate subject alternative name extension, so one
+collector certificate works for direct IPv4, direct IPv6, and FQDN access.
 For automated deployment, provide one or more of `--fqdn`, `--ipv4`, and
 `--ipv6` instead of answering the prompts.
 

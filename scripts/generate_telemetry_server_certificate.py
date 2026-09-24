@@ -23,16 +23,12 @@ def _write_certificate(path: str, content: bytes) -> None:
 
 def _prompt_fqdn() -> str:
     while True:
-        answer = input("Do you have an FQDN host name, for example telemetry.example.net? [y/N]: ").strip().lower()
-        if answer in {"", "n", "no"}:
+        value = input("FQDN host name, for example telemetry.example.net (press Enter to omit): ").strip()
+        if not value:
             return ""
-        if answer in {"y", "yes"}:
-            value = input("FQDN host name: ").strip()
-            if value and not _is_ip_address(value):
-                return value
-            print("Enter a DNS host name, not an IP address.")
-            continue
-        print("Please answer y or n.")
+        if not _is_ip_address(value):
+            return value
+        print("Enter a DNS host name, not an IP address.")
 
 
 def _prompt_ip(version: int) -> str:
