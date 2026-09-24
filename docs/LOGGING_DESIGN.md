@@ -23,9 +23,9 @@ standalone log receiver -> local stdout, file rotation, and Admin log ring
 The bridge, ChannelMux, Admin Web, and TUN helper have not been replaced by a
 single IP logging service. Default Python logging still writes to its local
 sinks. Python can optionally send ordinary log records to the independent
-private UDP receiver shown above. Apple does not implement that UDP protocol;
-it records bounded telemetry health/lifecycle events to its private spool and,
-when enabled and provisioned, uploads batches through HTTPS.
+private UDP receiver shown above. Python and Apple do not use that UDP protocol
+for telemetry: each records bounded redacted lifecycle/load events to a private
+spool and uploads batches through HTTPS when enabled and provisioned.
 
 `telemetry_endpoint` is already the client-side remote-address option. Its
 default is `https://127.0.0.1:18443/v1/telemetry/batches`, and the client spool
@@ -532,9 +532,20 @@ the certificate common name becomes the automatically derived installation ID.
 Physical-device validation is the next Apple-runtime evidence; a simulator is
 not a qualification target for this work.
 
+### Python delivery state
+
+When `telemetry_enabled` is true, the Python Runner derives its installation ID
+from the client certificate common name, creates a bounded in-memory emitter,
+and starts a single-flight uploader task. Lifecycle events are emitted at
+startup and shutdown; a redacted load event is emitted from the 15-second
+runtime-health timer. Spool writes and HTTPS requests run in worker threads;
+the overlay, packet, and forwarding callbacks do not perform telemetry I/O.
+Credential, spool, or upload failures are warning-level `[TELEMETRY]` entries
+in the normal debug log and leave the bridge running. `/api/telemetry` exposes
+only bounded spool status.
+
 | Package | Scope | Definition of done |
 | --- | --- | --- |
-| S2 — collector topology and configuration | Provide the operational connection model before general log shipping: a supervised collector service on a Python peer host with explicit bind address, HTTPS port, storage directory, TLS server identity, client CA, and revocation source. Clients use one full `telemetry_endpoint`; no duplicated host/port knobs. | A local Python client reaches a loopback collector; a remote client reaches a collector on a named host and port; an iPhone never treats `127.0.0.1` as its peer host. The collector has no overlay/Admin-Web listener role, refuses plaintext and unauthenticated connections, and reports bounded health without event content. |
 | S3 — controlled collector interoperability | Exercise the implemented Apple uploader against the Python reference collector on a controlled HTTPS endpoint. | A physical Apple client uploads a batch to `bridge_telemetry_ingest` with mTLS; its certificate common name and configured installation identifier match; the collector returns an accepted sequence; the client removes only that acknowledged range. Offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart cases preserve the spool and runtime path. |
 | S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. Keep endpoints, installation identifiers, identity labels, and spool locations visible; hide only actual credentials. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. A fresh-proof, local-only credential reveal flow covers each real credential consistently in Python, macOS, and iOS. |
 | S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Physical-device evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |

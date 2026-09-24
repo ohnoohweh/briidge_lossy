@@ -1149,8 +1149,11 @@ What the admin web shows:
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
 The optional private UDP logger is isolated best-effort diagnostics only. The
-Python telemetry foundation additionally provides a bounded, allowlisted local
-event producer, crash-safe spool, and mTLS-required reference ingest process;
+Python Runner additionally provides a bounded, allowlisted local event
+producer, crash-safe spool, single-flight background uploader, and mTLS-required
+reference ingest process. Lifecycle/load emission and spool/network delivery stay
+outside forwarding callbacks; failures are warning-level debug-log evidence and
+never block the bridge;
 the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in

@@ -6,7 +6,11 @@ import threading
 import subprocess
 import sys
 import http.server
+import argparse
+import asyncio
+import importlib
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -22,6 +26,8 @@ from obstacle_bridge import bridge_telemetry_ingest as ingest
 from obstacle_bridge.bridge_telemetry_ingest import TelemetryAdmissionControl, TelemetryIngestStore, build_tls_context
 from obstacle_bridge.bridge_telemetry_credentials import TelemetryRevocationList, client_certificate_paths, generate_ca, issue_client_certificate, issue_server_certificate
 from obstacle_bridge.bridge_telemetry_uploader import TelemetryUploader
+from obstacle_bridge.bridge import Runner
+bridge_runner = importlib.import_module("obstacle_bridge.bridge_runner")
 
 
 VECTORS = json.loads((Path(__file__).parents[2] / "docs" / "TELEMETRY_V1_VECTORS.json").read_text(encoding="utf-8"))
@@ -187,6 +193,42 @@ def test_uploader_requires_https_and_respects_backoff(tmp_path):
     spool = TelemetrySpool(str(tmp_path / "spool")); assert spool.append(VECTORS["event"])
     with pytest.raises(ValueError):
         TelemetryUploader(spool, "http://invalid", "", "", "")
+
+
+def test_runner_telemetry_client_spools_lifecycle_event_off_runtime_path(tmp_path, monkeypatch):
+    class _Uploader:
+        last_error = ""
+
+        def upload_once(self):
+            return {"ok": False, "reason": "backoff"}
+
+    runner = Runner.__new__(Runner)
+    runner.args = argparse.Namespace(
+        telemetry_enabled=True,
+        telemetry_endpoint="https://collector.example.test/v1/telemetry/batches",
+        telemetry_spool_directory=str(tmp_path / "spool"),
+        telemetry_client_certificate_directory=str(tmp_path / "credentials"),
+    )
+    runner.log = mock.Mock()
+    runner._telemetry_client_task = None
+    runner._telemetry_emitter = None
+    runner._telemetry_spool = None
+    runner._telemetry_uploader = None
+    runner._telemetry_client_last_error = ""
+    runner._telemetry_client_last_warning = ""
+    monkeypatch.setattr(bridge_runner, "client_certificate_paths", lambda directory: ("client.cert.pem", "client.key.pem", "ca.cert.pem", "install-01"))
+    monkeypatch.setattr(bridge_runner, "TelemetryUploader", lambda *args: _Uploader())
+
+    async def run() -> None:
+        await runner._start_telemetry_client()
+        await asyncio.sleep(0.05)
+        assert runner._telemetry_spool is not None
+        events = runner._telemetry_spool.recover()
+        assert events and events[0]["event"] == "runtime.lifecycle"
+        assert events[0]["fields"] == {"state": "started", "reason": ""}
+        await runner._stop_telemetry_client()
+
+    asyncio.run(run())
 
 
 def test_telemetry_qualification_harness_reports_bounded_emit_latency():

@@ -13,11 +13,14 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Mapping
 
 from .bridge_tun_helper_client import _open_local_helper_connection
-from .bridge_telemetry import TelemetryRuntimeSettings
+from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, TelemetrySpool
+from .bridge_telemetry_credentials import client_certificate_paths
+from .bridge_telemetry_uploader import TelemetryUploader
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
 
 _bridge = export_bridge_globals(globals())
@@ -204,6 +207,12 @@ class Runner:
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
         self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
         self._telemetry_collector_process: Optional[asyncio.subprocess.Process] = None
+        self._telemetry_client_task: Optional[asyncio.Task] = None
+        self._telemetry_emitter: Optional[TelemetryEmitter] = None
+        self._telemetry_spool: Optional[TelemetrySpool] = None
+        self._telemetry_uploader: Optional[TelemetryUploader] = None
+        self._telemetry_client_last_error: str = ""
+        self._telemetry_client_last_warning: str = ""
         self._tun_helper_prestarted: bool = False
         self._tun_helper_session_token: str = ""
         self._tun_helper_socket_path: str = ""
@@ -313,6 +322,79 @@ class Runner:
             with contextlib.suppress(asyncio.TimeoutError):
                 await asyncio.wait_for(proc.wait(), timeout=1.0)
 
+    def _telemetry_client_warning(self, message: str) -> None:
+        """Report telemetry setup/delivery failure without affecting the bridge."""
+        text = "telemetry client " + str(message)
+        self._telemetry_client_last_error = text
+        if text == self._telemetry_client_last_warning:
+            return
+        self._telemetry_client_last_warning = text
+        self.log.warning("[TELEMETRY] %s", text)
+
+    async def _telemetry_client_flush_once(self) -> None:
+        emitter = self._telemetry_emitter
+        spool = self._telemetry_spool
+        uploader = self._telemetry_uploader
+        if emitter is None or spool is None or uploader is None:
+            return
+        events = emitter.drain()
+        if events and not await asyncio.to_thread(spool.append_many, events):
+            self._telemetry_client_warning("spool append failed; events were dropped")
+        result = await asyncio.to_thread(uploader.upload_once)
+        if not result.get("ok") and result.get("reason") not in {"backoff", "byte_budget"}:
+            self._telemetry_client_warning("upload failed (%s)" % str(uploader.last_error or result.get("reason") or "unknown"))
+        elif result.get("ok"):
+            self._telemetry_client_last_error = ""
+            self._telemetry_client_last_warning = ""
+
+    async def _telemetry_client_worker(self) -> None:
+        try:
+            while True:
+                await self._telemetry_client_flush_once()
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._telemetry_client_warning("worker stopped unexpectedly (%s)" % type(exc).__name__)
+
+    async def _start_telemetry_client(self) -> None:
+        if not bool(getattr(self.args, "telemetry_enabled", False)):
+            return
+        try:
+            certificate_directory = str(getattr(self.args, "telemetry_client_certificate_directory", "") or "").strip()
+            endpoint = str(getattr(self.args, "telemetry_endpoint", "") or "").strip()
+            spool_directory = str(getattr(self.args, "telemetry_spool_directory", "") or "").strip()
+            certfile, keyfile, cafile, installation_id = client_certificate_paths(certificate_directory)
+            self._telemetry_spool = TelemetrySpool(spool_directory)
+            self._telemetry_uploader = TelemetryUploader(self._telemetry_spool, endpoint, cafile, certfile, keyfile)
+            self._telemetry_emitter = TelemetryEmitter(installation_id, str(uuid.uuid4()))
+            self._telemetry_emitter.emit_lifecycle("started")
+            self._telemetry_client_task = asyncio.create_task(
+                self._telemetry_client_worker(), name="telemetry-client-uploader"
+            )
+            self.log.info("[TELEMETRY] client uploader started endpoint=%s", endpoint)
+        except Exception as exc:
+            self._telemetry_emitter = None
+            self._telemetry_spool = None
+            self._telemetry_uploader = None
+            self._telemetry_client_warning("setup failed (%s); bridge startup continues" % type(exc).__name__)
+
+    async def _stop_telemetry_client(self) -> None:
+        task = self._telemetry_client_task
+        self._telemetry_client_task = None
+        emitter = self._telemetry_emitter
+        if emitter is not None:
+            emitter.emit_lifecycle("stopped")
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._telemetry_client_flush_once(), timeout=2.0)
+        self._telemetry_emitter = None
+        self._telemetry_spool = None
+        self._telemetry_uploader = None
+
     def _make_runtime_health_store(self) -> Optional[RuntimeHealthStore]:
         configured = str(os.environ.get("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH") or "").strip()
         if not configured:
@@ -373,6 +455,14 @@ class Runner:
         while True:
             await asyncio.sleep(15.0)
             self._record_runtime_health("heartbeat")
+            emitter = self._telemetry_emitter
+            if emitter is not None:
+                with contextlib.suppress(Exception):
+                    emitter.emit_load(
+                        queue_depth=emitter.pending_count(),
+                        dropped=sum(int(value) for value in emitter.dropped.values()),
+                        load_1m=float(os.getloadavg()[0]),
+                    )
 
     def _runtime_health_status_fields(self) -> dict[str, Any]:
         store = self._runtime_health_store
@@ -1183,6 +1273,7 @@ class Runner:
         )
         self._ensure_runtime_events()
         self._begin_runtime_health_lifetime()
+        await self._start_telemetry_client()
         await self._start_telemetry_collector()
         await self._start_tun_helper()
         await self._start_proxy_provider()
@@ -1364,6 +1455,8 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._runtime_health_task
             self._runtime_health_task = None
+        self.log.debug("[RUNNER] stop: entering telemetry_client.stop")
+        await _run_stop_step("telemetry_client.stop", self._stop_telemetry_client(), timeout_s=3.0)
         if self.admin_web is not None:
             await _run_stop_step("admin_web.stop", self.admin_web.stop(), timeout_s=2.0)
             self.admin_web = None        

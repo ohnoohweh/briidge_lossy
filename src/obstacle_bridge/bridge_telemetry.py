@@ -284,6 +284,15 @@ class TelemetryEmitter:
         finally:
             self._lock.release()
 
+    def pending_count(self) -> int:
+        """Return the current in-memory queue depth without waiting."""
+        if not self._lock.acquire(blocking=False):
+            return self.capacity
+        try:
+            return len(self._events)
+        finally:
+            self._lock.release()
+
 
 class TelemetrySpool:
     """Atomic per-event files with bounded priority-aware eviction and recovery."""
