@@ -346,6 +346,24 @@ Construct `TelemetryUploader` with the client certificate/key and the
 access to the collector private key, collector ingest state, or CA private
 key. The peer bridge process needs none of these private keys.
 
+The SSH deployment scripts use a private remote staging directory, install
+only the named role material with restrictive ownership/modes, and never copy
+`ca.key.pem`. They require SSH access as `root` by default and a pre-existing
+`obstaclebridge` service account; they use the project VPS SSH default port
+`18022`. Override `USER_NAME`, `PORT`,
+`SERVICE_USER`, `SERVICE_GROUP`, and `SSH_IDENTITY` as needed. They do not
+start or restart a bridge, uploader, or collector.
+
+```text
+HOST=<peer-server> CA_CERT=/safe/ca.cert.pem SERVER_KEY=/safe/server.key.pem \
+  SERVER_CERT=/safe/server.cert.pem \
+  bash scripts/deploy_telemetry_peer_server.sh
+
+HOST=<peer-client> CA_CERT=/safe/ca.cert.pem CLIENT_KEY=/safe/client.key.pem \
+  CLIENT_CERT=/safe/client.cert.pem \
+  bash scripts/deploy_telemetry_peer_client.sh
+```
+
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA only to the separate Python telemetry-uploader service account. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the uploader account. The peer bridge process does not need either private key. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, service-manager credentials, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
