@@ -74,6 +74,35 @@ messages; ordinary log records remain one-way. The receiver bounds a reply to
 one datagram and discards oldest lines if needed. Admin requests therefore
 cannot reach the runtime's packet path or make the remote logger a dependency.
 
+## Unified IP logging delivery plan
+
+This plan replaces direct process-local operational logging with a dedicated
+logging service while retaining a local-development mode. It is separate from
+the bounded HTTPS telemetry stream: ordinary log records can contain richer
+diagnostic text and therefore use a private-network transport until a later
+public-safe log schema is approved. The collector address is a `host:port`
+target for the IP logging protocol. `127.0.0.1` always means a collector on the
+same operating-system host; a remote collector needs its routable name or IP.
+
+### Python first
+
+| Package | Scope | Definition of done |
+| --- | --- | --- |
+| UL1 — IP logging contract and configuration | Define one versioned, bounded IP logging record, health/status response, and configuration vocabulary. Producer options are `logging_delivery` (`local` or `ip`), `logging_server_target` (`host:port`), and `logging_server_required` (default `false`). Collector options are `logging_server_bind`, `logging_server_port`, storage settings, and an explicit enable flag. | Parser, saved configuration, and Admin Web show the same values. Invalid targets disable IP delivery rather than blocking startup. `127.0.0.1:port` is accepted only as a same-host target; no hidden peer-address inference exists. |
+| UL2 — standalone Python logging service | Replace the ad-hoc receiver process with a managed, bounded Python logging service that owns its UDP/IP listener, rotation, recent-log ring, and status counters. It remains a separate process from the bridge and TUN helper. | Starting, stopping, unavailable storage, malformed datagrams, full rings, and listener restart leave every bridge process healthy. The service exposes a bounded local status response and never accepts an Admin-Web or overlay connection on its logging port. |
+| UL3 — Python producer migration | Route Python bridge, ChannelMux, Admin Web, and TUN-helper process logs through one nonblocking client handler when `logging_delivery=ip`. Remove direct stdout/file/ring handlers from those producers in this mode; keep `local` mode for development. | Saturation, server loss, DNS/setup failure, and send errors only increment local drop counters. Packet forwarding, helper control, Admin API responses, and shutdown remain within their existing latency limits. A source-level and runtime test proves that no migrated Python component writes a direct logging sink in IP mode. |
+| UL4 — Python operator view and peer deployment | Make the logging service’s bind/port and each client target visible in Admin Web, show connection/drop/last-send health without log payloads, and provide a peer-server deployment example. | A local client reaches `127.0.0.1:port`; a remote client reaches a peer-server logging host; Admin Web can report an unavailable logger without calling a bridge packet path. Operator instructions distinguish the logging-server address from overlay peer and Admin-Web addresses. |
+| UL5 — Python failure and load qualification | Qualify the complete Python service and migrated producers under log floods, service restart, bad target, slow disk, and TUN-helper restart. | Measured bridge throughput and latency stay within an agreed baseline while the logger drops or restarts. The test report records producer drops, collector loss, recovery, and bounded Admin status behavior. |
+
+### Swift, iOS, macOS, and Linux second
+
+| Package | Scope | Definition of done |
+| --- | --- | --- |
+| UL6 — portable Swift client contract | Implement the UL1 wire contract and bounded nonblocking client in Swift Core, with the same field limits, priority/drop policy, and target parsing as Python. | Shared vectors pass in Python and Swift. Swift emission performs no DNS, file I/O, retry, or wait on a bridge/packet callback. |
+| UL7 — macOS and Linux producers | Migrate macOS host-runner, macOS helper, and Linux Swift runtime operational logging to the Swift IP client. Provide the same `logging_delivery` and `logging_server_target` configuration fields. | Each runtime sends bounded records to the Python logging service in local and remote cases. Service loss leaves forwarding and helper lifecycle operational; parity tests compare Python and Swift status/drop behavior. |
+| UL8 — iOS Packet Tunnel producer | Migrate iOS lifecycle, bridge, and bounded load evidence to the Swift IP client without packet-flow callback I/O. For an iPhone, a target must be remote unless an actual on-device collector exists. | Physical-device tests send records to a controlled Python logging service, cover collector loss/recovery and tunnel stop, and show no packet-flow latency regression. No iOS configuration maps loopback to a Mac or peer server. |
+| UL9 — cross-platform qualification and retirement | Qualify mixed Python/Swift producers against one logging service and retire direct production sinks from migrated components. Keep a documented local-development mode only. | Python, macOS, Linux, and iOS produce compatible records and bounded status through one service. Migration tests prove no duplicate direct logs in IP mode, and operational runbooks cover collector upgrade, rollback, and failure isolation. |
+
 ## Delivery and performance contract
 
 - A sender resolves and connects its UDP socket once during startup. `emit()`
