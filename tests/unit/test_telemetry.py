@@ -198,7 +198,7 @@ def test_telemetry_qualification_harness_reports_bounded_emit_latency():
 
 def test_ingest_main_reads_enabled_collector_from_shared_telemetry_config(tmp_path, monkeypatch):
     config_path = tmp_path / "ObstacleBridge.cfg"
-    config_path.write_text(json.dumps({"telemetry": {
+    config_path.write_text(json.dumps({"telemetry_server": {
         "telemetry_collector_enabled": True,
         "telemetry_collector_bind": "127.0.0.1",
         "telemetry_collector_address_family": "ipv4",
@@ -222,7 +222,7 @@ def test_ingest_main_reads_enabled_collector_from_shared_telemetry_config(tmp_pa
 
 def test_ingest_main_rejects_disabled_collector_config(tmp_path):
     config_path = tmp_path / "ObstacleBridge.cfg"
-    config_path.write_text(json.dumps({"telemetry": {"telemetry_collector_enabled": False}}), encoding="utf-8")
+    config_path.write_text(json.dumps({"telemetry_server": {"telemetry_collector_enabled": False}}), encoding="utf-8")
 
     with pytest.raises(SystemExit, match="telemetry collector is disabled"):
         ingest.main(["--config", str(config_path)])

@@ -307,7 +307,7 @@ enum ObstacleBridgeRuntimeConfig {
         "TUN_routing",
         "admin_web",
         "debug_logging",
-        "telemetry",
+        "telemetry_client",
         "channel_mux",
         "iOS_TUN_connector",
         "proxy_provider",
@@ -366,7 +366,7 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "log_file_max_bytes", description: "Maximum size of each log file before rotation", defaultValue: 1_048_576),
                 schemaItem(key: "log_file_backup_count", description: "Number of rotated log files to keep", defaultValue: 5),
             ],
-            "telemetry": [
+            "telemetry_client": [
                 schemaItem(key: "telemetry_enabled", description: "Enable bounded HTTPS telemetry upload outside the bridge and packet paths.", defaultValue: false),
                 schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: ""),
                 schemaItem(key: "telemetry_spool_directory", description: "Optional macOS telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: ""),
@@ -598,11 +598,10 @@ enum ObstacleBridgeRuntimeConfig {
     static func maskedConfigSnapshot(_ runtimeConfig: [String: Any]) -> [String: Any] {
         var payload = runtimeConfig
         normalizeFlatPayloadForSchema(&payload)
-        // The admin configuration form posts every visible telemetry field.
-        // Older configurations have no telemetry section, and early builds
-        // could persist JSON null for an unset field.  Return schema-typed
-        // defaults in both cases so a read-modify-save cycle never submits a
-        // null where the schema requires an empty string.
+        // The admin configuration form posts every visible telemetry-client
+        // field. Return schema-typed defaults for unset values so a
+        // read-modify-save cycle never submits a null where the schema
+        // requires an empty string.
         for (key, defaultValue) in defaultTelemetryConfig()
             where payload[key] == nil || payload[key] is NSNull {
             payload[key] = defaultValue

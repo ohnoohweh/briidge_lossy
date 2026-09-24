@@ -223,7 +223,7 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"],
         )
 
-    def test_runner_schema_snapshot_matches_apple_telemetry_fields(self) -> None:
+    def test_runner_schema_snapshot_separates_telemetry_client_and_server_fields(self) -> None:
         configured_telemetry = {
             "telemetry_enabled": True,
             "telemetry_endpoint": "https://collector.example.test/v1/telemetry",
@@ -240,20 +240,34 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             "telemetry_collector_client_ca": "/etc/obstaclebridge/telemetry/client-ca.cert.pem",
             "telemetry_collector_revocations": "/var/lib/obstaclebridge/telemetry-ingest/revocations.json",
         }
-        args = build_runtime_args_from_config({"telemetry": configured_telemetry})
+        client_keys = {
+            "telemetry_enabled", "telemetry_endpoint", "telemetry_spool_directory",
+            "telemetry_client_certificate_directory", "telemetry_client_address_family",
+        }
+        args = build_runtime_args_from_config({
+            "telemetry_client": {key: value for key, value in configured_telemetry.items() if key in client_keys},
+            "telemetry_server": {key: value for key, value in configured_telemetry.items() if key not in client_keys},
+        })
         runner = Runner.__new__(Runner)
         runner.args = args
 
-        telemetry_rows = {row["key"]: row for row in runner.get_config_schema_snapshot()["telemetry"]}
+        schema = runner.get_config_schema_snapshot()
+        client_rows = {row["key"]: row for row in schema["telemetry_client"]}
+        server_rows = {row["key"]: row for row in schema["telemetry_server"]}
 
         self.assertEqual(
-            set(telemetry_rows),
+            set(client_rows),
             {
                 "telemetry_enabled",
                 "telemetry_endpoint",
                 "telemetry_spool_directory",
                 "telemetry_client_certificate_directory",
                 "telemetry_client_address_family",
+            },
+        )
+        self.assertEqual(
+            set(server_rows),
+            {
                 "telemetry_collector_enabled",
                 "telemetry_collector_bind",
                 "telemetry_collector_address_family",
@@ -265,10 +279,10 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
                 "telemetry_collector_revocations",
             },
         )
-        self.assertFalse(telemetry_rows["telemetry_enabled"]["default"])
-        self.assertFalse(telemetry_rows["telemetry_collector_enabled"]["default"])
-        for key in telemetry_rows:
-            self.assertFalse(telemetry_rows[key].get("secret", False))
+        self.assertFalse(client_rows["telemetry_enabled"]["default"])
+        self.assertFalse(server_rows["telemetry_collector_enabled"]["default"])
+        for row in [*client_rows.values(), *server_rows.values()]:
+            self.assertFalse(row.get("secret", False))
         config = runner.get_config_snapshot()
         self.assertEqual(
             {key: config[key] for key in configured_telemetry},

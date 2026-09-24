@@ -1460,7 +1460,8 @@ REQ-MYU-007:
 
 REQ-ADM-001:
   # Shared telemetry configuration coverage keeps the three Python producer
-  # settings aligned with macOS and iOS. Python adds its standard certificate
+  # settings aligned with macOS and iOS. Python cleanly separates client and
+  # server configuration, and adds its standard certificate
   # directory, address-family policy, and collector settings; the certificate
   # CN, rather than mutable configuration, supplies the installation identity.
   # An enabled collector is a supervised child whose failure stays observable
@@ -1494,7 +1495,7 @@ REQ-ADM-001:
     - tests/unit/test_telemetry.py::test_client_certificate_directory_derives_installation_id
     - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
     - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
-    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_matches_apple_telemetry_fields
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_separates_telemetry_client_and_server_fields
     - ios/tests/test_ios_app_facade.py::test_load_grouped_runtime_config_preserves_saved_transport_fields
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_exposes_only_redacted_telemetry_status
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread

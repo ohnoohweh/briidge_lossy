@@ -89,7 +89,7 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert config["TUN_routing"]["mtu"] == 1600
     assert config["TUN_routing"]["log_TUN_routing"] == "CRITICAL"
     assert "log_file" in config["debug_logging"]
-    assert config["telemetry"] == {
+    assert config["telemetry_client"] == {
         "telemetry_enabled": False,
         "telemetry_endpoint": "",
         "telemetry_spool_directory": "",

@@ -82,9 +82,9 @@ def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
     app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
     assert '"telemetry": telemetryStatusSnapshot()' in source
     assert "ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)" in source
-    assert '"telemetry": [' in runtime_config
+    assert '"telemetry_client": [' in runtime_config
     assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
-    assert '"telemetry": ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()' in app_main
+    assert '"telemetry_client": ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()' in app_main
 
 
 def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
@@ -6043,7 +6043,7 @@ def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_pa
                     "admin_web_dir": str((ROOT / "admin_web").resolve()),
                     "admin_web_auth_disable": True,
                 },
-                "telemetry": {
+                "telemetry_client": {
                     "telemetry_enabled": True,
                     "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
                     "telemetry_spool_directory": str(tmp_path / "private-spool"),
@@ -6070,7 +6070,7 @@ def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_pa
             "endpoint_host": "collector.example.invalid",
             "identity_available": False,
         }
-        telemetry_keys = {str(item["key"]) for item in config["schema"]["telemetry"]}
+        telemetry_keys = {str(item["key"]) for item in config["schema"]["telemetry_client"]}
         assert telemetry_keys == {
             "telemetry_enabled",
             "telemetry_endpoint",

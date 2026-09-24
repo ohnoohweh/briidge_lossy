@@ -2155,7 +2155,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                             "ws_peer": "",
                             "ws_peer_port": 8080,
                         ] as [String: Any],
-                        "telemetry": [
+                        "telemetry_client": [
                             "telemetry_enabled": true,
                             "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
                             "telemetry_spool_directory": "/private/telemetry-spool",
@@ -2175,7 +2175,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                     let adminSection = restored["admin_web"] as? [String: Any] ?? [:]
                     let channelMuxSection = restored["channel_mux"] as? [String: Any] ?? [:]
                     let proxySection = restored["proxy_provider"] as? [String: Any] ?? [:]
-                    let telemetrySection = persisted["telemetry"] as? [String: Any] ?? [:]
+                    let telemetrySection = persisted["telemetry_client"] as? [String: Any] ?? [:]
                     let output: [String: Any] = [
                         "suggested_updates": updates,
                         "secure_section": secureSection,

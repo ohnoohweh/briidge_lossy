@@ -221,7 +221,7 @@ receiver.
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
-| Runtime configuration | Python, macOS, and iOS expose the same three producer keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, and `telemetry_spool_directory`. Python additionally exposes `telemetry_client_certificate_directory`, defaulting to `/etc/obstaclebridge/telemetry-client`, its `telemetry_client_address_family` policy, and the server-only `telemetry_collector_*` keys in that same section; Apple does not run a collector. The client installation ID is derived from the client certificate common name and is never entered in configuration. Apple selects exactly one extension-accessible telemetry identity and derives the same value from its certificate. |
+| Runtime configuration | Python separates Admin configuration into `telemetry_client` and `telemetry_server`. The client section contains `telemetry_enabled`, `telemetry_endpoint`, `telemetry_spool_directory`, `telemetry_client_certificate_directory`, and `telemetry_client_address_family`. The server section contains only `telemetry_collector_*` settings. macOS and iOS expose the same `telemetry_client` section; they do not expose an empty server section. The client installation ID is derived from the client certificate common name and is never entered in configuration. |
 
 ### Client-to-collector alignment
 
@@ -383,7 +383,7 @@ The following procedure commissions the collector and proves its mTLS boundary
 for a Python peer server and Python peer client. It does not expose the
 private UDP logging receiver.
 
-1. In the peer server's Admin Web **Telemetry** section, set the collector
+1. In the peer server's Admin Web **Telemetry Server** section, set the collector
    values below and save the shared configuration file. Select the bind address
    deliberately: the default `::` with `prefer-ipv6` tries IPv6 first and
    falls back to IPv4 when IPv6 cannot bind. Select `ipv6` or `ipv4` to require
@@ -418,7 +418,7 @@ private UDP logging receiver.
    reference collector has no installed unit file and must not run as the peer
    bridge process or as root merely to use port `18443`.
 
-3. On the peer client, set the visible **Telemetry** configuration values as
+3. On the peer client, set the visible **Telemetry Client** configuration values as
    follows. The installation identifier is not arbitrary: it must exactly
    equal the common name in
    `/etc/obstaclebridge/telemetry-client/client.cert.pem`.

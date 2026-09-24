@@ -37,8 +37,8 @@ class TelemetryRuntimeSettings:
     """Shared runtime configuration surface for bounded telemetry/v1."""
 
     @staticmethod
-    def register_cli(parser: argparse.ArgumentParser) -> None:
-        group = parser.add_argument_group("telemetry")
+    def register_client_cli(parser: argparse.ArgumentParser) -> None:
+        group = parser.add_argument_group("telemetry_client")
         group.add_argument(
             "--telemetry-enabled",
             action="store_true",
@@ -66,6 +66,10 @@ class TelemetryRuntimeSettings:
             default="prefer-ipv6",
             help="Python telemetry uploader address-family policy; prefer-ipv6 falls back to IPv4",
         )
+
+    @staticmethod
+    def register_server_cli(parser: argparse.ArgumentParser) -> None:
+        group = parser.add_argument_group("telemetry_server")
         group.add_argument(
             "--telemetry-collector-enabled",
             action="store_true",

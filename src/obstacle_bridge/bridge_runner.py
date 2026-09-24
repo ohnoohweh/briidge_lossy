@@ -3471,7 +3471,7 @@ class ConfigAwareCLI:
 
         # 2) Add auto-generated per-section log options
         for section in sections.keys():
-            if section == "telemetry":
+            if section in {"telemetry_client", "telemetry_server"}:
                 continue
             opt_name = f"log_{section}"       # internal dest
             cli_flag = f"--log-{section.replace('_', '-')}"
@@ -3857,7 +3857,8 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("secure_link",        SecureLinkPskSession.register_cli),
         ("compress_layer",     CompressLayerSession.register_cli),
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
-        ("telemetry",          TelemetryRuntimeSettings.register_cli),
+        ("telemetry_client",   TelemetryRuntimeSettings.register_client_cli),
+        ("telemetry_server",   TelemetryRuntimeSettings.register_server_cli),
         ("stats_board",        StatsBoard.register_cli),
     ]
 

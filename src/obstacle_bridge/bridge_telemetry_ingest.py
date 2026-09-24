@@ -206,7 +206,7 @@ def _collector_config(config_path: str) -> Dict[str, Any]:
         raise ValueError("telemetry collector configuration file not found") from exc
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError("telemetry collector configuration file is invalid") from exc
-    telemetry = document.get("telemetry") if isinstance(document, Mapping) else None
+    telemetry = document.get("telemetry_server") if isinstance(document, Mapping) else None
     if not isinstance(telemetry, Mapping):
         raise ValueError("telemetry collector configuration section is missing")
     return {str(key): value for key, value in telemetry.items()}
