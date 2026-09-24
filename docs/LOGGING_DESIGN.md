@@ -221,7 +221,7 @@ receiver.
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
-| Runtime configuration | Python, macOS, and iOS expose the same five producer keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, `telemetry_installation_id`, `telemetry_mtls_identity_label`, and `telemetry_spool_directory`. Python additionally exposes the server-only `telemetry_collector_*` keys in that same section; Apple does not run a collector. These are visible operational settings, not credential material. Python keeps the uploader process isolated from the bridge runtime; Apple resolves the identity label through Keychain. |
+| Runtime configuration | Python, macOS, and iOS expose the same three producer keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, and `telemetry_spool_directory`. Python additionally exposes `telemetry_client_certificate_directory`, defaulting to `/etc/obstaclebridge/telemetry-client`, and the server-only `telemetry_collector_*` keys in that same section; Apple does not run a collector. The client installation ID is derived from the client certificate common name and is never entered in configuration. Apple selects exactly one extension-accessible telemetry identity and derives the same value from its certificate. |
 
 ### Client-to-collector alignment
 
@@ -244,9 +244,9 @@ Internet diagnostics. Apple clients use the HTTPS collector endpoint instead.
 This section concerns the HTTPS telemetry collector, not the private UDP
 logger.  The collector has a TLS **server** identity; every telemetry producer
 has its own mTLS **client** identity.  The client-certificate common name must
-equal that producer's `telemetry_installation_id`.  A distinct identity is
-required for every installation, so revocation of one device does not disable
-another device.
+the telemetry installation ID derived automatically by the client. A distinct
+identity is required for every installation, so revocation of one device does
+not disable another device.
 
 The reference helper creates a local CA and client certificate/key pair:
 
@@ -424,9 +424,8 @@ private UDP logging receiver.
    | --- | --- |
    | `telemetry_enabled` | `true` |
    | `telemetry_endpoint` | `https://<collector-FQDN-or-SAN-IP>:18443/v1/telemetry/batches` |
-   | `telemetry_installation_id` | the client-certificate CN, for example `linux-client-01` |
-   | `telemetry_mtls_identity_label` | an operator label for that identity, for example `linux-client-01`; it is not a PEM path |
    | `telemetry_spool_directory` | `/var/lib/obstaclebridge/telemetry-client` |
+   | `telemetry_client_certificate_directory` | `/etc/obstaclebridge/telemetry-client` |
 
    `127.0.0.1` is valid in the endpoint only when this client and the collector
    are on the same operating-system host. A remote Python peer uses the
@@ -448,6 +447,12 @@ private UDP logging receiver.
    validation, client-certificate acceptance, and the collector's writable
    state directory. It does not upload an event.
 
+`client.cert.pem` supplies the installation ID through its certificate common
+name. The standard Python certificate directory contains `client.cert.pem`,
+`client.key.pem`, and `collector-ca.cert.pem`; a missing file disables the
+future uploader rather than asking the operator to duplicate certificate data
+in configuration.
+
 The Python reference has `TelemetryEmitter`, `TelemetrySpool`, and
 `TelemetryUploader` components, but the peer bridge does not yet create or
 schedule them from these five saved configuration values. Consequently,
@@ -460,25 +465,25 @@ settings, and demonstrate one acknowledged batch. Until then, the `curl`
 check above is the complete deployable Python verification; it must not be
 represented as end-to-end telemetry collection.
 
-For Apple clients, the endpoint, installation ID, identity label, and enable
-flag use the same values. The iPhone label must resolve to an already-installed
-extension-accessible Keychain `SecIdentity`; copying these PEM files to the
-phone or App Group does not provision that identity. The current iOS identity
+For Apple clients, the endpoint, spool location, and enable flag use the same
+values. The runtime derives the installation ID from one already-installed,
+extension-accessible Keychain `SecIdentity`; it safely disables telemetry when
+there is none or more than one candidate. Copying these PEM files to the phone
+or App Group does not provision that identity. The current iOS identity
 enrolment/import gap therefore also prevents end-to-end commissioning on an
 iPhone, even when the collector health check succeeds from Linux.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA only to the separate Python telemetry-uploader service account. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the uploader account. The peer bridge process does not need either private key. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, service-manager credentials, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
-| 2. Python peer server on Linux + Swift peer client on macOS | Issue one client certificate whose common name is the macOS installation ID. Import the certificate and private key into the macOS Keychain under the configured `telemetry_mtls_identity_label`; deploy only the endpoint, installation ID, and label in configuration. | The private key stays in a Keychain `SecIdentity`; no PEM file is read by the Swift uploader. The collector retains its Linux server key and trusts the issuing client CA. | Swift resolves a `SecIdentity` by label and uses it for URLSession mTLS. DoD: a documented signed/importable macOS identity deployment, a Keychain access check under the production app identity, a real upload, rotation with overlap, and revocation evidence. |
-| 3. Python peer server on Linux + Swift peer client on iOS | Issue one client certificate whose common name is the iPhone installation ID. Synchronize the non-secret telemetry configuration from app Documents to the shared App Group, then install the client identity through a managed profile/MDM or an approved enrolment flow. | The extension reads configuration and keeps its telemetry spool in the App Group. It must obtain the private key as an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into Documents or the App Group. | Documents-to-App-Group configuration synchronization and App-Group spooling exist. The extension only looks up an already-installed identity by label; it has no identity import/enrolment workflow. DoD: deploy an extension-accessible identity on a physical iPhone, show `identity_available` in status, complete an mTLS batch upload, prove offline/restart recovery, rotation, revocation, and no extension latency regression. |
+| 2. Python peer server on Linux + Swift peer client on macOS | Issue one client certificate whose common name is the macOS installation ID. Import exactly one telemetry certificate/private-key identity into the macOS Keychain; deploy only endpoint, enablement, and optional spool location in configuration. | The private key stays in a Keychain `SecIdentity`; no PEM file is read by the Swift uploader. The collector retains its Linux server key and trusts the issuing client CA. | Swift selects exactly one accessible identity, derives its CN, and uses it for URLSession mTLS. DoD: a documented signed/importable macOS identity deployment, a Keychain access check under the production app identity, a real upload, rotation with overlap, and revocation evidence. |
+| 3. Python peer server on Linux + Swift peer client on iOS | Issue one client certificate whose common name is the iPhone installation ID. Synchronize the non-secret telemetry configuration from app Documents to the shared App Group, then install exactly one telemetry identity through a managed profile/MDM or an approved enrolment flow. | The extension reads configuration and keeps its telemetry spool in the App Group. It must obtain the private key as an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into Documents or the App Group. | Documents-to-App-Group configuration synchronization and App-Group spooling exist. The extension derives the ID from exactly one already-installed identity; it has no identity import/enrolment workflow. DoD: deploy an extension-accessible identity on a physical iPhone, show `identity_available` in status, complete an mTLS batch upload, prove offline/restart recovery, rotation, revocation, and no extension latency regression. |
 
-For the Apple cases, `telemetry_mtls_identity_label` is a visible operational
-reference, not a secret and not a certificate file path.  A configuration
-sync is sufficient for the endpoint and label but cannot make a private key
-available to the Network Extension.  The identity deployment must be completed
-before enabling telemetry; otherwise the extension safely leaves telemetry
-inactive.
+For the Apple cases, a configuration sync is sufficient for endpoint and spool
+location but cannot make a private key available to the Network Extension. The
+identity deployment must leave exactly one extension-accessible telemetry
+identity before enabling telemetry; otherwise the extension safely leaves
+telemetry inactive.
 
 ### Swift/macOS implementation status
 
@@ -514,7 +519,7 @@ yet been observed. The Python bridge peer process is not a collector: an
 operator must run `bridge_telemetry_ingest` as a separate HTTPS service, which
 may be on the same host as a peer server but uses a distinct port. For a real
 device transfer, the collector must trust the iPhone client certificate and
-the certificate common name must equal `telemetry_installation_id`.
+the certificate common name becomes the automatically derived installation ID.
 Physical-device validation is the next Apple-runtime evidence; a simulator is
 not a qualification target for this work.
 

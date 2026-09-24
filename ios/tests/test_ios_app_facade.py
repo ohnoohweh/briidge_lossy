@@ -92,8 +92,6 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert config["telemetry"] == {
         "telemetry_enabled": False,
         "telemetry_endpoint": "",
-        "telemetry_installation_id": "",
-        "telemetry_mtls_identity_label": "",
         "telemetry_spool_directory": "",
     }
 

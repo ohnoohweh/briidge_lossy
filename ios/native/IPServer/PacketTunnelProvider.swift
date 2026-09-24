@@ -1132,13 +1132,11 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
               ObstacleBridgeRuntimeConfig.boolValue(from: config["telemetry_enabled"]) ?? false,
               let endpointText = ObstacleBridgeRuntimeConfig.stringValue(from: config["telemetry_endpoint"]),
               let endpoint = URL(string: endpointText), endpoint.scheme?.lowercased() == "https",
-              let installationID = ObstacleBridgeRuntimeConfig.stringValue(from: config["telemetry_installation_id"]),
-              let identityLabel = ObstacleBridgeRuntimeConfig.stringValue(from: config["telemetry_mtls_identity_label"]),
-              let identity = ObstacleBridgeTelemetryIdentityStore.identity(label: identityLabel),
+              let telemetryIdentity = ObstacleBridgeTelemetryIdentityStore.telemetryIdentity(),
               let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared")
         else { return }
         let spoolURL = container.appendingPathComponent("telemetry-v1", isDirectory: true)
-        guard let emitter = try? ObstacleBridgeTelemetryEmitter(installationID: installationID, sessionID: UUID().uuidString),
+        guard let emitter = try? ObstacleBridgeTelemetryEmitter(installationID: telemetryIdentity.installationID, sessionID: UUID().uuidString),
               let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
               let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
         else { return }
@@ -1148,7 +1146,7 @@ class PacketTunnelProvider: NEPacketTunnelProvider {
         telemetryQueue.sync {
             telemetryEmitter = emitter
             telemetrySpool = spool
-            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
+            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
             _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
             telemetryTimer = timer
             timer.resume()

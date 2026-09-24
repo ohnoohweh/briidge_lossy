@@ -1134,9 +1134,8 @@ What the admin web shows:
 | `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
 | `--telemetry-enabled` | `false` | Enable bounded HTTPS telemetry configuration outside bridge and packet paths. |
 | `--telemetry-endpoint` | unset | HTTPS collector endpoint for telemetry batches. |
-| `--telemetry-installation-id` | unset | Pseudonymous telemetry installation identifier. |
-| `--telemetry-mtls-identity-label` | unset | Reference to the enrolled telemetry mTLS client identity. |
 | `--telemetry-spool-directory` | unset | Local bounded telemetry spool directory. |
+| `--telemetry-client-certificate-directory` | `/etc/obstaclebridge/telemetry-client` | Python uploader client certificate, key, and collector-CA directory. |
 | `--telemetry-collector-enabled` | `false` | Enable this host's separate HTTPS telemetry collector service. |
 | `--telemetry-collector-bind` | `127.0.0.1` | Collector IPv4 bind address. |
 | `--telemetry-collector-port` | `18443` | Collector HTTPS TCP port. |
@@ -1154,8 +1153,10 @@ the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
-The `telemetry` configuration section uses exactly the same five settings in Python,
-macOS, and iOS; Admin Web shows them as operational configuration values.
+The `telemetry` configuration section uses the same three producer settings in Python,
+macOS, and iOS; Python additionally exposes its client-certificate directory and
+server collector settings. The telemetry installation ID is always derived from
+the client-certificate common name rather than entered in configuration.
 The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
 For a Linux Python collector/client reference deployment, the repository provides
 `generate_telemetry_ca.py`, `generate_telemetry_server_certificate.py`, and

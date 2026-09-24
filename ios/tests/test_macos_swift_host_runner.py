@@ -6030,7 +6030,6 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
 def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_path: Path) -> None:
     artifact = build_macos_swift_artifact()
     status_port = _unused_tcp_port()
-    identity_label = f"unavailable-telemetry-test-{uuid.uuid4()}"
     runtime_config_path = tmp_path / "runtime_telemetry_configuration.json"
     runtime_config_path.write_text(
         json.dumps(
@@ -6047,8 +6046,6 @@ def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_pa
                 "telemetry": {
                     "telemetry_enabled": True,
                     "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
-                    "telemetry_installation_id": "installation-private-id",
-                    "telemetry_mtls_identity_label": identity_label,
                     "telemetry_spool_directory": str(tmp_path / "private-spool"),
                 },
             },
@@ -6068,24 +6065,19 @@ def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_pa
         telemetry = status["telemetry"]
         assert telemetry == {
             "enabled": True,
-            "configured": True,
+            "configured": False,
             "endpoint_scheme": "https",
             "endpoint_host": "collector.example.invalid",
-            "identity_configured": True,
             "identity_available": False,
         }
         telemetry_keys = {str(item["key"]) for item in config["schema"]["telemetry"]}
         assert telemetry_keys == {
             "telemetry_enabled",
             "telemetry_endpoint",
-            "telemetry_installation_id",
-            "telemetry_mtls_identity_label",
             "telemetry_spool_directory",
         }
         assert config["config"]["telemetry_enabled"] is True
         assert config["config"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
-        assert config["config"]["telemetry_installation_id"] == "installation-private-id"
-        assert config["config"]["telemetry_mtls_identity_label"] == identity_label
         assert config["config"]["telemetry_spool_directory"] == str(tmp_path / "private-spool")
     finally:
         if process.poll() is None:

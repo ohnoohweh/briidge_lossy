@@ -507,13 +507,11 @@ final class ObstacleBridgeHostRunner {
         guard Self.boolValue(from: runtimeConfig["telemetry_enabled"]) ?? false,
               let endpointText = Self.stringValue(from: runtimeConfig["telemetry_endpoint"]),
               let endpoint = URL(string: endpointText), endpoint.scheme?.lowercased() == "https",
-              let installationID = Self.stringValue(from: runtimeConfig["telemetry_installation_id"]),
-              let identityLabel = Self.stringValue(from: runtimeConfig["telemetry_mtls_identity_label"]),
-              let identity = ObstacleBridgeTelemetryIdentityStore.identity(label: identityLabel)
+              let telemetryIdentity = ObstacleBridgeTelemetryIdentityStore.telemetryIdentity()
         else { return }
         let spoolURL = Self.stringValue(from: runtimeConfig["telemetry_spool_directory"]).map(URL.init(fileURLWithPath:))
             ?? URL(fileURLWithPath: runtimeConfigPath).deletingLastPathComponent().appendingPathComponent(".ObstacleBridge.telemetry-v1", isDirectory: true)
-        guard let emitter = try? ObstacleBridgeTelemetryEmitter(installationID: installationID, sessionID: UUID().uuidString),
+        guard let emitter = try? ObstacleBridgeTelemetryEmitter(installationID: telemetryIdentity.installationID, sessionID: UUID().uuidString),
               let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
               let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
         else { return }
@@ -523,7 +521,7 @@ final class ObstacleBridgeHostRunner {
         telemetryQueue.sync {
             telemetryEmitter = emitter
             telemetrySpool = spool
-            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: identity)
+            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
             _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
             telemetryTimer = timer
             timer.resume()

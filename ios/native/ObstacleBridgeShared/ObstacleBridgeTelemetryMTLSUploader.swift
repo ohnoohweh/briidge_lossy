@@ -60,18 +60,29 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
 }
 
 enum ObstacleBridgeTelemetryIdentityStore {
-    static func identity(label: String) -> SecIdentity? {
+    static func telemetryIdentity() -> (identity: SecIdentity, installationID: String)? {
         let query: [CFString: Any] = [
             kSecClass: kSecClassIdentity,
-            kSecAttrLabel: label,
             kSecReturnRef: true,
-            kSecMatchLimit: kSecMatchLimitOne,
+            kSecMatchLimit: kSecMatchLimitAll,
         ]
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let result
+              let identities = result as? [SecIdentity]
         else { return nil }
-        return (result as! SecIdentity)
+        let telemetryIdentities = identities.compactMap { identity -> (identity: SecIdentity, installationID: String)? in
+            var certificate: SecCertificate?
+            guard SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess,
+                  let certificate
+            else { return nil }
+            var commonName: CFString?
+            guard SecCertificateCopyCommonName(certificate, &commonName) == errSecSuccess,
+                  let installationID = commonName as String?, !installationID.isEmpty,
+                  installationID.count <= ObstacleBridgeTelemetry.maximumIdentifierLength
+            else { return nil }
+            return (identity, installationID)
+        }
+        return telemetryIdentities.count == 1 ? telemetryIdentities[0] : nil
     }
 }
 #endif
@@ -80,19 +91,17 @@ enum ObstacleBridgeTelemetryAdminStatus {
     static func snapshot(runtimeConfig: [String: Any]) -> [String: Any] {
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["telemetry_enabled"]) ?? false
         let endpoint = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_endpoint"])
-        let identityLabel = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_mtls_identity_label"])
         let parsed = endpoint.flatMap(URL.init(string:))
         #if canImport(Security)
-        let identityAvailable = identityLabel.flatMap(ObstacleBridgeTelemetryIdentityStore.identity(label:)) != nil
+        let identityAvailable = ObstacleBridgeTelemetryIdentityStore.telemetryIdentity() != nil
         #else
         let identityAvailable = false
         #endif
         return [
             "enabled": enabled,
-            "configured": enabled && parsed?.scheme?.lowercased() == "https" && identityLabel != nil,
+            "configured": enabled && parsed?.scheme?.lowercased() == "https" && identityAvailable,
             "endpoint_scheme": parsed?.scheme?.lowercased() ?? "",
             "endpoint_host": parsed?.host ?? "",
-            "identity_configured": identityLabel != nil,
             "identity_available": identityAvailable,
         ]
     }

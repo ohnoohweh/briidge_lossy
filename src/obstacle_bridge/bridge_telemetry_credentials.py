@@ -72,6 +72,32 @@ def issue_client_certificate(ca_key_pem: bytes, ca_cert_pem: bytes, installation
     return (key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), certificate.public_bytes(serialization.Encoding.PEM), serial)
 
 
+def client_certificate_installation_id(certificate_pem: bytes) -> str:
+    """Return the installation identity embedded as the client certificate CN."""
+    certificate = x509.load_pem_x509_certificate(certificate_pem)
+    attributes = certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)
+    if len(attributes) != 1 or not attributes[0].value or len(attributes[0].value) > 128:
+        raise ValueError("client certificate has no valid installation common name")
+    return attributes[0].value
+
+
+def client_certificate_paths(directory: str) -> Tuple[str, str, str, str]:
+    """Return standard uploader paths and the installation ID encoded in its leaf certificate."""
+    root = Path(directory)
+    certificate_path = root / "client.cert.pem"
+    key_path = root / "client.key.pem"
+    ca_path = root / "collector-ca.cert.pem"
+    for path in (certificate_path, key_path, ca_path):
+        if not path.is_file():
+            raise ValueError("telemetry client credential file is missing: " + str(path))
+    return (
+        str(certificate_path),
+        str(key_path),
+        str(ca_path),
+        client_certificate_installation_id(certificate_path.read_bytes()),
+    )
+
+
 def issue_server_certificate(
     ca_key_pem: bytes,
     ca_cert_pem: bytes,

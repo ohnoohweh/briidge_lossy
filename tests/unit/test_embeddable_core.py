@@ -227,9 +227,8 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         configured_telemetry = {
             "telemetry_enabled": True,
             "telemetry_endpoint": "https://collector.example.test/v1/telemetry",
-            "telemetry_installation_id": "installation-test-id",
-            "telemetry_mtls_identity_label": "telemetry-client-identity",
             "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry",
+            "telemetry_client_certificate_directory": "/etc/obstaclebridge/telemetry-client",
             "telemetry_collector_enabled": True,
             "telemetry_collector_bind": "0.0.0.0",
             "telemetry_collector_port": 18443,
@@ -250,9 +249,8 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             {
                 "telemetry_enabled",
                 "telemetry_endpoint",
-                "telemetry_installation_id",
-                "telemetry_mtls_identity_label",
                 "telemetry_spool_directory",
+                "telemetry_client_certificate_directory",
                 "telemetry_collector_enabled",
                 "telemetry_collector_bind",
                 "telemetry_collector_port",

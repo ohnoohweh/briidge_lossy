@@ -646,9 +646,9 @@ ARC-CMP-005:
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
   # and peer-scoped wrapper status.
-  # Telemetry configuration coverage keeps the five Python producer settings
-  # aligned with the macOS/iOS contract and keeps Python-only collector
-  # settings visible in the same operational section.
+  # Telemetry configuration coverage keeps the three Python producer settings
+  # aligned with the macOS/iOS contract and keeps Python-only certificate
+  # directory and collector settings visible in the same operational section.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
@@ -700,6 +700,7 @@ ARC-CMP-005:
     - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
     - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
     - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
+    - tests/unit/test_telemetry.py::test_client_certificate_directory_derives_installation_id
     - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
     - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_matches_apple_telemetry_fields

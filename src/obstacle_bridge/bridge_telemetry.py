@@ -51,19 +51,14 @@ class TelemetryRuntimeSettings:
             help="HTTPS collector endpoint for telemetry batches",
         )
         group.add_argument(
-            "--telemetry-installation-id",
-            default="",
-            help="Pseudonymous installation identifier scoped to telemetry collection",
-        )
-        group.add_argument(
-            "--telemetry-mtls-identity-label",
-            default="",
-            help="Reference to the enrolled telemetry mTLS client identity",
-        )
-        group.add_argument(
             "--telemetry-spool-directory",
             default="",
             help="Local directory for bounded telemetry spool segments",
+        )
+        group.add_argument(
+            "--telemetry-client-certificate-directory",
+            default="/etc/obstaclebridge/telemetry-client",
+            help="Python uploader directory containing client.cert.pem, client.key.pem, and collector-ca.cert.pem",
         )
         group.add_argument(
             "--telemetry-collector-enabled",

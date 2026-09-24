@@ -16,8 +16,6 @@ def _make_runner(tmp_path):
         secure_link_psk="bridge-secret",
         telemetry_enabled=True,
         telemetry_endpoint="https://collector.example.test/v1/telemetry",
-        telemetry_installation_id="installation-test-id",
-        telemetry_mtls_identity_label="telemetry-client-identity",
         telemetry_spool_directory=str(tmp_path / "telemetry-spool"),
         overlay_transport="myudp",
         _config_sections={
@@ -105,8 +103,6 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
         "telemetry": [
             "telemetry_enabled",
             "telemetry_endpoint",
-            "telemetry_installation_id",
-            "telemetry_mtls_identity_label",
             "telemetry_spool_directory",
         ],
     }
@@ -123,8 +119,6 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
     assert written["secure_link"]["secure_link_psk"] != "bridge-secret"
     for key in {
         "telemetry_endpoint",
-        "telemetry_installation_id",
-        "telemetry_mtls_identity_label",
         "telemetry_spool_directory",
     }:
         assert not written["telemetry"][key].startswith("enc:v1:")
@@ -135,8 +129,6 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
     assert loaded["admin_web"]["admin_web_password"] == "admin-secret"
     assert loaded["secure_link"]["secure_link_psk"] == "bridge-secret"
     assert loaded["telemetry"]["telemetry_endpoint"] == "https://collector.example.test/v1/telemetry"
-    assert loaded["telemetry"]["telemetry_installation_id"] == "installation-test-id"
-    assert loaded["telemetry"]["telemetry_mtls_identity_label"] == "telemetry-client-identity"
     assert loaded["telemetry"]["telemetry_spool_directory"] == str(tmp_path / "telemetry-spool")
 
 
@@ -147,8 +139,6 @@ def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_pa
     runner.args.admin_web_password = ""
     runner.args.secure_link_psk = ""
     runner.args.telemetry_endpoint = ""
-    runner.args.telemetry_installation_id = ""
-    runner.args.telemetry_mtls_identity_label = ""
     runner.args.telemetry_spool_directory = ""
     runner.args._config_sections = {
         "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
@@ -156,8 +146,6 @@ def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_pa
         "telemetry": [
             "telemetry_enabled",
             "telemetry_endpoint",
-            "telemetry_installation_id",
-            "telemetry_mtls_identity_label",
             "telemetry_spool_directory",
         ],
     }
@@ -172,8 +160,6 @@ def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_pa
     assert written["secure_link"]["secure_link_psk"] == ""
     for key in {
         "telemetry_endpoint",
-        "telemetry_installation_id",
-        "telemetry_mtls_identity_label",
         "telemetry_spool_directory",
     }:
         assert written["telemetry"][key] == ""
@@ -217,8 +203,6 @@ def test_ios_runtime_config_persists_secret_fields_as_plaintext(tmp_path, monkey
         "telemetry": [
             "telemetry_enabled",
             "telemetry_endpoint",
-            "telemetry_installation_id",
-            "telemetry_mtls_identity_label",
             "telemetry_spool_directory",
         ],
     }
@@ -232,6 +216,4 @@ def test_ios_runtime_config_persists_secret_fields_as_plaintext(tmp_path, monkey
     assert written["admin_web"]["admin_web_password"] == "admin-secret"
     assert written["secure_link"]["secure_link_psk"] == "bridge-secret"
     assert written["telemetry"]["telemetry_endpoint"] == "https://collector.example.test/v1/telemetry"
-    assert written["telemetry"]["telemetry_installation_id"] == "installation-test-id"
-    assert written["telemetry"]["telemetry_mtls_identity_label"] == "telemetry-client-identity"
     assert written["telemetry"]["telemetry_spool_directory"] == str(tmp_path / "telemetry-spool")

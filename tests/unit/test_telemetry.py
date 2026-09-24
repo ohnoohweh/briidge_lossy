@@ -19,7 +19,7 @@ from obstacle_bridge.bridge_telemetry import (
 )
 from obstacle_bridge import bridge_telemetry_ingest as ingest
 from obstacle_bridge.bridge_telemetry_ingest import TelemetryAdmissionControl, TelemetryIngestStore, build_tls_context
-from obstacle_bridge.bridge_telemetry_credentials import TelemetryRevocationList, generate_ca, issue_client_certificate, issue_server_certificate
+from obstacle_bridge.bridge_telemetry_credentials import TelemetryRevocationList, client_certificate_paths, generate_ca, issue_client_certificate, issue_server_certificate
 from obstacle_bridge.bridge_telemetry_uploader import TelemetryUploader
 
 
@@ -140,6 +140,20 @@ def test_mtls_credential_issue_and_revocation(tmp_path):
     assert not revocations.is_revoked(serial)
     revocations.revoke(serial)
     assert revocations.is_revoked(serial)
+
+
+def test_client_certificate_directory_derives_installation_id(tmp_path):
+    ca_key, ca_cert = generate_ca("test-ca")
+    client_key, client_cert, _ = issue_client_certificate(ca_key, ca_cert, "install-01")
+    (tmp_path / "client.key.pem").write_bytes(client_key)
+    (tmp_path / "client.cert.pem").write_bytes(client_cert)
+    (tmp_path / "collector-ca.cert.pem").write_bytes(ca_cert)
+
+    cert, key, ca, installation_id = client_certificate_paths(str(tmp_path))
+    assert (cert, key, ca, installation_id) == (
+        str(tmp_path / "client.cert.pem"), str(tmp_path / "client.key.pem"),
+        str(tmp_path / "collector-ca.cert.pem"), "install-01",
+    )
 
 
 def test_mtls_ingest_accepts_matching_client_identity(tmp_path):

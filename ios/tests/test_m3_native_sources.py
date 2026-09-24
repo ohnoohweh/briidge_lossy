@@ -34,7 +34,9 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "performDefaultHandling" in source
     assert "ObstacleBridgeTelemetryAdminStatus" in source
     assert "SecItemCopyMatching" in source
-    assert "return (result as! SecIdentity)" in source
+    assert "static func telemetryIdentity()" in source
+    assert "SecCertificateCopyCommonName" in source
+    assert "telemetryIdentities.count == 1" in source
     assert "func cancel()" in source
     assert "session.invalidateAndCancel()" in source
     assert '"identity_available": identityAvailable' in source
@@ -56,8 +58,6 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert 'enqueueTelemetryFailure(errorCode: "bridge_start")' in provider
     for key in [
         "telemetry_endpoint",
-        "telemetry_installation_id",
-        "telemetry_mtls_identity_label",
         "telemetry_spool_directory",
     ]:
         assert f'"{key}",' in runtime_config

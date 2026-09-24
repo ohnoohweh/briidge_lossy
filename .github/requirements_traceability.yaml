@@ -1459,11 +1459,10 @@ REQ-MYU-007:
 # extend the existing `REQ-MYU-*` and admin-observability test families.
 
 REQ-ADM-001:
-  # Shared telemetry configuration coverage keeps the Python Admin schema to
-  # the same five visible operational keys used by macOS and iOS; credentials
-  # remain the only write-only configuration values. Linux credential scripts
-  # create the CA, collector SAN identity, and installation-bound client
-  # identity without placing private material in that configuration surface.
+  # Shared telemetry configuration coverage keeps the three Python producer
+  # settings aligned with macOS and iOS. Python adds its standard certificate
+  # directory and collector settings; the certificate CN, rather than mutable
+  # configuration, supplies the installation identity.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
@@ -1490,6 +1489,7 @@ REQ-ADM-001:
     - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
     - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
     - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
+    - tests/unit/test_telemetry.py::test_client_certificate_directory_derives_installation_id
     - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
     - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_matches_apple_telemetry_fields
