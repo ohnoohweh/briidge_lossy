@@ -1950,7 +1950,8 @@ class AdminWebUI:
         except Exception:
             await self._send_json(writer, 503, {"ok": False, "error": "telemetry status unavailable", "retryable": True})
             return
-        payload = {"ok": True, "telemetry": status}
+        client_snapshot = self._call_runner(self.runner.get_telemetry_client_snapshot, timeout=0.2)
+        payload = {"ok": True, "telemetry": status, "client": client_snapshot}
         self._log_api_response("/api/telemetry", 200, payload, summary="redacted spool status")
         await self._send_json(writer, 200, payload)
 

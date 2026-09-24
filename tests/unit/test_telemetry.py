@@ -83,6 +83,11 @@ def test_spool_recovers_atomic_events_and_acknowledges_them(tmp_path):
     assert spool.recover() == []
 
 
+def test_emitter_empty_drain_is_non_blocking_and_returns_no_events():
+    emitter = TelemetryEmitter("install-01", "session-01")
+    assert emitter.drain() == []
+
+
 def test_spool_status_is_bounded_and_redacted(tmp_path):
     spool = TelemetrySpool(str(tmp_path / "spool")); assert spool.append(VECTORS["event"])
     status = spool.status()
@@ -227,6 +232,58 @@ def test_runner_telemetry_client_spools_lifecycle_event_off_runtime_path(tmp_pat
         assert [event["event"] for event in events] == ["runtime.lifecycle", "runtime.load"]
         assert events[0]["fields"] == {"state": "started", "reason": ""}
         assert events[1]["fields"]["queue_depth"] >= 1
+        await runner._stop_telemetry_client()
+
+    asyncio.run(run())
+
+
+def test_runner_telemetry_client_retries_a_failed_flush_worker(tmp_path, monkeypatch):
+    class _Uploader:
+        last_error = ""
+
+        def upload_once(self):
+            return {"ok": True, "accepted_count": 1}
+
+    runner = Runner.__new__(Runner)
+    runner.args = argparse.Namespace(
+        telemetry_enabled=True,
+        telemetry_endpoint="https://collector.example.test/v1/telemetry/batches",
+        telemetry_spool_directory=str(tmp_path / "spool"),
+        telemetry_client_certificate_directory=str(tmp_path / "credentials"),
+    )
+    runner.log = mock.Mock()
+    runner._telemetry_client_task = None
+    runner._telemetry_emitter = None
+    runner._telemetry_spool = None
+    runner._telemetry_uploader = None
+    runner._telemetry_client_flush_task = None
+    runner._telemetry_client_last_error = ""
+    runner._telemetry_client_last_warning = ""
+    runner._telemetry_client_last_cycle_monotonic = 0.0
+    runner._telemetry_client_last_load_monotonic = 0.0
+    runner._telemetry_client_cycles = 0
+    monkeypatch.setattr(bridge_runner, "client_certificate_paths", lambda directory: ("client.cert.pem", "client.key.pem", "ca.cert.pem", "install-01"))
+    monkeypatch.setattr(bridge_runner, "TelemetryUploader", lambda *args: _Uploader())
+
+    original_flush = runner._telemetry_client_flush_blocking
+    attempts = 0
+
+    def _flaky_flush(events):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("temporary spool failure")
+        return original_flush(events)
+
+    runner._telemetry_client_flush_blocking = _flaky_flush
+
+    async def run() -> None:
+        await runner._start_telemetry_client()
+        await asyncio.sleep(3.1)
+        snapshot = runner.get_telemetry_client_snapshot()
+        assert attempts >= 2
+        assert snapshot["worker_state"] == "running"
+        assert snapshot["worker_cycles"] >= 2
         await runner._stop_telemetry_client()
 
     asyncio.run(run())

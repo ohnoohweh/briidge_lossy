@@ -459,20 +459,16 @@ private UDP logging receiver.
 `client.cert.pem` supplies the installation ID through its certificate common
 name. The standard Python certificate directory contains `client.cert.pem`,
 `client.key.pem`, and `collector-ca.cert.pem`; a missing file disables the
-future uploader rather than asking the operator to duplicate certificate data
+uploader rather than asking the operator to duplicate certificate data
 in configuration.
 
-The Python reference has `TelemetryEmitter`, `TelemetrySpool`, and
-`TelemetryUploader` components, but the peer bridge does not yet create or
-schedule them from these five saved configuration values. Consequently,
-setting `telemetry_enabled=true` in Python Admin Web currently records the
-operator intent but does **not** start an uploader or produce a batch. There
-is also no supported uploader service or CLI that maps the installed PEM files
-to the saved settings. The remaining Python commissioning work is to provide
-that separate supervised emitter/uploader service, connect it to the visible
-settings, and demonstrate one acknowledged batch. Until then, the `curl`
-check above is the complete deployable Python verification; it must not be
-represented as end-to-end telemetry collection.
+The Python Runner reads that directory when `telemetry_enabled=true`, derives
+the installation ID from the certificate common name, and starts its bounded
+uploader. The health request verifies credentials and collector reachability;
+the Runner's startup lifecycle event and recurring load samples prove
+end-to-end collection. The bridge execution identity therefore needs read
+access to these three files, while no endpoint, identity label, or secret is
+duplicated in configuration.
 
 For Apple clients, the endpoint, spool location, and enable flag use the same
 values. The runtime derives the installation ID from one already-installed,
@@ -484,7 +480,7 @@ iPhone, even when the collector health check succeeds from Linux.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
-| 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA only to the separate Python telemetry-uploader service account. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the uploader account. The peer bridge process does not need either private key. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, service-manager credentials, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
+| 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA to the Python bridge identity that runs the uploader. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the bridge/uploader identity. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
 | 2. Python peer server on Linux + Swift peer client on macOS | Issue one client certificate whose common name is the macOS installation ID. Import exactly one telemetry certificate/private-key identity into the macOS Keychain; deploy only endpoint, enablement, and optional spool location in configuration. | The private key stays in a Keychain `SecIdentity`; no PEM file is read by the Swift uploader. The collector retains its Linux server key and trusts the issuing client CA. | Swift selects exactly one accessible identity, derives its CN, and uses it for URLSession mTLS. DoD: a documented signed/importable macOS identity deployment, a Keychain access check under the production app identity, a real upload, rotation with overlap, and revocation evidence. |
 | 3. Python peer server on Linux + Swift peer client on iOS | Issue one client certificate whose common name is the iPhone installation ID. Synchronize the non-secret telemetry configuration from app Documents to the shared App Group, then install exactly one telemetry identity through a managed profile/MDM or an approved enrolment flow. | The extension reads configuration and keeps its telemetry spool in the App Group. It must obtain the private key as an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into Documents or the App Group. | Documents-to-App-Group configuration synchronization and App-Group spooling exist. The extension derives the ID from exactly one already-installed identity; it has no identity import/enrolment workflow. DoD: deploy an extension-accessible identity on a physical iPhone, show `identity_available` in status, complete an mTLS batch upload, prove offline/restart recovery, rotation, revocation, and no extension latency regression. |
 
@@ -536,13 +532,15 @@ not a qualification target for this work.
 
 When `telemetry_enabled` is true, the Python Runner derives its installation ID
 from the client certificate common name, creates a bounded in-memory emitter,
-and starts a single-flight uploader task. Lifecycle events are emitted at
-startup and shutdown; the uploader worker emits a redacted load event at
-startup and every 15 seconds. Spool writes and HTTPS requests run in worker threads;
-the overlay, packet, and forwarding callbacks do not perform telemetry I/O.
+and starts a supervised uploader task. Lifecycle events are emitted at startup
+and shutdown; the uploader worker emits a redacted load event at startup and
+every 15 seconds. Empty queue drains are no-ops. A single background flush task
+owns spool writes and HTTPS requests; its failure is retried by the worker and
+an in-flight flush cannot block packet, forwarding, or bridge callbacks.
 Credential, spool, or upload failures are warning-level `[TELEMETRY]` entries
 in the normal debug log and leave the bridge running. `/api/telemetry` exposes
-only bounded spool status.
+bounded spool status plus redacted worker liveness, cycle age, flush state, and
+the latest delivery error.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |

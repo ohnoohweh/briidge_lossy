@@ -696,7 +696,9 @@ ARC-CMP-005:
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - tests/unit/test_debug_logging_aliases.py::test_udp_log_sender_drops_transport_failure_without_raising
     - tests/unit/test_debug_logging_aliases.py::test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call
-    - tests/unit/test_debug_logging_aliases.py::test_admin_telemetry_status_is_redacted_and_does_not_call_runner
+    - tests/unit/test_debug_logging_aliases.py::test_admin_telemetry_status_is_redacted_and_reports_worker_liveness
+    - tests/unit/test_telemetry.py::test_emitter_empty_drain_is_non_blocking_and_returns_no_events
+    - tests/unit/test_telemetry.py::test_runner_telemetry_client_retries_a_failed_flush_worker
     - tests/unit/test_telemetry.py::test_v1_vector_round_trips_canonically
     - tests/unit/test_telemetry.py::test_spool_recovers_atomic_events_and_acknowledges_them
     - tests/unit/test_telemetry.py::test_ingest_store_acknowledges_only_valid_ordered_durable_batch

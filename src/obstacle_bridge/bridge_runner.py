@@ -211,8 +211,12 @@ class Runner:
         self._telemetry_emitter: Optional[TelemetryEmitter] = None
         self._telemetry_spool: Optional[TelemetrySpool] = None
         self._telemetry_uploader: Optional[TelemetryUploader] = None
+        self._telemetry_client_flush_task: Optional[asyncio.Task] = None
         self._telemetry_client_last_error: str = ""
         self._telemetry_client_last_warning: str = ""
+        self._telemetry_client_last_cycle_monotonic: float = 0.0
+        self._telemetry_client_last_load_monotonic: float = 0.0
+        self._telemetry_client_cycles: int = 0
         self._tun_helper_prestarted: bool = False
         self._tun_helper_session_token: str = ""
         self._tun_helper_socket_path: str = ""
@@ -331,26 +335,65 @@ class Runner:
         self._telemetry_client_last_warning = text
         self.log.warning("[TELEMETRY] %s", text)
 
-    async def _telemetry_client_flush_once(self) -> None:
-        emitter = self._telemetry_emitter
+    def _telemetry_client_flush_blocking(self, events: list[dict]) -> dict:
+        """Perform telemetry disk/network work on one bounded background task."""
         spool = self._telemetry_spool
         uploader = self._telemetry_uploader
-        if emitter is None or spool is None or uploader is None:
-            return
-        events = emitter.drain()
-        if events and not await asyncio.to_thread(spool.append_many, events):
-            self._telemetry_client_warning("spool append failed; events were dropped")
-        result = await asyncio.to_thread(uploader.upload_once)
-        if not result.get("ok") and result.get("reason") not in {"backoff", "byte_budget"}:
-            self._telemetry_client_warning("upload failed (%s)" % str(uploader.last_error or result.get("reason") or "unknown"))
-        elif result.get("ok"):
-            self._telemetry_client_last_error = ""
-            self._telemetry_client_last_warning = ""
+        if spool is None or uploader is None:
+            return {"ok": False, "reason": "disabled"}
+        if events and not spool.append_many(events):
+            return {"ok": False, "reason": "spool_append_failed"}
+        return uploader.upload_once()
+
+    async def _telemetry_client_flush_once(self) -> dict:
+        emitter = self._telemetry_emitter
+        uploader = self._telemetry_uploader
+        if emitter is None or uploader is None:
+            return {"ok": False, "reason": "disabled"}
+        task = self._telemetry_client_flush_task
+        if task is not None and not task.done():
+            return {"ok": False, "reason": "in_flight"}
+        result = None
+        if task is not None:
+            self._telemetry_client_flush_task = None
+            try:
+                result = task.result()
+            except Exception as exc:
+                self._telemetry_client_warning("flush worker failed (%s)" % type(exc).__name__)
+                result = {"ok": False, "reason": "flush_worker_failed"}
+            if result.get("reason") == "spool_append_failed":
+                self._telemetry_client_warning("spool append failed; events were dropped")
+            elif not result.get("ok") and result.get("reason") not in {"backoff", "byte_budget"}:
+                self._telemetry_client_warning("upload failed (%s)" % str(uploader.last_error or result.get("reason") or "unknown"))
+            elif result.get("ok"):
+                self._telemetry_client_last_error = ""
+                self._telemetry_client_last_warning = ""
+        self._telemetry_client_flush_task = asyncio.create_task(
+            asyncio.to_thread(self._telemetry_client_flush_blocking, emitter.drain()),
+            name="telemetry-client-flush",
+        )
+        return result or {"ok": True, "reason": "scheduled"}
+
+    def get_telemetry_client_snapshot(self) -> dict:
+        now = time.monotonic()
+        task = self._telemetry_client_task
+        flush_task = self._telemetry_client_flush_task
+        enabled = bool(getattr(self.args, "telemetry_enabled", False))
+        worker_state = "disabled" if not enabled else "not_started" if task is None else "stopped" if task.done() else "running"
+        return {
+            "enabled": enabled,
+            "worker_state": worker_state,
+            "worker_cycles": int(self._telemetry_client_cycles),
+            "last_cycle_age_sec": max(0.0, now - self._telemetry_client_last_cycle_monotonic) if self._telemetry_client_last_cycle_monotonic else None,
+            "last_load_age_sec": max(0.0, now - self._telemetry_client_last_load_monotonic) if self._telemetry_client_last_load_monotonic else None,
+            "flush_in_flight": bool(flush_task is not None and not flush_task.done()),
+            "last_error": self._telemetry_client_last_error or None,
+        }
 
     async def _telemetry_client_worker(self) -> None:
         next_load_at = 0.0
-        try:
-            while True:
+        while True:
+            try:
                 now = time.monotonic()
                 if now >= next_load_at:
                     emitter = self._telemetry_emitter
@@ -361,13 +404,16 @@ class Runner:
                                 dropped=sum(int(value) for value in emitter.dropped.values()),
                                 load_1m=float(os.getloadavg()[0]),
                             )
+                        self._telemetry_client_last_load_monotonic = now
                     next_load_at = now + 15.0
                 await self._telemetry_client_flush_once()
-                await asyncio.sleep(1.0)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            self._telemetry_client_warning("worker stopped unexpectedly (%s)" % type(exc).__name__)
+                self._telemetry_client_cycles += 1
+                self._telemetry_client_last_cycle_monotonic = time.monotonic()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._telemetry_client_warning("worker cycle failed (%s); retrying" % type(exc).__name__)
+            await asyncio.sleep(1.0)
 
     async def _start_telemetry_client(self) -> None:
         if not bool(getattr(self.args, "telemetry_enabled", False)):
@@ -380,6 +426,10 @@ class Runner:
             self._telemetry_spool = TelemetrySpool(spool_directory)
             self._telemetry_uploader = TelemetryUploader(self._telemetry_spool, endpoint, cafile, certfile, keyfile)
             self._telemetry_emitter = TelemetryEmitter(installation_id, str(uuid.uuid4()))
+            self._telemetry_client_flush_task = None
+            self._telemetry_client_last_cycle_monotonic = 0.0
+            self._telemetry_client_last_load_monotonic = 0.0
+            self._telemetry_client_cycles = 0
             self._telemetry_emitter.emit_lifecycle("started")
             self._telemetry_client_task = asyncio.create_task(
                 self._telemetry_client_worker(), name="telemetry-client-uploader"
@@ -402,10 +452,18 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await task
         with contextlib.suppress(Exception):
-            await asyncio.wait_for(self._telemetry_client_flush_once(), timeout=2.0)
+            await self._telemetry_client_flush_once()
+            flush_task = self._telemetry_client_flush_task
+            if flush_task is not None:
+                await asyncio.wait_for(asyncio.shield(flush_task), timeout=2.0)
+                await self._telemetry_client_flush_once()
+                flush_task = self._telemetry_client_flush_task
+                if flush_task is not None:
+                    await asyncio.wait_for(asyncio.shield(flush_task), timeout=2.0)
         self._telemetry_emitter = None
         self._telemetry_spool = None
         self._telemetry_uploader = None
+        self._telemetry_client_flush_task = None
 
     def _make_runtime_health_store(self) -> Optional[RuntimeHealthStore]:
         configured = str(os.environ.get("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH") or "").strip()

@@ -136,15 +136,18 @@ def test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call():
     }
 
 
-def test_admin_telemetry_status_is_redacted_and_does_not_call_runner(tmp_path):
+def test_admin_telemetry_status_is_redacted_and_reports_worker_liveness(tmp_path):
     from obstacle_bridge.bridge_telemetry import TelemetrySpool
 
     spool = TelemetrySpool(str(tmp_path / "spool"))
     assert spool.append({"v": 1, "kind": "telemetry.event", "installation_id": "install", "session_id": "session", "sequence": 1, "monotonic_ns": 1, "wall_time": 1.0, "priority": "normal", "event": "runtime.load", "fields": {"queue_depth": 1}})
-    ui = AdminWebUI(SimpleNamespace(telemetry_spool_directory=str(spool.directory)), mock.Mock())
+    runner = mock.Mock()
+    runner.get_telemetry_client_snapshot.return_value = {"enabled": True, "worker_state": "running"}
+    ui = AdminWebUI(SimpleNamespace(telemetry_spool_directory=str(spool.directory)), runner)
     ui._send_json = mock.AsyncMock(); ui._log_api_response = mock.Mock(); ui._call_runner = mock.Mock()
     asyncio.run(ui._handle_telemetry(mock.Mock()))
-    ui._call_runner.assert_not_called()
+    ui._call_runner.assert_called_once_with(runner.get_telemetry_client_snapshot, timeout=0.2)
     payload = ui._send_json.await_args.args[2]
     assert payload["ok"] and payload["telemetry"]["pending_events"] == 1
     assert "installation_id" not in payload["telemetry"]
+    assert payload["client"] == ui._call_runner.return_value

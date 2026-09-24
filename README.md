@@ -1152,7 +1152,8 @@ The optional private UDP logger is isolated best-effort diagnostics only. The
 Python Runner additionally provides a bounded, allowlisted local event
 producer, crash-safe spool, single-flight background uploader, and mTLS-required
 reference ingest process. The worker emits a startup load sample and repeats it
-every 15 seconds; spool/network delivery stays outside forwarding callbacks;
+every 15 seconds; empty drains are no-ops and one background flush owns
+spool/network delivery outside forwarding callbacks;
 failures are warning-level debug-log evidence and
 never block the bridge;
 the reference uploader uses only acknowledged delivery and the collector rejects
@@ -1598,7 +1599,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `64` | `1009` |
+| Python CLI/runtime, including macOS Python | `64` | `1011` |
 | macOS Swift app | `1` | `70` |
 | iOS app/extension | `30` | `199` |
 

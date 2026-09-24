@@ -279,6 +279,8 @@ class TelemetryEmitter:
         if not self._lock.acquire(blocking=False):
             return []
         try:
+            if not self._events:
+                return []
             count = max(1, min(int(limit), MAX_BATCH_EVENTS, len(self._events)))
             return [self._events.popleft() for _ in range(count)]
         finally:
