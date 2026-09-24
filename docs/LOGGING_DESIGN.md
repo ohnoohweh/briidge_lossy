@@ -373,7 +373,8 @@ named file into an owner-only temporary staging directory, use the invoking
 user's SSH identity to transfer it, then remove the local and remote staging
 directories. The remote-sudo preflight and final installation allocate a TTY
 so a non-root SSH user can enter its remote sudo password on hosts that require
-one. Set `LOCAL_SUDO` when the local privilege command is not `sudo`.
+one; the installation disables TTY echo while it receives the scripted input.
+Set `LOCAL_SUDO` when the local privilege command is not `sudo`.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
