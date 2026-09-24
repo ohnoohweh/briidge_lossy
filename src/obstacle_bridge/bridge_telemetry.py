@@ -65,6 +65,48 @@ class TelemetryRuntimeSettings:
             default="",
             help="Local directory for bounded telemetry spool segments",
         )
+        group.add_argument(
+            "--telemetry-collector-enabled",
+            action="store_true",
+            default=False,
+            help="Enable this host's separate HTTPS telemetry collector service",
+        )
+        group.add_argument(
+            "--telemetry-collector-bind",
+            default="127.0.0.1",
+            help="Collector IPv4 bind address; use a restricted firewall for non-loopback binds",
+        )
+        group.add_argument(
+            "--telemetry-collector-port",
+            type=int,
+            default=18443,
+            help="Collector HTTPS TCP port",
+        )
+        group.add_argument(
+            "--telemetry-collector-spool-directory",
+            default="/var/lib/obstaclebridge/telemetry-ingest",
+            help="Collector durable accepted-event and replay-state directory",
+        )
+        group.add_argument(
+            "--telemetry-collector-tls-cert",
+            default="/etc/obstaclebridge/telemetry/server.cert.pem",
+            help="Collector TLS server certificate PEM path",
+        )
+        group.add_argument(
+            "--telemetry-collector-tls-key",
+            default="/etc/obstaclebridge/telemetry/server.key.pem",
+            help="Collector TLS server private-key PEM path",
+        )
+        group.add_argument(
+            "--telemetry-collector-client-ca",
+            default="/etc/obstaclebridge/telemetry/client-ca.cert.pem",
+            help="Trusted telemetry client CA certificate PEM path",
+        )
+        group.add_argument(
+            "--telemetry-collector-revocations",
+            default="/var/lib/obstaclebridge/telemetry-ingest/revocations.json",
+            help="Collector revoked-client-certificate serial list path",
+        )
 
 
 class TelemetryValidationError(ValueError):

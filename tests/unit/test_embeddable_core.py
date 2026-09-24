@@ -230,6 +230,14 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             "telemetry_installation_id": "installation-test-id",
             "telemetry_mtls_identity_label": "telemetry-client-identity",
             "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry",
+            "telemetry_collector_enabled": True,
+            "telemetry_collector_bind": "0.0.0.0",
+            "telemetry_collector_port": 18443,
+            "telemetry_collector_spool_directory": "/var/lib/obstaclebridge/telemetry-ingest",
+            "telemetry_collector_tls_cert": "/etc/obstaclebridge/telemetry/server.cert.pem",
+            "telemetry_collector_tls_key": "/etc/obstaclebridge/telemetry/server.key.pem",
+            "telemetry_collector_client_ca": "/etc/obstaclebridge/telemetry/client-ca.cert.pem",
+            "telemetry_collector_revocations": "/var/lib/obstaclebridge/telemetry-ingest/revocations.json",
         }
         args = build_runtime_args_from_config({"telemetry": configured_telemetry})
         runner = Runner.__new__(Runner)
@@ -245,10 +253,19 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
                 "telemetry_installation_id",
                 "telemetry_mtls_identity_label",
                 "telemetry_spool_directory",
+                "telemetry_collector_enabled",
+                "telemetry_collector_bind",
+                "telemetry_collector_port",
+                "telemetry_collector_spool_directory",
+                "telemetry_collector_tls_cert",
+                "telemetry_collector_tls_key",
+                "telemetry_collector_client_ca",
+                "telemetry_collector_revocations",
             },
         )
         self.assertFalse(telemetry_rows["telemetry_enabled"]["default"])
-        for key in set(telemetry_rows) - {"telemetry_enabled"}:
+        self.assertFalse(telemetry_rows["telemetry_collector_enabled"]["default"])
+        for key in telemetry_rows:
             self.assertFalse(telemetry_rows[key].get("secret", False))
         config = runner.get_config_snapshot()
         self.assertEqual(

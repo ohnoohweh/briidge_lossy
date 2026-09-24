@@ -127,7 +127,7 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
         "telemetry_mtls_identity_label",
         "telemetry_spool_directory",
     }:
-        assert written["telemetry"][key].startswith("enc:v1:")
+        assert not written["telemetry"][key].startswith("enc:v1:")
 
     cli = ConfigAwareCLI(description="test")
     loaded = cli._load_json_config(str(tmp_path / "ObstacleBridge.cfg"))

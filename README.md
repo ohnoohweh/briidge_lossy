@@ -1137,6 +1137,14 @@ What the admin web shows:
 | `--telemetry-installation-id` | unset | Pseudonymous telemetry installation identifier. |
 | `--telemetry-mtls-identity-label` | unset | Reference to the enrolled telemetry mTLS client identity. |
 | `--telemetry-spool-directory` | unset | Local bounded telemetry spool directory. |
+| `--telemetry-collector-enabled` | `false` | Enable this host's separate HTTPS telemetry collector service. |
+| `--telemetry-collector-bind` | `127.0.0.1` | Collector IPv4 bind address. |
+| `--telemetry-collector-port` | `18443` | Collector HTTPS TCP port. |
+| `--telemetry-collector-spool-directory` | `/var/lib/obstaclebridge/telemetry-ingest` | Collector accepted-event and replay-state directory. |
+| `--telemetry-collector-tls-cert` | `/etc/obstaclebridge/telemetry/server.cert.pem` | Collector TLS server certificate PEM path. |
+| `--telemetry-collector-tls-key` | `/etc/obstaclebridge/telemetry/server.key.pem` | Collector TLS server private-key PEM path. |
+| `--telemetry-collector-client-ca` | `/etc/obstaclebridge/telemetry/client-ca.cert.pem` | Trusted telemetry client CA PEM path. |
+| `--telemetry-collector-revocations` | `/var/lib/obstaclebridge/telemetry-ingest/revocations.json` | Revoked client-certificate serial list path. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
 The optional private UDP logger is isolated best-effort diagnostics only. The

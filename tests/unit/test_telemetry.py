@@ -179,3 +179,34 @@ def test_telemetry_qualification_harness_reports_bounded_emit_latency():
     result = json.loads(completed.stdout)
     assert result["p99_emit_ms"] <= 20
     assert result["drops"]["queue_full"] > 0
+
+
+def test_ingest_main_reads_enabled_collector_from_shared_telemetry_config(tmp_path, monkeypatch):
+    config_path = tmp_path / "ObstacleBridge.cfg"
+    config_path.write_text(json.dumps({"telemetry": {
+        "telemetry_collector_enabled": True,
+        "telemetry_collector_bind": "127.0.0.1",
+        "telemetry_collector_port": 19443,
+        "telemetry_collector_spool_directory": str(tmp_path / "ingest"),
+        "telemetry_collector_tls_cert": "/tmp/server.cert.pem",
+        "telemetry_collector_tls_key": "/tmp/server.key.pem",
+        "telemetry_collector_client_ca": "/tmp/client-ca.cert.pem",
+        "telemetry_collector_revocations": str(tmp_path / "revocations.json"),
+    }}), encoding="utf-8")
+    observed = {}
+    monkeypatch.setattr(ingest, "serve", lambda *args: observed.setdefault("args", args))
+
+    assert ingest.main(["--config", str(config_path)]) == 0
+    assert observed["args"] == (
+        "127.0.0.1", 19443, str(tmp_path / "ingest"),
+        "/tmp/server.cert.pem", "/tmp/server.key.pem", "/tmp/client-ca.cert.pem",
+        str(tmp_path / "revocations.json"),
+    )
+
+
+def test_ingest_main_rejects_disabled_collector_config(tmp_path):
+    config_path = tmp_path / "ObstacleBridge.cfg"
+    config_path.write_text(json.dumps({"telemetry": {"telemetry_collector_enabled": False}}), encoding="utf-8")
+
+    with pytest.raises(SystemExit, match="telemetry collector is disabled"):
+        ingest.main(["--config", str(config_path)])

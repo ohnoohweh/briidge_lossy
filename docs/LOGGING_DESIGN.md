@@ -221,7 +221,7 @@ receiver.
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
-| Runtime configuration | Python, macOS, and iOS expose exactly the same `telemetry` keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, `telemetry_installation_id`, `telemetry_mtls_identity_label`, and `telemetry_spool_directory`. They are visible operational settings, not credential material. Python keeps the uploader process isolated from the bridge runtime; Apple resolves the identity label through Keychain. |
+| Runtime configuration | Python, macOS, and iOS expose the same five producer keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, `telemetry_installation_id`, `telemetry_mtls_identity_label`, and `telemetry_spool_directory`. Python additionally exposes the server-only `telemetry_collector_*` keys in that same section; Apple does not run a collector. These are visible operational settings, not credential material. Python keeps the uploader process isolated from the bridge runtime; Apple resolves the identity label through Keychain. |
 
 ### Client-to-collector alignment
 
@@ -383,28 +383,39 @@ The following procedure commissions the collector and proves its mTLS boundary
 for a Python peer server and Python peer client. It does not expose the
 private UDP logging receiver.
 
-1. On the peer server, start the collector under the dedicated service account.
-   Select the bind address deliberately: `127.0.0.1` accepts only same-host
-   clients; `0.0.0.0` accepts IPv4 clients after the host firewall permits TCP
-   port `18443` only from intended sources. The certificate must have a SAN for
-   the exact FQDN or IP address used in the endpoint.
+1. In the peer server's Admin Web **Telemetry** section, set the collector
+   values below and save the shared configuration file. Select the bind address
+   deliberately: `127.0.0.1` accepts only same-host clients; `0.0.0.0` accepts
+   IPv4 clients after the host firewall permits TCP port `18443` only from
+   intended sources. The certificate must have a SAN for the exact FQDN or IP
+   address used in the endpoint.
+
+   | Setting | Python peer-server value |
+   | --- | --- |
+   | `telemetry_collector_enabled` | `true` |
+   | `telemetry_collector_bind` | `0.0.0.0` for approved remote IPv4 clients, otherwise `127.0.0.1` |
+   | `telemetry_collector_port` | `18443` |
+   | `telemetry_collector_spool_directory` | `/var/lib/obstaclebridge/telemetry-ingest` |
+   | `telemetry_collector_tls_cert` | `/etc/obstaclebridge/telemetry/server.cert.pem` |
+   | `telemetry_collector_tls_key` | `/etc/obstaclebridge/telemetry/server.key.pem` |
+   | `telemetry_collector_client_ca` | `/etc/obstaclebridge/telemetry/client-ca.cert.pem` |
+   | `telemetry_collector_revocations` | `/var/lib/obstaclebridge/telemetry-ingest/revocations.json` |
+
+2. Start the collector under the dedicated service account with the saved
+   configuration path; no bind, TLS, or storage option is required on the
+   command line:
 
    ```bash
    sudo -u obstaclebridge /path/to/venv/bin/python \
      -m obstacle_bridge.bridge_telemetry_ingest \
-     --bind 0.0.0.0 --port 18443 \
-     --spool-directory /var/lib/obstaclebridge/telemetry-ingest \
-     --tls-cert /etc/obstaclebridge/telemetry/server.cert.pem \
-     --tls-key /etc/obstaclebridge/telemetry/server.key.pem \
-     --client-ca /etc/obstaclebridge/telemetry/client-ca.cert.pem \
-     --revocations /var/lib/obstaclebridge/telemetry-ingest/revocations.json
+     --config /path/to/ObstacleBridge.cfg
    ```
 
    Run this command through a service manager for an enduring deployment. The
    reference collector has no installed unit file and must not run as the peer
    bridge process or as root merely to use port `18443`.
 
-2. On the peer client, set the visible **Telemetry** configuration values as
+3. On the peer client, set the visible **Telemetry** configuration values as
    follows. The installation identifier is not arbitrary: it must exactly
    equal the common name in
    `/etc/obstaclebridge/telemetry-client/client.cert.pem`.
@@ -422,7 +433,7 @@ private UDP logging receiver.
    collector FQDN or its certificate SAN IP address instead. The endpoint must
    retain the `/v1/telemetry/batches` path and use `https`, never `http`.
 
-3. From the client host, verify the deployed credentials and the collector
+4. From the client host, verify the deployed credentials and the collector
    independently of the bridge with an authenticated health request:
 
    ```bash

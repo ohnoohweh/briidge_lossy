@@ -175,17 +175,56 @@ def serve(bind: str, port: int, spool_directory: str, certfile: str, keyfile: st
     server.serve_forever()
 
 
+def _collector_config(config_path: str) -> Dict[str, Any]:
+    """Read only the non-secret collector settings from the shared JSON config."""
+    try:
+        document = json.loads(Path(config_path).read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValueError("telemetry collector configuration file not found") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("telemetry collector configuration file is invalid") from exc
+    telemetry = document.get("telemetry") if isinstance(document, Mapping) else None
+    if not isinstance(telemetry, Mapping):
+        raise ValueError("telemetry collector configuration section is missing")
+    return {str(key): value for key, value in telemetry.items()}
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
+    """Start the isolated collector from the shared Admin-Web configuration."""
     parser = argparse.ArgumentParser(description="TLS-only ObstacleBridge telemetry ingest reference")
-    parser.add_argument("--bind", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=18443)
-    parser.add_argument("--spool-directory", required=True)
-    parser.add_argument("--tls-cert", required=True)
-    parser.add_argument("--tls-key", required=True)
-    parser.add_argument("--client-ca", required=True)
-    parser.add_argument("--revocations", required=True)
+    parser.add_argument("--config", "-c", default="ObstacleBridge.cfg", help="Shared ObstacleBridge JSON configuration file")
     args = parser.parse_args(argv)
-    serve(args.bind, args.port, args.spool_directory, args.tls_cert, args.tls_key, args.client_ca, args.revocations)
+    try:
+        config = _collector_config(args.config)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    if not config.get("telemetry_collector_enabled", False):
+        raise SystemExit("telemetry collector is disabled; set telemetry_collector_enabled=true in the telemetry configuration")
+    try:
+        port = int(config.get("telemetry_collector_port", 18443))
+    except (TypeError, ValueError) as exc:
+        raise SystemExit("telemetry_collector_port must be between 1 and 65535") from exc
+    if not 1 <= port <= 65535:
+        raise SystemExit("telemetry_collector_port must be between 1 and 65535")
+    required = {
+        "telemetry_collector_spool_directory": config.get("telemetry_collector_spool_directory", "/var/lib/obstaclebridge/telemetry-ingest"),
+        "telemetry_collector_tls_cert": config.get("telemetry_collector_tls_cert", "/etc/obstaclebridge/telemetry/server.cert.pem"),
+        "telemetry_collector_tls_key": config.get("telemetry_collector_tls_key", "/etc/obstaclebridge/telemetry/server.key.pem"),
+        "telemetry_collector_client_ca": config.get("telemetry_collector_client_ca", "/etc/obstaclebridge/telemetry/client-ca.cert.pem"),
+        "telemetry_collector_revocations": config.get("telemetry_collector_revocations", "/var/lib/obstaclebridge/telemetry-ingest/revocations.json"),
+    }
+    missing = [name for name, value in required.items() if not str(value or "").strip()]
+    if missing:
+        raise SystemExit("collector configuration values required: " + ", ".join(missing))
+    serve(
+        str(config.get("telemetry_collector_bind", "127.0.0.1")),
+        port,
+        str(required["telemetry_collector_spool_directory"]),
+        str(required["telemetry_collector_tls_cert"]),
+        str(required["telemetry_collector_tls_key"]),
+        str(required["telemetry_collector_client_ca"]),
+        str(required["telemetry_collector_revocations"]),
+    )
     return 0
 
 
