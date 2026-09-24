@@ -518,7 +518,7 @@ In the iPhone WebAdmin **Telemetry client** section set:
 | Setting | iPhone value |
 | --- | --- |
 | `telemetry_enabled` | `true` |
-| `telemetry_endpoint` | `https://38.180.143.5:18443/v1/telemetry/batches` (or the collector FQDN/SAN IP) |
+| `telemetry_endpoint` | `https://<collector-FQDN-or-SAN-IP>:18443/v1/telemetry/batches` |
 | `telemetry_spool_directory` | Leave the default; the Packet Tunnel uses its private App-Group spool instead. |
 
 Save the configuration and start/restart the Packet Tunnel. Its local
