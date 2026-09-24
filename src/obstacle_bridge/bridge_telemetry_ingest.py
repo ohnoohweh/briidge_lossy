@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import http.server
 import json
+import socket
 import ssl
 import os
 import time
@@ -168,8 +169,30 @@ def build_tls_context(certfile: str, keyfile: str, client_ca: str) -> ssl.SSLCon
     return context
 
 
-def serve(bind: str, port: int, spool_directory: str, certfile: str, keyfile: str, client_ca: str, revocations: str) -> None:
-    server = http.server.ThreadingHTTPServer((bind, int(port)), _Handler)
+def _collector_server(bind: str, port: int, address_family: str) -> http.server.ThreadingHTTPServer:
+    policy = str(address_family or "prefer-ipv6")
+    if policy not in {"ipv4", "ipv6", "prefer-ipv6"}:
+        raise ValueError("telemetry collector address family must be ipv4, ipv6, or prefer-ipv6")
+
+    def create(family: socket.AddressFamily, address: str) -> http.server.ThreadingHTTPServer:
+        class CollectorServer(http.server.ThreadingHTTPServer):
+            address_family = family
+            daemon_threads = True
+        return CollectorServer((address, int(port)), _Handler)
+
+    if policy in {"ipv6", "prefer-ipv6"}:
+        ipv6_bind = bind if bind not in {"", "0.0.0.0"} else "::"
+        try:
+            return create(socket.AF_INET6, ipv6_bind)
+        except OSError:
+            if policy == "ipv6":
+                raise
+    ipv4_bind = bind if bind not in {"", "::"} else "0.0.0.0"
+    return create(socket.AF_INET, ipv4_bind)
+
+
+def serve(bind: str, port: int, spool_directory: str, certfile: str, keyfile: str, client_ca: str, revocations: str, address_family: str = "prefer-ipv6") -> None:
+    server = _collector_server(bind, port, address_family)
     server.RequestHandlerClass.store = TelemetryIngestStore(spool_directory, TelemetryRevocationList(revocations))
     server.socket = build_tls_context(certfile, keyfile, client_ca).wrap_socket(server.socket, server_side=True)
     server.serve_forever()
@@ -217,13 +240,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     if missing:
         raise SystemExit("collector configuration values required: " + ", ".join(missing))
     serve(
-        str(config.get("telemetry_collector_bind", "127.0.0.1")),
+        str(config.get("telemetry_collector_bind", "::")),
         port,
         str(required["telemetry_collector_spool_directory"]),
         str(required["telemetry_collector_tls_cert"]),
         str(required["telemetry_collector_tls_key"]),
         str(required["telemetry_collector_client_ca"]),
         str(required["telemetry_collector_revocations"]),
+        str(config.get("telemetry_collector_address_family", "prefer-ipv6")),
     )
     return 0
 

@@ -221,7 +221,7 @@ receiver.
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
-| Runtime configuration | Python, macOS, and iOS expose the same three producer keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, and `telemetry_spool_directory`. Python additionally exposes `telemetry_client_certificate_directory`, defaulting to `/etc/obstaclebridge/telemetry-client`, and the server-only `telemetry_collector_*` keys in that same section; Apple does not run a collector. The client installation ID is derived from the client certificate common name and is never entered in configuration. Apple selects exactly one extension-accessible telemetry identity and derives the same value from its certificate. |
+| Runtime configuration | Python, macOS, and iOS expose the same three producer keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, and `telemetry_spool_directory`. Python additionally exposes `telemetry_client_certificate_directory`, defaulting to `/etc/obstaclebridge/telemetry-client`, its `telemetry_client_address_family` policy, and the server-only `telemetry_collector_*` keys in that same section; Apple does not run a collector. The client installation ID is derived from the client certificate common name and is never entered in configuration. Apple selects exactly one extension-accessible telemetry identity and derives the same value from its certificate. |
 
 ### Client-to-collector alignment
 
@@ -385,15 +385,16 @@ private UDP logging receiver.
 
 1. In the peer server's Admin Web **Telemetry** section, set the collector
    values below and save the shared configuration file. Select the bind address
-   deliberately: `127.0.0.1` accepts only same-host clients; `0.0.0.0` accepts
-   IPv4 clients after the host firewall permits TCP port `18443` only from
-   intended sources. The certificate must have a SAN for the exact FQDN or IP
-   address used in the endpoint.
+   deliberately: the default `::` with `prefer-ipv6` tries IPv6 first and
+   falls back to IPv4 when IPv6 cannot bind. Select `ipv6` or `ipv4` to require
+   one family; use `0.0.0.0` only with `ipv4`. The certificate must have a SAN
+   for the exact FQDN or IP address used in the endpoint.
 
    | Setting | Python peer-server value |
    | --- | --- |
    | `telemetry_collector_enabled` | `true` |
-   | `telemetry_collector_bind` | `0.0.0.0` for approved remote IPv4 clients, otherwise `127.0.0.1` |
+   | `telemetry_collector_bind` | `::` for the default policy; `0.0.0.0` when explicitly selecting IPv4 |
+   | `telemetry_collector_address_family` | `prefer-ipv6` (or explicit `ipv6` / `ipv4`) |
    | `telemetry_collector_port` | `18443` |
    | `telemetry_collector_spool_directory` | `/var/lib/obstaclebridge/telemetry-ingest` |
    | `telemetry_collector_tls_cert` | `/etc/obstaclebridge/telemetry/server.cert.pem` |
@@ -401,9 +402,11 @@ private UDP logging receiver.
    | `telemetry_collector_client_ca` | `/etc/obstaclebridge/telemetry/client-ca.cert.pem` |
    | `telemetry_collector_revocations` | `/var/lib/obstaclebridge/telemetry-ingest/revocations.json` |
 
-2. Start the collector under the dedicated service account with the saved
-   configuration path; no bind, TLS, or storage option is required on the
-   command line:
+2. A normal `python3 -m obstacle_bridge --config <path>` startup starts this
+   enabled collector as a separate supervised child process. It preflights TLS
+   material and prints a startup warning to stdout when the collector cannot
+   start; bridge forwarding continues. The standalone command remains useful
+   for maintenance and requires no bind, TLS, or storage option:
 
    ```bash
    sudo -u obstaclebridge /path/to/venv/bin/python \
@@ -426,6 +429,7 @@ private UDP logging receiver.
    | `telemetry_endpoint` | `https://<collector-FQDN-or-SAN-IP>:18443/v1/telemetry/batches` |
    | `telemetry_spool_directory` | `/var/lib/obstaclebridge/telemetry-client` |
    | `telemetry_client_certificate_directory` | `/etc/obstaclebridge/telemetry-client` |
+   | `telemetry_client_address_family` | `prefer-ipv6` (or explicit `ipv6` / `ipv4`) |
 
    `127.0.0.1` is valid in the endpoint only when this client and the collector
    are on the same operating-system host. A remote Python peer uses the

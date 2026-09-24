@@ -648,7 +648,8 @@ ARC-CMP-005:
   # and peer-scoped wrapper status.
   # Telemetry configuration coverage keeps the three Python producer settings
   # aligned with the macOS/iOS contract and keeps Python-only certificate
-  # directory and collector settings visible in the same operational section.
+  # directory, family policy, and supervised collector settings visible in
+  # the same operational section.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema

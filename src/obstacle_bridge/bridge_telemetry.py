@@ -61,6 +61,12 @@ class TelemetryRuntimeSettings:
             help="Python uploader directory containing client.cert.pem, client.key.pem, and collector-ca.cert.pem",
         )
         group.add_argument(
+            "--telemetry-client-address-family",
+            choices=("ipv4", "ipv6", "prefer-ipv6"),
+            default="prefer-ipv6",
+            help="Python telemetry uploader address-family policy; prefer-ipv6 falls back to IPv4",
+        )
+        group.add_argument(
             "--telemetry-collector-enabled",
             action="store_true",
             default=False,
@@ -68,8 +74,14 @@ class TelemetryRuntimeSettings:
         )
         group.add_argument(
             "--telemetry-collector-bind",
-            default="127.0.0.1",
-            help="Collector IPv4 bind address; use a restricted firewall for non-loopback binds",
+            default="::",
+            help="Collector bind address; the default follows telemetry_collector_address_family",
+        )
+        group.add_argument(
+            "--telemetry-collector-address-family",
+            choices=("ipv4", "ipv6", "prefer-ipv6"),
+            default="prefer-ipv6",
+            help="Collector address-family policy; prefer-ipv6 falls back to IPv4",
         )
         group.add_argument(
             "--telemetry-collector-port",

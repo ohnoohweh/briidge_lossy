@@ -1136,8 +1136,10 @@ What the admin web shows:
 | `--telemetry-endpoint` | unset | HTTPS collector endpoint for telemetry batches. |
 | `--telemetry-spool-directory` | unset | Local bounded telemetry spool directory. |
 | `--telemetry-client-certificate-directory` | `/etc/obstaclebridge/telemetry-client` | Python uploader client certificate, key, and collector-CA directory. |
+| `--telemetry-client-address-family` | `prefer-ipv6` | Python uploader endpoint policy: IPv6 preferred with IPv4 fallback, IPv6 only, or IPv4 only. |
 | `--telemetry-collector-enabled` | `false` | Enable this host's separate HTTPS telemetry collector service. |
-| `--telemetry-collector-bind` | `127.0.0.1` | Collector IPv4 bind address. |
+| `--telemetry-collector-bind` | `::` | Collector bind address. |
+| `--telemetry-collector-address-family` | `prefer-ipv6` | Collector bind policy: IPv6 preferred with IPv4 fallback, IPv6 only, or IPv4 only. |
 | `--telemetry-collector-port` | `18443` | Collector HTTPS TCP port. |
 | `--telemetry-collector-spool-directory` | `/var/lib/obstaclebridge/telemetry-ingest` | Collector accepted-event and replay-state directory. |
 | `--telemetry-collector-tls-cert` | `/etc/obstaclebridge/telemetry/server.cert.pem` | Collector TLS server certificate PEM path. |

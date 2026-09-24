@@ -1,5 +1,6 @@
 import json
 import http.client
+import socket
 import ssl
 import threading
 import subprocess
@@ -200,6 +201,7 @@ def test_ingest_main_reads_enabled_collector_from_shared_telemetry_config(tmp_pa
     config_path.write_text(json.dumps({"telemetry": {
         "telemetry_collector_enabled": True,
         "telemetry_collector_bind": "127.0.0.1",
+        "telemetry_collector_address_family": "ipv4",
         "telemetry_collector_port": 19443,
         "telemetry_collector_spool_directory": str(tmp_path / "ingest"),
         "telemetry_collector_tls_cert": "/tmp/server.cert.pem",
@@ -214,7 +216,7 @@ def test_ingest_main_reads_enabled_collector_from_shared_telemetry_config(tmp_pa
     assert observed["args"] == (
         "127.0.0.1", 19443, str(tmp_path / "ingest"),
         "/tmp/server.cert.pem", "/tmp/server.key.pem", "/tmp/client-ca.cert.pem",
-        str(tmp_path / "revocations.json"),
+        str(tmp_path / "revocations.json"), "ipv4",
     )
 
 
@@ -224,3 +226,19 @@ def test_ingest_main_rejects_disabled_collector_config(tmp_path):
 
     with pytest.raises(SystemExit, match="telemetry collector is disabled"):
         ingest.main(["--config", str(config_path)])
+
+
+def test_collector_uses_explicit_ipv4_or_ipv6_address_family():
+    ipv4 = ingest._collector_server("127.0.0.1", 0, "ipv4")
+    try:
+        assert ipv4.address_family == socket.AF_INET
+    finally:
+        ipv4.server_close()
+    try:
+        ipv6 = ingest._collector_server("::1", 0, "ipv6")
+    except OSError:
+        pytest.skip("IPv6 loopback is unavailable on this host")
+    try:
+        assert ipv6.address_family == socket.AF_INET6
+    finally:
+        ipv6.server_close()

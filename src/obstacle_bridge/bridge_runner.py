@@ -9,6 +9,7 @@ import secrets
 import shutil
 import signal as _process_signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -202,6 +203,7 @@ class Runner:
         self._tun_helper_client: Optional[TunHelperClient] = None
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
         self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
+        self._telemetry_collector_process: Optional[asyncio.subprocess.Process] = None
         self._tun_helper_prestarted: bool = False
         self._tun_helper_session_token: str = ""
         self._tun_helper_socket_path: str = ""
@@ -224,7 +226,7 @@ class Runner:
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._last_connection_lifecycle_monotonic: Optional[float] = None
-        self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
+        self._client_restart_watchdog_task: Optional[asyncio.Task] = None
         self._runtime_health_store: Optional[RuntimeHealthStore] = self._make_runtime_health_store()
         self._runtime_health_previous_lifetime_ended_cleanly: Optional[bool] = None
         self._runtime_health_sequence = 0
@@ -257,6 +259,59 @@ class Runner:
             "last_failed_monotonic": None,
             "last_failed_error": "",
         }
+
+    def _telemetry_collector_warning(self, message: str) -> None:
+        text = "WARNING: telemetry collector " + str(message)
+        print(text, file=sys.stdout, flush=True)
+        self.log.warning("[TELEMETRY] %s", text)
+
+    async def _start_telemetry_collector(self) -> None:
+        if not bool(getattr(self.args, "telemetry_collector_enabled", False)):
+            return
+        config_path = str(getattr(self.args, "config", "") or "").strip()
+        if not config_path or not pathlib.Path(config_path).is_file():
+            self._telemetry_collector_warning("enabled but the saved --config file is unavailable; collector was not started")
+            return
+        try:
+            from .bridge_telemetry_ingest import _collector_config, build_tls_context
+            config = _collector_config(config_path)
+            if not bool(config.get("telemetry_collector_enabled", False)):
+                self._telemetry_collector_warning("enabled at runtime but disabled in the saved configuration; collector was not started")
+                return
+            build_tls_context(
+                str(config.get("telemetry_collector_tls_cert", "")),
+                str(config.get("telemetry_collector_tls_key", "")),
+                str(config.get("telemetry_collector_client_ca", "")),
+            )
+        except Exception as exc:
+            self._telemetry_collector_warning("preflight failed (%s); bridge startup continues" % type(exc).__name__)
+            return
+        self._telemetry_collector_process = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "obstacle_bridge.bridge_telemetry_ingest", "--config", config_path,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.sleep(0.15)
+        proc = self._telemetry_collector_process
+        if proc.returncode is not None:
+            _, stderr = await proc.communicate()
+            detail = stderr.decode("utf-8", "replace").strip() if stderr else ""
+            self._telemetry_collector_warning("failed startup%s; bridge startup continues" % (": " + detail if detail else ""))
+            self._telemetry_collector_process = None
+            return
+        print("Telemetry collector started alongside bridge (pid=%d)." % int(proc.pid), file=sys.stdout, flush=True)
+
+    async def _stop_telemetry_collector(self) -> None:
+        proc = self._telemetry_collector_process
+        self._telemetry_collector_process = None
+        if proc is None or proc.returncode is not None:
+            return
+        proc.terminate()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        if proc.returncode is None:
+            proc.kill()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
 
     def _make_runtime_health_store(self) -> Optional[RuntimeHealthStore]:
         configured = str(os.environ.get("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH") or "").strip()
@@ -1128,6 +1183,7 @@ class Runner:
         )
         self._ensure_runtime_events()
         self._begin_runtime_health_lifetime()
+        await self._start_telemetry_collector()
         await self._start_tun_helper()
         await self._start_proxy_provider()
 
@@ -1316,6 +1372,9 @@ class Runner:
 
         self.log.debug("[RUNNER] stop: entering proxy_provider.stop")
         await _run_stop_step("proxy_provider.stop", self._stop_proxy_provider(), timeout_s=3.0)
+
+        self.log.debug("[RUNNER] stop: entering telemetry_collector.stop")
+        await _run_stop_step("telemetry_collector.stop", self._stop_telemetry_collector(), timeout_s=3.0)
 
         self.log.debug("[RUNNER] stop: entering stats.stop")
         await _run_stop_step("stats.stop", self.stats.stop(), timeout_s=2.0)
