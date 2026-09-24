@@ -80,8 +80,12 @@ enum ObstacleBridgeTelemetryIdentityStore {
         let status = SecPKCS12Import(p12 as CFData, [kSecImportExportPassphrase as String: password] as CFDictionary, &imported)
         guard status == errSecSuccess,
               let item = (imported as? [[String: Any]])?.first,
-              let identity = item[kSecImportItemIdentity as String] as? SecIdentity
+              let importedIdentity = item[kSecImportItemIdentity as String]
         else { return "identity_import_failed" }
+        // SecPKCS12Import guarantees this value is a SecIdentity.  A forced
+        // bridge is required on recent iOS SDKs, which reject a conditional
+        // downcast to this CoreFoundation type as an always-successful cast.
+        let identity = importedIdentity as! SecIdentity
         var privateKey: SecKey?
         var certificate: SecCertificate?
         guard SecIdentityCopyPrivateKey(identity, &privateKey) == errSecSuccess,
@@ -104,8 +108,6 @@ enum ObstacleBridgeTelemetryIdentityStore {
             SecItemDelete([kSecClass: kSecClassKey, kSecAttrApplicationTag: tag, kSecAttrAccessGroup: accessGroup] as CFDictionary)
             return "shared_certificate_import_failed"
         }
-        var sharedIdentity: SecIdentity?
-        guard SecIdentityCreateWithCertificate(nil, certificate, &sharedIdentity) == errSecSuccess else { return "shared_identity_unavailable" }
         try? FileManager.default.removeItem(at: p12URL)
         try? FileManager.default.removeItem(at: passwordURL)
         return "imported"
@@ -138,10 +140,21 @@ enum ObstacleBridgeTelemetryIdentityStore {
     }
 
     private static func telemetryAccessGroup() -> String? {
+        #if os(iOS)
+        // SecTask entitlement inspection is a macOS API.  The iOS build
+        // supplies this resolved value in each target's Info.plist.
+        guard let accessGroup = Bundle.main.object(forInfoDictionaryKey: "ObstacleBridgeTelemetryKeychainAccessGroup") as? String,
+              accessGroup.hasSuffix(sharedAccessGroupSuffix)
+        else { return nil }
+        return accessGroup
+        #elseif os(macOS)
         guard let task = SecTaskCreateFromSelf(nil),
               let groups = SecTaskCopyValueForEntitlement(task, "keychain-access-groups" as CFString, nil) as? [String]
         else { return nil }
         return groups.first(where: { $0.hasSuffix(sharedAccessGroupSuffix) })
+        #else
+        return nil
+        #endif
     }
 }
 #endif
