@@ -354,15 +354,16 @@ only the named role material with restrictive ownership/modes, and never copy
 `SERVICE_USER`, `SERVICE_GROUP`, and `SSH_IDENTITY` as needed. They do not
 start or restart a bridge, uploader, or collector.
 
-```text
-HOST=<peer-server> CA_CERT=/safe/ca.cert.pem SERVER_KEY=/safe/server.key.pem \
-  SERVER_CERT=/safe/server.cert.pem \
-  bash scripts/deploy_telemetry_peer_server.sh
+The scripts default to the generation paths listed above. A normal deployment
+therefore needs only the remote host:
 
-HOST=<peer-client> CA_CERT=/safe/ca.cert.pem CLIENT_KEY=/safe/client.key.pem \
-  CLIENT_CERT=/safe/client.cert.pem \
-  bash scripts/deploy_telemetry_peer_client.sh
+```text
+HOST=<peer-server> bash scripts/deploy_telemetry_peer_server.sh
+HOST=<peer-client> bash scripts/deploy_telemetry_peer_client.sh
 ```
+
+Set `CA_CERT`, `SERVER_KEY`, `SERVER_CERT`, `CLIENT_KEY`, or `CLIENT_CERT`
+only when the source material is intentionally stored elsewhere.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |

@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Deploy a Python telemetry-uploader mTLS identity over SSH. It never deploys the CA private key.
 # Example:
-# HOST=client.example.net CA_CERT=/safe/ca.cert.pem CLIENT_KEY=/safe/client.key.pem \
-# CLIENT_CERT=/safe/client.cert.pem bash scripts/deploy_telemetry_peer_client.sh
+# HOST=client.example.net bash scripts/deploy_telemetry_peer_client.sh
 
 set -euo pipefail
 
 PORT="${PORT:-18022}"
 USER_NAME="${USER_NAME:-root}"
 HOST="${HOST:?set HOST to the peer-client address}"
-CA_CERT="${CA_CERT:?set CA_CERT to the public collector-CA certificate PEM}"
-CLIENT_KEY="${CLIENT_KEY:?set CLIENT_KEY to the client private-key PEM}"
-CLIENT_CERT="${CLIENT_CERT:?set CLIENT_CERT to the client certificate PEM}"
+CA_CERT="${CA_CERT:-/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem}"
+CLIENT_KEY="${CLIENT_KEY:-/var/lib/obstaclebridge/telemetry-client/client.key.pem}"
+CLIENT_CERT="${CLIENT_CERT:-/var/lib/obstaclebridge/telemetry-client/client.cert.pem}"
 SERVICE_USER="${SERVICE_USER:-obstaclebridge}"
 SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
 SSH_IDENTITY="${SSH_IDENTITY:-}"

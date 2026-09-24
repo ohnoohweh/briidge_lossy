@@ -1,17 +1,16 @@
 #!/usr/bin/env bash
 # Deploy collector TLS material over SSH. It never deploys the CA private key.
 # Example:
-# HOST=collector.example.net CA_CERT=/safe/ca.cert.pem SERVER_KEY=/safe/server.key.pem \
-# SERVER_CERT=/safe/server.cert.pem bash scripts/deploy_telemetry_peer_server.sh
+# HOST=collector.example.net bash scripts/deploy_telemetry_peer_server.sh
 
 set -euo pipefail
 
 PORT="${PORT:-18022}"
 USER_NAME="${USER_NAME:-root}"
 HOST="${HOST:?set HOST to the peer-server address}"
-CA_CERT="${CA_CERT:?set CA_CERT to the public client-CA certificate PEM}"
-SERVER_KEY="${SERVER_KEY:?set SERVER_KEY to the collector private-key PEM}"
-SERVER_CERT="${SERVER_CERT:?set SERVER_CERT to the collector certificate PEM}"
+CA_CERT="${CA_CERT:-/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem}"
+SERVER_KEY="${SERVER_KEY:-/etc/obstaclebridge/telemetry/server.key.pem}"
+SERVER_CERT="${SERVER_CERT:-/etc/obstaclebridge/telemetry/server.cert.pem}"
 SERVICE_USER="${SERVICE_USER:-obstaclebridge}"
 SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
 SSH_IDENTITY="${SSH_IDENTITY:-}"
