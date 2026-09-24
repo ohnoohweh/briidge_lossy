@@ -365,6 +365,12 @@ HOST=<peer-client> bash scripts/deploy_telemetry_peer_client.sh
 Set `CA_CERT`, `SERVER_KEY`, `SERVER_CERT`, `CLIENT_KEY`, or `CLIENT_CERT`
 only when the source material is intentionally stored elsewhere.
 
+The default source directories are root-only. When the invoking user cannot
+read one of those files, the scripts invoke local `sudo` to copy only that
+named file into an owner-only temporary staging directory, use the invoking
+user's SSH identity to transfer it, then remove the local and remote staging
+directories. Set `LOCAL_SUDO` when the local privilege command is not `sudo`.
+
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA only to the separate Python telemetry-uploader service account. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the uploader account. The peer bridge process does not need either private key. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, service-manager credentials, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |

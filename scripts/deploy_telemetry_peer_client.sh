@@ -14,9 +14,13 @@ CLIENT_CERT="${CLIENT_CERT:-/var/lib/obstaclebridge/telemetry-client/client.cert
 SERVICE_USER="${SERVICE_USER:-obstaclebridge}"
 SERVICE_GROUP="${SERVICE_GROUP:-${SERVICE_USER}}"
 SSH_IDENTITY="${SSH_IDENTITY:-}"
+LOCAL_SUDO="${LOCAL_SUDO:-sudo}"
 
 for source_file in "$CA_CERT" "$CLIENT_KEY" "$CLIENT_CERT"; do
-    [[ -f "$source_file" ]] || { echo "missing regular file: $source_file" >&2; exit 2; }
+    [[ -f "$source_file" ]] || "$LOCAL_SUDO" test -f "$source_file" || {
+        echo "missing regular file: $source_file" >&2
+        exit 2
+    }
 done
 [[ "$SERVICE_USER" =~ ^[A-Za-z0-9_.-]+$ && "$SERVICE_GROUP" =~ ^[A-Za-z0-9_.-]+$ ]] || {
     echo "SERVICE_USER and SERVICE_GROUP may contain only letters, numbers, dot, underscore, and hyphen" >&2
@@ -31,15 +35,34 @@ if [[ -n "$SSH_IDENTITY" ]]; then
 fi
 REMOTE="${USER_NAME}@${HOST}"
 
-remote_stage="$("${SSH[@]}" "$REMOTE" 'umask 077; mktemp -d /tmp/obstaclebridge-telemetry-client.XXXXXX')"
+local_stage="$(mktemp -d "${TMPDIR:-/tmp}/obstaclebridge-telemetry-client.XXXXXX")"
+chmod 0700 "$local_stage"
+remote_stage=""
 cleanup() {
-    "${SSH[@]}" "$REMOTE" "rm -rf -- '$remote_stage'" >/dev/null 2>&1 || true
+    if [[ -n "$remote_stage" ]]; then
+        "${SSH[@]}" "$REMOTE" "rm -rf -- '$remote_stage'" >/dev/null 2>&1 || true
+    fi
+    rm -rf -- "$local_stage"
 }
 trap cleanup EXIT
+copy_source() {
+    local source_file="$1"
+    local staged_name="$2"
+    if [[ -r "$source_file" ]]; then
+        install -m 0600 "$source_file" "$local_stage/$staged_name"
+    else
+        "$LOCAL_SUDO" install -m 0600 -o "$(id -u)" -g "$(id -g)" "$source_file" "$local_stage/$staged_name"
+    fi
+}
+copy_source "$CA_CERT" source-ca.cert.pem
+copy_source "$CLIENT_KEY" source-client.key.pem
+copy_source "$CLIENT_CERT" source-client.cert.pem
 
-"${SCP[@]}" "$CA_CERT" "$REMOTE:$remote_stage/source-ca.cert.pem"
-"${SCP[@]}" "$CLIENT_KEY" "$REMOTE:$remote_stage/source-client.key.pem"
-"${SCP[@]}" "$CLIENT_CERT" "$REMOTE:$remote_stage/source-client.cert.pem"
+remote_stage="$("${SSH[@]}" "$REMOTE" 'umask 077; mktemp -d /tmp/obstaclebridge-telemetry-client.XXXXXX')"
+
+"${SCP[@]}" "$local_stage/source-ca.cert.pem" "$REMOTE:$remote_stage/source-ca.cert.pem"
+"${SCP[@]}" "$local_stage/source-client.key.pem" "$REMOTE:$remote_stage/source-client.key.pem"
+"${SCP[@]}" "$local_stage/source-client.cert.pem" "$REMOTE:$remote_stage/source-client.cert.pem"
 "${SSH[@]}" "$REMOTE" bash -s -- "$remote_stage" "$SERVICE_USER" "$SERVICE_GROUP" <<'REMOTE_SCRIPT'
 set -euo pipefail
 stage="$1"
