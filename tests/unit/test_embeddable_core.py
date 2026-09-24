@@ -238,11 +238,10 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
                 "telemetry_installation_id",
                 "telemetry_mtls_identity_label",
                 "telemetry_spool_directory",
-                "log_telemetry",
             },
         )
         self.assertFalse(telemetry_rows["telemetry_enabled"]["default"])
-        for key in set(telemetry_rows) - {"telemetry_enabled", "log_telemetry"}:
+        for key in set(telemetry_rows) - {"telemetry_enabled"}:
             self.assertTrue(telemetry_rows[key]["secret"])
 
     def test_runner_schema_snapshot_includes_proxy_provider_fields(self) -> None:

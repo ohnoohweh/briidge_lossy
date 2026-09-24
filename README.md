@@ -1146,7 +1146,7 @@ the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
-The `telemetry` configuration section uses the same five settings in Python,
+The `telemetry` configuration section uses exactly the same five settings in Python,
 macOS, and iOS; Admin Web masks identifying and location values in all three.
 The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.

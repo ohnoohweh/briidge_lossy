@@ -3412,6 +3412,8 @@ class ConfigAwareCLI:
 
         # 2) Add auto-generated per-section log options
         for section in sections.keys():
+            if section == "telemetry":
+                continue
             opt_name = f"log_{section}"       # internal dest
             cli_flag = f"--log-{section.replace('_', '-')}"
             existing_option_strings = {
