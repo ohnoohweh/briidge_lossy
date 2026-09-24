@@ -1459,6 +1459,8 @@ REQ-MYU-007:
 # extend the existing `REQ-MYU-*` and admin-observability test families.
 
 REQ-ADM-001:
+  # UDP logging targets remain direct host:port configuration values rather
+  # than being coerced into the adjacent logger-level selector vocabulary.
   # Shared telemetry configuration coverage keeps producer defaults aligned
   # with macOS and iOS. Python cleanly separates client and
   # server configuration, and adds its standard certificate

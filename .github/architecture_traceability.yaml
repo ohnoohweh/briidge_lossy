@@ -638,6 +638,8 @@ ARC-CMP-004:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
 
 ARC-CMP-005:
+  # The WebAdmin configuration renderer preserves UDP logging endpoints as
+  # direct text values, independently of per-component log-level controls.
   # Admin status resilience includes the minimal live-session fallback used
   # before a cached status payload exists. The supported peer-scoped summary
   # contract excludes retired SecureLink-specific handshake-debug telemetry,

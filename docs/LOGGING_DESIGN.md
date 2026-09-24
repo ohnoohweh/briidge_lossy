@@ -48,6 +48,10 @@ python -m obstacle_bridge.bridge_logging_ipc --bind 0.0.0.0:15140 \
   --log-file /var/log/obstaclebridge/bridge.log --file-level DEBUG
 ```
 
+In WebAdmin, `log_udp_target` and `log_admin_udp_target` are direct text-entry
+`host:port` fields. They are not logger-level controls and must be empty when
+no UDP receiver is configured.
+
 Each runtime then uses, for example:
 
 ```bash

@@ -577,6 +577,14 @@ class AdminWebPayloadTests(unittest.TestCase):
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         return [repo_root / "admin_web" / "app.js"]
 
+    def test_udp_log_targets_are_direct_text_configuration_fields(self):
+        app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
+
+        self.assertIn("function isDirectEntryConfigSetting(key)", app_js)
+        self.assertIn("normalizedKey === 'log_udp_target'", app_js)
+        self.assertIn("normalizedKey === 'log_admin_udp_target'", app_js)
+        self.assertIn("if (isDirectEntryConfigSetting(normalizedKey)) return false;", app_js)
+
     def test_runner_mux_aggregate_preserves_tun_counter_maps(self):
         class _MuxStub:
             def __init__(self, icmp_counts, probe_counts, local_reply_counts, timeout_diag=None):

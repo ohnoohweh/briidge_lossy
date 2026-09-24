@@ -1129,9 +1129,9 @@ What the admin web shows:
 | `--log-file-backup-count` | `5` | Number of rotated log files to keep when `--log-file-max-bytes` is enabled |
 | `--console-level` | `INFO` | console (stdout) logging level (default INFO) |
 | `--file-level` | `DEBUG` | file logging level (default: same as --log) |
-| `--log-udp-target` | unset | Best-effort UDP log receiver `host:port`; transport failures drop records. |
+| `--log-udp-target` | unset | Best-effort UDP log receiver `host:port`; a direct text-entry endpoint field, not a log-level selector. Transport failures drop records. |
 | `--log-udp-only` | `false` | Use only the UDP sender, isolating runtime work from local logging sinks. |
-| `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
+| `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active; a direct text-entry endpoint field. |
 | `--telemetry-enabled` | `false` | Enable bounded HTTPS telemetry configuration outside bridge and packet paths. |
 | `--telemetry-endpoint` | `https://127.0.0.1:18443/v1/telemetry/batches` | HTTPS collector endpoint for telemetry batches. Replace loopback with the reachable collector address for remote clients. |
 | `--telemetry-spool-directory` | `/var/lib/obstaclebridge/telemetry-client` | Local bounded telemetry spool directory. |

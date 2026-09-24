@@ -3968,7 +3968,11 @@ function isLogFileConfigSetting(key) {
 
 function isDirectEntryConfigSetting(key) {
   const normalizedKey = String(key || '').toLowerCase();
-  return normalizedKey === 'log_file_backup_count'
+  return normalizedKey === 'log_udp_target'
+    || normalizedKey === 'log_admin_udp_target'
+    || normalizedKey.endsWith('.log_udp_target')
+    || normalizedKey.endsWith('.log_admin_udp_target')
+    || normalizedKey === 'log_file_backup_count'
     || normalizedKey === 'log_file_max_bytes'
     || normalizedKey.endsWith('.log_file_backup_count')
     || normalizedKey.endsWith('.log_file_max_bytes');
