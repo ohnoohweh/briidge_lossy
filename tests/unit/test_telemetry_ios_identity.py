@@ -55,3 +55,15 @@ def test_ios_identity_wrapper_uses_standard_ca_paths_and_returns_output_to_opera
     assert "/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem" in source
     assert "generate_telemetry_ios_identity.py" in source
     assert "sudo chown -R" in source
+
+
+def test_ios_identity_upload_wrapper_uses_device_app_documents_copy_and_readback():
+    source = (REPO_ROOT / "ios/scripts/upload_ios_telemetry_identity.sh").read_text(encoding="utf-8")
+    assert "OB_IOS_DEVICE_ID is required" in source
+    assert "--domain-type appDataContainer" in source
+    assert "--domain-identifier" in source
+    assert "Documents/ObstacleBridge-telemetry-identity.p12" in source
+    assert "xcrun devicectl device copy to" in source
+    assert "xcrun devicectl device copy from" in source
+    assert "cmp -s" in source
+    assert "not yet a Keychain identity" in source

@@ -480,7 +480,7 @@ App Group does not provision that identity.
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA to the Python bridge identity that runs the uploader. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the bridge/uploader identity. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
 | 2. Python peer server on Linux + Swift peer client on macOS | Issue one client certificate whose common name is the macOS installation ID. Import exactly one telemetry certificate/private-key identity into the macOS Keychain; deploy only endpoint, enablement, and optional spool location in configuration. | The private key stays in a Keychain `SecIdentity`; no PEM file is read by the Swift uploader. The collector retains its Linux server key and trusts the issuing client CA. | Swift selects exactly one accessible identity, derives its CN, and uses it for URLSession mTLS. DoD: a documented signed/importable macOS identity deployment, a Keychain access check under the production app identity, a real upload, rotation with overlap, and revocation evidence. |
-| 3. Python peer server on Linux + Swift peer client on iOS | Issue and export one password-protected PKCS#12 client identity with `scripts/generate_telemetry_ios_identity.py`; its common name is the iPhone installation ID. Install the accompanying collector CA and identity through Apple Configurator, MDM, or a protected on-device enrolment flow, then synchronize non-secret configuration from app Documents to the shared App Group. | The extension reads configuration and keeps its telemetry spool in the App Group. The private key is imported into an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into Documents or the App Group. | The export tool, Documents-to-App-Group configuration synchronization, App-Group spooling, and Keychain identity selection exist. DoD: physical-iPhone evidence of `identity_available`, one accepted mTLS batch, offline/restart recovery, rotation, revocation, and no extension latency regression. |
+| 3. Python peer server on Linux + Swift peer client on iOS | Issue and export one password-protected PKCS#12 client identity with `scripts/generate_telemetry_ios_identity.py`; its common name is the iPhone installation ID. Install the accompanying collector CA and identity through Apple Configurator, MDM, or a protected on-device enrolment flow. `ios/scripts/upload_ios_telemetry_identity.sh` can stage the encrypted `.p12` in the app Documents container for a future app-owned import. | The extension reads configuration and keeps its telemetry spool in the App Group. The private key is imported into an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into the App Group. A `.p12` in Documents is temporary encrypted enrolment staging only and must be deleted after Keychain import. | The export/upload tools, Documents-to-App-Group configuration synchronization, App-Group spooling, and Keychain identity selection exist. App-owned PKCS#12 import/deletion remains required before staged material can enable telemetry. DoD: physical-iPhone evidence of `identity_available`, one accepted mTLS batch, offline/restart recovery, rotation, revocation, and no extension latency regression. |
 
 For the Apple cases, a configuration sync is sufficient for endpoint and spool
 location but cannot make a private key available to the Network Extension. The
@@ -514,6 +514,21 @@ full trust under **Settings → General → About → Certificate Trust Settings
 then install the `.p12` and enter its password. Delete the transferred `.p12`
 after import. The certificate remains short-lived and the private key remains
 in the iPhone Keychain.
+
+When the phone is connected to the Mac, stage that generated identity in the
+ObstacleBridge Documents container with a verified device transfer:
+
+```bash
+bash ios/scripts/upload_ios_telemetry_identity.sh \
+  "$HOME/obstaclebridge-iphone-telemetry/obstaclebridge-telemetry-iphone-primary.p12" \
+  "$HOME/obstaclebridge-iphone-telemetry/obstaclebridge-telemetry-collector-ca.cer"
+```
+
+This is deliberately only staging. The Packet Tunnel does not read private
+keys from Documents, and the current app has no app-owned PKCS#12 importer;
+therefore the upload alone cannot set `identity_available` or enable delivery.
+Use MDM/Configurator/on-device import until that importer is delivered, then
+remove the staged `.p12` immediately after import.
 
 In the iPhone WebAdmin **Telemetry client** section set:
 

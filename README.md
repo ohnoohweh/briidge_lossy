@@ -1173,6 +1173,9 @@ FQDN and direct static IPv4/IPv6 addresses in one certificate.
 PKCS#12 identity and public collector CA for protected iPhone Keychain
 enrolment; the extension derives its telemetry installation ID from that
 identity rather than reading a private key from app storage.
+`ios/scripts/upload_ios_telemetry_identity.sh` performs a verified temporary
+transfer of that encrypted package into the app Documents container; it does
+not itself import the key into Keychain or enable telemetry.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner
@@ -1605,7 +1608,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `64` | `1011` |
 | macOS Swift app | `1` | `70` |
-| iOS app/extension | `31` | `202` |
+| iOS app/extension | `31` | `203` |
 
 #### Requirement traceability
 
