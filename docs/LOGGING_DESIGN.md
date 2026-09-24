@@ -211,48 +211,29 @@ installation/session-scoped acknowledgement. Its tests cover saturation,
 concurrent emission, corrupt recovery, capacity eviction, and unavailable
 storage setup.
 
-The remaining packages bring macOS and iOS from the contract to an isolated
-telemetry path. A package remains here only until its definition of done has
-evidence in the repository; completed capabilities move to the status section.
+### Apple delivery state
 
-S3 has an in-progress shared upload policy that accepts only HTTPS endpoints,
-forms one identity-scoped batch at a time, enforces a byte budget, validates
-acknowledgement ranges before deleting spool data, and schedules jittered
-backoff after a failure. The Apple transport presents only a supplied enrolled
-`SecIdentity` for a client-certificate challenge and leaves normal server-trust
-validation enabled. The macOS status snapshot exposes only whether telemetry,
-an HTTPS endpoint, and a Keychain identity label are configured; it never
-returns credentials or event data. Admin configuration shows the endpoint,
-installation identifier, Keychain identity label, and spool location so an
-operator can align a client with its collector. The shared Apple configuration
-schema exposes these visible operational settings in a disabled-by-default
-`telemetry` section.
-On Apple platforms it also reports a boolean Keychain lookup result for the
-configured label without returning the identity or certificate details.
-The macOS host runner has an in-progress dedicated telemetry queue that creates
-the emitter, spool, policy, and mTLS uploader only after this configuration is
-valid, then drains it on a five-second timer outside service work. The matching
-Packet Tunnel queue uses the app-group `telemetry-v1` spool and the same
-five-second scheduling boundary, without packet-flow callback I/O.
-The host runner queues compact lifecycle and runtime-health sequence evidence;
-the Packet Tunnel queues rate-limited health counters for memory footprint,
-packet backlog, packet drops, and heartbeat state from its utility heartbeat.
-The host runner also records a bounded startup-failure marker after the
-telemetry queue is available, without forwarding exception text.
-The Packet Tunnel uses stable error codes for post-initialization startup
-failures and preserves exception detail only in its local runtime evidence.
-On shutdown, both runtimes persist their final queued marker without starting a
-new request and cancel any outstanding URLSession upload.
-A native macOS build of these sources completes successfully. Runtime
-qualification is reserved for physical Apple devices: a simulator is not a
-qualification target for this work because its resource cost on the available
-machine is disproportionate and it cannot demonstrate Packet Tunnel behavior.
-Controlled-collector coverage and device restart/network-failure qualification
-remain required.
+The Apple implementation contains the shared bounded emitter, private spool,
+single-flight HTTPS upload policy, URLSession mTLS transport, and dedicated
+host-runner and Packet Tunnel queues. The queues create telemetry only after a
+valid HTTPS endpoint, installation identifier, and Keychain identity are
+available; they drain on a five-second timer outside service and packet-flow
+work. Shutdown persists its final marker and cancels any request in progress.
+The provider emits compact lifecycle and runtime-health evidence, including
+heartbeat, memory, backlog, and drop counters.
+
+The macOS host target builds successfully. No iPhone-to-collector transfer has
+yet been observed. The Python bridge peer process is not a collector: an
+operator must run `bridge_telemetry_ingest` as a separate HTTPS service, which
+may be on the same host as a peer server but uses a distinct port. For a real
+device transfer, the collector must trust the iPhone client certificate and
+the certificate common name must equal `telemetry_installation_id`.
+Physical-device validation is the next Apple-runtime evidence; a simulator is
+not a qualification target for this work.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |
-| S3 — mTLS uploader | Add one low-priority Swift uploader with TLS-only HTTPS, client credentials, bounded batches, one in-flight request, acknowledgement handling, timeout, jittered backoff, and byte budget. | A controlled local collector verifies mTLS and acknowledgement semantics; offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart tests keep the spool bounded and preserve the runtime path. |
+| S3 — controlled collector interoperability | Exercise the implemented Apple uploader against the Python reference collector on a controlled HTTPS endpoint. | A physical Apple client uploads a batch to `bridge_telemetry_ingest` with mTLS; its certificate common name and configured installation identifier match; the collector returns an accepted sequence; the client removes only that acknowledged range. Offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart cases preserve the spool and runtime path. |
 | S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. Keep endpoints, installation identifiers, identity labels, and spool locations visible; hide only actual credentials. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. A fresh-proof, local-only credential reveal flow covers each real credential consistently in Python, macOS, and iOS. |
 | S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Physical-device evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |
 
