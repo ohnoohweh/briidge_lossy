@@ -1149,6 +1149,10 @@ remains gated by the remaining authentication-operations and abuse-hardening seq
 The `telemetry` configuration section uses exactly the same five settings in Python,
 macOS, and iOS; Admin Web shows them as operational configuration values.
 The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
+For a Linux Python collector/client reference deployment, the repository provides
+`generate_telemetry_ca.py`, `generate_telemetry_server_certificate.py`, and
+`generate_telemetry_client_certificate.py`; the server script can include an
+FQDN and direct static IPv4/IPv6 addresses in one certificate.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner

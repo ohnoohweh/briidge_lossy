@@ -72,20 +72,33 @@ def issue_client_certificate(ca_key_pem: bytes, ca_cert_pem: bytes, installation
     return (key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), certificate.public_bytes(serialization.Encoding.PEM), serial)
 
 
-def issue_server_certificate(ca_key_pem: bytes, ca_cert_pem: bytes, hostname: str, days: int = 30) -> Tuple[bytes, bytes]:
+def issue_server_certificate(
+    ca_key_pem: bytes,
+    ca_cert_pem: bytes,
+    hostname: str,
+    days: int = 30,
+    alternative_names: Iterable[str] = (),
+) -> Tuple[bytes, bytes]:
+    names = list(dict.fromkeys(str(name).strip() for name in (hostname, *alternative_names) if str(name).strip()))
+    if not names:
+        raise ValueError("at least one collector hostname or IP address is required")
     ca_key = serialization.load_pem_private_key(ca_key_pem, password=None)
     ca_cert = x509.load_pem_x509_certificate(ca_cert_pem)
     authority_key_id = x509.AuthorityKeyIdentifier.from_issuer_public_key(ca_cert.public_key())
     key = ed25519.Ed25519PrivateKey.generate()
     now = _now()
-    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, hostname)])
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, names[0])])
+    subject_alternative_names = [
+        x509.IPAddress(ipaddress.ip_address(name)) if _is_ip(name) else x509.DNSName(name)
+        for name in names
+    ]
     certificate = (
         x509.CertificateBuilder().subject_name(subject).issuer_name(ca_cert.subject).public_key(key.public_key())
         .serial_number(x509.random_serial_number()).not_valid_before(now - dt.timedelta(minutes=5)).not_valid_after(now + dt.timedelta(days=max(1, min(int(days), 365))))
         .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.AuthorityKeyIdentifier(authority_key_id.key_identifier, None, None), critical=False)
         .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
-        .add_extension(x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address(hostname))] if _is_ip(hostname) else [x509.DNSName(hostname)]), critical=False)
+        .add_extension(x509.SubjectAlternativeName(subject_alternative_names), critical=False)
         .sign(ca_key, algorithm=None)
     )
     return (key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()), certificate.public_bytes(serialization.Encoding.PEM))

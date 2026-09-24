@@ -1461,7 +1461,9 @@ REQ-MYU-007:
 REQ-ADM-001:
   # Shared telemetry configuration coverage keeps the Python Admin schema to
   # the same five visible operational keys used by macOS and iOS; credentials
-  # remain the only write-only configuration values.
+  # remain the only write-only configuration values. Linux credential scripts
+  # create the CA, collector SAN identity, and installation-bound client
+  # identity without placing private material in that configuration surface.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
