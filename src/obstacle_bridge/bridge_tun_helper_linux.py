@@ -346,6 +346,27 @@ class LinuxTunHelperBackend:
             out.append(route_spec)
         return self._dedupe_route_specs(out)
 
+    def _main_table_connected_routes(self, family_flag: str, *, scope_link: bool) -> list[str]:
+        """Return every kernel-owned connected route in the main table.
+
+        A policy full-tunnel default rule takes precedence over the normal main
+        table lookup.  All local bridge and host-only networks therefore need
+        an earlier, destination-specific lookup of the main table; limiting
+        this to the Internet underlay would send libvirt/VMware LAN traffic to
+        the tunnel instead.
+        """
+        args = [family_flag, "route", "show", "proto", "kernel"]
+        if scope_link:
+            args.extend(["scope", "link"])
+        result = self._run_ip(*args, check=False)
+        out: list[str] = []
+        for line in str(result.stdout or "").splitlines():
+            parsed = self._parse_route_show(line)
+            route_spec = parsed.get("route", "")
+            if route_spec and route_spec != "default":
+                out.append(route_spec)
+        return self._dedupe_route_specs(out)
+
     @staticmethod
     def _policy_rule_present(rule_dump: str, *, pref: int, route_spec: str, table: str) -> bool:
         prefix = f"{int(pref)}:"
@@ -414,6 +435,7 @@ class LinuxTunHelperBackend:
         excluded = self._applied_excluded_ipv4_routes if is_v4 else self._applied_excluded_ipv6_routes
         bypass_routes = self._dedupe_route_specs(
             [
+                *self._main_table_connected_routes(family_flag, scope_link=is_v4),
                 *(self._connected_routes(family_flag, dev=str(underlay.get("dev") or ""), proto_kernel_only=True, scope_link=is_v4) if underlay.get("dev") else []),
                 *self._connected_routes(family_flag, dev=ifname, proto_kernel_only=True, scope_link=is_v4),
                 *excluded,

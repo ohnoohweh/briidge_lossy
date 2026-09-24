@@ -966,6 +966,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_records_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_allows_test_injected_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_excluded_routes_and_full_tunnel_policy
+    - tests/unit/test_tun_helper_linux_backend.py::test_full_tunnel_preserves_all_connected_local_lans_in_main_table
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_policy_rules_on_restart
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause

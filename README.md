@@ -1578,7 +1578,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product. The shared Swift package boundary is exercised separately through the `ObstacleBridgeCore` and `ObstacleBridgeApplePackageProbe` build targets.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, full-tunnel policy routing that retains every kernel-connected local LAN such as libvirt and VMware bridges in the main table, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
@@ -1598,9 +1598,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `63` | `980` |
-| macOS Swift app | `1` | `66` |
-| iOS app/extension | `29` | `190` |
+| Python CLI/runtime, including macOS Python | `64` | `1009` |
+| macOS Swift app | `1` | `70` |
+| iOS app/extension | `30` | `199` |
 
 #### Requirement traceability
 
@@ -1640,9 +1640,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `66` | `0` | `66` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `78` | `152` | `230` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `70` | `0` | `70` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
+| Total parity-oriented evidence | Sum of the lanes above | `82` | `154` | `236` |
 
 Important caveat:
 
