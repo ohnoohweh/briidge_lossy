@@ -371,9 +371,9 @@ The default source directories are root-only. When the invoking user cannot
 read one of those files, the scripts invoke local `sudo` to copy only that
 named file into an owner-only temporary staging directory, use the invoking
 user's SSH identity to transfer it, then remove the local and remote staging
-directories. The remote-sudo preflight allocates a TTY so a non-root SSH user
-can enter its remote sudo password. Set `LOCAL_SUDO` when the local privilege
-command is not `sudo`.
+directories. The remote-sudo preflight and final installation allocate a TTY
+so a non-root SSH user can enter its remote sudo password on hosts that require
+one. Set `LOCAL_SUDO` when the local privilege command is not `sudo`.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |

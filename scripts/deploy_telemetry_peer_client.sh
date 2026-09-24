@@ -75,7 +75,7 @@ echo "Uploading Python uploader TLS material."
 "${SCP[@]}" "$local_stage/source-client.key.pem" "$REMOTE:$remote_stage/source-client.key.pem"
 "${SCP[@]}" "$local_stage/source-client.cert.pem" "$REMOTE:$remote_stage/source-client.cert.pem"
 echo "Installing Python uploader TLS material."
-"${SSH[@]}" "$REMOTE" "$REMOTE_SUDO" bash -s -- "$remote_stage" "$SERVICE_USER" "$SERVICE_GROUP" <<'REMOTE_SCRIPT'
+"${SSH_TTY[@]}" "$REMOTE" "$REMOTE_SUDO" bash -s -- "$remote_stage" "$SERVICE_USER" "$SERVICE_GROUP" <<'REMOTE_SCRIPT'
 set -euo pipefail
 stage="$1"
 owner="$2"
