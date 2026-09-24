@@ -6083,8 +6083,10 @@ def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_pa
             "telemetry_spool_directory",
         }
         assert config["config"]["telemetry_enabled"] is True
-        for key in telemetry_keys - {"telemetry_enabled"}:
-            assert config["config"][key] == ""
+        assert config["config"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+        assert config["config"]["telemetry_installation_id"] == "installation-private-id"
+        assert config["config"]["telemetry_mtls_identity_label"] == identity_label
+        assert config["config"]["telemetry_spool_directory"] == str(tmp_path / "private-spool")
     finally:
         if process.poll() is None:
             process.terminate()

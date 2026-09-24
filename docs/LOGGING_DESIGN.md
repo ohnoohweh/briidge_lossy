@@ -175,7 +175,23 @@ receiver.
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
-| Runtime configuration | Python, macOS, and iOS expose exactly the same `telemetry` keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, `telemetry_installation_id`, `telemetry_mtls_identity_label`, and `telemetry_spool_directory`. The four identifying or location fields are write-only and masked in Admin snapshots. Python keeps the uploader process isolated from the bridge runtime; Apple resolves the identity label through Keychain. |
+| Runtime configuration | Python, macOS, and iOS expose exactly the same `telemetry` keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, `telemetry_installation_id`, `telemetry_mtls_identity_label`, and `telemetry_spool_directory`. They are visible operational settings, not credential material. Python keeps the uploader process isolated from the bridge runtime; Apple resolves the identity label through Keychain. |
+
+### Client-to-collector alignment
+
+The telemetry endpoint is the common point where a peer client and a
+peer-server-operated diagnostics service meet. An operator may host the
+collector beside a bridge server, but it is a separate HTTPS collector process;
+the peer bridge does not accept telemetry on its overlay or Admin Web ports.
+Every client uses that same visible `telemetry_endpoint`, a unique visible
+installation identifier, and its enrolled mTLS identity reference. The
+collector trusts the corresponding client credentials and records the supplied
+installation identifier with the bounded event batch.
+
+The private UDP logger remains a Python-only trusted-network facility. A
+Python client can target the independent UDP receiver running beside a peer
+server, but neither iOS nor macOS uses that receiver and it is not suitable for
+Internet diagnostics. Apple clients use the HTTPS collector endpoint instead.
 
 ### Swift/macOS implementation status
 
@@ -206,13 +222,11 @@ backoff after a failure. The Apple transport presents only a supplied enrolled
 `SecIdentity` for a client-certificate challenge and leaves normal server-trust
 validation enabled. The macOS status snapshot exposes only whether telemetry,
 an HTTPS endpoint, and a Keychain identity label are configured; it never
-returns the identity label, endpoint path, credentials, or event data.
-Masked Admin configuration also clears the telemetry endpoint, installation
-identifier, Keychain identity label, and spool location while retaining the
-enabled flag. The shared Apple configuration schema exposes a disabled-by-
-default `telemetry` section; its collector endpoint, pseudonymous installation
-identifier, Keychain identity label, and macOS spool location are secret-at-
-rest settings.
+returns credentials or event data. Admin configuration shows the endpoint,
+installation identifier, Keychain identity label, and spool location so an
+operator can align a client with its collector. The shared Apple configuration
+schema exposes these visible operational settings in a disabled-by-default
+`telemetry` section.
 On Apple platforms it also reports a boolean Keychain lookup result for the
 configured label without returning the identity or certificate details.
 The macOS host runner has an in-progress dedicated telemetry queue that creates
@@ -239,7 +253,7 @@ remain required.
 | Package | Scope | Definition of done |
 | --- | --- | --- |
 | S3 — mTLS uploader | Add one low-priority Swift uploader with TLS-only HTTPS, client credentials, bounded batches, one in-flight request, acknowledgement handling, timeout, jittered backoff, and byte budget. | A controlled local collector verifies mTLS and acknowledgement semantics; offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart tests keep the spool bounded and preserve the runtime path. |
-| S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. |
+| S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. Keep endpoints, installation identifiers, identity labels, and spool locations visible; hide only actual credentials. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. A fresh-proof, local-only credential reveal flow covers each real credential consistently in Python, macOS, and iOS. |
 | S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Physical-device evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |
 
 ### Residual work before public deployment

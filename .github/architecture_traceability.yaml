@@ -647,7 +647,7 @@ ARC-CMP-005:
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
   # and peer-scoped wrapper status.
   # Telemetry configuration coverage keeps the Python Admin schema aligned
-  # exactly with the five-key macOS/iOS configuration contract.
+  # exactly with the five visible operational keys in the macOS/iOS contract.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema

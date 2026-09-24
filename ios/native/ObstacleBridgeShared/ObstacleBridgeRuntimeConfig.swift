@@ -370,10 +370,10 @@ enum ObstacleBridgeRuntimeConfig {
             ],
             "telemetry": [
                 schemaItem(key: "telemetry_enabled", description: "Enable bounded HTTPS telemetry upload outside the bridge and packet paths.", defaultValue: false),
-                schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: "", secret: true),
-                schemaItem(key: "telemetry_installation_id", description: "Pseudonymous installation identifier scoped to telemetry collection.", defaultValue: "", secret: true),
-                schemaItem(key: "telemetry_mtls_identity_label", description: "Keychain label of the enrolled telemetry client identity.", defaultValue: "", secret: true),
-                schemaItem(key: "telemetry_spool_directory", description: "Optional macOS telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: "", secret: true),
+                schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: ""),
+                schemaItem(key: "telemetry_installation_id", description: "Pseudonymous installation identifier scoped to telemetry collection.", defaultValue: ""),
+                schemaItem(key: "telemetry_mtls_identity_label", description: "Keychain label of the enrolled telemetry client identity.", defaultValue: ""),
+                schemaItem(key: "telemetry_spool_directory", description: "Optional macOS telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: ""),
             ],
             "runner": [
                 schemaItem(key: "overlay_transport", description: "Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances.", defaultValue: "myudp"),
@@ -762,10 +762,6 @@ enum ObstacleBridgeRuntimeConfig {
         for key in [
             "admin_web_password",
             "secure_link_psk",
-            "telemetry_endpoint",
-            "telemetry_installation_id",
-            "telemetry_mtls_identity_label",
-            "telemetry_spool_directory",
         ] where payload[key] != nil {
             payload[key] = ""
         }

@@ -2244,18 +2244,18 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
     assert payload["proxy_section"]["proxy_provider_auth"]["username"] == "obproxy"
     assert payload["proxy_section"]["proxy_provider_auth"]["token"] == "local-token"
     assert payload["proxy_section"]["log_proxy_provider"] == "INFO"
-    assert payload["telemetry_section"]["telemetry_endpoint"].startswith("enc:v1:")
-    assert payload["telemetry_section"]["telemetry_installation_id"].startswith("enc:v1:")
-    assert payload["telemetry_section"]["telemetry_mtls_identity_label"].startswith("enc:v1:")
-    assert payload["telemetry_section"]["telemetry_spool_directory"].startswith("enc:v1:")
+    assert payload["telemetry_section"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+    assert payload["telemetry_section"]["telemetry_installation_id"] == "installation-private-id"
+    assert payload["telemetry_section"]["telemetry_mtls_identity_label"] == "telemetry-client-identity"
+    assert payload["telemetry_section"]["telemetry_spool_directory"] == "/private/telemetry-spool"
     assert payload["masked"]["secure_link"] is True
     assert payload["masked"]["secure_link_mode"] == "psk"
     assert payload["masked"]["secure_link_psk"] == ""
     assert payload["masked"]["telemetry_enabled"] is True
-    assert payload["masked"]["telemetry_endpoint"] == ""
-    assert payload["masked"]["telemetry_installation_id"] == ""
-    assert payload["masked"]["telemetry_mtls_identity_label"] == ""
-    assert payload["masked"]["telemetry_spool_directory"] == ""
+    assert payload["masked"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+    assert payload["masked"]["telemetry_installation_id"] == "installation-private-id"
+    assert payload["masked"]["telemetry_mtls_identity_label"] == "telemetry-client-identity"
+    assert payload["masked"]["telemetry_spool_directory"] == "/private/telemetry-spool"
     assert payload["masked"]["compress_layer"] is True
     assert payload["masked"]["compress_layer_level"] == 5
 

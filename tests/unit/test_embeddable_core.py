@@ -224,7 +224,14 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         )
 
     def test_runner_schema_snapshot_matches_apple_telemetry_fields(self) -> None:
-        args = build_runtime_args_from_config({"telemetry": {}})
+        configured_telemetry = {
+            "telemetry_enabled": True,
+            "telemetry_endpoint": "https://collector.example.test/v1/telemetry",
+            "telemetry_installation_id": "installation-test-id",
+            "telemetry_mtls_identity_label": "telemetry-client-identity",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry",
+        }
+        args = build_runtime_args_from_config({"telemetry": configured_telemetry})
         runner = Runner.__new__(Runner)
         runner.args = args
 
@@ -242,7 +249,12 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
         )
         self.assertFalse(telemetry_rows["telemetry_enabled"]["default"])
         for key in set(telemetry_rows) - {"telemetry_enabled"}:
-            self.assertTrue(telemetry_rows[key]["secret"])
+            self.assertFalse(telemetry_rows[key].get("secret", False))
+        config = runner.get_config_snapshot()
+        self.assertEqual(
+            {key: config[key] for key in configured_telemetry},
+            configured_telemetry,
+        )
 
     def test_runner_schema_snapshot_includes_proxy_provider_fields(self) -> None:
         args = build_runtime_args_from_config(

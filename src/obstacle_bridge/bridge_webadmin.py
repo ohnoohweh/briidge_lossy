@@ -2120,10 +2120,6 @@ class AdminWebUI:
         return {
             "admin_web_password",
             "secure_link_psk",
-            "telemetry_endpoint",
-            "telemetry_installation_id",
-            "telemetry_mtls_identity_label",
-            "telemetry_spool_directory",
         }
 
     @staticmethod
