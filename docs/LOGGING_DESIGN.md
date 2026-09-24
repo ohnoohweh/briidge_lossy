@@ -18,6 +18,23 @@ bridge / helper / remote bridge
 standalone log receiver -> local stdout, file rotation, and Admin log ring
 ```
 
+## Current runtime boundary
+
+The bridge, ChannelMux, Admin Web, and TUN helper have not been replaced by a
+single IP logging service. Default Python logging still writes to its local
+sinks. Python can optionally send ordinary log records to the independent
+private UDP receiver shown above. Apple does not implement that UDP protocol;
+it records bounded telemetry health/lifecycle events to its private spool and,
+when enabled and provisioned, uploads batches through HTTPS.
+
+`telemetry_endpoint` is already the client-side remote-address option. It is a
+complete HTTPS URL, including the port and `/v1/telemetry/batches` path. For a
+Python client and collector on the same machine, it may be
+`https://127.0.0.1:18443/v1/telemetry/batches`. On an iPhone,
+`127.0.0.1` means the phone itself, not the Mac or Python peer; the endpoint
+must therefore name the collector host. The collector currently starts as a
+separate Python service, not as part of a peer bridge process.
+
 The sender is configured with `--log-udp-target HOST:PORT`. Combining it with
 `--log-udp-only` removes local stdout, file, stderr-mirror, and Admin-ring
 handlers from the application process; the only installed handler is the UDP
@@ -233,6 +250,7 @@ not a qualification target for this work.
 
 | Package | Scope | Definition of done |
 | --- | --- | --- |
+| S2 — collector topology and configuration | Provide the operational connection model before general log shipping: a supervised collector service on a Python peer host with explicit bind address, HTTPS port, storage directory, TLS server identity, client CA, and revocation source. Clients use one full `telemetry_endpoint`; no duplicated host/port knobs. | A local Python client reaches a loopback collector; a remote client reaches a collector on a named host and port; an iPhone never treats `127.0.0.1` as its peer host. The collector has no overlay/Admin-Web listener role, refuses plaintext and unauthenticated connections, and reports bounded health without event content. |
 | S3 — controlled collector interoperability | Exercise the implemented Apple uploader against the Python reference collector on a controlled HTTPS endpoint. | A physical Apple client uploads a batch to `bridge_telemetry_ingest` with mTLS; its certificate common name and configured installation identifier match; the collector returns an accepted sequence; the client removes only that acknowledged range. Offline, timeout, TLS failure, retryable response, duplicate acknowledgement, and restart cases preserve the spool and runtime path. |
 | S4 — macOS runtime and evidence | Configure the macOS host runner through explicit telemetry settings, emit redacted lifecycle/load/bridge evidence outside forwarding callbacks, and expose redacted local telemetry status through authenticated Admin Web. Keep endpoints, installation identifiers, identity labels, and spool locations visible; hide only actual credentials. | Configuration parsing, disabled-by-default behavior, event redaction, Admin authorization, bounded status lookup, and overload isolation are covered by component tests. A fresh-proof, local-only credential reveal flow covers each real credential consistently in Python, macOS, and iOS. |
 | S5 — Packet Tunnel integration | Connect the provider to the shared producer/spool using the app-group container, recording lifecycle and load evidence without payloads or callback I/O. | Physical-device evidence covers start, readiness, reassert, stop, fatal path, restart recovery, and saturated packet flow; the extension completes stop handling promptly when telemetry storage or upload fails. |
