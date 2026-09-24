@@ -473,22 +473,61 @@ duplicated in configuration.
 For Apple clients, the endpoint, spool location, and enable flag use the same
 values. The runtime derives the installation ID from one already-installed,
 extension-accessible Keychain `SecIdentity`; it safely disables telemetry when
-there is none or more than one candidate. Copying these PEM files to the phone
-or App Group does not provision that identity. The current iOS identity
-enrolment/import gap therefore also prevents end-to-end commissioning on an
-iPhone, even when the collector health check succeeds from Linux.
+there is none or more than one candidate. Copying PEM files to the phone or
+App Group does not provision that identity.
 
 | Deployment use case | Generation and deployment | Required storage boundary | Present state and deployment DoD |
 | --- | --- | --- | --- |
 | 1. Python peer server on Linux + Python peer client on Linux | Issue one client certificate whose common name is the client's installation ID. Deploy the collector server certificate/key and trusted client CA to the supervised `bridge_telemetry_ingest` service. Deploy the client certificate/key and collector CA to the Python bridge identity that runs the uploader. | Collector key, client key, and revocation state are separate owner-only files/directories. The server key is readable only by the collector account; the client key only by the bridge/uploader identity. | The reference credential CLI, collector, and `TelemetryUploader(cafile, certfile, keyfile)` support this layout. DoD: ownership/mode checks, expiry/rotation, revocation drill, and a successful mTLS upload with the bridge and collector in separate processes. |
 | 2. Python peer server on Linux + Swift peer client on macOS | Issue one client certificate whose common name is the macOS installation ID. Import exactly one telemetry certificate/private-key identity into the macOS Keychain; deploy only endpoint, enablement, and optional spool location in configuration. | The private key stays in a Keychain `SecIdentity`; no PEM file is read by the Swift uploader. The collector retains its Linux server key and trusts the issuing client CA. | Swift selects exactly one accessible identity, derives its CN, and uses it for URLSession mTLS. DoD: a documented signed/importable macOS identity deployment, a Keychain access check under the production app identity, a real upload, rotation with overlap, and revocation evidence. |
-| 3. Python peer server on Linux + Swift peer client on iOS | Issue one client certificate whose common name is the iPhone installation ID. Synchronize the non-secret telemetry configuration from app Documents to the shared App Group, then install exactly one telemetry identity through a managed profile/MDM or an approved enrolment flow. | The extension reads configuration and keeps its telemetry spool in the App Group. It must obtain the private key as an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into Documents or the App Group. | Documents-to-App-Group configuration synchronization and App-Group spooling exist. The extension derives the ID from exactly one already-installed identity; it has no identity import/enrolment workflow. DoD: deploy an extension-accessible identity on a physical iPhone, show `identity_available` in status, complete an mTLS batch upload, prove offline/restart recovery, rotation, revocation, and no extension latency regression. |
+| 3. Python peer server on Linux + Swift peer client on iOS | Issue and export one password-protected PKCS#12 client identity with `scripts/generate_telemetry_ios_identity.py`; its common name is the iPhone installation ID. Install the accompanying collector CA and identity through Apple Configurator, MDM, or a protected on-device enrolment flow, then synchronize non-secret configuration from app Documents to the shared App Group. | The extension reads configuration and keeps its telemetry spool in the App Group. The private key is imported into an extension-accessible Keychain `SecIdentity`; PEM, `.p12`, and private-key files must not be copied into Documents or the App Group. | The export tool, Documents-to-App-Group configuration synchronization, App-Group spooling, and Keychain identity selection exist. DoD: physical-iPhone evidence of `identity_available`, one accepted mTLS batch, offline/restart recovery, rotation, revocation, and no extension latency regression. |
 
 For the Apple cases, a configuration sync is sufficient for endpoint and spool
 location but cannot make a private key available to the Network Extension. The
 identity deployment must leave exactly one extension-accessible telemetry
 identity before enabling telemetry; otherwise the extension safely leaves
 telemetry inactive.
+
+#### iPhone commissioning against the Python collector
+
+Use the same CA that signed `/etc/obstaclebridge/telemetry/server.cert.pem` on
+the collector. On the CA-issuing Linux host, create a one-off iPhone identity;
+the output directory must be new or empty and contains sensitive material:
+
+```bash
+sudo .venv/bin/python scripts/generate_telemetry_ios_identity.py \
+  --ca-key /var/lib/obstaclebridge/telemetry-ca/ca.key.pem \
+  --ca-cert /var/lib/obstaclebridge/telemetry-ca/ca.cert.pem \
+  --installation-id iphone-primary \
+  --out-dir "$HOME/obstaclebridge-iphone-telemetry" \
+  --days 30
+sudo chown -R "$USER":"$(id -gn)" "$HOME/obstaclebridge-iphone-telemetry"
+```
+
+The script asks twice for a PKCS#12 password and creates an owner-only
+`obstaclebridge-telemetry-iphone-primary.p12`, plus the public
+`obstaclebridge-telemetry-collector-ca.cer`. Transfer these two files only by
+a protected channel. On the iPhone, install the CA first and explicitly enable
+full trust under **Settings → General → About → Certificate Trust Settings**;
+then install the `.p12` and enter its password. Delete the transferred `.p12`
+after import. The certificate remains short-lived and the private key remains
+in the iPhone Keychain.
+
+In the iPhone WebAdmin **Telemetry client** section set:
+
+| Setting | iPhone value |
+| --- | --- |
+| `telemetry_enabled` | `true` |
+| `telemetry_endpoint` | `https://38.180.143.5:18443/v1/telemetry/batches` (or the collector FQDN/SAN IP) |
+| `telemetry_spool_directory` | Leave the default; the Packet Tunnel uses its private App-Group spool instead. |
+
+Save the configuration and start/restart the Packet Tunnel. Its local
+WebAdmin telemetry status must show `enabled: true`, `identity_available:
+true`, and `configured: true`. The collector `/healthz` response must then
+advance `accepted_batches`; each five-second delivery timer only removes a
+batch after the collector returns `202` with an acknowledgement. If identity
+availability remains false, remove additional client identities visible to the
+extension or use an MDM/Configurator profile that installs exactly this one.
 
 ### Swift/macOS implementation status
 

@@ -1169,6 +1169,10 @@ For a Linux Python collector/client reference deployment, the repository provide
 `generate_telemetry_ca.py`, `generate_telemetry_server_certificate.py`, and
 `generate_telemetry_client_certificate.py`; the server script can include an
 FQDN and direct static IPv4/IPv6 addresses in one certificate.
+`generate_telemetry_ios_identity.py` creates a password-protected PKCS#12
+identity and public collector CA for protected iPhone Keychain enrolment; the
+extension derives its telemetry installation ID from that identity rather than
+reading a private key from app storage.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner
@@ -1601,7 +1605,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `64` | `1011` |
 | macOS Swift app | `1` | `70` |
-| iOS app/extension | `30` | `199` |
+| iOS app/extension | `31` | `201` |
 
 #### Requirement traceability
 
