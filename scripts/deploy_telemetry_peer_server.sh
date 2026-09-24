@@ -32,9 +32,11 @@ done
 
 [[ "$REMOTE_SUDO" =~ ^[A-Za-z0-9_./-]+$ ]] || { echo "REMOTE_SUDO must be a command path" >&2; exit 2; }
 SSH=(ssh -p "$PORT" -o "ConnectTimeout=$CONNECT_TIMEOUT" -o ConnectionAttempts=1)
+SSH_TTY=(ssh -tt -p "$PORT" -o "ConnectTimeout=$CONNECT_TIMEOUT" -o ConnectionAttempts=1)
 SCP=(scp -P "$PORT" -o "ConnectTimeout=$CONNECT_TIMEOUT" -o ConnectionAttempts=1)
 if [[ -n "$SSH_IDENTITY" ]]; then
     SSH+=(-i "$SSH_IDENTITY")
+    SSH_TTY+=(-i "$SSH_IDENTITY")
     SCP+=(-i "$SSH_IDENTITY")
 fi
 REMOTE="${USER_NAME}@${HOST}"
@@ -64,7 +66,7 @@ copy_source "$SERVER_KEY" source-server.key.pem
 copy_source "$SERVER_CERT" source-server.cert.pem
 
 echo "Connecting to $REMOTE on SSH port $PORT and acquiring remote privilege."
-"${SSH[@]}" "$REMOTE" "$REMOTE_SUDO" -v
+"${SSH_TTY[@]}" "$REMOTE" "$REMOTE_SUDO" -v
 echo "Creating private remote staging directory."
 remote_stage="$("${SSH[@]}" "$REMOTE" 'umask 077; mktemp -d /tmp/obstaclebridge-telemetry-server.XXXXXX')"
 
