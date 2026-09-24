@@ -2117,7 +2117,14 @@ class AdminWebUI:
 
     @staticmethod
     def _secret_config_keys() -> Set[str]:
-        return {"admin_web_password", "secure_link_psk"}
+        return {
+            "admin_web_password",
+            "secure_link_psk",
+            "telemetry_endpoint",
+            "telemetry_installation_id",
+            "telemetry_mtls_identity_label",
+            "telemetry_spool_directory",
+        }
 
     @staticmethod
     def _readonly_config_keys() -> Set[str]:

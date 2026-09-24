@@ -1238,6 +1238,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
         debug["log_file_max_bytes"] = 1_048_576
         debug["log_file_backup_count"] = 5
         grouped["debug_logging"] = debug
+        grouped["telemetry"] = ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()
 
         var ws = (grouped["ws_session"] as? [String: Any]) ?? [:]
         ws["ws_static_dir"] = root.appendingPathComponent("web", isDirectory: true).path

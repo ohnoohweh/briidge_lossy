@@ -1132,7 +1132,11 @@ What the admin web shows:
 | `--log-udp-target` | unset | Best-effort UDP log receiver `host:port`; transport failures drop records. |
 | `--log-udp-only` | `false` | Use only the UDP sender, isolating runtime work from local logging sinks. |
 | `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active. |
-| `--telemetry-spool-directory` | unset | Enables local telemetry spooling and authenticated redacted `/api/telemetry` status. |
+| `--telemetry-enabled` | `false` | Enable bounded HTTPS telemetry configuration outside bridge and packet paths. |
+| `--telemetry-endpoint` | unset | HTTPS collector endpoint for telemetry batches; write-only in Admin Web. |
+| `--telemetry-installation-id` | unset | Pseudonymous telemetry installation identifier; write-only in Admin Web. |
+| `--telemetry-mtls-identity-label` | unset | Reference to the enrolled telemetry mTLS client identity; write-only in Admin Web. |
+| `--telemetry-spool-directory` | unset | Local bounded telemetry spool directory; write-only in Admin Web. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
 
 The optional private UDP logger is isolated best-effort diagnostics only. The
@@ -1142,6 +1146,8 @@ the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
+The `telemetry` configuration section uses the same five settings in Python,
+macOS, and iOS; Admin Web masks identifying and location values in all three.
 The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 

@@ -1,6 +1,7 @@
 """Bounded, redacted telemetry/v1 event construction for hardened logging."""
 from __future__ import annotations
 
+import argparse
 import json
 import hashlib
 import os
@@ -30,6 +31,40 @@ ALLOWED_FIELD_NAMES = frozenset(
 )
 _SENSITIVE_FIELD_TOKENS = ("address", "cookie", "header", "key", "packet", "payload", "psk", "secret", "token")
 _EVENT_KEYS = frozenset(("v", "kind", "installation_id", "session_id", "sequence", "monotonic_ns", "wall_time", "priority", "event", "fields"))
+
+
+class TelemetryRuntimeSettings:
+    """Shared runtime configuration surface for bounded telemetry/v1."""
+
+    @staticmethod
+    def register_cli(parser: argparse.ArgumentParser) -> None:
+        group = parser.add_argument_group("telemetry")
+        group.add_argument(
+            "--telemetry-enabled",
+            action="store_true",
+            default=False,
+            help="Enable bounded HTTPS telemetry outside bridge and packet paths",
+        )
+        group.add_argument(
+            "--telemetry-endpoint",
+            default="",
+            help="HTTPS collector endpoint for telemetry batches",
+        )
+        group.add_argument(
+            "--telemetry-installation-id",
+            default="",
+            help="Pseudonymous installation identifier scoped to telemetry collection",
+        )
+        group.add_argument(
+            "--telemetry-mtls-identity-label",
+            default="",
+            help="Reference to the enrolled telemetry mTLS client identity",
+        )
+        group.add_argument(
+            "--telemetry-spool-directory",
+            default="",
+            help="Local directory for bounded telemetry spool segments",
+        )
 
 
 class TelemetryValidationError(ValueError):

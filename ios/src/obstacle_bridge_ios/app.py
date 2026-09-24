@@ -213,6 +213,13 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
             "log_file_max_bytes": 1_048_576,
             "log_file_backup_count": 5,
         },
+        "telemetry": {
+            "telemetry_enabled": False,
+            "telemetry_endpoint": "",
+            "telemetry_installation_id": "",
+            "telemetry_mtls_identity_label": "",
+            "telemetry_spool_directory": "",
+        },
         "channel_mux": {
             "own_servers": [],
             "remote_servers": [],

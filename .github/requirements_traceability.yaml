@@ -1485,6 +1485,9 @@ REQ-ADM-001:
     - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
     - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
     - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_matches_apple_telemetry_fields
+    - ios/tests/test_ios_app_facade.py::test_load_grouped_runtime_config_preserves_saved_transport_fields
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_exposes_only_redacted_telemetry_status
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
     - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback

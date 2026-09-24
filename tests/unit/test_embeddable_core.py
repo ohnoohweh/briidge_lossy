@@ -223,6 +223,28 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"],
         )
 
+    def test_runner_schema_snapshot_matches_apple_telemetry_fields(self) -> None:
+        args = build_runtime_args_from_config({"telemetry": {}})
+        runner = Runner.__new__(Runner)
+        runner.args = args
+
+        telemetry_rows = {row["key"]: row for row in runner.get_config_schema_snapshot()["telemetry"]}
+
+        self.assertEqual(
+            set(telemetry_rows),
+            {
+                "telemetry_enabled",
+                "telemetry_endpoint",
+                "telemetry_installation_id",
+                "telemetry_mtls_identity_label",
+                "telemetry_spool_directory",
+                "log_telemetry",
+            },
+        )
+        self.assertFalse(telemetry_rows["telemetry_enabled"]["default"])
+        for key in set(telemetry_rows) - {"telemetry_enabled", "log_telemetry"}:
+            self.assertTrue(telemetry_rows[key]["secret"])
+
     def test_runner_schema_snapshot_includes_proxy_provider_fields(self) -> None:
         args = build_runtime_args_from_config(
             {

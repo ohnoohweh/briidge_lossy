@@ -145,12 +145,6 @@ class DebugLoggingConfigurator:
                 default=None,
                 help="UDP log receiver queried by Admin Web in --log-udp-only mode (default: --log-udp-target)",
             )
-        if not _has("--telemetry-spool-directory"):
-            p.add_argument(
-                "--telemetry-spool-directory",
-                default=None,
-                help="local telemetry spool directory; also enables the redacted Admin telemetry status API",
-            )
 
     @staticmethod
     def from_args(args: argparse.Namespace) -> "DebugLoggingConfigurator":

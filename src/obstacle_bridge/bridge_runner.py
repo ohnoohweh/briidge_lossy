@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .bridge_tun_helper_client import _open_local_helper_connection
+from .bridge_telemetry import TelemetryRuntimeSettings
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
 
 _bridge = export_bridge_globals(globals())
@@ -3746,6 +3747,11 @@ class ConfigAwareCLI:
             if not isinstance(value, dict):
                 continue
             for kk, vv in value.items():
+                # Keep the short-lived pre-schema telemetry spool setting
+                # loadable after it moved from debug_logging into telemetry.
+                if section == "debug_logging" and kk == "telemetry_spool_directory":
+                    flat["telemetry_spool_directory"] = vv
+                    continue
                 # The public tun_execution section uses concise keys, while
                 # argparse stores the corresponding CLI destination names.
                 if section == TUN_EXECUTION_SECTION:
@@ -3790,6 +3796,7 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("secure_link",        SecureLinkPskSession.register_cli),
         ("compress_layer",     CompressLayerSession.register_cli),
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
+        ("telemetry",          TelemetryRuntimeSettings.register_cli),
         ("stats_board",        StatsBoard.register_cli),
     ]
 

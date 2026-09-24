@@ -332,6 +332,16 @@ enum ObstacleBridgeRuntimeConfig {
         "helper_log_level": "tun_helper_log_level",
     ]
 
+    static func defaultTelemetryConfig() -> [String: Any] {
+        [
+            "telemetry_enabled": false,
+            "telemetry_endpoint": "",
+            "telemetry_installation_id": "",
+            "telemetry_mtls_identity_label": "",
+            "telemetry_spool_directory": "",
+        ]
+    }
+
     static func configSchemaSnapshot() -> [String: Any] {
         [
             "admin_web": [

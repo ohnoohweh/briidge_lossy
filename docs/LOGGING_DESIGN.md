@@ -175,6 +175,7 @@ receiver.
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
 | Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
+| Runtime configuration | Python, macOS, and iOS expose the same `telemetry` keys in their Admin configuration schema: `telemetry_enabled`, `telemetry_endpoint`, `telemetry_installation_id`, `telemetry_mtls_identity_label`, and `telemetry_spool_directory`. The four identifying or location fields are write-only and masked in Admin snapshots. Python keeps the uploader process isolated from the bridge runtime; Apple resolves the identity label through Keychain. |
 
 ### Swift/macOS implementation status
 

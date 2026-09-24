@@ -89,6 +89,13 @@ def test_load_grouped_runtime_config_preserves_saved_transport_fields(tmp_path: 
     assert config["TUN_routing"]["mtu"] == 1600
     assert config["TUN_routing"]["log_TUN_routing"] == "CRITICAL"
     assert "log_file" in config["debug_logging"]
+    assert config["telemetry"] == {
+        "telemetry_enabled": False,
+        "telemetry_endpoint": "",
+        "telemetry_installation_id": "",
+        "telemetry_mtls_identity_label": "",
+        "telemetry_spool_directory": "",
+    }
 
 
 def test_app_facade_reports_swift_host_runner_mode_from_config(tmp_path: Path, monkeypatch) -> None:

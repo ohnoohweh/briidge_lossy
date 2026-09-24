@@ -697,6 +697,9 @@ ARC-CMP-005:
     - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
     - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
     - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_matches_apple_telemetry_fields
+    - ios/tests/test_ios_app_facade.py::test_load_grouped_runtime_config_preserves_saved_transport_fields
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_exposes_only_redacted_telemetry_status
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates

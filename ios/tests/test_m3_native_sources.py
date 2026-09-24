@@ -64,6 +64,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert '"telemetry",' in runtime_config
     assert '"telemetry": [' in runtime_config
     assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
+    assert "static func defaultTelemetryConfig()" in runtime_config
 
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:

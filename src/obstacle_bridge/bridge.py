@@ -130,7 +130,14 @@ except Exception:
     _bridge_import_debug("bridge_import_crypto_extract_failed")
 
 
-CONFIG_SECRET_FIELDS = {"admin_web_password", "secure_link_psk"}
+CONFIG_SECRET_FIELDS = {
+    "admin_web_password",
+    "secure_link_psk",
+    "telemetry_endpoint",
+    "telemetry_installation_id",
+    "telemetry_mtls_identity_label",
+    "telemetry_spool_directory",
+}
 CONFIG_SECRET_PREFIX = "enc:v1:"
 CONFIG_SECRET_SALT = b"ObstacleBridge config secret v1"
 CONFIG_SECRET_INFO = b"ObstacleBridge config field encryption"

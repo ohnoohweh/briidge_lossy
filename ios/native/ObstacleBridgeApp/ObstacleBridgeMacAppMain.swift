@@ -360,6 +360,7 @@ final class ObstacleBridgeMacAppMain: NSObject, NSApplicationDelegate, WKScriptM
                 "log_file_max_bytes": 1_048_576,
                 "log_file_backup_count": 5,
             ],
+            "telemetry": ObstacleBridgeRuntimeConfig.defaultTelemetryConfig(),
             "iOS_TUN_connector": [
                 "packetflow_connector": "swift_host_runner",
                 "bind_host": "127.0.0.1",
