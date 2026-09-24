@@ -67,3 +67,5 @@ def test_ios_identity_upload_wrapper_uses_device_app_documents_copy_and_readback
     assert "xcrun devicectl device copy from" in source
     assert "cmp -s" in source
     assert "not yet a Keychain identity" in source
+    assert "PKCS#12 password:" in source
+    assert "ObstacleBridge-telemetry-identity.password" in source

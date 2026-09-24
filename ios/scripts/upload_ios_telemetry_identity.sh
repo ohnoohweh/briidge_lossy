@@ -56,6 +56,17 @@ TMP_DIR="$(mktemp -d)"
 cleanup() { rm -rf "${TMP_DIR}"; }
 trap cleanup EXIT
 
+read -r -s -p "PKCS#12 password: " P12_PASSWORD
+echo
+if [ -z "${P12_PASSWORD}" ]; then
+  echo "[upload_ios_telemetry_identity] PKCS#12 password is required" >&2
+  exit 2
+fi
+PASSWORD_FILE="${TMP_DIR}/ObstacleBridge-telemetry-identity.password"
+umask 077
+printf '%s\n' "${P12_PASSWORD}" > "${PASSWORD_FILE}"
+unset P12_PASSWORD
+
 copy_and_verify() {
   local source="$1"
   local remote_path="$2"
@@ -84,6 +95,7 @@ copy_and_verify() {
 }
 
 copy_and_verify "${LOCAL_P12}" "${REMOTE_P12}"
+copy_and_verify "${PASSWORD_FILE}" "Documents/ObstacleBridge-telemetry-identity.password"
 if [ -n "${LOCAL_CA}" ]; then
   copy_and_verify "${LOCAL_CA}" "${REMOTE_CA}"
 fi

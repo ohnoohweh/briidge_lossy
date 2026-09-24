@@ -60,12 +60,64 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
 }
 
 enum ObstacleBridgeTelemetryIdentityStore {
+    private static let sharedAccessGroupSuffix = ".com.obstaclebridge.shared"
+    private static let identityTag = "com.obstaclebridge.telemetry.identity"
+    private static let stagedIdentityFilename = "ObstacleBridge-telemetry-identity.p12"
+    private static let stagedPasswordFilename = "ObstacleBridge-telemetry-identity.password"
+
+    /// Imports a one-shot app-Documents PKCS#12 staging pair into the Keychain
+    /// access group shared with the Packet Tunnel, then removes the staging
+    /// material. A failed import deliberately leaves both files for correction.
+    static func importStagedIdentityIfPresent() -> String {
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return "documents_unavailable" }
+        let p12URL = documents.appendingPathComponent(stagedIdentityFilename)
+        let passwordURL = documents.appendingPathComponent(stagedPasswordFilename)
+        guard FileManager.default.fileExists(atPath: p12URL.path) else { return "not_staged" }
+        guard let password = try? String(contentsOf: passwordURL, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !password.isEmpty else { return "password_missing" }
+        guard let accessGroup = telemetryAccessGroup() else { return "shared_keychain_unavailable" }
+        guard let p12 = try? Data(contentsOf: p12URL) else { return "identity_unreadable" }
+        var imported: CFArray?
+        let status = SecPKCS12Import(p12 as CFData, [kSecImportExportPassphrase as String: password] as CFDictionary, &imported)
+        guard status == errSecSuccess,
+              let item = (imported as? [[String: Any]])?.first,
+              let identity = item[kSecImportItemIdentity as String] as? SecIdentity
+        else { return "identity_import_failed" }
+        var privateKey: SecKey?
+        var certificate: SecCertificate?
+        guard SecIdentityCopyPrivateKey(identity, &privateKey) == errSecSuccess,
+              SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess,
+              let privateKey, let certificate
+        else { return "identity_extract_failed" }
+        let tag = Data(identityTag.utf8)
+        SecItemDelete([kSecClass: kSecClassKey, kSecAttrApplicationTag: tag, kSecAttrAccessGroup: accessGroup] as CFDictionary)
+        SecItemDelete([kSecClass: kSecClassCertificate, kSecAttrLabel: identityTag, kSecAttrAccessGroup: accessGroup] as CFDictionary)
+        let keyStatus = SecItemAdd([
+            kSecClass: kSecClassKey, kSecValueRef: privateKey, kSecAttrApplicationTag: tag,
+            kSecAttrAccessGroup: accessGroup, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ] as CFDictionary, nil)
+        guard keyStatus == errSecSuccess else { return "shared_key_import_failed" }
+        let certificateStatus = SecItemAdd([
+            kSecClass: kSecClassCertificate, kSecValueRef: certificate, kSecAttrLabel: identityTag,
+            kSecAttrAccessGroup: accessGroup, kSecAttrAccessible: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+        ] as CFDictionary, nil)
+        guard certificateStatus == errSecSuccess else {
+            SecItemDelete([kSecClass: kSecClassKey, kSecAttrApplicationTag: tag, kSecAttrAccessGroup: accessGroup] as CFDictionary)
+            return "shared_certificate_import_failed"
+        }
+        var sharedIdentity: SecIdentity?
+        guard SecIdentityCreateWithCertificate(nil, certificate, &sharedIdentity) == errSecSuccess else { return "shared_identity_unavailable" }
+        try? FileManager.default.removeItem(at: p12URL)
+        try? FileManager.default.removeItem(at: passwordURL)
+        return "imported"
+    }
+
     static func telemetryIdentity() -> (identity: SecIdentity, installationID: String)? {
-        let query: [CFString: Any] = [
+        var query: [CFString: Any] = [
             kSecClass: kSecClassIdentity,
             kSecReturnRef: true,
             kSecMatchLimit: kSecMatchLimitAll,
         ]
+        if let accessGroup = telemetryAccessGroup() { query[kSecAttrAccessGroup] = accessGroup }
         var result: CFTypeRef?
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let identities = result as? [SecIdentity]
@@ -83,6 +135,13 @@ enum ObstacleBridgeTelemetryIdentityStore {
             return (identity, installationID)
         }
         return telemetryIdentities.count == 1 ? telemetryIdentities[0] : nil
+    }
+
+    private static func telemetryAccessGroup() -> String? {
+        guard let task = SecTaskCreateFromSelf(nil),
+              let groups = SecTaskCopyValueForEntitlement(task, "keychain-access-groups" as CFString, nil) as? [String]
+        else { return nil }
+        return groups.first(where: { $0.hasSuffix(sharedAccessGroupSuffix) })
     }
 }
 #endif

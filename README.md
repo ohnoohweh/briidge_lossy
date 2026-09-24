@@ -1174,8 +1174,9 @@ PKCS#12 identity and public collector CA for protected iPhone Keychain
 enrolment; the extension derives its telemetry installation ID from that
 identity rather than reading a private key from app storage.
 `ios/scripts/upload_ios_telemetry_identity.sh` performs a verified temporary
-transfer of that encrypted package into the app Documents container; it does
-not itself import the key into Keychain or enable telemetry.
+transfer of that encrypted package and its password into the app Documents
+container; the next app/tunnel start imports the key into the shared Keychain
+and removes the staging files.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner

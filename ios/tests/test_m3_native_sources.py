@@ -36,6 +36,10 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "SecItemCopyMatching" in source
     assert "static func telemetryIdentity()" in source
     assert "SecCertificateCopyCommonName" in source
+    assert "SecPKCS12Import" in source
+    assert "importStagedIdentityIfPresent" in source
+    assert "keychain-access-groups" in (APP_NATIVE_DIR / "ObstacleBridge.entitlements").read_text(encoding="utf-8")
+    assert "keychain-access-groups" in (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")
     assert "telemetryIdentities.count == 1" in source
     assert "func cancel()" in source
     assert "session.invalidateAndCancel()" in source
@@ -44,6 +48,8 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)' in provider
     assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
+    control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()" in control
     assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
     assert "private func flushTelemetry(startUpload: Bool = true)" in provider
     assert "flushTelemetry(startUpload: false)" in provider

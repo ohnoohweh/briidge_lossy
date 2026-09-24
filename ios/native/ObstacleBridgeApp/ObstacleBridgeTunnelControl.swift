@@ -227,6 +227,12 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func configureTunnel(startAfterInstall: Bool) {
+        #if canImport(Security)
+        let telemetryIdentityImport = ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()
+        if telemetryIdentityImport != "not_staged" {
+            recordEvent("telemetry_identity_staging", payload: ["result": telemetryIdentityImport])
+        }
+        #endif
         let configSync = syncConfigurationFileInternal()
         recordEvent("config_sync_before_prepare", payload: configSync)
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
