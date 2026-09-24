@@ -1151,8 +1151,9 @@ What the admin web shows:
 The optional private UDP logger is isolated best-effort diagnostics only. The
 Python Runner additionally provides a bounded, allowlisted local event
 producer, crash-safe spool, single-flight background uploader, and mTLS-required
-reference ingest process. Lifecycle/load emission and spool/network delivery stay
-outside forwarding callbacks; failures are warning-level debug-log evidence and
+reference ingest process. The worker emits a startup load sample and repeats it
+every 15 seconds; spool/network delivery stays outside forwarding callbacks;
+failures are warning-level debug-log evidence and
 never block the bridge;
 the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry

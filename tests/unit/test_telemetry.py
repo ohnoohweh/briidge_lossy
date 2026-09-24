@@ -224,8 +224,9 @@ def test_runner_telemetry_client_spools_lifecycle_event_off_runtime_path(tmp_pat
         await asyncio.sleep(0.05)
         assert runner._telemetry_spool is not None
         events = runner._telemetry_spool.recover()
-        assert events and events[0]["event"] == "runtime.lifecycle"
+        assert [event["event"] for event in events] == ["runtime.lifecycle", "runtime.load"]
         assert events[0]["fields"] == {"state": "started", "reason": ""}
+        assert events[1]["fields"]["queue_depth"] >= 1
         await runner._stop_telemetry_client()
 
     asyncio.run(run())

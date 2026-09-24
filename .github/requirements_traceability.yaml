@@ -1461,7 +1461,7 @@ REQ-MYU-007:
 REQ-ADM-001:
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
-  # Shared telemetry coverage keeps bounded Runner producer/upload work off
+  # Shared telemetry coverage keeps bounded worker-owned Runner producer/upload work off
   # forwarding paths and keeps producer defaults aligned
   # with macOS and iOS. Python cleanly separates client and
   # server configuration, and adds its standard certificate

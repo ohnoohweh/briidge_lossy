@@ -348,8 +348,20 @@ class Runner:
             self._telemetry_client_last_warning = ""
 
     async def _telemetry_client_worker(self) -> None:
+        next_load_at = 0.0
         try:
             while True:
+                now = time.monotonic()
+                if now >= next_load_at:
+                    emitter = self._telemetry_emitter
+                    if emitter is not None:
+                        with contextlib.suppress(Exception):
+                            emitter.emit_load(
+                                queue_depth=emitter.pending_count(),
+                                dropped=sum(int(value) for value in emitter.dropped.values()),
+                                load_1m=float(os.getloadavg()[0]),
+                            )
+                    next_load_at = now + 15.0
                 await self._telemetry_client_flush_once()
                 await asyncio.sleep(1.0)
         except asyncio.CancelledError:
@@ -455,14 +467,6 @@ class Runner:
         while True:
             await asyncio.sleep(15.0)
             self._record_runtime_health("heartbeat")
-            emitter = self._telemetry_emitter
-            if emitter is not None:
-                with contextlib.suppress(Exception):
-                    emitter.emit_load(
-                        queue_depth=emitter.pending_count(),
-                        dropped=sum(int(value) for value in emitter.dropped.values()),
-                        load_1m=float(os.getloadavg()[0]),
-                    )
 
     def _runtime_health_status_fields(self) -> dict[str, Any]:
         store = self._runtime_health_store

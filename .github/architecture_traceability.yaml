@@ -648,7 +648,7 @@ ARC-CMP-005:
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
   # and peer-scoped wrapper status.
-  # Telemetry coverage keeps bounded Runner producer/upload work off forwarding
+  # Telemetry coverage keeps bounded worker-owned Runner producer/upload work off forwarding
   # paths, the loopback collector endpoint, and
   # client-spool defaults aligned with macOS/iOS, while Python exposes its
   # certificate directory, family policy, and supervised collector settings

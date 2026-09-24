@@ -537,8 +537,8 @@ not a qualification target for this work.
 When `telemetry_enabled` is true, the Python Runner derives its installation ID
 from the client certificate common name, creates a bounded in-memory emitter,
 and starts a single-flight uploader task. Lifecycle events are emitted at
-startup and shutdown; a redacted load event is emitted from the 15-second
-runtime-health timer. Spool writes and HTTPS requests run in worker threads;
+startup and shutdown; the uploader worker emits a redacted load event at
+startup and every 15 seconds. Spool writes and HTTPS requests run in worker threads;
 the overlay, packet, and forwarding callbacks do not perform telemetry I/O.
 Credential, spool, or upload failures are warning-level `[TELEMETRY]` entries
 in the normal debug log and leave the bridge running. `/api/telemetry` exposes
