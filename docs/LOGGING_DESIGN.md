@@ -495,14 +495,16 @@ the collector. On the CA-issuing Linux host, create a one-off iPhone identity;
 the output directory must be new or empty and contains sensitive material:
 
 ```bash
-sudo .venv/bin/python scripts/generate_telemetry_ios_identity.py \
-  --ca-key /var/lib/obstaclebridge/telemetry-ca/ca.key.pem \
-  --ca-cert /var/lib/obstaclebridge/telemetry-ca/ca.cert.pem \
-  --installation-id iphone-primary \
-  --out-dir "$HOME/obstaclebridge-iphone-telemetry" \
-  --days 30
-sudo chown -R "$USER":"$(id -gn)" "$HOME/obstaclebridge-iphone-telemetry"
+TELEMETRY_INSTALLATION_ID=iphone-primary \
+  bash ios/scripts/generate_telemetry_ios_identity.sh
 ```
+
+The wrapper uses `/var/lib/obstaclebridge/telemetry-ca/` and writes to
+`$HOME/obstaclebridge-iphone-telemetry` by default. It invokes `sudo` only for
+certificate issuance and returns the generated directory to the invoking user.
+Set `TELEMETRY_CA_KEY`, `TELEMETRY_CA_CERT`,
+`TELEMETRY_IOS_OUTPUT_DIRECTORY`, or `TELEMETRY_IDENTITY_DAYS` only when the
+standard locations or 30-day lifetime do not apply.
 
 The script asks twice for a PKCS#12 password and creates an owner-only
 `obstaclebridge-telemetry-iphone-primary.p12`, plus the public

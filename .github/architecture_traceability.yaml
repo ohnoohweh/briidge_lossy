@@ -709,6 +709,7 @@ ARC-CMP-005:
     - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
     - tests/unit/test_telemetry.py::test_client_certificate_directory_derives_installation_id
     - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_generator_creates_password_protected_keychain_import_material
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_wrapper_uses_standard_ca_paths_and_returns_output_to_operator
     - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
     - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_separates_telemetry_client_and_server_fields

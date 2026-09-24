@@ -46,3 +46,12 @@ def test_ios_identity_generator_refuses_nonempty_output_directory(tmp_path):
     ], capture_output=True, text=True)
     assert completed.returncode != 0
     assert "refusing to overwrite credential material" in completed.stderr
+
+
+def test_ios_identity_wrapper_uses_standard_ca_paths_and_returns_output_to_operator():
+    source = (REPO_ROOT / "ios/scripts/generate_telemetry_ios_identity.sh").read_text(encoding="utf-8")
+    assert "TELEMETRY_INSTALLATION_ID" in source
+    assert "/var/lib/obstaclebridge/telemetry-ca/ca.key.pem" in source
+    assert "/var/lib/obstaclebridge/telemetry-ca/ca.cert.pem" in source
+    assert "generate_telemetry_ios_identity.py" in source
+    assert "sudo chown -R" in source
