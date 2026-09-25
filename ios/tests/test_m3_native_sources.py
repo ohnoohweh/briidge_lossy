@@ -50,6 +50,10 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()" in control
+    assert "@objc class func clearSharedLogs()" in control
+    assert "ObstacleBridgeTelemetryIdentityStore.clearAppGroupDiagnosticLogs()" in control
+    assert "static func clearAppGroupDiagnosticLogs()" in source
+    assert 'appendingPathComponent("logs", isDirectory: true)' in source
     assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
     assert "private func flushTelemetry(startUpload: Bool = true)" in provider
     assert "flushTelemetry(startUpload: false)" in provider

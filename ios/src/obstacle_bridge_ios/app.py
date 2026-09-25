@@ -43,6 +43,7 @@ from .diagnostics import (
 from .profiles import ProfileStore
 from .tunnel_control import (
     harvest_runtime_logs,
+    clear_shared_runtime_logs,
     prepare_runtime,
     runtime_status,
     start_runtime,
@@ -536,6 +537,7 @@ def _consume_log_cleanup_request(documents_root: Path) -> bool:
     logs = documents_root / "logs"
     try:
         shutil.rmtree(logs, ignore_errors=True)
+        clear_shared_runtime_logs()
         marker.unlink()
     except OSError:
         return False

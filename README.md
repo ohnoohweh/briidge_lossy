@@ -1178,7 +1178,8 @@ transfer of that encrypted package and its password into the app Documents
 container; the next app/tunnel start imports the key into the shared Keychain
 and removes the staging files.
 `ios/scripts/clear_ios_logs.sh` removes only iPhone diagnostic logs through a
-one-shot app request, preserving configuration and telemetry enrolment data.
+one-shot app request, including the extension's private App Group logs while
+preserving configuration, telemetry spool, and enrolment data.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner

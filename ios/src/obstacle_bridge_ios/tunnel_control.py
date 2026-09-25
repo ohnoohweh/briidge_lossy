@@ -91,6 +91,16 @@ def harvest_runtime_logs() -> dict[str, Any]:
     return harvest_shared_logs()
 
 
+def clear_shared_runtime_logs() -> dict[str, Any]:
+    bridge = _load_bridge()
+    if bridge is None:
+        return {"ok": False, "error": _LAST_ERROR}
+    try:
+        return _decode_response(bridge.clearSharedLogs())
+    except Exception as exc:
+        return {"ok": False, "error": f"clearSharedLogs failed: {type(exc).__name__}: {exc}"}
+
+
 def ipserver_tunnel_status() -> dict[str, Any]:
     bridge = _load_bridge()
     if bridge is None:

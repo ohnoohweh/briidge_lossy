@@ -113,6 +113,28 @@ enum ObstacleBridgeTelemetryIdentityStore {
         return "imported"
     }
 
+    static func clearAppGroupDiagnosticLogs() -> [String: Any] {
+        guard let sharedContainer = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: "group.com.obstaclebridge.shared"
+        ) else {
+            return ["ok": false, "error": "shared app-group container unavailable"]
+        }
+        let logs = sharedContainer.appendingPathComponent("logs", isDirectory: true)
+        let fileManager = FileManager.default
+        let entries = (try? fileManager.contentsOfDirectory(at: logs, includingPropertiesForKeys: nil)) ?? []
+        var removed: [String] = []
+        var failures: [String] = []
+        for entry in entries {
+            do {
+                try fileManager.removeItem(at: entry)
+                removed.append(entry.lastPathComponent)
+            } catch {
+                failures.append(entry.lastPathComponent)
+            }
+        }
+        return ["ok": failures.isEmpty, "removed": removed, "failures": failures]
+    }
+
     static func telemetryIdentity() -> (identity: SecIdentity, installationID: String)? {
         var query: [CFString: Any] = [
             kSecClass: kSecClassIdentity,

@@ -712,7 +712,7 @@ ARC-CMP-005:
     - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_wrapper_uses_standard_ca_paths_and_returns_output_to_operator
     - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_upload_wrapper_uses_device_app_documents_copy_and_readback
     - ios/tests/test_m3_native_sources.py::test_shared_mtls_telemetry_transport_source_exists
-    - ios/tests/test_ios_app_facade.py::test_log_cleanup_request_removes_only_documents_logs
+    - ios/tests/test_ios_app_facade.py::test_log_cleanup_request_removes_documents_logs_and_requests_shared_logs_cleanup
     - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
     - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_separates_telemetry_client_and_server_fields

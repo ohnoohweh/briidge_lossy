@@ -200,6 +200,14 @@ final class ObstacleBridgeTunnelControl: NSObject {
         return jsonString(payload) as NSString
     }
 
+    /// Clears only diagnostic files in the extension's App Group log directory.
+    /// Configuration, telemetry spools, and credentials have separate paths.
+    @objc class func clearSharedLogs() -> NSString {
+        let payload = ObstacleBridgeTelemetryIdentityStore.clearAppGroupDiagnosticLogs()
+        recordEvent("shared_logs_cleared", payload: payload)
+        return jsonString(payload) as NSString
+    }
+
     @objc class func status() -> NSString {
         refreshStatusAsync()
         if let cached = cachedStatusPayload() {

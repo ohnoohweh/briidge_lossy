@@ -155,7 +155,7 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     assert config_payload["channel_mux"]["remote_servers"] == []
 
 
-def test_log_cleanup_request_removes_only_documents_logs(tmp_path: Path) -> None:
+def test_log_cleanup_request_removes_documents_logs_and_requests_shared_logs_cleanup(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "Documents"
     (root / "logs").mkdir(parents=True)
     (root / "logs" / "debug.log").write_text("diagnostic", encoding="utf-8")
@@ -164,7 +164,10 @@ def test_log_cleanup_request_removes_only_documents_logs(tmp_path: Path) -> None
     (root / "ObstacleBridge-telemetry-identity.p12").write_bytes(b"identity")
     (root / ".obstaclebridge-clear-logs-v1").write_text("clear", encoding="utf-8")
 
+    cleared = []
+    monkeypatch.setattr(ios_app_module, "clear_shared_runtime_logs", lambda: cleared.append(True) or {"ok": True})
     assert _consume_log_cleanup_request(root) is True
+    assert cleared == [True]
     assert not (root / "logs").exists()
     assert (root / "config" / "ObstacleBridge.cfg").is_file()
     assert (root / "ObstacleBridge-telemetry-identity.p12").is_file()
