@@ -7,6 +7,13 @@ import Security
 final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
     private let policy: ObstacleBridgeTelemetryUploadPolicy
     private let credential: URLCredential
+    private let statusLock = NSLock()
+    private var attempts: UInt64 = 0
+    private var acceptedBatches: UInt64 = 0
+    private var rejectedBatches: UInt64 = 0
+    private var lastError = ""
+    private var lastSuccessUnixTS: Double?
+    private var lastAttemptUnixTS: Double?
     private lazy var session: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
@@ -25,6 +32,10 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
     /// Starts at most one upload; policy failure keeps the spool untouched.
     func uploadOnce(completion: @escaping (Bool) -> Void = { _ in }) {
         guard let pending = policy.nextRequest() else { completion(false); return }
+        statusLock.lock()
+        attempts &+= 1
+        lastAttemptUnixTS = Date().timeIntervalSince1970
+        statusLock.unlock()
         var request = URLRequest(url: pending.endpoint)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -37,9 +48,39 @@ final class ObstacleBridgeTelemetryMTLSUploader: NSObject, URLSessionDelegate {
                   object["ok"] as? Bool == true,
                   let accepted = object["accepted_through"] as? NSNumber,
                   self.policy.accept(acceptedThrough: accepted.uint64Value) > 0
-            else { self?.policy.fail(); completion(false); return }
+            else {
+                self?.policy.fail()
+                self?.recordFailure(error ?? NSError(domain: "ObstacleBridgeTelemetry", code: (response as? HTTPURLResponse)?.statusCode ?? -1))
+                completion(false)
+                return
+            }
+            self.recordSuccess()
             completion(true)
         }.resume()
+    }
+
+    func statusSnapshot() -> [String: Any] {
+        statusLock.lock()
+        let snapshot: [String: Any] = [
+            "attempts": attempts,
+            "accepted_batches": acceptedBatches,
+            "rejected_batches": rejectedBatches,
+            "last_error": lastError.isEmpty ? NSNull() : lastError,
+            "last_success_unix_ts": lastSuccessUnixTS ?? NSNull(),
+            "last_attempt_unix_ts": lastAttemptUnixTS ?? NSNull(),
+        ]
+        statusLock.unlock()
+        return snapshot.merging(policy.statusSnapshot()) { current, _ in current }
+    }
+
+    private func recordSuccess() {
+        statusLock.lock(); defer { statusLock.unlock() }
+        acceptedBatches &+= 1; lastSuccessUnixTS = Date().timeIntervalSince1970; lastError = ""
+    }
+
+    private func recordFailure(_ error: Error) {
+        statusLock.lock(); defer { statusLock.unlock() }
+        rejectedBatches &+= 1; lastError = String(describing: error).prefix(160).description
     }
 
     /// Cancels outstanding network work during runtime shutdown. The spool
@@ -182,7 +223,7 @@ enum ObstacleBridgeTelemetryIdentityStore {
 #endif
 
 enum ObstacleBridgeTelemetryAdminStatus {
-    static func snapshot(runtimeConfig: [String: Any]) -> [String: Any] {
+    static func snapshot(runtimeConfig: [String: Any], emitter: ObstacleBridgeTelemetryEmitter? = nil, spool: ObstacleBridgeTelemetrySpool? = nil, uploader: ObstacleBridgeTelemetryMTLSUploader? = nil) -> [String: Any] {
         let enabled = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["telemetry_enabled"]) ?? false
         let endpoint = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["telemetry_endpoint"])
         let parsed = endpoint.flatMap(URL.init(string:))
@@ -191,12 +232,17 @@ enum ObstacleBridgeTelemetryAdminStatus {
         #else
         let identityAvailable = false
         #endif
-        return [
+        var snapshot: [String: Any] = [
             "enabled": enabled,
             "configured": enabled && parsed?.scheme?.lowercased() == "https" && identityAvailable,
+            "runtime_state": enabled ? (uploader == nil ? "not_running" : "running") : "disabled",
             "endpoint_scheme": parsed?.scheme?.lowercased() ?? "",
             "endpoint_host": parsed?.host ?? "",
             "identity_available": identityAvailable,
         ]
+        snapshot["emitter"] = emitter?.statusSnapshot() ?? ["available": false]
+        snapshot["spool"] = spool?.statusSnapshot() ?? ["available": false]
+        snapshot["uploader"] = uploader?.statusSnapshot() ?? ["available": false]
+        return snapshot
     }
 }

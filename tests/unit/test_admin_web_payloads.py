@@ -572,6 +572,18 @@ def _http_json_body(writer: _WriterStub) -> dict:
 
 
 class AdminWebPayloadTests(unittest.TestCase):
+
+    def test_telemetry_tab_renders_client_and_collector_status(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-tab="telemetry"', index_html)
+        self.assertIn('id="tab-telemetry"', index_html)
+        self.assertIn("Telemetry collector", index_html)
+        self.assertIn("function applyTelemetryDoc", app_js)
+        self.assertIn("telemetry.collector", app_js)
+
     @staticmethod
     def _canonical_webadmin_paths() -> list[pathlib.Path]:
         repo_root = pathlib.Path(__file__).resolve().parents[2]

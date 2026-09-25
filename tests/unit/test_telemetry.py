@@ -122,10 +122,16 @@ def test_ingest_store_acknowledges_only_valid_ordered_durable_batch(tmp_path):
     store = TelemetryIngestStore(str(tmp_path / "ingest"))
     assert store.accept(payload, "install-01", 1) == {"ok": True, "accepted_through": 1, "accepted_count": 1}
     assert store.spool.recover() == [event]
+    status = json.loads((tmp_path / "ingest" / "collector-status.json").read_text(encoding="utf-8"))
+    assert status["accepted_batches"] == 1
+    assert status["rejected_batches"] == 0
+    assert status["last_accepted_unix_ts"] is not None
     bad = dict(event)
     bad["sequence"] = 0
     with pytest.raises(TelemetryValidationError):
         store.accept(json.dumps({"v": 1, "kind": "telemetry.batch", "events": [bad]}).encode("utf-8"), "install-01", 1)
+    status = json.loads((tmp_path / "ingest" / "collector-status.json").read_text(encoding="utf-8"))
+    assert status["rejected_batches"] == 1
 
 
 def test_ingest_rejects_replay_and_admission_exhaustion(tmp_path):

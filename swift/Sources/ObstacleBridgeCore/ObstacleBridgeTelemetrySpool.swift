@@ -57,6 +57,17 @@ public final class ObstacleBridgeTelemetryEmitter: @unchecked Sendable {
         defer { gate.signal() }; return dropped
     }
 
+    public func statusSnapshot() -> [String: Any] {
+        guard gate.wait(timeout: .now()) == .success else { return ["available": false] }
+        defer { gate.signal() }
+        return [
+            "available": true,
+            "pending_events": pending.count,
+            "newest_sequence": nextSequence == 0 ? NSNull() : nextSequence,
+            "drops": dropped,
+        ]
+    }
+
     private func increment(_ reason: String) { dropped[reason, default: 0] += 1 }
 }
 
@@ -100,6 +111,21 @@ public final class ObstacleBridgeTelemetrySpool: @unchecked Sendable {
         defer { gate.signal() }; var removed = 0
         for url in segments() where read(url).map({ $0.sequence <= sequence && $0.installationID == installationID && $0.sessionID == sessionID }) == true { try? FileManager.default.removeItem(at: url); removed += 1 }
         return removed
+    }
+
+    public func statusSnapshot() -> [String: Any] {
+        guard gate.wait(timeout: .now()) == .success else { return ["available": false] }
+        defer { gate.signal() }
+        let entries = segments()
+        let events = entries.compactMap(read).sorted { $0.sequence < $1.sequence }
+        return [
+            "available": true,
+            "pending_events": events.count,
+            "pending_bytes": usage(),
+            "oldest_sequence": events.first.map { $0.sequence } ?? NSNull(),
+            "newest_sequence": events.last.map { $0.sequence } ?? NSNull(),
+            "drops": dropped,
+        ]
     }
 
     private func segments() -> [URL] { (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]))?.filter { $0.lastPathComponent.hasPrefix("event-") && $0.pathExtension == "json" } ?? [] }

@@ -43,4 +43,16 @@ public final class ObstacleBridgeTelemetryUploadPolicy: @unchecked Sendable {
         guard gate.wait(timeout: .now()) == .success else { return }; defer { gate.signal() }
         inFlight = nil; nextAttempt = clock() + backoff + random() * backoff * 0.2; backoff = min(300, backoff * 2)
     }
+
+    public func statusSnapshot() -> [String: Any] {
+        guard gate.wait(timeout: .now()) == .success else { return ["available": false] }
+        defer { gate.signal() }
+        let now = clock()
+        return [
+            "available": true,
+            "in_flight": inFlight != nil,
+            "sent_bytes": sentBytes,
+            "backoff_remaining_sec": max(0, nextAttempt - now),
+        ]
+    }
 }

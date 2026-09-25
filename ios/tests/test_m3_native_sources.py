@@ -45,7 +45,11 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "session.invalidateAndCancel()" in source
     assert '"identity_available": identityAvailable' in source
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)' in provider
+    assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(' in provider
+    assert "emitter: telemetryEmitter" in provider
+    assert "spool: telemetrySpool" in provider
+    assert "uploader: telemetryUploader" in provider
+    assert "func statusSnapshot() -> [String: Any]" in source
     assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")

@@ -1436,7 +1436,12 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func telemetryStatusSnapshot() -> [String: Any] {
-        ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)
+        ObstacleBridgeTelemetryAdminStatus.snapshot(
+            runtimeConfig: runtimeConfig,
+            emitter: telemetryEmitter,
+            spool: telemetrySpool,
+            uploader: telemetryUploader
+        )
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {

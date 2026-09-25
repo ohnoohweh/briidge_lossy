@@ -224,7 +224,7 @@ receiver.
 | Authentication and replay | The reference credential CLI creates a local CA and scoped mTLS certificates, supports revocation, verifies the client identity against the installation ID, and persists replay sequence state. |
 | Uploader | `bridge_telemetry_uploader` performs single-flight mTLS HTTPS uploads with bounded batches, acknowledgement-scoped cleanup, timeout, jittered backoff, and a local byte budget. It is not on the logging, bridge, or packet path. |
 | Admission control | The ingest reference applies bounded request parsing and local per-identity/source token buckets. Replayed or over-limit batches are rejected. |
-| Operator evidence | `bridge_telemetry_status` and the authenticated Admin Web `/api/telemetry` endpoint expose bounded, redacted local spool status. The Admin endpoint times out its spool lookup and treats unavailable data as status, not an error for the bridge. |
+| Operator evidence | The authenticated Admin Web **Telemetry** tab exposes bounded, redacted client and collector state. Client state includes configuration, runtime state, identity availability, endpoint host/scheme, pending spool data, delivery/rejection counters, retry backoff, and last delivery/error. A hosting Python node also reports the supervised collector process, durable ingest counters, collector spool, and last acceptance/rejection. `/api/telemetry` remains available for automation and times out its spool lookup rather than affecting the bridge. |
 | Local qualification | `python scripts/qualify_telemetry.py` exercises a saturated producer and reports bounded emission latency, capacity, and drops. It is a pre-qualification check only. |
 | Runtime configuration | Python separates Admin configuration into `telemetry_client` and `telemetry_server`. The client section contains `telemetry_enabled`, `telemetry_endpoint`, `telemetry_spool_directory`, `telemetry_client_certificate_directory`, and `telemetry_client_address_family`. The server section contains only `telemetry_collector_*` settings. macOS and iOS expose the same `telemetry_client` section; they do not expose an empty server section. The client installation ID is derived from the client certificate common name and is never entered in configuration. |
 
@@ -549,13 +549,16 @@ In the iPhone WebAdmin **Telemetry client** section set:
 | `telemetry_endpoint` | `https://<collector-FQDN-or-SAN-IP>:18443/v1/telemetry/batches` |
 | `telemetry_spool_directory` | Leave the default; the Packet Tunnel uses its private App-Group spool instead. |
 
-Save the configuration and start/restart the Packet Tunnel. Its local
-WebAdmin telemetry status must show `enabled: true`, `identity_available:
-true`, and `configured: true`. The collector `/healthz` response must then
-advance `accepted_batches`; each five-second delivery timer only removes a
-batch after the collector returns `202` with an acknowledgement. If identity
-availability remains false, remove additional client identities visible to the
-extension or use an MDM/Configurator profile that installs exactly this one.
+Save the configuration and start/restart the Packet Tunnel. In the local
+WebAdmin **Telemetry** tab, verify the client is `configured` and `running`,
+the identity is available, and the pending-spool/delivery counters change. The
+collector section is populated only on a Python host configured to run the
+collector; it shows its supervised process, accepted/rejected batches, durable
+spool depth, and most recent acceptance/error. Each five-second delivery timer
+removes a batch only after the collector returns `202` with an acknowledgement.
+If identity availability remains false, remove additional client identities
+visible to the extension or use an MDM/Configurator profile that installs
+exactly this one.
 
 ### Swift/macOS implementation status
 

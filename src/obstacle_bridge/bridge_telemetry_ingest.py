@@ -69,6 +69,23 @@ class TelemetryIngestStore:
         self.admission = admission or TelemetryAdmissionControl()
         self.accepted_batches = 0
         self.rejected_batches = 0
+        self.started_unix_ts = time.time()
+        self.last_accepted_unix_ts: Optional[float] = None
+        self.last_rejected_unix_ts: Optional[float] = None
+        self.last_error = ""
+        self._persist_status()
+
+    @property
+    def status_path(self) -> Path:
+        return self.spool.directory / "collector-status.json"
+
+    def _persist_status(self) -> None:
+        temporary = self.status_path.with_suffix(".tmp")
+        try:
+            temporary.write_text(json.dumps(self.health(), sort_keys=True, separators=(",", ":")), encoding="utf-8")
+            os.replace(str(temporary), str(self.status_path))
+        except OSError:
+            pass
 
     def accept(self, payload: bytes, installation_id: Optional[str] = None, certificate_serial: Optional[int] = None, source: str = "local") -> Dict[str, Any]:
         if not isinstance(payload, bytes) or not payload or len(payload) > MAX_REQUEST_BYTES:
@@ -102,14 +119,29 @@ class TelemetryIngestStore:
             self.replay_store.advance(identity_key, sequences[-1])
         except Exception as exc:
             self.rejected_batches += 1
+            self.last_rejected_unix_ts = time.time()
+            self.last_error = type(exc).__name__
+            self._persist_status()
             if isinstance(exc, TelemetryValidationError):
                 raise
             raise TelemetryValidationError("malformed batch") from exc
         self.accepted_batches += 1
+        self.last_accepted_unix_ts = time.time()
+        self.last_error = ""
+        self._persist_status()
         return {"ok": True, "accepted_through": sequences[-1], "accepted_count": len(normalized)}
 
     def health(self) -> Dict[str, Any]:
-        return {"ok": True, "accepted_batches": self.accepted_batches, "rejected_batches": self.rejected_batches, "spool": self.spool.status()}
+        return {
+            "ok": True,
+            "accepted_batches": self.accepted_batches,
+            "rejected_batches": self.rejected_batches,
+            "last_accepted_unix_ts": self.last_accepted_unix_ts,
+            "last_rejected_unix_ts": self.last_rejected_unix_ts,
+            "last_error": self.last_error or None,
+            "started_unix_ts": self.started_unix_ts,
+            "spool": self.spool.status(),
+        }
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):

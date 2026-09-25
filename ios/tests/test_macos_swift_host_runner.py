@@ -60,7 +60,7 @@ def test_macos_build_includes_mtls_telemetry_transport() -> None:
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "connectionProxyDictionary = [:]" in source
     assert "SecItemCopyMatching" in source
-    assert "return (result as! SecIdentity)" in source
+    assert "return telemetryIdentities.count == 1 ? telemetryIdentities[0] : nil" in source
     assert "session.invalidateAndCancel()" in source
 
 
@@ -81,7 +81,8 @@ def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
     assert '"telemetry": telemetryStatusSnapshot()' in source
-    assert "ObstacleBridgeTelemetryAdminStatus.snapshot(runtimeConfig: runtimeConfig)" in source
+    assert "ObstacleBridgeTelemetryAdminStatus.snapshot(" in source
+    assert "uploader: telemetryUploader" in source
     assert '"telemetry_client": [' in runtime_config
     assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
     assert 'defaultValue: "https://127.0.0.1:18443/v1/telemetry/batches"' in runtime_config

@@ -654,8 +654,11 @@ ARC-CMP-005:
   # client-spool defaults aligned with macOS/iOS, while Python exposes its
   # certificate directory, family policy, and supervised collector settings
   # in separate client and server sections.
+  # The shared Telemetry tab retains only bounded delivery and collector
+  # summaries; it never reflects telemetry event payloads or credentials.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
+    - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
     - tests/unit/test_runtime_health.py::test_ring_is_bounded_and_classifies_only_the_last_lifecycle_marker
     - tests/unit/test_runtime_health.py::test_runner_lifecycle_persists_and_reports_redacted_health

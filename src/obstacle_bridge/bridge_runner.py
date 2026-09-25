@@ -4,6 +4,7 @@ from ._bridge_import import export_bridge_globals
 import base64
 import contextlib as _process_contextlib
 import ctypes
+import json
 import os
 import secrets
 import shutil
@@ -207,6 +208,7 @@ class Runner:
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
         self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
         self._telemetry_collector_process: Optional[asyncio.subprocess.Process] = None
+        self._telemetry_collector_last_error: str = ""
         self._telemetry_client_task: Optional[asyncio.Task] = None
         self._telemetry_emitter: Optional[TelemetryEmitter] = None
         self._telemetry_spool: Optional[TelemetrySpool] = None
@@ -275,6 +277,7 @@ class Runner:
 
     def _telemetry_collector_warning(self, message: str) -> None:
         text = "WARNING: telemetry collector " + str(message)
+        self._telemetry_collector_last_error = text
         print(text, file=sys.stdout, flush=True)
         self.log.warning("[TELEMETRY] %s", text)
 
@@ -312,6 +315,32 @@ class Runner:
             self._telemetry_collector_process = None
             return
         print("Telemetry collector started alongside bridge (pid=%d)." % int(proc.pid), file=sys.stdout, flush=True)
+
+    def get_telemetry_collector_snapshot(self) -> dict:
+        enabled = bool(getattr(self.args, "telemetry_collector_enabled", False))
+        proc = self._telemetry_collector_process
+        running = bool(proc is not None and proc.returncode is None)
+        spool_directory = str(getattr(self.args, "telemetry_collector_spool_directory", "") or "").strip()
+        spool = {}
+        if spool_directory:
+            with contextlib.suppress(Exception):
+                spool = TelemetrySpool(spool_directory).status()
+        collector_status = {}
+        if spool_directory:
+            with contextlib.suppress(Exception):
+                collector_status = json.loads((pathlib.Path(spool_directory) / "collector-status.json").read_text(encoding="utf-8"))
+        return {
+            "enabled": enabled,
+            "runtime_state": "running" if running else "disabled" if not enabled else "not_running",
+            "pid": int(proc.pid) if running and proc is not None else None,
+            "last_error": self._telemetry_collector_last_error or None,
+            "spool": spool,
+            "accepted_batches": int(collector_status.get("accepted_batches") or 0),
+            "rejected_batches": int(collector_status.get("rejected_batches") or 0),
+            "last_accepted_unix_ts": collector_status.get("last_accepted_unix_ts"),
+            "last_rejected_unix_ts": collector_status.get("last_rejected_unix_ts"),
+            "ingest_last_error": collector_status.get("last_error"),
+        }
 
     async def _stop_telemetry_collector(self) -> None:
         proc = self._telemetry_collector_process
@@ -380,6 +409,9 @@ class Runner:
         flush_task = self._telemetry_client_flush_task
         enabled = bool(getattr(self.args, "telemetry_enabled", False))
         worker_state = "disabled" if not enabled else "not_started" if task is None else "stopped" if task.done() else "running"
+        emitter = self._telemetry_emitter
+        spool = self._telemetry_spool
+        uploader = self._telemetry_uploader
         return {
             "enabled": enabled,
             "worker_state": worker_state,
@@ -388,6 +420,16 @@ class Runner:
             "last_load_age_sec": max(0.0, now - self._telemetry_client_last_load_monotonic) if self._telemetry_client_last_load_monotonic else None,
             "flush_in_flight": bool(flush_task is not None and not flush_task.done()),
             "last_error": self._telemetry_client_last_error or None,
+            "emitter": {
+                "pending_events": emitter.pending_count() if emitter is not None else 0,
+                "drops": dict(emitter.dropped) if emitter is not None else {},
+            },
+            "spool": spool.status() if spool is not None else {},
+            "uploader": {
+                "sent_bytes": int(getattr(uploader, "sent_bytes", 0) or 0) if uploader is not None else 0,
+                "backoff_remaining_sec": max(0.0, float(getattr(uploader, "next_attempt", 0.0) - getattr(uploader, "clock", time.monotonic)())) if uploader is not None else 0.0,
+                "last_error": (getattr(uploader, "last_error", "") or None) if uploader is not None else None,
+            },
         }
 
     async def _telemetry_client_worker(self) -> None:
@@ -2024,6 +2066,10 @@ class Runner:
             "compression_saving_ratio": savings_ratio,
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
+        payload["telemetry"] = {
+            "client": self.get_telemetry_client_snapshot(),
+            "collector": self.get_telemetry_collector_snapshot(),
+        }
         payload["tun_helper"] = self._tun_helper_snapshot()
         payload.update(self._runtime_health_status_fields())
         return payload
