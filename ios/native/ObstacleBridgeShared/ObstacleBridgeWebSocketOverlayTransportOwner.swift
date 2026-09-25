@@ -618,12 +618,19 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
         let generation = websocketTransportGeneration
         do {
             let resolved = try currentResolvedPeer()
-            let usesAddressOverride = !peerAddresses.isEmpty
+            // URLSession receives only a URL.  Passing a resolved IP literal
+            // into a wss URL makes system trust evaluation compare the leaf
+            // certificate with that address rather than with ws_peer.  Use
+            // Network.framework for every TLS connection so it can dial the
+            // selected address while retaining ws_peer as the TLS server name
+            // (SNI and certificate hostname).  Explicit peer addresses use
+            // the same path for the same reason.
+            let useNetworkWebSocket = useTLS || !peerAddresses.isEmpty
             let plan = overlayRuntime.buildConnectPlan(
                 host: resolved.host,
                 port: resolved.port,
-                peerNameHost: usesAddressOverride ? peerHost : nil,
-                peerNamePort: usesAddressOverride ? peerPort : nil,
+                peerNameHost: useNetworkWebSocket ? peerHost : nil,
+                peerNamePort: useNetworkWebSocket ? peerPort : nil,
                 useTLS: useTLS,
                 wsPath: wsPath,
                 wsSubprotocol: wsSubprotocol,
@@ -633,7 +640,7 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
             resolvedPeerPort = resolved.port
             resolvedPeerFamily = ObstacleBridgePeerAddressResolver.familyName(resolved.family)
             connectedURI = plan.uri
-            if usesAddressOverride {
+            if useNetworkWebSocket {
                 try connectNetworkWebSocket(resolved: resolved, plan: plan, generation: generation)
                 return
             }

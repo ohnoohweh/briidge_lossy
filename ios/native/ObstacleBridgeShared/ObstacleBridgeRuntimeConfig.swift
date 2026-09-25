@@ -307,6 +307,7 @@ enum ObstacleBridgeRuntimeConfig {
         "TUN_routing",
         "admin_web",
         "debug_logging",
+        "telemetry_client",
         "channel_mux",
         "iOS_TUN_connector",
         "proxy_provider",
@@ -330,6 +331,14 @@ enum ObstacleBridgeRuntimeConfig {
         "helper_apply_network": "tun_helper_apply_network",
         "helper_log_level": "tun_helper_log_level",
     ]
+
+    static func defaultTelemetryConfig() -> [String: Any] {
+        [
+            "telemetry_enabled": false,
+            "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
+        ]
+    }
 
     static func configSchemaSnapshot() -> [String: Any] {
         [
@@ -356,6 +365,11 @@ enum ObstacleBridgeRuntimeConfig {
                 schemaItem(key: "log_file", description: "Debug log file path", defaultValue: ""),
                 schemaItem(key: "log_file_max_bytes", description: "Maximum size of each log file before rotation", defaultValue: 1_048_576),
                 schemaItem(key: "log_file_backup_count", description: "Number of rotated log files to keep", defaultValue: 5),
+            ],
+            "telemetry_client": [
+                schemaItem(key: "telemetry_enabled", description: "Enable bounded HTTPS telemetry upload outside the bridge and packet paths.", defaultValue: false),
+                schemaItem(key: "telemetry_endpoint", description: "HTTPS collector endpoint for telemetry batches.", defaultValue: "https://127.0.0.1:18443/v1/telemetry/batches"),
+                schemaItem(key: "telemetry_spool_directory", description: "Telemetry spool directory. Packet Tunnel telemetry uses its app-group container.", defaultValue: "/var/lib/obstaclebridge/telemetry-client"),
             ],
             "runner": [
                 schemaItem(key: "overlay_transport", description: "Overlay transport between peers: comma-separated list from myudp,tcp,quic,ws. Multiple transports are supported simultaneously for listening instances.", defaultValue: "myudp"),
@@ -584,6 +598,14 @@ enum ObstacleBridgeRuntimeConfig {
     static func maskedConfigSnapshot(_ runtimeConfig: [String: Any]) -> [String: Any] {
         var payload = runtimeConfig
         normalizeFlatPayloadForSchema(&payload)
+        // The admin configuration form posts every visible telemetry-client
+        // field. Return schema-typed defaults for unset values so a
+        // read-modify-save cycle never submits a null where the schema
+        // requires an empty string.
+        for (key, defaultValue) in defaultTelemetryConfig()
+            where payload[key] == nil || payload[key] is NSNull {
+            payload[key] = defaultValue
+        }
         if payload["overlay_transport"] == nil {
             payload["overlay_transport"] = "myudp"
         }
@@ -741,7 +763,10 @@ enum ObstacleBridgeRuntimeConfig {
         if payload["compress_layer_types"] == nil {
             payload["compress_layer_types"] = "data,data_frag"
         }
-        for key in ["admin_web_password", "secure_link_psk"] where payload[key] != nil {
+        for key in [
+            "admin_web_password",
+            "secure_link_psk",
+        ] where payload[key] != nil {
             payload[key] = ""
         }
         return payload

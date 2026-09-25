@@ -2155,6 +2155,11 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                             "ws_peer": "",
                             "ws_peer_port": 8080,
                         ] as [String: Any],
+                        "telemetry_client": [
+                            "telemetry_enabled": true,
+                            "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
+                            "telemetry_spool_directory": "/private/telemetry-spool",
+                        ] as [String: Any],
                     ]
                     let saved = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
                         currentRawConfig: freshRawConfig,
@@ -2170,6 +2175,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                     let adminSection = restored["admin_web"] as? [String: Any] ?? [:]
                     let channelMuxSection = restored["channel_mux"] as? [String: Any] ?? [:]
                     let proxySection = restored["proxy_provider"] as? [String: Any] ?? [:]
+                    let telemetrySection = persisted["telemetry_client"] as? [String: Any] ?? [:]
                     let output: [String: Any] = [
                         "suggested_updates": updates,
                         "secure_section": secureSection,
@@ -2177,6 +2183,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                         "admin_section": adminSection,
                         "channel_mux_section": channelMuxSection,
                         "proxy_section": proxySection,
+                        "telemetry_section": telemetrySection,
                         "masked": masked,
                         "normalized_keys": saved.normalizedKeys,
                     ]
@@ -2235,9 +2242,14 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
     assert payload["proxy_section"]["proxy_provider_auth"]["username"] == "obproxy"
     assert payload["proxy_section"]["proxy_provider_auth"]["token"] == "local-token"
     assert payload["proxy_section"]["log_proxy_provider"] == "INFO"
+    assert payload["telemetry_section"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+    assert payload["telemetry_section"]["telemetry_spool_directory"] == "/private/telemetry-spool"
     assert payload["masked"]["secure_link"] is True
     assert payload["masked"]["secure_link_mode"] == "psk"
     assert payload["masked"]["secure_link_psk"] == ""
+    assert payload["masked"]["telemetry_enabled"] is True
+    assert payload["masked"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+    assert payload["masked"]["telemetry_spool_directory"] == "/private/telemetry-spool"
     assert payload["masked"]["compress_layer"] is True
     assert payload["masked"]["compress_layer_level"] == 5
 

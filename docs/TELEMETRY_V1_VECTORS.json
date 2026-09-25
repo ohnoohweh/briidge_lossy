@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "event": {
+    "event": "runtime.lifecycle",
+    "fields": {"reason": "start", "state": "ready"},
+    "installation_id": "install-01",
+    "kind": "telemetry.event",
+    "monotonic_ns": 123456789,
+    "priority": "critical",
+    "sequence": 1,
+    "session_id": "session-01",
+    "v": 1,
+    "wall_time": 1700000000.0
+  }
+}

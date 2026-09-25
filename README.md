@@ -152,7 +152,7 @@ The wizard is designed for typical peer onboarding:
 - Step 4: Review
 - Step 5: Apply + restart
 
-The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, peer endpoint settings, TUN routing, compression, admin web port, mux TCP backpressure knobs, and proxy-provider settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
+The onboarding flow accepts either an invite token or a paste-ready configuration snippet for the initial setup. Both paths can carry transport and service-definition onboarding data (`own_servers`, `remote_servers`, secure-link mode/PSK envelope, peer endpoint settings, MyUDP/TCP/QUIC/WebSocket client transport options including WebSocket peer-address overrides and the selected existing client's bind/port, TUN routing, compression, admin web port, mux TCP backpressure knobs, and proxy-provider settings). Admin credentials are entered locally in the wizard and are not sourced from the invite token.
 
 Invite-derived apply updates use the same grouped config shape as persisted runtime config, including grouped `TUN_routing` sections, so Python and Swift runtimes accept the same onboarding payload structure.
 
@@ -1129,7 +1129,58 @@ What the admin web shows:
 | `--log-file-backup-count` | `5` | Number of rotated log files to keep when `--log-file-max-bytes` is enabled |
 | `--console-level` | `INFO` | console (stdout) logging level (default INFO) |
 | `--file-level` | `DEBUG` | file logging level (default: same as --log) |
+| `--log-udp-target` | unset | Best-effort UDP log receiver `host:port`; a direct text-entry endpoint field, not a log-level selector. Transport failures drop records. |
+| `--log-udp-only` | `false` | Use only the UDP sender, isolating runtime work from local logging sinks. |
+| `--log-admin-udp-target` | `--log-udp-target` | UDP receiver queried by Admin Web when UDP-only logging is active; a direct text-entry endpoint field. |
+| `--telemetry-enabled` | `false` | Enable bounded HTTPS telemetry configuration outside bridge and packet paths. |
+| `--telemetry-endpoint` | `https://127.0.0.1:18443/v1/telemetry/batches` | HTTPS collector endpoint for telemetry batches. Replace loopback with the reachable collector address for remote clients. |
+| `--telemetry-spool-directory` | `/var/lib/obstaclebridge/telemetry-client` | Local bounded telemetry spool directory. |
+| `--telemetry-client-certificate-directory` | `/etc/obstaclebridge/telemetry-client` | Python uploader client certificate, key, and collector-CA directory. |
+| `--telemetry-client-address-family` | `prefer-ipv6` | Python uploader endpoint policy: IPv6 preferred with IPv4 fallback, IPv6 only, or IPv4 only. |
+| `--telemetry-collector-enabled` | `false` | Enable this host's separate HTTPS telemetry collector service. |
+| `--telemetry-collector-bind` | `::` | Collector bind address. |
+| `--telemetry-collector-address-family` | `prefer-ipv6` | Collector bind policy: IPv6 preferred with IPv4 fallback, IPv6 only, or IPv4 only. |
+| `--telemetry-collector-port` | `18443` | Collector HTTPS TCP port. |
+| `--telemetry-collector-spool-directory` | `/var/lib/obstaclebridge/telemetry-ingest` | Collector accepted-event and replay-state directory. |
+| `--telemetry-collector-tls-cert` | `/etc/obstaclebridge/telemetry/server.cert.pem` | Collector TLS server certificate PEM path. |
+| `--telemetry-collector-tls-key` | `/etc/obstaclebridge/telemetry/server.key.pem` | Collector TLS server private-key PEM path. |
+| `--telemetry-collector-client-ca` | `/etc/obstaclebridge/telemetry/client-ca.cert.pem` | Trusted telemetry client CA PEM path. |
+| `--telemetry-collector-revocations` | `/var/lib/obstaclebridge/telemetry-ingest/revocations.json` | Revoked client-certificate serial list path. |
 | `--debug-stderr` | `False` | mirror DEBUG lines to stderr (default: off) |
+
+The optional private UDP logger is isolated best-effort diagnostics only. The
+Python Runner additionally provides a bounded, allowlisted local event
+producer, crash-safe spool, single-flight background uploader, and mTLS-required
+reference ingest process. The worker emits a startup load sample and repeats it
+every 15 seconds; empty drains are no-ops and one background flush owns
+spool/network delivery outside forwarding callbacks;
+failures are warning-level debug-log evidence and
+never block the bridge;
+the reference uploader uses only acknowledged delivery and the collector rejects
+replayed/admission-exhausted batches; public-Internet telemetry
+remains gated by the remaining authentication-operations and abuse-hardening sequence in
+[docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
+Python separates telemetry configuration into `telemetry_client` and `telemetry_server`;
+the client section holds producer settings and the server section holds collector settings.
+The telemetry installation ID is always derived from
+the client-certificate common name rather than entered in configuration.
+The local telemetry-status CLI reports redacted spool occupancy and delivery metadata only.
+For a Linux Python collector/client reference deployment, the repository provides
+`generate_telemetry_ca.py`, `generate_telemetry_server_certificate.py`, and
+`generate_telemetry_client_certificate.py`; the server script can include an
+FQDN and direct static IPv4/IPv6 addresses in one certificate.
+`ios/scripts/generate_telemetry_ios_identity.sh` creates a password-protected
+PKCS#12 identity and public collector CA for protected iPhone Keychain
+enrolment; the extension derives its telemetry installation ID from that
+identity rather than reading a private key from app storage.
+`ios/scripts/upload_ios_telemetry_identity.sh` performs a verified temporary
+transfer of that encrypted package and its password into the app Documents
+container; the next app/tunnel start imports the key into the shared Keychain
+and removes the staging files.
+`ios/scripts/clear_ios_logs.sh` removes only iPhone diagnostic logs through a
+one-shot app request, including the extension's private App Group logs while
+preserving configuration, telemetry spool, and enrolment data.
+Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner
 | Option(s) | Default | Description |
@@ -1539,7 +1590,7 @@ Optional operations follow-up:
 
 Testing statistics and traceability are now reported per product instead of as one blended count blob. See [docs/README_TESTING.md](docs/README_TESTING.md) for the detailed guide, and use `python3 scripts/report_product_traceability.py` for the current machine-derived snapshot. In that report, `python` means the Python CLI/runtime product across supported host operating systems, including macOS Python; `macos` means the macOS Swift app product. The shared Swift package boundary is exercised separately through the `ObstacleBridgeCore` and `ObstacleBridgeApplePackageProbe` build targets.
 
-The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+The current Python-side TUN helper focus includes Linux-native lifecycle hardening, package-prestarted helper handoff for Synology packaging experiments, helper and inline process-identity reporting on the TUN page, support-diagnostics exposure through `/api/status`, helper-reader ownership handoff protection for shared-TUN helper mode, peer-plus-channel scoped shared-TUN routing so independent listener clients may use the same channel number and the actual shared server TUN reader retains peer routing across ChannelMux instances, non-canonical policy-rule reuse, full-tunnel policy routing that retains every kernel-connected local LAN such as libvirt and VMware bridges in the main table, non-blocking Admin Web verification probes so live TUN diagnostics stay responsive while peer/global internal ICMP checks refresh in the background, and route-only included-route enable/suspend control for supported helper backends. The cross-layer connection lifecycle and rotation rework has typed transport and SecureLink propagation; SecureLink reports failure without initiating reconnect, and a new SecureLink session is considered recovered only after peer-confirmed authentication, while Compression, ChannelMux, Runner, and Swift adoption remain in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 Oversized protected WebSocket UDP coverage verifies exact payload bytes and peer counters across the fragmentation boundary; diagnostic log routing remains an operator aid rather than a wire-contract dependency.
 
@@ -1559,9 +1610,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `63` | `980` |
-| macOS Swift app | `1` | `66` |
-| iOS app/extension | `29` | `190` |
+| Python CLI/runtime, including macOS Python | `64` | `1012` |
+| macOS Swift app | `1` | `70` |
+| iOS app/extension | `31` | `206` |
 
 #### Requirement traceability
 
@@ -1601,9 +1652,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `66` | `0` | `66` |
-| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `32` | `32` |
-| Total parity-oriented evidence | Sum of the lanes above | `78` | `152` | `230` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `70` | `0` | `70` |
+| Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
+| Total parity-oriented evidence | Sum of the lanes above | `82` | `154` | `236` |
 
 Important caveat:
 

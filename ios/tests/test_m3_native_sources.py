@@ -26,6 +26,65 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
     assert 'schema: String = "obstaclebridge.ios.packet-tunnel.v1"' in shared
 
 
+def test_shared_mtls_telemetry_transport_source_exists() -> None:
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert "SecIdentity" in source
+    assert "NSURLAuthenticationMethodClientCertificate" in source
+    assert "performDefaultHandling" in source
+    assert "ObstacleBridgeTelemetryAdminStatus" in source
+    assert "SecItemCopyMatching" in source
+    assert "static func telemetryIdentity()" in source
+    assert "SecCertificateCopyCommonName" in source
+    assert "SecPKCS12Import" in source
+    assert "importStagedIdentityIfPresent" in source
+    assert "keychain-access-groups" in (APP_NATIVE_DIR / "ObstacleBridge.entitlements").read_text(encoding="utf-8")
+    assert "keychain-access-groups" in (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")
+    assert "telemetryIdentities.count == 1" in source
+    assert "func cancel()" in source
+    assert "session.invalidateAndCancel()" in source
+    assert '"identity_available": identityAvailable' in source
+    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(' in provider
+    assert "emitter: telemetryEmitter" in provider
+    assert "spool: telemetrySpool" in provider
+    assert "uploader: telemetryUploader" in provider
+    assert "func statusSnapshot() -> [String: Any]" in source
+    assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
+    assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
+    control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()" in control
+    assert "@objc class func clearSharedLogs()" in control
+    assert "ObstacleBridgeTelemetryIdentityStore.clearAppGroupDiagnosticLogs()" in control
+    assert "static func clearAppGroupDiagnosticLogs()" in source
+    assert 'appendingPathComponent("logs", isDirectory: true)' in source
+    assert 'appendingPathComponent("telemetry-v1", isDirectory: true)' in provider
+    assert "private func flushTelemetry(startUpload: Bool = true)" in provider
+    assert "flushTelemetry(startUpload: false)" in provider
+    assert "telemetryUploader?.cancel()" in provider
+    assert "private func enqueueTelemetryHealth(" in provider
+    assert 'event: "runtime.health"' in provider
+    assert "let memoryBytes = Int64(clamping:" in provider
+    assert '"memory_bytes": .integer(memoryBytes)' in provider
+    assert '"queue_depth": .integer(queueDepth)' in provider
+    assert '"dropped": .integer(dropped)' in provider
+    assert "private func enqueueTelemetryFailure(errorCode: String)" in provider
+    assert 'enqueueTelemetryFailure(errorCode: "bridge_start")' in provider
+    for key in [
+        "telemetry_endpoint",
+        "telemetry_spool_directory",
+    ]:
+        assert f'"{key}",' in runtime_config
+    assert '"telemetry_client",' in runtime_config
+    assert '"telemetry_client": [' in runtime_config
+    assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
+    assert "static func defaultTelemetryConfig()" in runtime_config
+    assert '"telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches"' in runtime_config
+    assert '"telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client"' in runtime_config
+    assert "for (key, defaultValue) in defaultTelemetryConfig()" in runtime_config
+    assert "payload[key] == nil || payload[key] is NSNull" in runtime_config
+
+
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
@@ -926,6 +985,7 @@ def test_websocket_overlay_transport_owner_source_exists() -> None:
     assert "NWProtocolWebSocket.Options" in runtime
     assert "sec_protocol_options_set_tls_server_name" in runtime
     assert 'headers.append((name: "Host"' in runtime
+    assert "let useNetworkWebSocket = useTLS || !peerAddresses.isEmpty" in runtime
     assert "peerAddresses.isEmpty" in runtime
     assert 'peerAddresses: ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: settings.runtimeConfig["ws_peer_addresses"])' in provider
     assert 'let peerAddresses = ObstacleBridgeRuntimeConfig.wsPeerAddresses(from: runtimeConfig["ws_peer_addresses"])' in host_runner
@@ -933,6 +993,46 @@ def test_websocket_overlay_transport_owner_source_exists() -> None:
     assert "handleInboundTCPMuxFrame(" in runtime
     assert "handleInboundUDPMuxFrame(" in runtime
     assert "sendMuxFrames(" in runtime
+
+
+def test_onboarding_invites_keep_all_client_transport_options() -> None:
+    onboarding = (SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift").read_text(encoding="utf-8")
+
+    for key in [
+        "udp_bind",
+        "udp_own_port",
+        "udp_peer_resolve_family",
+        "max_inflight",
+        "tcp_bind",
+        "tcp_own_port",
+        "tcp_peer_resolve_family",
+        "tcp_bp_wbuf_threshold",
+        "quic_bind",
+        "quic_own_port",
+        "quic_peer_resolve_family",
+        "quic_alpn",
+        "quic_insecure",
+        "quic_max_size",
+        "ws_bind",
+        "ws_own_port",
+        "ws_peer_addresses",
+        "ws_path",
+        "ws_payload_mode",
+        "ws_peer_resolve_family",
+        "ws_proxy_auth",
+        "ws_proxy_host",
+        "ws_proxy_mode",
+        "ws_proxy_port",
+        "ws_reconnect_grace",
+        "ws_send_timeout",
+        "ws_subprotocol",
+        "ws_tcp_user_timeout_ms",
+        "ws_tls",
+        "ws_max_size",
+    ]:
+        assert f'"{key}"' in onboarding
+    assert 'profile["transport_options"]' in onboarding
+    assert 'connection["transport_options"]' in onboarding
 
 
 def test_tcp_overlay_runtime_source_exists() -> None:

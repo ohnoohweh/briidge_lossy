@@ -966,6 +966,7 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_records_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_allows_test_injected_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_excluded_routes_and_full_tunnel_policy
+    - tests/unit/test_tun_helper_linux_backend.py::test_full_tunnel_preserves_all_connected_local_lans_in_main_table
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_policy_rules_on_restart
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause
@@ -1459,6 +1460,16 @@ REQ-MYU-007:
 # extend the existing `REQ-MYU-*` and admin-observability test families.
 
 REQ-ADM-001:
+  # UDP logging targets remain direct host:port configuration values rather
+  # than being coerced into the adjacent logger-level selector vocabulary.
+  # Shared telemetry coverage keeps bounded worker-owned Runner producer/upload work off
+  # forwarding paths and keeps producer defaults aligned
+  # with macOS and iOS. Python cleanly separates client and
+  # server configuration, and adds its standard certificate
+  # directory, address-family policy, and collector settings; the certificate
+  # CN, rather than mutable configuration, supplies the installation identity.
+  # An enabled collector is a supervised child whose failure stays observable
+  # without preventing bridge startup.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
@@ -1470,9 +1481,35 @@ REQ-ADM-001:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
+    - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
     - tests/unit/test_admin_web_payloads.py::test_admin_web_does_not_embed_ios_native_tunnel_controls
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
+    - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
+    - tests/unit/test_debug_logging_aliases.py::test_udp_log_sender_drops_transport_failure_without_raising
+    - tests/unit/test_debug_logging_aliases.py::test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call
+    - tests/unit/test_debug_logging_aliases.py::test_admin_telemetry_status_is_redacted_and_reports_worker_liveness
+    - tests/unit/test_telemetry.py::test_emitter_empty_drain_is_non_blocking_and_returns_no_events
+    - tests/unit/test_telemetry.py::test_runner_telemetry_client_retries_a_failed_flush_worker
+    - tests/unit/test_telemetry.py::test_v1_vector_round_trips_canonically
+    - tests/unit/test_telemetry.py::test_spool_recovers_atomic_events_and_acknowledges_them
+    - tests/unit/test_telemetry.py::test_ingest_store_acknowledges_only_valid_ordered_durable_batch
+    - tests/unit/test_telemetry.py::test_mtls_ingest_accepts_matching_client_identity
+    - tests/unit/test_telemetry.py::test_uploader_requires_https_and_respects_backoff
+    - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
+    - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
+    - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
+    - tests/unit/test_telemetry.py::test_client_certificate_directory_derives_installation_id
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_generator_creates_password_protected_keychain_import_material
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_wrapper_uses_standard_ca_paths_and_returns_output_to_operator
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_upload_wrapper_uses_device_app_documents_copy_and_readback
+    - ios/tests/test_m3_native_sources.py::test_shared_mtls_telemetry_transport_source_exists
+    - ios/tests/test_ios_app_facade.py::test_log_cleanup_request_removes_documents_logs_and_requests_shared_logs_cleanup
+    - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
+    - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_separates_telemetry_client_and_server_fields
+    - ios/tests/test_ios_app_facade.py::test_load_grouped_runtime_config_preserves_saved_transport_fields
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_exposes_only_redacted_telemetry_status
     - ios/tests/test_m3_native_sources.py::test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread
     - ios/tests/test_ios_app_facade.py::test_webadmin_url_from_config_uses_extension_admin_api
     - ios/tests/test_ios_app_facade.py::test_resolve_toga_switch_class_uses_widget_module_fallback
@@ -1625,6 +1662,7 @@ REQ-ADM-010:
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_applies_client_options_for_every_transport
     - tests/unit/test_admin_web_payloads.py::test_onboarding_blueprints_group_active_peer_connections
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
     - tests/unit/test_runner_config_persistence.py::test_update_config_accepts_grouped_tun_routing_section

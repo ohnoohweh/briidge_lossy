@@ -4,18 +4,24 @@ from ._bridge_import import export_bridge_globals
 import base64
 import contextlib as _process_contextlib
 import ctypes
+import json
 import os
 import secrets
 import shutil
 import signal as _process_signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Mapping
 
 from .bridge_tun_helper_client import _open_local_helper_connection
+from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, TelemetrySpool
+from .bridge_telemetry_credentials import client_certificate_paths
+from .bridge_telemetry_uploader import TelemetryUploader
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
 
 _bridge = export_bridge_globals(globals())
@@ -201,6 +207,18 @@ class Runner:
         self._tun_helper_client: Optional[TunHelperClient] = None
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
         self._tun_helper_process: Optional[asyncio.subprocess.Process] = None
+        self._telemetry_collector_process: Optional[asyncio.subprocess.Process] = None
+        self._telemetry_collector_last_error: str = ""
+        self._telemetry_client_task: Optional[asyncio.Task] = None
+        self._telemetry_emitter: Optional[TelemetryEmitter] = None
+        self._telemetry_spool: Optional[TelemetrySpool] = None
+        self._telemetry_uploader: Optional[TelemetryUploader] = None
+        self._telemetry_client_flush_task: Optional[asyncio.Task] = None
+        self._telemetry_client_last_error: str = ""
+        self._telemetry_client_last_warning: str = ""
+        self._telemetry_client_last_cycle_monotonic: float = 0.0
+        self._telemetry_client_last_load_monotonic: float = 0.0
+        self._telemetry_client_cycles: int = 0
         self._tun_helper_prestarted: bool = False
         self._tun_helper_session_token: str = ""
         self._tun_helper_socket_path: str = ""
@@ -223,7 +241,7 @@ class Runner:
         self._last_connected_monotonic: Optional[float] = None
         self._last_disconnected_monotonic: Optional[float] = None
         self._last_connection_lifecycle_monotonic: Optional[float] = None
-        self._client_restart_watchdog_task: Optional[asyncio.Task] = None        
+        self._client_restart_watchdog_task: Optional[asyncio.Task] = None
         self._runtime_health_store: Optional[RuntimeHealthStore] = self._make_runtime_health_store()
         self._runtime_health_previous_lifetime_ended_cleanly: Optional[bool] = None
         self._runtime_health_sequence = 0
@@ -256,6 +274,238 @@ class Runner:
             "last_failed_monotonic": None,
             "last_failed_error": "",
         }
+
+    def _telemetry_collector_warning(self, message: str) -> None:
+        text = "WARNING: telemetry collector " + str(message)
+        self._telemetry_collector_last_error = text
+        print(text, file=sys.stdout, flush=True)
+        self.log.warning("[TELEMETRY] %s", text)
+
+    async def _start_telemetry_collector(self) -> None:
+        if not bool(getattr(self.args, "telemetry_collector_enabled", False)):
+            return
+        config_path = str(getattr(self.args, "config", "") or "").strip()
+        if not config_path or not pathlib.Path(config_path).is_file():
+            self._telemetry_collector_warning("enabled but the saved --config file is unavailable; collector was not started")
+            return
+        try:
+            from .bridge_telemetry_ingest import _collector_config, build_tls_context
+            config = _collector_config(config_path)
+            if not bool(config.get("telemetry_collector_enabled", False)):
+                self._telemetry_collector_warning("enabled at runtime but disabled in the saved configuration; collector was not started")
+                return
+            build_tls_context(
+                str(config.get("telemetry_collector_tls_cert", "")),
+                str(config.get("telemetry_collector_tls_key", "")),
+                str(config.get("telemetry_collector_client_ca", "")),
+            )
+        except Exception as exc:
+            self._telemetry_collector_warning("preflight failed (%s); bridge startup continues" % type(exc).__name__)
+            return
+        self._telemetry_collector_process = await asyncio.create_subprocess_exec(
+            sys.executable, "-m", "obstacle_bridge.bridge_telemetry_ingest", "--config", config_path,
+            stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE,
+        )
+        await asyncio.sleep(0.15)
+        proc = self._telemetry_collector_process
+        if proc.returncode is not None:
+            _, stderr = await proc.communicate()
+            detail = stderr.decode("utf-8", "replace").strip() if stderr else ""
+            self._telemetry_collector_warning("failed startup%s; bridge startup continues" % (": " + detail if detail else ""))
+            self._telemetry_collector_process = None
+            return
+        print("Telemetry collector started alongside bridge (pid=%d)." % int(proc.pid), file=sys.stdout, flush=True)
+
+    def get_telemetry_collector_snapshot(self) -> dict:
+        enabled = bool(getattr(self.args, "telemetry_collector_enabled", False))
+        proc = self._telemetry_collector_process
+        running = bool(proc is not None and proc.returncode is None)
+        spool_directory = str(getattr(self.args, "telemetry_collector_spool_directory", "") or "").strip()
+        spool = {}
+        if spool_directory:
+            with contextlib.suppress(Exception):
+                spool = TelemetrySpool(spool_directory).status()
+        collector_status = {}
+        if spool_directory:
+            with contextlib.suppress(Exception):
+                collector_status = json.loads((pathlib.Path(spool_directory) / "collector-status.json").read_text(encoding="utf-8"))
+        return {
+            "enabled": enabled,
+            "runtime_state": "running" if running else "disabled" if not enabled else "not_running",
+            "pid": int(proc.pid) if running and proc is not None else None,
+            "last_error": self._telemetry_collector_last_error or None,
+            "spool": spool,
+            "accepted_batches": int(collector_status.get("accepted_batches") or 0),
+            "rejected_batches": int(collector_status.get("rejected_batches") or 0),
+            "last_accepted_unix_ts": collector_status.get("last_accepted_unix_ts"),
+            "last_rejected_unix_ts": collector_status.get("last_rejected_unix_ts"),
+            "ingest_last_error": collector_status.get("last_error"),
+        }
+
+    async def _stop_telemetry_collector(self) -> None:
+        proc = self._telemetry_collector_process
+        self._telemetry_collector_process = None
+        if proc is None or proc.returncode is not None:
+            return
+        proc.terminate()
+        with contextlib.suppress(asyncio.TimeoutError):
+            await asyncio.wait_for(proc.wait(), timeout=2.0)
+        if proc.returncode is None:
+            proc.kill()
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(proc.wait(), timeout=1.0)
+
+    def _telemetry_client_warning(self, message: str) -> None:
+        """Report telemetry setup/delivery failure without affecting the bridge."""
+        text = "telemetry client " + str(message)
+        self._telemetry_client_last_error = text
+        if text == self._telemetry_client_last_warning:
+            return
+        self._telemetry_client_last_warning = text
+        self.log.warning("[TELEMETRY] %s", text)
+
+    def _telemetry_client_flush_blocking(self, events: list[dict]) -> dict:
+        """Perform telemetry disk/network work on one bounded background task."""
+        spool = self._telemetry_spool
+        uploader = self._telemetry_uploader
+        if spool is None or uploader is None:
+            return {"ok": False, "reason": "disabled"}
+        if events and not spool.append_many(events):
+            return {"ok": False, "reason": "spool_append_failed"}
+        return uploader.upload_once()
+
+    async def _telemetry_client_flush_once(self) -> dict:
+        emitter = self._telemetry_emitter
+        uploader = self._telemetry_uploader
+        if emitter is None or uploader is None:
+            return {"ok": False, "reason": "disabled"}
+        task = self._telemetry_client_flush_task
+        if task is not None and not task.done():
+            return {"ok": False, "reason": "in_flight"}
+        result = None
+        if task is not None:
+            self._telemetry_client_flush_task = None
+            try:
+                result = task.result()
+            except Exception as exc:
+                self._telemetry_client_warning("flush worker failed (%s)" % type(exc).__name__)
+                result = {"ok": False, "reason": "flush_worker_failed"}
+            if result.get("reason") == "spool_append_failed":
+                self._telemetry_client_warning("spool append failed; events were dropped")
+            elif not result.get("ok") and result.get("reason") not in {"backoff", "byte_budget"}:
+                self._telemetry_client_warning("upload failed (%s)" % str(uploader.last_error or result.get("reason") or "unknown"))
+            elif result.get("ok"):
+                self._telemetry_client_last_error = ""
+                self._telemetry_client_last_warning = ""
+        self._telemetry_client_flush_task = asyncio.create_task(
+            asyncio.to_thread(self._telemetry_client_flush_blocking, emitter.drain()),
+            name="telemetry-client-flush",
+        )
+        return result or {"ok": True, "reason": "scheduled"}
+
+    def get_telemetry_client_snapshot(self) -> dict:
+        now = time.monotonic()
+        task = self._telemetry_client_task
+        flush_task = self._telemetry_client_flush_task
+        enabled = bool(getattr(self.args, "telemetry_enabled", False))
+        worker_state = "disabled" if not enabled else "not_started" if task is None else "stopped" if task.done() else "running"
+        emitter = self._telemetry_emitter
+        spool = self._telemetry_spool
+        uploader = self._telemetry_uploader
+        return {
+            "enabled": enabled,
+            "worker_state": worker_state,
+            "worker_cycles": int(self._telemetry_client_cycles),
+            "last_cycle_age_sec": max(0.0, now - self._telemetry_client_last_cycle_monotonic) if self._telemetry_client_last_cycle_monotonic else None,
+            "last_load_age_sec": max(0.0, now - self._telemetry_client_last_load_monotonic) if self._telemetry_client_last_load_monotonic else None,
+            "flush_in_flight": bool(flush_task is not None and not flush_task.done()),
+            "last_error": self._telemetry_client_last_error or None,
+            "emitter": {
+                "pending_events": emitter.pending_count() if emitter is not None else 0,
+                "drops": dict(emitter.dropped) if emitter is not None else {},
+            },
+            "spool": spool.status() if spool is not None else {},
+            "uploader": {
+                "sent_bytes": int(getattr(uploader, "sent_bytes", 0) or 0) if uploader is not None else 0,
+                "backoff_remaining_sec": max(0.0, float(getattr(uploader, "next_attempt", 0.0) - getattr(uploader, "clock", time.monotonic)())) if uploader is not None else 0.0,
+                "last_error": (getattr(uploader, "last_error", "") or None) if uploader is not None else None,
+            },
+        }
+
+    async def _telemetry_client_worker(self) -> None:
+        next_load_at = 0.0
+        while True:
+            try:
+                now = time.monotonic()
+                if now >= next_load_at:
+                    emitter = self._telemetry_emitter
+                    if emitter is not None:
+                        with contextlib.suppress(Exception):
+                            emitter.emit_load(
+                                queue_depth=emitter.pending_count(),
+                                dropped=sum(int(value) for value in emitter.dropped.values()),
+                                load_1m=float(os.getloadavg()[0]),
+                            )
+                        self._telemetry_client_last_load_monotonic = now
+                    next_load_at = now + 15.0
+                await self._telemetry_client_flush_once()
+                self._telemetry_client_cycles += 1
+                self._telemetry_client_last_cycle_monotonic = time.monotonic()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self._telemetry_client_warning("worker cycle failed (%s); retrying" % type(exc).__name__)
+            await asyncio.sleep(1.0)
+
+    async def _start_telemetry_client(self) -> None:
+        if not bool(getattr(self.args, "telemetry_enabled", False)):
+            return
+        try:
+            certificate_directory = str(getattr(self.args, "telemetry_client_certificate_directory", "") or "").strip()
+            endpoint = str(getattr(self.args, "telemetry_endpoint", "") or "").strip()
+            spool_directory = str(getattr(self.args, "telemetry_spool_directory", "") or "").strip()
+            certfile, keyfile, cafile, installation_id = client_certificate_paths(certificate_directory)
+            self._telemetry_spool = TelemetrySpool(spool_directory)
+            self._telemetry_uploader = TelemetryUploader(self._telemetry_spool, endpoint, cafile, certfile, keyfile)
+            self._telemetry_emitter = TelemetryEmitter(installation_id, str(uuid.uuid4()))
+            self._telemetry_client_flush_task = None
+            self._telemetry_client_last_cycle_monotonic = 0.0
+            self._telemetry_client_last_load_monotonic = 0.0
+            self._telemetry_client_cycles = 0
+            self._telemetry_emitter.emit_lifecycle("started")
+            self._telemetry_client_task = asyncio.create_task(
+                self._telemetry_client_worker(), name="telemetry-client-uploader"
+            )
+            self.log.info("[TELEMETRY] client uploader started endpoint=%s", endpoint)
+        except Exception as exc:
+            self._telemetry_emitter = None
+            self._telemetry_spool = None
+            self._telemetry_uploader = None
+            self._telemetry_client_warning("setup failed (%s); bridge startup continues" % type(exc).__name__)
+
+    async def _stop_telemetry_client(self) -> None:
+        task = self._telemetry_client_task
+        self._telemetry_client_task = None
+        emitter = self._telemetry_emitter
+        if emitter is not None:
+            emitter.emit_lifecycle("stopped")
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        with contextlib.suppress(Exception):
+            await self._telemetry_client_flush_once()
+            flush_task = self._telemetry_client_flush_task
+            if flush_task is not None:
+                await asyncio.wait_for(asyncio.shield(flush_task), timeout=2.0)
+                await self._telemetry_client_flush_once()
+                flush_task = self._telemetry_client_flush_task
+                if flush_task is not None:
+                    await asyncio.wait_for(asyncio.shield(flush_task), timeout=2.0)
+        self._telemetry_emitter = None
+        self._telemetry_spool = None
+        self._telemetry_uploader = None
+        self._telemetry_client_flush_task = None
 
     def _make_runtime_health_store(self) -> Optional[RuntimeHealthStore]:
         configured = str(os.environ.get("OBSTACLEBRIDGE_RUNTIME_HEALTH_PATH") or "").strip()
@@ -1127,6 +1377,8 @@ class Runner:
         )
         self._ensure_runtime_events()
         self._begin_runtime_health_lifetime()
+        await self._start_telemetry_client()
+        await self._start_telemetry_collector()
         await self._start_tun_helper()
         await self._start_proxy_provider()
 
@@ -1307,6 +1559,8 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._runtime_health_task
             self._runtime_health_task = None
+        self.log.debug("[RUNNER] stop: entering telemetry_client.stop")
+        await _run_stop_step("telemetry_client.stop", self._stop_telemetry_client(), timeout_s=3.0)
         if self.admin_web is not None:
             await _run_stop_step("admin_web.stop", self.admin_web.stop(), timeout_s=2.0)
             self.admin_web = None        
@@ -1315,6 +1569,9 @@ class Runner:
 
         self.log.debug("[RUNNER] stop: entering proxy_provider.stop")
         await _run_stop_step("proxy_provider.stop", self._stop_proxy_provider(), timeout_s=3.0)
+
+        self.log.debug("[RUNNER] stop: entering telemetry_collector.stop")
+        await _run_stop_step("telemetry_collector.stop", self._stop_telemetry_collector(), timeout_s=3.0)
 
         self.log.debug("[RUNNER] stop: entering stats.stop")
         await _run_stop_step("stats.stop", self.stats.stop(), timeout_s=2.0)
@@ -1809,6 +2066,10 @@ class Runner:
             "compression_saving_ratio": savings_ratio,
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
+        payload["telemetry"] = {
+            "client": self.get_telemetry_client_snapshot(),
+            "collector": self.get_telemetry_collector_snapshot(),
+        }
         payload["tun_helper"] = self._tun_helper_snapshot()
         payload.update(self._runtime_health_status_fields())
         return payload
@@ -3411,6 +3672,8 @@ class ConfigAwareCLI:
 
         # 2) Add auto-generated per-section log options
         for section in sections.keys():
+            if section in {"telemetry_client", "telemetry_server"}:
+                continue
             opt_name = f"log_{section}"       # internal dest
             cli_flag = f"--log-{section.replace('_', '-')}"
             existing_option_strings = {
@@ -3746,6 +4009,11 @@ class ConfigAwareCLI:
             if not isinstance(value, dict):
                 continue
             for kk, vv in value.items():
+                # Keep the short-lived pre-schema telemetry spool setting
+                # loadable after it moved from debug_logging into telemetry.
+                if section == "debug_logging" and kk == "telemetry_spool_directory":
+                    flat["telemetry_spool_directory"] = vv
+                    continue
                 # The public tun_execution section uses concise keys, while
                 # argparse stores the corresponding CLI destination names.
                 if section == TUN_EXECUTION_SECTION:
@@ -3790,6 +4058,8 @@ def default_runtime_registrars() -> List[Tuple[str, Callable[[argparse.ArgumentP
         ("secure_link",        SecureLinkPskSession.register_cli),
         ("compress_layer",     CompressLayerSession.register_cli),
         ("debug_logging",      DebugLoggingConfigurator.register_cli),
+        ("telemetry_client",   TelemetryRuntimeSettings.register_client_cli),
+        ("telemetry_server",   TelemetryRuntimeSettings.register_server_cli),
         ("stats_board",        StatsBoard.register_cli),
     ]
 

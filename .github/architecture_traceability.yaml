@@ -497,6 +497,7 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_records_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_allows_test_injected_failure_and_rolls_back_partial_state
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_and_remove_network_programs_excluded_routes_and_full_tunnel_policy
+    - tests/unit/test_tun_helper_linux_backend.py::test_full_tunnel_preserves_all_connected_local_lans_in_main_table
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_policy_rules_on_restart
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_matching_existing_host_policy_rules_without_prefix_in_rule_dump
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_reuses_existing_default_policy_rules_rendered_without_to_clause
@@ -638,22 +639,40 @@ ARC-CMP-004:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
 
 ARC-CMP-005:
+  # The WebAdmin configuration renderer preserves UDP logging endpoints as
+  # direct text values, independently of per-component log-level controls.
   # Admin status resilience includes the minimal live-session fallback used
-  # before a cached status payload exists. Admin payload coverage here guards
-  # the supported peer-scoped summary contract rather than retired
-  # SecureLink-specific handshake-debug telemetry fields, including persistent
+  # before a cached status payload exists. The supported peer-scoped summary
+  # contract excludes retired SecureLink-specific handshake-debug telemetry,
+  # including persistent
   # enabled-layer visibility, ChannelMux-owned reconnect countdowns, and
   # the stable peer Transport detail layout, peer-local identity-cell row spans,
   # semantic status-pill colors, consistent peer open-channel labeling, negative-uptime launcher restart countdown,
   # and peer-scoped wrapper status.
+  # Telemetry coverage keeps bounded worker-owned Runner producer/upload work off forwarding
+  # paths, the loopback collector endpoint, and
+  # client-spool defaults aligned with macOS/iOS, while Python exposes its
+  # certificate directory, family policy, and supervised collector settings
+  # in separate client and server sections.
+  # The shared Telemetry tab retains only bounded delivery and collector
+  # summaries; it never reflects telemetry event payloads or credentials.
   unit_tests:
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
+    - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
     - tests/unit/test_runtime_health.py::test_ring_is_bounded_and_classifies_only_the_last_lifecycle_marker
     - tests/unit/test_runtime_health.py::test_runner_lifecycle_persists_and_reports_redacted_health
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::recordUsesPortableRedactedSchema
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::ringIsBoundedAndClassifiesOnlyTheLastLifecycleMarker
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::canonicalVectorRoundTripsThroughThePortableContract
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::rejectsNonAllowlistedAndMalformedEvents
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::enforcesEventAndBatchBounds
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::concurrentEmissionStaysBoundedAndNeverThrows
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::spoolQuarantinesCorruptSegmentsAndEvictsLowPriorityFirst
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::unavailableSpoolDirectoryFailsAtSetupNotOnEmitterPath
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::uploadPolicyScopesBatchAcknowledgementsAndBackoff
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTelemetryTests.swift::uploadPolicyRejectsPlainHTTPAndOverBudgetRequests
     - ios/tests/test_m3_native_sources.py::test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_persists_portable_runtime_health_evidence
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_preserves_connection_failure_fields
@@ -677,6 +696,31 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_secure_link_psk_reveal_insecure_context_notice_prefers_own_server_path
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
+    - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
+    - tests/unit/test_debug_logging_aliases.py::test_udp_log_sender_drops_transport_failure_without_raising
+    - tests/unit/test_debug_logging_aliases.py::test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call
+    - tests/unit/test_debug_logging_aliases.py::test_admin_telemetry_status_is_redacted_and_reports_worker_liveness
+    - tests/unit/test_telemetry.py::test_emitter_empty_drain_is_non_blocking_and_returns_no_events
+    - tests/unit/test_telemetry.py::test_runner_telemetry_client_retries_a_failed_flush_worker
+    - tests/unit/test_telemetry.py::test_v1_vector_round_trips_canonically
+    - tests/unit/test_telemetry.py::test_spool_recovers_atomic_events_and_acknowledges_them
+    - tests/unit/test_telemetry.py::test_ingest_store_acknowledges_only_valid_ordered_durable_batch
+    - tests/unit/test_telemetry.py::test_mtls_ingest_accepts_matching_client_identity
+    - tests/unit/test_telemetry.py::test_uploader_requires_https_and_respects_backoff
+    - tests/unit/test_telemetry.py::test_ingest_rejects_replay_and_admission_exhaustion
+    - tests/unit/test_telemetry.py::test_spool_status_is_bounded_and_redacted
+    - tests/unit/test_telemetry.py::test_telemetry_qualification_harness_reports_bounded_emit_latency
+    - tests/unit/test_telemetry.py::test_client_certificate_directory_derives_installation_id
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_generator_creates_password_protected_keychain_import_material
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_wrapper_uses_standard_ca_paths_and_returns_output_to_operator
+    - tests/unit/test_telemetry_ios_identity.py::test_ios_identity_upload_wrapper_uses_device_app_documents_copy_and_readback
+    - ios/tests/test_m3_native_sources.py::test_shared_mtls_telemetry_transport_source_exists
+    - ios/tests/test_ios_app_facade.py::test_log_cleanup_request_removes_documents_logs_and_requests_shared_logs_cleanup
+    - tests/unit/test_telemetry.py::test_ingest_main_reads_enabled_collector_from_shared_telemetry_config
+    - tests/unit/test_telemetry.py::test_ingest_main_rejects_disabled_collector_config
+    - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_separates_telemetry_client_and_server_fields
+    - ios/tests/test_ios_app_facade.py::test_load_grouped_runtime_config_preserves_saved_transport_fields
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_exposes_only_redacted_telemetry_status
     - tests/unit/test_connection_snapshots.py::test_closed_channel_stats_are_archived_by_owner_peer
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_archived_closed_channel_payload_totals
     - tests/unit/test_connection_snapshots.py::test_peer_snapshot_includes_tun_payload_and_rates
@@ -709,6 +753,7 @@ ARC-CMP-005:
     - tests/unit/test_admin_web_payloads.py::test_admin_web_navigation_uses_operator_labels_for_peer_and_udp_tcp_tabs
     - tests/unit/test_admin_web_payloads.py::test_admin_web_proxy_tab_renders_config_runtime_and_throughput
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
+    - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_applies_client_options_for_every_transport
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_preview_hides_psk_and_updates_keep_plaintext
     - tests/unit/test_runner_config_persistence.py::test_update_config_accepts_grouped_tun_routing_section
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_ui_payload_matches_python

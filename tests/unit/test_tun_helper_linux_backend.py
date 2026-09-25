@@ -482,6 +482,51 @@ class LinuxTunHelperBackendTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(("-4", "route", "del", "198.51.100.5/32"), command_only)
         self.assertIn(("-6", "route", "del", "2001:db8::5/128"), command_only)
 
+    async def test_full_tunnel_preserves_all_connected_local_lans_in_main_table(self) -> None:
+        backend = LinuxTunHelperBackend()
+        commands: list[tuple[tuple[str, ...], bool]] = []
+
+        def _fake_run(args, check, capture_output, text):
+            self.assertEqual(args[0], "ip")
+            cmd = tuple(args[1:])
+            commands.append((cmd, bool(check)))
+            stdout = ""
+            if cmd == ("-4", "route", "show", "default"):
+                stdout = "default via 10.0.0.1 dev enp1s0 src 10.0.0.2\n"
+            elif cmd == ("-4", "route", "show", "proto", "kernel", "scope", "link"):
+                stdout = (
+                    "10.0.0.0/24 dev enp1s0 proto kernel scope link src 10.0.0.2\n"
+                    "192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1\n"
+                    "192.168.179.0/24 dev vmnet8 proto kernel scope link src 192.168.179.1\n"
+                )
+            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+        payload = {
+            "ifname": "obtun-local-lan",
+            "tun_routing": {
+                "tunnel_address": "198.18.70.2",
+                "tunnel_prefix": 24,
+                "tunnel_gateway": "198.18.70.1",
+                "included_routes": ["0.0.0.0/0"],
+            },
+        }
+
+        with mock.patch.object(helper_linux.subprocess, "run", side_effect=_fake_run):
+            applied = await backend.apply_network(payload)
+
+        self.assertIn("to 192.168.122.0/24 lookup main", applied["policy_rules4"])
+        self.assertIn("to 192.168.179.0/24 lookup main", applied["policy_rules4"])
+        command_only = [cmd for cmd, _check in commands]
+        self.assertIn(("-4", "route", "show", "proto", "kernel", "scope", "link"), command_only)
+        self.assertNotIn(
+            ("-4", "route", "replace", "192.168.122.0/24", "dev", "obtun-local-lan"),
+            command_only,
+        )
+        self.assertNotIn(
+            ("-4", "route", "replace", "192.168.179.0/24", "dev", "obtun-local-lan"),
+            command_only,
+        )
+
     async def test_apply_network_reuses_matching_existing_policy_rules_on_restart(self) -> None:
         backend = LinuxTunHelperBackend()
         commands: list[tuple[tuple[str, ...], bool]] = []

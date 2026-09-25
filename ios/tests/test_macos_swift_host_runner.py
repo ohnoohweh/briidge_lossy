@@ -16,6 +16,7 @@ import threading
 import time
 import contextlib
 import textwrap
+import uuid
 import urllib.error
 import urllib.request
 import zlib
@@ -52,6 +53,17 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
+def test_macos_build_includes_mtls_telemetry_transport() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeTelemetryMTLSUploader.swift" in build_script
+    assert "NSURLAuthenticationMethodClientCertificate" in source
+    assert "connectionProxyDictionary = [:]" in source
+    assert "SecItemCopyMatching" in source
+    assert "return telemetryIdentities.count == 1 ? telemetryIdentities[0] : nil" in source
+    assert "session.invalidateAndCancel()" in source
+
+
 def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
@@ -62,6 +74,34 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     assert '"runtime_health_recent_records"' in source
     assert 'appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)' in source
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
+
+
+def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
+    assert '"telemetry": telemetryStatusSnapshot()' in source
+    assert "ObstacleBridgeTelemetryAdminStatus.snapshot(" in source
+    assert "uploader: telemetryUploader" in source
+    assert '"telemetry_client": [' in runtime_config
+    assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
+    assert 'defaultValue: "https://127.0.0.1:18443/v1/telemetry/batches"' in runtime_config
+    assert 'defaultValue: "/var/lib/obstaclebridge/telemetry-client"' in runtime_config
+    assert '"telemetry_client": ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()' in app_main
+
+
+def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")' in source
+    assert "startTelemetryIfConfigured()" in source
+    assert "private func flushTelemetry(startUpload: Bool = true)" in source
+    assert "private func enqueueTelemetryHealth(state: String, counter: UInt64)" in source
+    assert 'event: "runtime.health"' in source
+    assert '"counter": .integer(Int64(clamping: counter))' in source
+    assert "enqueueTelemetryHealth(state: event, counter: sequence)" in source
+    assert 'enqueueTelemetryHealth(state: "startup_failed", counter: 0)' in source
+    assert "flushTelemetry(startUpload: false)" in source
+    assert "telemetryUploader?.cancel()" in source
 
 
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:
@@ -5984,6 +6024,72 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
                 f"Python bridge peer exited unexpectedly with code {python_peer_proc.returncode}. "
                 f"Log file: {python_peer_log_path}\n{python_peer_log_path.read_text(encoding='utf-8', errors='replace')}"
             )
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_path: Path) -> None:
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime_telemetry_configuration.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "runner": {"overlay_transport": "myudp"},
+                "udp_session": {"udp_bind": "127.0.0.1", "udp_own_port": 0},
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": status_port,
+                    "admin_web_dir": str((ROOT / "admin_web").resolve()),
+                    "admin_web_auth_disable": True,
+                },
+                "telemetry_client": {
+                    "telemetry_enabled": True,
+                    "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
+                    "telemetry_spool_directory": str(tmp_path / "private-spool"),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [str(artifact.binary_path), "--runtime-config", str(runtime_config_path), "--hold-sec", "20"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        status = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status", timeout_sec=20.0)
+        config = _http_json(f"http://127.0.0.1:{status_port}/api/config")
+        telemetry = status["telemetry"]
+        assert telemetry == {
+            "enabled": True,
+            "configured": False,
+            "endpoint_scheme": "https",
+            "endpoint_host": "collector.example.invalid",
+            "identity_available": False,
+        }
+        telemetry_keys = {str(item["key"]) for item in config["schema"]["telemetry_client"]}
+        assert telemetry_keys == {
+            "telemetry_enabled",
+            "telemetry_endpoint",
+            "telemetry_spool_directory",
+        }
+        assert config["config"]["telemetry_enabled"] is True
+        assert config["config"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+        assert config["config"]["telemetry_spool_directory"] == str(tmp_path / "private-spool")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
         if process.returncode not in (0, -15):
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"

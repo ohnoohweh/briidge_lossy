@@ -21,11 +21,68 @@ class AdminWebUI:
     ONBOARDING_TOKEN_PREFIX = "ob1."
     PING_VERIFICATION_CACHE_TTL_SEC = 2.0
     TUN_ROUTING_SUMMARY_MARKER = "tun-summary-marker-2026-08-16a"
+    # Invite tokens describe the receiving peer.  These are the transport
+    # options that affect that peer's outbound connection. Existing client
+    # profiles additionally retain their local bind/port. Static asset paths
+    # and server key material stay local.
+    ONBOARDING_TRANSPORT_OPTION_KEYS = {
+        "myudp": (
+            "udp_bind",
+            "udp_own_port",
+            "udp_peer_resolve_family",
+            "max_inflight",
+        ),
+        "tcp": (
+            "tcp_bind",
+            "tcp_own_port",
+            "tcp_peer_resolve_family",
+            "tcp_bp_wbuf_threshold",
+        ),
+        "quic": (
+            "quic_bind",
+            "quic_own_port",
+            "quic_peer_resolve_family",
+            "quic_alpn",
+            "quic_insecure",
+            "quic_max_size",
+        ),
+        "ws": (
+            "ws_bind",
+            "ws_own_port",
+            "ws_peer_addresses",
+            "ws_path",
+            "ws_payload_mode",
+            "ws_peer_resolve_family",
+            "ws_proxy_auth",
+            "ws_proxy_host",
+            "ws_proxy_mode",
+            "ws_proxy_port",
+            "ws_reconnect_grace",
+            "ws_send_timeout",
+            "ws_subprotocol",
+            "ws_tcp_user_timeout_ms",
+            "ws_tls",
+            "ws_max_size",
+        ),
+    }
+    ONBOARDING_TRANSPORT_LOCAL_OPTION_KEYS = {
+        "myudp": ("udp_bind", "udp_own_port"),
+        "tcp": ("tcp_bind", "tcp_own_port"),
+        "quic": ("quic_bind", "quic_own_port"),
+        "ws": ("ws_bind", "ws_own_port"),
+    }
 
     @staticmethod
     def _transport_attr_prefix(transport: str) -> str:
         t = str(transport or "").strip().lower()
         return "udp" if t in {"udp", "myudp"} else t
+
+    def _onboarding_transport_options(self, transport: str) -> dict:
+        return {
+            key: value
+            for key in self.ONBOARDING_TRANSPORT_OPTION_KEYS.get(transport, ())
+            if (value := getattr(self.args, key, None)) is not None
+        }
 
     @staticmethod
     def register_cli(p):
@@ -585,6 +642,10 @@ class AdminWebUI:
 
             if path == "/api/logs":
                 await self._handle_logs(writer, raw_path)
+                return
+
+            if path == "/api/telemetry":
+                await self._handle_telemetry(writer)
                 return
 
             if path == "/api/peers":
@@ -1329,6 +1390,11 @@ class AdminWebUI:
             if transport == "ws":
                 profile["ws_path"] = str(getattr(self.args, "ws_path", "/") or "/")
                 profile["ws_tls"] = bool(getattr(self.args, "ws_tls", False))
+            transport_options = self._onboarding_transport_options(transport)
+            if role != "client":
+                for key in self.ONBOARDING_TRANSPORT_LOCAL_OPTION_KEYS.get(transport, ()):
+                    transport_options.pop(key, None)
+            profile["transport_options"] = transport_options
             profiles.append(profile)
         try:
             peers_payload = self.runner.get_peer_connections_snapshot() or {}
@@ -1435,6 +1501,11 @@ class AdminWebUI:
                 port_i = int(port)
                 if 1 <= port_i <= 65535:
                     updates[f"{attr_prefix}_peer_port"] = port_i
+        transport_options = conn.get("transport_options")
+        if isinstance(transport_options, dict):
+            for key in AdminWebUI.ONBOARDING_TRANSPORT_OPTION_KEYS.get(transport, ()):
+                if key in transport_options:
+                    updates[key] = transport_options[key]
         secure_mode = str(payload.get("secure_link_mode", "") or "").strip().lower()
         if secure_mode in {"off", "none", "psk", "cert"}:
             updates["secure_link_mode"] = "off" if secure_mode in {"off", "none"} else secure_mode
@@ -1836,13 +1907,52 @@ class AdminWebUI:
                     if k == "limit":
                         limit = int(v)
                         break
-        try:
-            lines = self._call_runner(self.runner.get_debug_logs, limit=limit, timeout=0.5)
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+        if bool(getattr(self.args, "log_udp_only", False)):
+            try:
+                from .bridge_logging_ipc import fetch_remote_log_lines
+
+                remote = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_remote_log_lines, limit), timeout=0.2
+                )
+            except Exception:
+                remote = None
+            remote = remote or {"available": False, "lines": [], "error": "logger unavailable"}
+            result = {
+                "lines": list(remote.get("lines", [])),
+                "source": "remote_udp",
+                "logger_available": bool(remote.get("available", False)),
+                "logger_error": str(remote.get("error", "") or ""),
+            }
+        else:
+            try:
+                lines = self._call_runner(self.runner.get_debug_logs, limit=limit, timeout=0.5)
+            except concurrent.futures.TimeoutError:
+                await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+                return
+            result = {"lines": lines, "source": "local", "logger_available": True, "logger_error": ""}
+        payload = {"ok": True, "lines": result["lines"], "count": len(result["lines"]),
+                   "source": result["source"], "logger_available": result["logger_available"],
+                   "logger_error": result["logger_error"]}
+        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(result['lines'])}")
+        await self._send_json(writer, 200, payload)
+
+    async def _handle_telemetry(self, writer):
+        spool_directory = str(getattr(self.args, "telemetry_spool_directory", "") or "").strip()
+        if not spool_directory:
+            await self._send_json(writer, 404, {"ok": False, "error": "telemetry status disabled"})
             return
-        payload = {"ok": True, "lines": lines, "count": len(lines)}
-        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(lines)}")
+        try:
+            from .bridge_telemetry import TelemetrySpool
+
+            status = await asyncio.wait_for(
+                asyncio.to_thread(lambda: TelemetrySpool(spool_directory).status()), timeout=0.2
+            )
+        except Exception:
+            await self._send_json(writer, 503, {"ok": False, "error": "telemetry status unavailable", "retryable": True})
+            return
+        client_snapshot = self._call_runner(self.runner.get_telemetry_client_snapshot, timeout=0.2)
+        payload = {"ok": True, "telemetry": status, "client": client_snapshot}
+        self._log_api_response("/api/telemetry", 200, payload, summary="redacted spool status")
         await self._send_json(writer, 200, payload)
 
     async def _handle_secure_link_rekey(self, writer, method: str, body: bytes):
@@ -2075,7 +2185,10 @@ class AdminWebUI:
 
     @staticmethod
     def _secret_config_keys() -> Set[str]:
-        return {"admin_web_password", "secure_link_psk"}
+        return {
+            "admin_web_password",
+            "secure_link_psk",
+        }
 
     @staticmethod
     def _readonly_config_keys() -> Set[str]:

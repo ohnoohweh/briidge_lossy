@@ -24,6 +24,9 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTelemetry.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTelemetrySpool.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTelemetryUploadPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift",
@@ -96,6 +99,7 @@
         "ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"

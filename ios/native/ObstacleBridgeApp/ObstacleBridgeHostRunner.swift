@@ -143,6 +143,7 @@ final class ObstacleBridgeHostRunner {
     private let authStateQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Auth")
     private let adminSnapshotQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.AdminSnapshots")
     private let runtimeHealthQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.RuntimeHealth")
+    private let telemetryQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")
     private let macOSTunHelperPackageQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.TunHelperPackage")
     private let controlActionQueue = DispatchQueue(label: "ObstacleBridgeHostRunner.ControlActions")
     private var controlServer: ObstacleBridgeWebAdminServer?
@@ -191,6 +192,10 @@ final class ObstacleBridgeHostRunner {
     private var clientRestartWatchdog: DispatchSourceTimer?
     private var adminSnapshotTimer: DispatchSourceTimer?
     private var runtimeHealthTimer: DispatchSourceTimer?
+    private var telemetryTimer: DispatchSourceTimer?
+    private var telemetryEmitter: ObstacleBridgeTelemetryEmitter?
+    private var telemetrySpool: ObstacleBridgeTelemetrySpool?
+    private var telemetryUploader: ObstacleBridgeTelemetryMTLSUploader?
     private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
@@ -444,6 +449,7 @@ final class ObstacleBridgeHostRunner {
         beginRuntimeHealthLifetime()
         try ensureControlServerStarted()
         prepareSharedOverlayBootstrap()
+        var startupFailed = false
         do {
             try startProxyProviderIfConfigured()
             try startOwnServers()
@@ -456,10 +462,15 @@ final class ObstacleBridgeHostRunner {
             NSLog("[ObstacleBridgeHostRunner][startup_failed] %@", error.localizedDescription)
             bootstrapState["startup_status"] = "failed"
             bootstrapState["startup_error"] = error.localizedDescription
+            startupFailed = true
         }
         startAdminSnapshotPublisher()
         startClientRestartWatchdog()
         startRuntimeHealthHeartbeat()
+        startTelemetryIfConfigured()
+        if startupFailed {
+            enqueueTelemetryHealth(state: "startup_failed", counter: 0)
+        }
     }
 
     func stop() {
@@ -481,6 +492,7 @@ final class ObstacleBridgeHostRunner {
         controlServer?.stop()
         controlServer = nil
         stopRuntimeHealthHeartbeat()
+        stopTelemetry()
         appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
     }
 
@@ -488,6 +500,62 @@ final class ObstacleBridgeHostRunner {
         URL(fileURLWithPath: runtimeConfigPath)
             .deletingLastPathComponent()
             .appendingPathComponent(".ObstacleBridgeHostRunner.runtime-health-v1.json")
+    }
+
+    private func startTelemetryIfConfigured() {
+        stopTelemetry()
+        guard Self.boolValue(from: runtimeConfig["telemetry_enabled"]) ?? false,
+              let endpointText = Self.stringValue(from: runtimeConfig["telemetry_endpoint"]),
+              let endpoint = URL(string: endpointText), endpoint.scheme?.lowercased() == "https",
+              let telemetryIdentity = ObstacleBridgeTelemetryIdentityStore.telemetryIdentity()
+        else { return }
+        let spoolURL = Self.stringValue(from: runtimeConfig["telemetry_spool_directory"]).map(URL.init(fileURLWithPath:))
+            ?? URL(fileURLWithPath: runtimeConfigPath).deletingLastPathComponent().appendingPathComponent(".ObstacleBridge.telemetry-v1", isDirectory: true)
+        guard let emitter = try? ObstacleBridgeTelemetryEmitter(installationID: telemetryIdentity.installationID, sessionID: UUID().uuidString),
+              let spool = try? ObstacleBridgeTelemetrySpool(directory: spoolURL),
+              let policy = try? ObstacleBridgeTelemetryUploadPolicy(spool: spool, endpoint: endpoint)
+        else { return }
+        let timer = DispatchSource.makeTimerSource(queue: telemetryQueue)
+        timer.schedule(deadline: .now() + .seconds(1), repeating: .seconds(5))
+        timer.setEventHandler { [weak self] in self?.flushTelemetry() }
+        telemetryQueue.sync {
+            telemetryEmitter = emitter
+            telemetrySpool = spool
+            telemetryUploader = ObstacleBridgeTelemetryMTLSUploader(policy: policy, identity: telemetryIdentity.identity)
+            _ = emitter.emit(event: "runtime.lifecycle", fields: ["state": .string("started")], priority: .critical)
+            telemetryTimer = timer
+            timer.resume()
+        }
+    }
+
+    private func flushTelemetry(startUpload: Bool = true) {
+        guard let emitter = telemetryEmitter, let spool = telemetrySpool, let uploader = telemetryUploader else { return }
+        for event in emitter.drain() { _ = spool.append(event) }
+        if startUpload { uploader.uploadOnce() }
+    }
+
+    private func stopTelemetry() {
+        telemetryTimer?.cancel(); telemetryTimer = nil
+        telemetryQueue.sync { [weak self] in
+            self?.telemetryEmitter?.emit(event: "runtime.lifecycle", fields: ["state": .string("stopped")], priority: .critical)
+            self?.flushTelemetry(startUpload: false)
+            self?.telemetryUploader?.cancel()
+        }
+        telemetryEmitter = nil; telemetrySpool = nil; telemetryUploader = nil
+    }
+
+    private func enqueueTelemetryHealth(state: String, counter: UInt64) {
+        telemetryQueue.async { [weak self] in
+            guard let emitter = self?.telemetryEmitter else { return }
+            _ = emitter.emit(
+                event: "runtime.health",
+                fields: [
+                    "counter": .integer(Int64(clamping: counter)),
+                    "state": .string(state),
+                ],
+                priority: .low
+            )
+        }
     }
 
     private func beginRuntimeHealthLifetime() {
@@ -505,7 +573,7 @@ final class ObstacleBridgeHostRunner {
         let secureLinkState = sharedSecureLinkPskTransportAdapter == nil
             ? "off"
             : (overlayCurrentlyConnected() == true ? "authenticated" : "disconnected")
-        runtimeHealthQueue.sync {
+        let sequence: UInt64 = runtimeHealthQueue.sync {
             runtimeHealthSequence += 1
             runtimeHealthRing.append(.init(
                 sequence: runtimeHealthSequence,
@@ -516,7 +584,9 @@ final class ObstacleBridgeHostRunner {
                 secureLinkState: secureLinkState
             ))
             try? ObstacleBridgeRuntimeHealthPersistence.save(runtimeHealthRing, to: runtimeHealthURL)
+            return runtimeHealthSequence
         }
+        enqueueTelemetryHealth(state: event, counter: sequence)
     }
 
     private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
@@ -1355,6 +1425,7 @@ final class ObstacleBridgeHostRunner {
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
             "proxy_provider": proxyProviderSnapshot(),
+            "telemetry": telemetryStatusSnapshot(),
             "secure_link_material_generation": 0,
             "secure_link_last_reload_unix_ts": NSNull(),
             "secure_link_last_reload_scope": "",
@@ -1362,6 +1433,15 @@ final class ObstacleBridgeHostRunner {
             "secure_link_last_reload_detail": "",
             "secure_link_peers_dropped_total": 0,
         ]
+    }
+
+    private func telemetryStatusSnapshot() -> [String: Any] {
+        ObstacleBridgeTelemetryAdminStatus.snapshot(
+            runtimeConfig: runtimeConfig,
+            emitter: telemetryEmitter,
+            spool: telemetrySpool,
+            uploader: telemetryUploader
+        )
     }
 
     private func staticFileResponse(path: String) -> (contentType: String, body: Data)? {

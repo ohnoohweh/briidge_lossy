@@ -43,6 +43,7 @@ from .diagnostics import (
 from .profiles import ProfileStore
 from .tunnel_control import (
     harvest_runtime_logs,
+    clear_shared_runtime_logs,
     prepare_runtime,
     runtime_status,
     start_runtime,
@@ -212,6 +213,11 @@ def _default_ios_grouped_config(root: Path) -> dict[str, Any]:
             "log_file": str(root / "logs" / "obstaclebridge.log"),
             "log_file_max_bytes": 1_048_576,
             "log_file_backup_count": 5,
+        },
+        "telemetry_client": {
+            "telemetry_enabled": False,
+            "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
         },
         "channel_mux": {
             "own_servers": [],
@@ -523,11 +529,28 @@ def _run_probe_mode(argv: list[str]) -> int | None:
     return int(e2e_main(argv))
 
 
+def _consume_log_cleanup_request(documents_root: Path) -> bool:
+    """Remove only diagnostic logs when the device-transfer marker is present."""
+    marker = documents_root / ".obstaclebridge-clear-logs-v1"
+    if not marker.is_file():
+        return False
+    logs = documents_root / "logs"
+    try:
+        shutil.rmtree(logs, ignore_errors=True)
+        clear_shared_runtime_logs()
+        marker.unlink()
+    except OSError:
+        return False
+    return True
+
+
 def main(argv: list[str] | None = None):
     args = list(sys.argv[1:] if argv is None else argv)
     probe_exit_code = _run_probe_mode(args)
     if probe_exit_code is not None:
         return probe_exit_code
+    if _consume_log_cleanup_request(ObstacleBridgeIOSApp.DOCUMENTS_ROOT):
+        return 0
     try:
         if toga is None:
             raise RuntimeError("Toga is required to run the iOS app UI")

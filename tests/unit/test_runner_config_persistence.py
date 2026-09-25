@@ -14,6 +14,9 @@ def _make_runner(tmp_path):
         admin_web_bind="127.0.0.1",
         admin_web_password="admin-secret",
         secure_link_psk="bridge-secret",
+        telemetry_enabled=True,
+        telemetry_endpoint="https://collector.example.test/v1/telemetry",
+        telemetry_spool_directory=str(tmp_path / "telemetry-spool"),
         overlay_transport="myudp",
         _config_sections={
             "admin_web": ["admin_web_bind", "admin_web_port"],
@@ -97,6 +100,11 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
     runner.args._config_sections = {
         "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
         "secure_link": ["secure_link_psk"],
+        "telemetry_client": [
+            "telemetry_enabled",
+            "telemetry_endpoint",
+            "telemetry_spool_directory",
+        ],
     }
 
     ok, err = runner.save_runtime_config()
@@ -109,12 +117,19 @@ def test_runtime_config_encrypts_secret_fields_and_loads_them_back(tmp_path, mon
     assert written["secure_link"]["secure_link_psk"].startswith("enc:v1:")
     assert written["admin_web"]["admin_web_password"] != "admin-secret"
     assert written["secure_link"]["secure_link_psk"] != "bridge-secret"
+    for key in {
+        "telemetry_endpoint",
+        "telemetry_spool_directory",
+    }:
+        assert not written["telemetry_client"][key].startswith("enc:v1:")
 
     cli = ConfigAwareCLI(description="test")
     loaded = cli._load_json_config(str(tmp_path / "ObstacleBridge.cfg"))
 
     assert loaded["admin_web"]["admin_web_password"] == "admin-secret"
     assert loaded["secure_link"]["secure_link_psk"] == "bridge-secret"
+    assert loaded["telemetry_client"]["telemetry_endpoint"] == "https://collector.example.test/v1/telemetry"
+    assert loaded["telemetry_client"]["telemetry_spool_directory"] == str(tmp_path / "telemetry-spool")
 
 
 def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_path, monkeypatch):
@@ -123,9 +138,16 @@ def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_pa
     runner = _make_runner(tmp_path)
     runner.args.admin_web_password = ""
     runner.args.secure_link_psk = ""
+    runner.args.telemetry_endpoint = ""
+    runner.args.telemetry_spool_directory = ""
     runner.args._config_sections = {
         "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
         "secure_link": ["secure_link_psk"],
+        "telemetry_client": [
+            "telemetry_enabled",
+            "telemetry_endpoint",
+            "telemetry_spool_directory",
+        ],
     }
 
     ok, err = runner.save_runtime_config()
@@ -136,6 +158,11 @@ def test_runtime_config_allows_empty_secret_fields_without_crypto_backend(tmp_pa
     written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
     assert written["admin_web"]["admin_web_password"] == ""
     assert written["secure_link"]["secure_link_psk"] == ""
+    for key in {
+        "telemetry_endpoint",
+        "telemetry_spool_directory",
+    }:
+        assert written["telemetry_client"][key] == ""
 
 
 def test_update_config_disabling_admin_web_auth_clears_credentials(tmp_path):
@@ -173,6 +200,11 @@ def test_ios_runtime_config_persists_secret_fields_as_plaintext(tmp_path, monkey
     runner.args._config_sections = {
         "admin_web": ["admin_web_bind", "admin_web_password", "admin_web_port"],
         "secure_link": ["secure_link_psk"],
+        "telemetry_client": [
+            "telemetry_enabled",
+            "telemetry_endpoint",
+            "telemetry_spool_directory",
+        ],
     }
 
     ok, err = runner.save_runtime_config()
@@ -183,3 +215,5 @@ def test_ios_runtime_config_persists_secret_fields_as_plaintext(tmp_path, monkey
     written = json.loads((tmp_path / "ObstacleBridge.cfg").read_text(encoding="utf-8"))
     assert written["admin_web"]["admin_web_password"] == "admin-secret"
     assert written["secure_link"]["secure_link_psk"] == "bridge-secret"
+    assert written["telemetry_client"]["telemetry_endpoint"] == "https://collector.example.test/v1/telemetry"
+    assert written["telemetry_client"]["telemetry_spool_directory"] == str(tmp_path / "telemetry-spool")

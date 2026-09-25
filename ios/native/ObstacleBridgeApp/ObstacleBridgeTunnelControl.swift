@@ -200,6 +200,14 @@ final class ObstacleBridgeTunnelControl: NSObject {
         return jsonString(payload) as NSString
     }
 
+    /// Clears only diagnostic files in the extension's App Group log directory.
+    /// Configuration, telemetry spools, and credentials have separate paths.
+    @objc class func clearSharedLogs() -> NSString {
+        let payload = ObstacleBridgeTelemetryIdentityStore.clearAppGroupDiagnosticLogs()
+        recordEvent("shared_logs_cleared", payload: payload)
+        return jsonString(payload) as NSString
+    }
+
     @objc class func status() -> NSString {
         refreshStatusAsync()
         if let cached = cachedStatusPayload() {
@@ -227,6 +235,12 @@ final class ObstacleBridgeTunnelControl: NSObject {
     }
 
     private class func configureTunnel(startAfterInstall: Bool) {
+        #if canImport(Security)
+        let telemetryIdentityImport = ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()
+        if telemetryIdentityImport != "not_staged" {
+            recordEvent("telemetry_identity_staging", payload: ["result": telemetryIdentityImport])
+        }
+        #endif
         let configSync = syncConfigurationFileInternal()
         recordEvent("config_sync_before_prepare", payload: configSync)
         NETunnelProviderManager.loadAllFromPreferences { managers, error in
@@ -1238,6 +1252,7 @@ final class ObstacleBridgeTunnelControl: NSObject {
         debug["log_file_max_bytes"] = 1_048_576
         debug["log_file_backup_count"] = 5
         grouped["debug_logging"] = debug
+        grouped["telemetry_client"] = ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()
 
         var ws = (grouped["ws_session"] as? [String: Any]) ?? [:]
         ws["ws_static_dir"] = root.appendingPathComponent("web", isDirectory: true).path
