@@ -13,11 +13,55 @@ import traceback
 from pathlib import Path
 from typing import Any, Mapping
 
-from obstacle_bridge.bridge import _detect_build_info
 from obstacle_bridge.crypto_extract import available_crypto_extract
 
 
 _HOOKS_INSTALLED = False
+_BUILD_INFO_CACHE: dict[str, Any] | None = None
+
+
+def _detect_build_info() -> dict[str, Any]:
+    """Return packaged build metadata without importing the server runtime.
+
+    The desktop/server ``obstacle_bridge.bridge`` module imports optional
+    ``cryptography`` helpers.  Those helpers are deliberately absent from the
+    iOS Python bundle because iOS uses the native crypto backend instead.  iOS
+    diagnostics only need the generated, package-local build metadata.
+    """
+    global _BUILD_INFO_CACHE
+    if _BUILD_INFO_CACHE is not None:
+        return dict(_BUILD_INFO_CACHE)
+
+    info: dict[str, Any] = {
+        "commit": "unknown",
+        "source": "embedded-build-info",
+        "repo_root": "",
+        "tainted": False,
+        "tracked_changes": 0,
+        "untracked_changes": 0,
+        "available": False,
+    }
+    try:
+        from obstacle_bridge._generated import build_info_generated as generated
+
+        commit = str(getattr(generated, "BUILD_COMMIT", "") or "").strip()
+        if commit:
+            info.update(
+                {
+                    "commit": commit,
+                    "source": str(getattr(generated, "BUILD_SOURCE", "") or "embedded-build-info"),
+                    "diff_sha": str(getattr(generated, "BUILD_DIFF_SHA", "") or ""),
+                    "tainted": bool(getattr(generated, "BUILD_DIRTY", False)),
+                    "build_timestamp_utc": str(getattr(generated, "BUILD_TIMESTAMP_UTC", "") or ""),
+                    "available": True,
+                }
+            )
+    except Exception:
+        pass
+    _BUILD_INFO_CACHE = dict(info)
+    return dict(info)
+
+
 def diagnostics_root(documents_root: Path) -> Path:
     root = Path(documents_root) / "logs"
     root.mkdir(parents=True, exist_ok=True)
