@@ -10,7 +10,7 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "ios" / "src"))
 
 from obstacle_bridge_ios import app as ios_app_module
-from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _load_grouped_runtime_config, _write_startup_artifacts
+from obstacle_bridge_ios.app import ObstacleBridgeIOSApp, _consume_log_cleanup_request, _load_grouped_runtime_config, _write_startup_artifacts
 
 
 def test_app_default_facade_reports_extension_as_runtime_owner(tmp_path: Path, monkeypatch) -> None:
@@ -143,7 +143,6 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     assert (root / "profiles").is_dir()
     assert (root / "admin_web" / "index.html").is_file()
     assert (root / "web" / "index.html").is_file()
-
     manifest = json.loads((root / "documents-manifest.json").read_text(encoding="utf-8"))
     assert manifest["config_file"] == str(root / "config" / "ObstacleBridge.cfg")
     assert manifest["log_file"] == str(root / "logs" / "obstaclebridge.log")
@@ -155,6 +154,21 @@ def test_startup_artifacts_seed_documents_config_logs_and_web_files(tmp_path: Pa
     assert config_payload["channel_mux"]["own_servers"] == []
     assert config_payload["channel_mux"]["remote_servers"] == []
 
+
+def test_log_cleanup_request_removes_only_documents_logs(tmp_path: Path) -> None:
+    root = tmp_path / "Documents"
+    (root / "logs").mkdir(parents=True)
+    (root / "logs" / "debug.log").write_text("diagnostic", encoding="utf-8")
+    (root / "config").mkdir()
+    (root / "config" / "ObstacleBridge.cfg").write_text("{}", encoding="utf-8")
+    (root / "ObstacleBridge-telemetry-identity.p12").write_bytes(b"identity")
+    (root / ".obstaclebridge-clear-logs-v1").write_text("clear", encoding="utf-8")
+
+    assert _consume_log_cleanup_request(root) is True
+    assert not (root / "logs").exists()
+    assert (root / "config" / "ObstacleBridge.cfg").is_file()
+    assert (root / "ObstacleBridge-telemetry-identity.p12").is_file()
+    assert not (root / ".obstaclebridge-clear-logs-v1").exists()
 
 def test_load_grouped_runtime_config_adds_default_remote_admin_forwarder(tmp_path: Path) -> None:
     root = tmp_path / "Documents"

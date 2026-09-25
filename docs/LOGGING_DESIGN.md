@@ -533,6 +533,12 @@ Rebuild and install the app before using this flow. The collector CA remains a
 separate public-trust concern: install it through MDM/Configurator/on-device
 enrolment, or use a collector certificate trusted by iOS.
 
+To remove accumulated iPhone diagnostics without deleting configuration or
+telemetry enrolment material, run `ios/scripts/clear_ios_logs.sh` with
+`OB_IOS_DEVICE_ID` set. The script stages a one-shot request and launches the
+app; the app removes only `Documents/logs` before its UI starts, then exits.
+It requires an unlocked paired phone and the current app build.
+
 In the iPhone WebAdmin **Telemetry client** section set:
 
 | Setting | iPhone value |

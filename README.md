@@ -1177,6 +1177,8 @@ identity rather than reading a private key from app storage.
 transfer of that encrypted package and its password into the app Documents
 container; the next app/tunnel start imports the key into the shared Keychain
 and removes the staging files.
+`ios/scripts/clear_ios_logs.sh` removes only iPhone diagnostic logs through a
+one-shot app request, preserving configuration and telemetry enrolment data.
 Run `python scripts/qualify_telemetry.py` for the local producer-latency pre-qualification check.
 
 ### Runner
@@ -1609,7 +1611,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | --- | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `64` | `1011` |
 | macOS Swift app | `1` | `70` |
-| iOS app/extension | `31` | `203` |
+| iOS app/extension | `31` | `205` |
 
 #### Requirement traceability
 

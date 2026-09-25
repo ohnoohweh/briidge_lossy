@@ -69,3 +69,11 @@ def test_ios_identity_upload_wrapper_uses_device_app_documents_copy_and_readback
     assert "not yet a Keychain identity" in source
     assert "PKCS#12 password:" in source
     assert "ObstacleBridge-telemetry-identity.password" in source
+
+
+def test_ios_log_cleanup_script_requests_only_documents_logs_cleanup():
+    source = (REPO_ROOT / "ios/scripts/clear_ios_logs.sh").read_text(encoding="utf-8")
+    assert "Documents/.obstaclebridge-clear-logs-v1" in source
+    assert "Documents/logs" in source
+    assert "xcrun devicectl device process launch" in source
+    assert "telemetry" not in source.lower() or "telemetry staging were preserved" in source
