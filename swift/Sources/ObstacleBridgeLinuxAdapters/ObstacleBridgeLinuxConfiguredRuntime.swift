@@ -61,7 +61,6 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
 /// session is explicit: callers must close it when their higher-level runtime
 /// decides the transport epoch has ended.
 public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
-    private let lower: ObstacleBridgeLinuxOverlayTransportClient
     private let lowerSession: ObstacleBridgeLinuxOverlayTransportSession
     private let secureLink: ObstacleBridgeSecureLinkPSKClient?
     private let secureLinkServer: ObstacleBridgeSecureLinkPSKServer?
@@ -70,8 +69,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
-        self.lower = lower
+    init(lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
         self.lowerSession = lowerSession
         self.secureLink = secureLink
         self.secureLinkServer = secureLinkServer
@@ -239,12 +237,12 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             let host = configuration.peerCandidates[index]
             let lower: ObstacleBridgeLinuxOverlayTransportClient
             do {
-                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode, receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds)
+                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode, quicALPN: configuration.quicALPN, quicInsecure: configuration.quicInsecure, receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds)
                 let lowerSession = try lower.openSession()
                 let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
                     let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: client, transport: configuration.transport)
+                    session = ObstacleBridgeLinuxConfiguredSession(lowerSession: lowerSession, secureLink: client, transport: configuration.transport)
                     guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     let hello = try client.begin(sessionID: sessionID, clientNonce: clientNonce)
                     let clientProof = try client.handleServerHello(lowerSession.exchange(hello))
@@ -252,7 +250,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                     secureLinkState = "authenticated"
                     clearInFlightConnection(session)
                 } else {
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
+                    session = ObstacleBridgeLinuxConfiguredSession(lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
                     guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     secureLinkState = "off"
                     clearInFlightConnection(session)

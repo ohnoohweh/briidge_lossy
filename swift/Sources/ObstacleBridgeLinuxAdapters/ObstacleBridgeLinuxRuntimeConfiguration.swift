@@ -46,6 +46,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let port: Int
     public let webSocketPath: String
     public let webSocketPayloadMode: String
+    public let quicALPN: String
+    public let quicInsecure: Bool
     public let secureLinkPSK: Data?
     public let receiveIdleTimeoutMilliseconds: Int
     /// Outbound compression policy. Inbound compressed frames remain accepted
@@ -54,7 +56,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -62,6 +64,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.port = port
         self.webSocketPath = webSocketPath
         self.webSocketPayloadMode = webSocketPayloadMode
+        self.quicALPN = quicALPN
+        self.quicInsecure = quicInsecure
         self.secureLinkPSK = secureLinkPSK
         self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
         self.compressionPolicy = compressionPolicy
@@ -102,6 +106,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         guard transport.isAvailable else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(transport.unavailableReason ?? "Linux transport unavailable")
         }
+        if listenerMode, transport == .quic {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC listener mode is unavailable until LSW-005B.2 owns certificate and peer admission")
+        }
         let sessionName: String
         let peerKey: String
         let portKey: String
@@ -109,17 +116,20 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         case .tcp: (sessionName, peerKey, portKey) = ("tcp_session", "tcp_peer", "tcp_peer_port")
         case .ws: (sessionName, peerKey, portKey) = ("ws_session", "ws_peer", "ws_peer_port")
         case .myudp: (sessionName, peerKey, portKey) = ("udp_session", "udp_peer", "udp_peer_port")
-        case .quic: throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(transport.unavailableReason ?? "Linux transport unavailable")
+        case .quic: (sessionName, peerKey, portKey) = ("quic_session", "quic_peer", "quic_peer_port")
         }
         let session = root[sessionName] as? [String: Any] ?? [:]
-        if listenerMode && transport == .myudp {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux listener_mode currently admits TCP and cleartext WebSocket only; myudp listener ownership is not yet qualified")
-        }
         let host = string(session[peerKey]) ?? (listenerMode ? "listener" : "")
         guard listenerMode || !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires \(sessionName).\(peerKey)")
         }
-        let ownPortKey = transport == .ws ? "ws_own_port" : "tcp_own_port"
+        let ownPortKey: String
+        switch transport {
+        case .tcp: ownPortKey = "tcp_own_port"
+        case .ws: ownPortKey = "ws_own_port"
+        case .myudp: ownPortKey = "udp_own_port"
+        case .quic: ownPortKey = "quic_own_port"
+        }
         let configuredPort = listenerMode ? integer(session[ownPortKey] ?? session[portKey]) : integer(session[portKey])
         guard let port = configuredPort, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires \(sessionName).\(portKey) between 1 and 65535")
@@ -160,6 +170,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             listenerMode: listenerMode,
             webSocketPath: string(session["ws_path"]) ?? "/",
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
+            quicALPN: string(session["quic_alpn"]) ?? "hq-29",
+            quicInsecure: boolean(session["quic_insecure"]) ?? false,
             secureLinkPSK: psk,
             receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
             compressionPolicy: compressionPolicy,

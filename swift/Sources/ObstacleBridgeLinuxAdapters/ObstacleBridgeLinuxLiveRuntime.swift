@@ -49,6 +49,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var previousRuntimeLifetimeEndedCleanly: Bool?
     private var runtimeHealthTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
+    /// Listener-owned child sessions are retired by their shared listener;
+    /// they must never turn a peer close into an outbound reconnect attempt.
+    private var inboundOnly = false
     private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil, runtimeHealthRecordCount: 0, previousRuntimeLifetimeEndedCleanly: nil)
     private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil, runtimeHealthRecordCount: 0, previousRuntimeLifetimeEndedCleanly: nil)
 
@@ -138,6 +141,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         queue.async { [weak self] in
             guard let self else { return }
             self.apply(self.coordinator.handle(.stop))
+            self.inboundOnly = true
             self.configuredRuntime.disconnect()
             self.stopped = false
             self.configuredRuntime.adoptInbound(connectedSession, host: host)
@@ -183,7 +187,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             do {
                 return try session.send(payload)
             } catch {
-                if let epoch = activeCoordinatorEpoch {
+                if inboundOnly {
+                    apply(coordinator.handle(.stop))
+                } else if let epoch = activeCoordinatorEpoch {
                     apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
                 }
                 throw error
@@ -196,7 +202,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public func reconnect() {
         queue.async { [weak self] in
             guard let self, !self.stopped else { return }
-            if let epoch = self.activeCoordinatorEpoch {
+            if self.inboundOnly {
+                self.apply(self.coordinator.handle(.stop))
+            } else if let epoch = self.activeCoordinatorEpoch {
                 self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: "manual reconnect")))
             } else {
                 self.apply(self.coordinator.handle(.start))
@@ -448,7 +456,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func receiveFailed(workerEpoch: UInt64, coordinatorEpoch: UInt64, reason: String) {
         guard !stopped, configuredRuntime.connectionEpoch == workerEpoch,
               activeCoordinatorEpoch == coordinatorEpoch else { return }
-        apply(coordinator.handle(.receiveFinished(epoch: coordinatorEpoch, reason: reason)))
+        if inboundOnly { apply(coordinator.handle(.stop)) }
+        else { apply(coordinator.handle(.receiveFinished(epoch: coordinatorEpoch, reason: reason))) }
     }
 
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {

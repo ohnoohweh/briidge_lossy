@@ -25,3 +25,4 @@ Cert_SecureLink/
 /logs/
 /ObstacleBridge*.log
 /dist/
+tests/unit/test_logging_ipc.py

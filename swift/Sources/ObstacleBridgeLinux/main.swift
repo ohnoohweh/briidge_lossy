@@ -139,6 +139,16 @@ enum ObstacleBridgeLinuxMain {
     private static func runForeground(options: RuntimeRunOptions) {
         do {
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configPath)
+            if configuration.listenerMode, configuration.transport == .myudp {
+                let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime)
+                try admin.start(port: options.adminPort)
+                runtime.start()
+                print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
+                let resources: [Any] = [runtime, admin]
+                    + installForegroundShutdown(stop: { runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
+                withExtendedLifetime(resources) { dispatchMain() }
+            }
             let healthURL = URL(fileURLWithPath: options.configPath)
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
@@ -169,7 +179,7 @@ enum ObstacleBridgeLinuxMain {
             }
             let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
-            resources.append(contentsOf: installForegroundShutdown(runtime: runtime, admin: admin, holdSeconds: options.holdSeconds))
+            resources.append(contentsOf: installForegroundShutdown(stop: { runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds))
             withExtendedLifetime(resources) { dispatchMain() }
         } catch {
             writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")
@@ -177,9 +187,9 @@ enum ObstacleBridgeLinuxMain {
         }
     }
 
-    private static func installForegroundShutdown(runtime: ObstacleBridgeLinuxLiveRuntime, admin: ObstacleBridgeLinuxAdminServer, holdSeconds: Int?) -> [Any] {
+    private static func installForegroundShutdown(stop: @escaping () -> Void, admin: ObstacleBridgeLinuxAdminServer, holdSeconds: Int?) -> [Any] {
         func shutdown() {
-            runtime.stop()
+            stop()
             admin.stop()
             exit(0)
         }

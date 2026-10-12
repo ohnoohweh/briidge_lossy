@@ -91,6 +91,31 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.port == 4242)
     }
 
+    @Test func parsesSectionedQuicConfigurationWithExplicitTrustPosture() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "quic"],
+            "quic_session": ["quic_peer": "127.0.0.1", "quic_peer_port": 4242, "quic_alpn": "hq-29", "quic_insecure": true],
+        ]))
+        #expect(config.transport == .quic)
+        #expect(config.host == "127.0.0.1")
+        #expect(config.port == 4242)
+        #expect(config.quicALPN == "hq-29")
+        #expect(config.quicInsecure)
+    }
+
+    @Test func parsesAuthenticatedMyudpListenerConfigurationWithoutOutboundPeer() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "myudp", "listener_mode": true],
+            "udp_session": ["udp_own_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+        ]))
+        #expect(config.listenerMode)
+        #expect(config.transport == .myudp)
+        #expect(config.port == 4242)
+        #expect(config.host == "listener")
+        #expect(config.secureLinkPSK == Data("listener-secret".utf8))
+    }
+
     @Test func parsesStructuredOwnAndRemoteServices() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "tcp"],
@@ -127,8 +152,14 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
     }
 
     @Test func rejectsUnqualifiedOrUnsafeRuntimeChoicesBeforeNetworking() {
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC is unavailable: the Network.framework owner has no qualified Linux backend")) {
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires quic_session.quic_peer")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(["runner": ["overlay_transport": "quic"]]))
+        }
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC listener mode is unavailable until LSW-005B.2 owns certificate and peer admission")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "quic", "listener_mode": true],
+                "quic_session": ["quic_own_port": 4242],
+            ]))
         }
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedWebSocketTLS) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([

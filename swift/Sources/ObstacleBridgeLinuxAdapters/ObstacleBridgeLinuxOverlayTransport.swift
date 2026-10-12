@@ -13,19 +13,15 @@ public enum ObstacleBridgeLinuxTransport: String, CaseIterable, Sendable {
 
     public var isAvailable: Bool {
         switch self {
-        case .tcp, .ws, .myudp:
+        case .tcp, .ws, .myudp, .quic:
             true
-        case .quic:
-            false
         }
     }
 
     public var unavailableReason: String? {
         switch self {
-        case .tcp, .ws, .myudp:
+        case .tcp, .ws, .myudp, .quic:
             nil
-        case .quic:
-            "Linux QUIC is unavailable: the Network.framework owner has no qualified Linux backend"
         }
     }
 }
@@ -75,10 +71,12 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let transport: ObstacleBridgeLinuxTransport
     private let wsPath: String
     private let wsPayloadMode: ObstacleBridgeWebSocketPayloadMode
+    private let quicALPN: String
+    private let quicInsecure: Bool
     private let receiveTimeoutMilliseconds: Int
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", receiveTimeoutMilliseconds: Int = 5_000) throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, receiveTimeoutMilliseconds: Int = 5_000) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -90,6 +88,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.transport = transport
         self.wsPath = wsPath.hasPrefix("/") ? wsPath : "/\(wsPath)"
         self.wsPayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(wsPayloadMode)
+        let normalizedALPN = quicALPN.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedALPN.isEmpty else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
+        self.quicALPN = normalizedALPN
+        self.quicInsecure = quicInsecure
         self.receiveTimeoutMilliseconds = max(1, receiveTimeoutMilliseconds)
         self.snapshot = .init(transport: transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
     }
@@ -120,7 +122,10 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     defer { connection.close() }
                     result = try connection.exchange(payload)
                 case .quic:
-                    throw ObstacleBridgeLinuxOverlayTransportError.unavailableTransport(transport.unavailableReason ?? "transport unavailable")
+                    let connection = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
+                    defer { connection.close() }
+                    try connection.write(try tcpWire(payload))
+                    result = try readTCPApplicationFrame(connection)
                 }
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: attempt, failureReason: nil)
                 return result
@@ -145,6 +150,21 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     close: { datagram.close() }
                 )
             }
+            if transport == .quic {
+                let quic = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
+                snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+                let send: (Data) throws -> Void = { [weak self] payload in
+                    guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                    try quic.write(try self.tcpWire(payload))
+                }
+                let receive: () throws -> Data = { [weak self] in
+                    guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                    return try self.readTCPApplicationFrame(quic)
+                }
+                return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
+                    quic.close()
+                })
+            }
             let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
             if transport == .ws { try performWebSocketUpgrade(connection) }
             snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
@@ -158,7 +178,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .myudp:
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 case .quic:
-                    throw ObstacleBridgeLinuxOverlayTransportError.unavailableTransport(self.transport.unavailableReason ?? "transport unavailable")
+                    throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 }
             }
             let receive: () throws -> Data = { [weak self] in
@@ -201,6 +221,24 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             case .ignore:
                 // A PONG completes a lower-layer liveness exchange and carries
                 // no application payload for this client.
+                break
+            }
+        }
+    }
+
+    private func readTCPApplicationFrame(_ connection: ObstacleBridgeLinuxQUICSession) throws -> Data {
+        while true {
+            let header = try connection.readExactly(4)
+            var headerReader = ObstacleBridgeBinaryReader(header)
+            let length = try headerReader.readUInt32()
+            guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+            let body = try connection.readExactly(Int(length))
+            switch try ObstacleBridgeOverlayEnvelope.decodeTCP(header + body) {
+            case .application(let payload):
+                return payload
+            case .reply(let frame):
+                try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(frame))
+            case .ignore:
                 break
             }
         }

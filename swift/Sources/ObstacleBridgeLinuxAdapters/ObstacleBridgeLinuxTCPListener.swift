@@ -91,9 +91,8 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
             lock.lock(); let shouldClose = open; open = false; lock.unlock()
             if shouldClose { _ = Glibc.close(clientFD) }
         })
-        let lower = try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: port, transport: transport, wsPath: webSocketPath)
         handedOff = true
-        return ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: raw, secureLink: nil, secureLinkServer: server, transport: transport)
+        return ObstacleBridgeLinuxConfiguredSession(lowerSession: raw, secureLink: nil, secureLinkServer: server, transport: transport)
     }
 
     public func close() { if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 } }

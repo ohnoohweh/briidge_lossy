@@ -23,6 +23,7 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 /// reads only the runtime's redacted status projection.
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
+    private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
@@ -32,14 +33,25 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime) {
         self.statusProvider = { runtime.status() }
+        self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
     }
 
     public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime) {
         self.statusProvider = { liveRuntime.status() }
+        self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
+    }
+
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime) {
+        self.statusProvider = { myudpListenerRuntime.status() }
+        self.peersProvider = {
+            myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
+        }
+        self.runtimeHealthProvider = { (0, nil) }
+        self.runtimeHealthRecordsProvider = { [] }
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -151,20 +163,22 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
 
     private func peersData() -> Data {
         let status = statusProvider()
-        var peer = peerPayload(status.peer)
-        peer["configured_candidates"] = status.configuredCandidates
-        peer["active_host"] = status.activeHost as Any
-        peer["port"] = status.port
-        peer["failure_reason"] = status.failureReason as Any
-        return json([peer])
+        return json(peersProvider().map { row in
+            var peer = peerPayload(row.snapshot, identity: row.identity)
+            peer["configured_candidates"] = status.configuredCandidates
+            peer["active_host"] = status.activeHost as Any
+            peer["port"] = status.port
+            peer["failure_reason"] = status.failureReason as Any
+            return peer
+        })
     }
 
     /// Serialize the one Core/adapter-derived peer projection. Do not read
     /// configuration secrets or construct protocol counters in this HTTP
     /// adapter: all SecureLink fields arrive through `status.peer`.
-    private func peerPayload(_ peer: ObstacleBridgeLinuxPeerSnapshot) -> [String: Any] {
+    private func peerPayload(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String = "configured-peer") -> [String: Any] {
         [
-            "peer_id": "configured-peer",
+            "peer_id": identity,
             "transport": peer.transport,
             "state": peer.lifecycleState,
             "connection_epoch": peer.connectionEpoch,

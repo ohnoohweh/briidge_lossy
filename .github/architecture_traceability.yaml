@@ -76,6 +76,9 @@ ARC-CMP-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpFramingRoundTripsAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpRegistryListenerKeepsTwoUdpPeersIsolated
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRejectsAmbiguousListenerServiceBinds
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_direct_preflight_requires_http_200_before_upgrade
@@ -90,6 +93,9 @@ ARC-CMP-002:
   # participates in this component boundary.
   unit_tests:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerRejectsDelayedStaleEpochForSameEndpoint
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerBoundsAuthenticatedPeerAdmission
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerExpiresIdleChildWithoutReconnect
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpCorePeerRegistryIsolatesEpochsAndWithdrawals
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks
@@ -875,6 +881,8 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesTcpListenerConfigurationWithoutOutboundPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesCleartextWebSocketListenerConfigurationWithoutOutboundPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesAuthenticatedMyudpListenerConfigurationWithoutOutboundPeer
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::myudpListenerAdminProjectsEachAuthenticatedPeerWithoutPSK
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkPskSessionAuthenticatesAndCarriesDataAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpSecureLinkWrongPskFailsClosedAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::tcpAndWebSocketSecureLinkRejectMalformedPythonPeerFrames

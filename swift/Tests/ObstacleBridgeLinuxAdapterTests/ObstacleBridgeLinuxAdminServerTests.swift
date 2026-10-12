@@ -121,6 +121,38 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((compression["compressed_output_bytes_sent_total"] as? UInt64 ?? 256) < 256)
     }
 
+    @Test func myudpListenerAdminProjectsEachAuthenticatedPeerWithoutPSK() async throws {
+        let secret = "linux-swift-psk"
+        let listener = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: .init(
+            transport: .myudp, host: "listener", port: 0, listenerMode: true,
+            secureLinkPSK: Data(secret.utf8)
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: listener)
+        try server.start()
+        listener.start()
+        defer { listener.stop(); server.stop() }
+        let connected = DispatchSemaphore(value: 0)
+        for identifier in 1...2 {
+            DispatchQueue.global().async {
+                let client = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+                    transport: .myudp, host: "127.0.0.1", port: listener.port,
+                    secureLinkPSK: Data(secret.utf8)
+                ))
+                _ = try? client.connect(sessionID: UInt64(identifier), clientNonce: Data(repeating: UInt8(identifier), count: 32))
+                connected.signal()
+            }
+        }
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+        let deadline = Date().addingTimeInterval(3)
+        while listener.peers().count != 2, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        let rows = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        #expect(rows.count == 2)
+        #expect(Set(rows.compactMap { $0["peer_id"] as? String }).count == 2)
+        #expect(rows.allSatisfy { ($0["secure_link"] as? [String: Any])?["authenticated"] as? Bool == true })
+        #expect(!String(decoding: try JSONSerialization.data(withJSONObject: rows), as: UTF8.self).contains(secret))
+    }
+
     private func getJSON(_ text: String) async throws -> Any {
         let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: text)))
         #expect((response as? HTTPURLResponse)?.statusCode == 200)

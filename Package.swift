@@ -45,6 +45,10 @@ targets += [
         dependencies: [
             "ObstacleBridgeCore",
             .product(name: "Crypto", package: "swift-crypto"),
+            .product(name: "Logging", package: "swift-log"),
+            .product(name: "NIOCore", package: "swift-nio"),
+            .product(name: "NIOPosix", package: "swift-nio"),
+            .product(name: "NIOQUIC", package: "swift-nio-quic"),
         ],
         path: "swift/Sources/ObstacleBridgeLinuxAdapters"
     ),
@@ -69,7 +73,12 @@ let package = Package(
     ],
     products: products,
     dependencies: [
-        .package(url: "https://github.com/apple/swift-crypto.git", exact: "4.5.1"),
+        .package(url: "https://github.com/apple/swift-crypto.git", exact: "5.0.0"),
+        .package(url: "https://github.com/apple/swift-log.git", exact: "1.16.1"),
+        .package(url: "https://github.com/apple/swift-nio.git", exact: "2.104.0"),
+        // Pin the qualified Linux QUIC backend because its public API evolves
+        // independently of this foreground runtime.
+        .package(url: "https://github.com/apple/swift-nio-quic.git", exact: "0.4.1"),
     ],
     targets: targets,
     swiftLanguageModes: [.v6]

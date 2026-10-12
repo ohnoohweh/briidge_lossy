@@ -2,6 +2,9 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
 @testable import ObstacleBridgeCore
+#if os(Linux)
+import Glibc
+#endif
 
 struct ObstacleBridgeLinuxOverlayTransportTests {
     @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() throws {
@@ -84,10 +87,18 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         }
     }
 
-    @Test func unqualifiedTransportsAreRejectedBeforeSocketCreation() {
-        #expect(throws: ObstacleBridgeLinuxOverlayTransportError.unavailableTransport("Linux QUIC is unavailable: the Network.framework owner has no qualified Linux backend")) {
-            try ObstacleBridgeLinuxOverlayTransportClient(host: "127.0.0.1", port: 1, transport: .quic)
-        }
+    @Test func quicReliableStreamRoundTripsAgainstPythonAioquicPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "quic")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(
+            host: "127.0.0.1",
+            port: peer.port,
+            transport: .quic,
+            quicALPN: "hq-29",
+            quicInsecure: true
+        )
+        #expect(try client.roundTrip(Data("swift-linux-quic".utf8)) == Data("python:swift-linux-quic".utf8))
+        #expect(client.snapshot.state == "connected")
     }
 
     @Test func myudpDataFrameRoundTripsAgainstPythonPeer() throws {
@@ -718,6 +729,7 @@ final class PythonOverlayPeer {
     private static let launchSlots = DispatchSemaphore(value: 2)
     let process: Process
     let port: Int
+    private let forceStop: Bool
     private var stopped = false
 
     init(mode: String) throws {
@@ -727,7 +739,10 @@ final class PythonOverlayPeer {
         let script = Self.script(for: mode)
         let process = Process()
         let stdout = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        let virtualEnvironmentPython = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".venv/bin/python")
+            .path
+        process.executableURL = URL(fileURLWithPath: mode == "quic" && FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython) ? virtualEnvironmentPython : "/usr/bin/python3")
         process.arguments = ["-u", "-c", script]
         process.standardOutput = stdout
         process.standardError = Pipe()
@@ -740,18 +755,75 @@ final class PythonOverlayPeer {
         }
         self.process = process
         self.port = port
+        self.forceStop = mode == "quic"
         started = true
     }
 
     func stop() {
         guard !stopped else { return }
         stopped = true
-        if process.isRunning { process.terminate() }
+        if process.isRunning {
+            if forceStop {
+                _ = kill(process.processIdentifier, SIGKILL)
+            } else {
+                process.terminate()
+            }
+        }
         process.waitUntilExit()
         Self.launchSlots.signal()
     }
 
     private static func script(for mode: String) -> String {
+        if mode == "quic" {
+            return """
+            import asyncio, datetime, ipaddress, signal, tempfile
+            from pathlib import Path
+            from aioquic.asyncio import serve, QuicConnectionProtocol
+            from aioquic.quic.configuration import QuicConfiguration
+            from aioquic.quic.events import StreamDataReceived
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.x509.oid import NameOID
+            signal.signal(signal.SIGTERM, lambda *_: exit(0))
+
+            class Echo(QuicConnectionProtocol):
+                def __init__(self, *args, **kwargs):
+                    super().__init__(*args, **kwargs); self.buffers = {}
+                def quic_event_received(self, event):
+                    if not isinstance(event, StreamDataReceived): return
+                    data = self.buffers.get(event.stream_id, b'') + event.data
+                    while len(data) >= 4:
+                        size = int.from_bytes(data[:4], 'big')
+                        if len(data) < 4 + size: break
+                        body, data = data[4:4 + size], data[4 + size:]
+                        assert body[:1] == b'\\0'
+                        reply = b'\\0python:' + body[1:]
+                        self._quic.send_stream_data(event.stream_id, len(reply).to_bytes(4, 'big') + reply)
+                        self.transmit()
+                    self.buffers[event.stream_id] = data
+
+            async def main():
+                tmp = Path(tempfile.mkdtemp())
+                key = ec.generate_private_key(ec.SECP256R1())
+                now = datetime.datetime.now(datetime.timezone.utc)
+                subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
+                cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                    .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                    .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=1))
+                    .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost'), x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), critical=False)
+                    .sign(key, hashes.SHA256()))
+                cert_path, key_path = tmp / 'cert.pem', tmp / 'key.pem'
+                cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+                key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+                configuration = QuicConfiguration(is_client=False, alpn_protocols=['hq-29'])
+                configuration.load_cert_chain(cert_path, key_path)
+                server = await serve('127.0.0.1', 0, configuration=configuration, create_protocol=Echo)
+                print(server._transport.get_extra_info('sockname')[1], flush=True)
+                await asyncio.Future()
+            asyncio.run(main())
+            """
+        }
         if mode == "ws-duplex" {
             return """
             import base64, hashlib, socket
