@@ -252,7 +252,23 @@ struct ObstacleBridgeAdminAPIResponse {
     }
 }
 
-enum ObstacleBridgeAdminAPI {
+/// Foundation-only response shape for non-Apple Admin HTTP adapters. The
+/// adapter owns sockets and headers; Core owns JSON serialization policy.
+public struct ObstacleBridgeAdminLinuxResponse {
+    public let statusCode: Int
+    public let body: Data
+
+    public init(statusCode: Int, body: Data) {
+        self.statusCode = statusCode
+        self.body = body
+    }
+}
+
+public enum ObstacleBridgeAdminAPI {
+    public static func linuxJSONResponse(_ payload: Any, statusCode: Int = 200) -> ObstacleBridgeAdminLinuxResponse? {
+        guard let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return nil }
+        return .init(statusCode: statusCode, body: body)
+    }
     static func tunControlSnapshot(enabled: Bool, startupEnabled: Bool, supported: Bool) -> [String: Any] {
         [
             "enabled": enabled,

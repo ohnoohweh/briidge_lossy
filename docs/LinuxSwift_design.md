@@ -210,7 +210,9 @@ projection through `ObstacleBridgeAdminSnapshotSupport`. The POSIX owners
 retain descriptor I/O and HTTP serialization; Core owns record acceptance and
 the selected runtime envelope. Linux configuration admission also calls the
 portable overlay-stack planner, preserving one layer-order and policy decision
-before any POSIX transport is opened.
+before any POSIX transport is opened. The Linux Admin adapter also obtains its
+JSON response body from `ObstacleBridgeAdminAPI`, retaining only status-line
+and socket-write mechanics locally.
 
 Known gaps after this `LSW-SC.1L-A` slice: Linux has not yet adopted the
 extracted TCP, QUIC, WebSocket, and ChannelMux lifecycle owners as production

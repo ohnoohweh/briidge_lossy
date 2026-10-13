@@ -107,18 +107,18 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         let requestLine = String(data: request, encoding: .utf8)?.split(separator: "\r\n", maxSplits: 1).first ?? ""
         let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? ""
-        let response: (Int, Data)
+        let response: ObstacleBridgeAdminLinuxResponse
         switch path {
-        case "/api/status": response = (200, statusData())
-        case "/api/peers": response = (200, peersData())
-        default: response = (404, Data("{\"error\":\"not found\"}".utf8))
+        case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))
         }
-        let header = "HTTP/1.1 \(response.0 == 200 ? "200 OK" : "404 Not Found")\r\nContent-Type: application/json\r\nContent-Length: \(response.1.count)\r\nConnection: close\r\n\r\n"
-        var wire = Data(header.utf8); wire.append(response.1)
+        let header = "HTTP/1.1 \(response.statusCode == 200 ? "200 OK" : response.statusCode == 404 ? "404 Not Found" : "500 Internal Server Error")\r\nContent-Type: application/json\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
+        var wire = Data(header.utf8); wire.append(response.body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
     }
 
-    private func statusData() -> Data {
+    private func statusPayload() -> [String: Any] {
         let status = statusProvider()
         let health = runtimeHealthProvider()
         let healthRecords = runtimeHealthRecordsProvider().compactMap { record -> [String: Any]? in
@@ -164,19 +164,19 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             ],
             "peer": peerPayload(status.peer),
         ]
-        return json(payload)
+        return payload
     }
 
-    private func peersData() -> Data {
+    private func peersPayload() -> [[String: Any]] {
         let status = statusProvider()
-        return json(peersProvider().map { row in
+        return peersProvider().map { row in
             var peer = peerPayload(row.snapshot, identity: row.identity)
             peer["configured_candidates"] = status.configuredCandidates
             peer["active_host"] = status.activeHost as Any
             peer["port"] = status.port
             peer["failure_reason"] = status.failureReason as Any
             return peer
-        })
+        }
     }
 
     /// Serialize the one Core/adapter-derived peer projection. Do not read
