@@ -264,12 +264,19 @@ long-lived protected session is qualified.
 
 Known gaps after `LSW-005B.2.2`: on the pinned `swift-nio-quic` 0.4.1 graph,
 the listener aborts when its first inbound stream is created, and a client
-aborts after TLS when a SecureLink multi-exchange stream is exercised. Neither
-failure is safe to expose as an admitted runtime mode. Linux QUIC listener
-ownership, custom-trust-root runtime interoperability, and ChannelMux service
-traffic therefore remain blocked on a released upstream backend correction;
-the current source still rejects listener mode and retains only the bounded
-single-exchange client probe. Peer-family preference is also not mapped.
+aborts after TLS when a SecureLink multi-exchange stream is exercised. A
+two-client listener reproduction retained the UDP channel, multiplexer,
+connections, and streams using the upstream example's ownership pattern and
+still reached that abort, so the fault is not an adapter lifetime inference.
+The separately current Swift Network Evolution crypto rewrite cannot be pinned
+with current NIO QUIC: its protocol-stack API no longer compiles against NIO
+QUIC main. There is consequently no compatible released correction to select.
+Neither failure is safe to expose as an admitted runtime mode. Linux QUIC
+listener ownership, custom-trust-root runtime interoperability, and ChannelMux
+service traffic therefore remain blocked on a released compatible backend
+correction; the current source still rejects listener mode and retains only
+the bounded single-exchange client probe. Peer-family preference is also not
+mapped.
 
 ## Platform decisions still required
 
