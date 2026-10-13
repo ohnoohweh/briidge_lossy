@@ -2292,7 +2292,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayTransportOwner.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeCompressLayerRuntime.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeServiceSpec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeNativeServiceSpec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeProxyConnections.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeProxyServer.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayChannelCore.swift'),

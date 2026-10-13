@@ -210,7 +210,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched
     assert "native/IPServer/IPServer.entitlements" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" in patched

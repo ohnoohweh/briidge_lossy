@@ -171,6 +171,12 @@ The compression configuration, accounting, and policy wrapper is also
 Core-owned; Apple owners only supply transport measurements and render its
 snapshot.
 
+`ObstacleBridgeNativeServiceSpec.swift` is Core-owned. Its active construction
+path converts the portable ChannelMux service record and returns that same
+record for adapter use; the unused initializer that accepted the mixed
+runtime-configuration record was removed rather than retaining a Core-to-Apple
+type dependency.
+
 `ObstacleBridgePeerAddressProtocolRuntime.swift` now performs bounded
 IPv4/IPv6 parsing and canonical formatting in Core without Darwin or Glibc
 socket conversion. `ObstacleBridgeOverlayLayerTransportAdapter.swift` is
@@ -178,10 +184,9 @@ therefore Core-owned as well, preserving the mapped-IPv4 and malformed-frame
 admission rules while composing the portable compression and SecureLink
 effects.
 
-The open `LSW-SC.1` gaps are the remaining 4 files in the preceding table:
+The open `LSW-SC.1` gaps are the remaining 3 files in the preceding table:
 `ObstacleBridgeAdminConfigSupport.swift`,
-`ObstacleBridgeAdminWebSupport.swift`, `ObstacleBridgeNativeServiceSpec.swift`,
-and `ObstacleBridgeOnboarding.swift`.
+`ObstacleBridgeAdminWebSupport.swift`, and `ObstacleBridgeOnboarding.swift`.
 They cannot be moved as a single file-system operation because their present
 Apple callers compile a flat source list and several depend on the `LSW-SC.2`
 configuration, packet-device, and connection contracts. The next extraction
@@ -194,12 +199,6 @@ group. The existing Linux runtime uses Core codecs and selected
 transport policy, but this package must replace any overlapping Linux-local
 planner, lifecycle, snapshot, or myUDP facade with the moved Core type and add
 direct Linux adapter evidence before those extractions count as Linux-adopted.
-
-`ObstacleBridgeNativeServiceSpec` remains open because its portable service
-projection is currently coupled to `ObstacleBridgeRuntimeServiceSpec` in the
-unextracted configuration layer. Its next slice must extract that neutral
-record or introduce a Core service-spec input, then update both configuration
-and native socket callers without retaining a duplicate model.
 
 The Admin-component parity fixture also needs its flat `swiftc` inventory to
 include the Core ChannelMux dependencies that its compatibility facade

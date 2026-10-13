@@ -786,7 +786,7 @@ def test_macos_swift_host_runner_source_exists() -> None:
     wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     shared_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
-    native_spec = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
+    native_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
 
     assert "@main" in wrapper
     assert "ObstacleBridgeHostRunnerMain" in wrapper
@@ -821,8 +821,8 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert '"build_timestamp_utc": timestamp' in runtime
     assert "let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
     assert "let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?" in native_spec
-    assert "self.lifecycleHooks = sharedSpec.lifecycleHooks" in native_spec
-    assert "self.options = sharedSpec.options" in native_spec
+    assert "self.lifecycleHooks = channelMuxSpec.lifecycleHooks" in native_spec
+    assert "self.options = channelMuxSpec.options" in native_spec
     assert "lifecycleHooks: lifecycleHooks" in native_spec
     assert "options: options" in native_spec
 
