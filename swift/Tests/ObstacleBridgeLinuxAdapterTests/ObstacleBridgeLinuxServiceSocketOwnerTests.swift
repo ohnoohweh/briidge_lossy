@@ -42,6 +42,27 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(datagram.frames.count == 2)
     }
 
+    @Test func coreRuntimeEpochResetWithdrawsTransportBoundChannels() throws {
+        let service = ObstacleBridgeNativeServiceSpec(
+            svcID: 10, name: "epoch-reset", listenProtocol: "tcp", listenBind: "127.0.0.1", listenPort: 0,
+            targetProtocol: "tcp", targetHost: "127.0.0.1", targetPort: 7
+        )
+        let tcp = ObstacleBridgeChannelMuxTcpRuntime(instanceID: 1, connectionSeq: 1)
+        let tcpOpen = try #require(try tcp.acceptLocalServerConnection(service: service, overlayConnected: true, acceptingEnabled: true))
+        let tcpReset = tcp.resetTransportEpoch(instanceID: 2, connectionSeq: 2)
+        #expect(tcpReset.withdrawnServerChannels == [tcpOpen.chanID])
+        #expect(tcpReset.withdrawnClientChannels.isEmpty)
+
+        let udp = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 1, connectionSeq: 1)
+        let udpOpen = try #require(try udp.handleLocalServerDatagram(
+            service: service, serviceKey: "127.0.0.1:5001", payload: Data("epoch".utf8),
+            addrHost: "127.0.0.1", addrPort: 5001, overlayConnected: true, acceptingEnabled: true
+        ))
+        let udpReset = udp.resetTransportEpoch(instanceID: 2, connectionSeq: 2)
+        #expect(udpReset.withdrawnServerChannels == [udpOpen.chanID])
+        #expect(udpReset.withdrawnClientChannels.isEmpty)
+    }
+
     @Test func tcpListenerPublishesOpenAndDataFrames() throws {
         let received = LockedFrames()
         let ready = DispatchSemaphore(value: 0)
