@@ -258,8 +258,8 @@ final class ObstacleBridgeHostRunner {
         self.runtimeConfigRaw = decoded
         self.runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
         self.configStore = ObstacleBridgeConfigStore(configPath: runtimeConfigPath, groupedConfig: decoded, runtimeConfig: runtimeConfig)
-        self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
-        self.remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
+        self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
+        self.remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
         self.bindHost = bindHostOverride ?? (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? "127.0.0.1")
         let configuredPort = ObstacleBridgeRuntimeConfig.intValue(from: runtimeConfig["admin_web_port"])
         self.statusPort = statusPortOverride ?? configuredPort ?? 18080
@@ -388,8 +388,8 @@ final class ObstacleBridgeHostRunner {
         runtimeConfigRaw = decoded
         runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
         configStore.updateConfigs(groupedConfig: decoded, runtimeConfig: runtimeConfig)
-        ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
-        remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map(ObstacleBridgeNativeServiceSpec.init)
+        ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
+        remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
     }
 
     private func reloadRuntimeStateForControlAction() throws {

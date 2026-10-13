@@ -68,6 +68,23 @@ struct ObstacleBridgeRuntimeServiceSpec {
     let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
     let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
 
+    func nativeServiceSpec() -> ObstacleBridgeNativeServiceSpec {
+        ObstacleBridgeNativeServiceSpec(
+            channelMuxSpec: .init(
+                svcID: svcID,
+                lProto: listenProtocol,
+                lBind: listenBind,
+                lPort: listenPort,
+                rProto: targetProtocol,
+                rHost: targetHost,
+                rPort: targetPort,
+                name: name,
+                lifecycleHooks: lifecycleHooks,
+                options: options
+            )
+        )
+    }
+
     var listenIfname: String? {
         listenProtocol == "tun" ? listenBind : nil
     }

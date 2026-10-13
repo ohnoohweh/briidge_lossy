@@ -76,6 +76,17 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
 
 
+def test_macos_host_runner_converts_portable_runtime_service_specs_at_the_host_boundary() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+
+    assert "func nativeServiceSpec() -> ObstacleBridgeNativeServiceSpec" in runtime_config
+    assert "channelMuxSpec: .init(" in runtime_config
+    assert "lifecycleHooks: lifecycleHooks" in runtime_config
+    assert "options: options" in runtime_config
+    assert ".map { $0.nativeServiceSpec() }" in source
+
+
 def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
