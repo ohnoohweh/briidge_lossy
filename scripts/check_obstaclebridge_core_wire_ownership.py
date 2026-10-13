@@ -55,7 +55,7 @@ def validate() -> list[str]:
         if fragment in overlay_text:
             errors.append(f"{OVERLAY_ADAPTER_FILE} retains Core overlay serializer fragment {fragment!r}")
     myudp_text = (ROOT / MYUDP_ADAPTER_FILE).read_text(encoding="utf-8")
-    if "ObstacleBridgeMyUDPPeerEngine" not in myudp_text:
+    if "ObstacleBridgeUdpOverlayPeerRuntime" not in myudp_text:
         errors.append(f"{MYUDP_ADAPTER_FILE} does not delegate myudp peer state and effects to Core")
     for fragment in MYUDP_FORBIDDEN_FRAGMENTS:
         if fragment in myudp_text:

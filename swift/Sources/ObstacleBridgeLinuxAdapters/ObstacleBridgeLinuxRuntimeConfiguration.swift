@@ -31,6 +31,21 @@ public struct ObstacleBridgeLinuxServiceSpec: Equatable, Sendable {
     public let targetHost: String
     public let targetPort: Int
 
+    /// Internal representation used after a Core-owned catalog decoder or a
+    /// bound Linux socket has already established the service values. Runtime
+    /// configuration admission continues through `init(nativeSpec:)`, which
+    /// invokes the portable `ObstacleBridgeNativeServiceSpec` validator.
+    init(serviceID: UInt16, name: String?, listenProtocol: ObstacleBridgeChannelMuxProtocol, listenHost: String, listenPort: Int, targetProtocol: ObstacleBridgeChannelMuxProtocol, targetHost: String, targetPort: Int) {
+        self.serviceID = serviceID
+        self.name = name
+        self.listenProtocol = listenProtocol
+        self.listenHost = listenHost
+        self.listenPort = listenPort
+        self.targetProtocol = targetProtocol
+        self.targetHost = targetHost
+        self.targetPort = targetPort
+    }
+
     init(nativeSpec: ObstacleBridgeNativeServiceSpec) throws {
         guard let serviceID = UInt16(exactly: nativeSpec.svcID),
               let listenProtocol = ObstacleBridgeLinuxRuntimeConfiguration.channelProtocol(nativeSpec.listenProtocol),

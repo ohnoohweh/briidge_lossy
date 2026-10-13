@@ -236,10 +236,12 @@ their respective application-frame effects, plus
 `ObstacleBridgeWebSocketOverlayRuntime` for clear-WebSocket proxy CONNECT
 policy. Linux service configuration maps admitted scalar rows through
 `ObstacleBridgeNativeServiceSpec` before Linux protocol/socket admission.
-Linux myUDP now delegates record batching, inbound delivery, and timer
-effects to `ObstacleBridgeUdpOverlayPeerRuntime`; the adapter retains descriptor
-send/receive and its small delivered-record queue. POSIX/NIO retains only the
-connection and byte I/O below those Core effects.
+Linux myUDP delegates record batching, inbound delivery, control acknowledgement,
+retransmit timers, and counter rollover to `ObstacleBridgeUdpOverlayPeerRuntime`;
+the adapter retains descriptor send/receive and its small delivered-record queue.
+Linux-host probes against the Python peer exercise dropped data recovery,
+duplicated out-of-order delivery, malformed-datagram rejection, and rollover.
+POSIX/NIO retains only the connection and byte I/O below those Core effects.
 Linux status readiness also uses the overlay-layer adapter's Core conjunction;
 the adapter's full lifecycle/effect executor is not yet adopted.
 The current macOS host can compile the portable Core target but does not expose
