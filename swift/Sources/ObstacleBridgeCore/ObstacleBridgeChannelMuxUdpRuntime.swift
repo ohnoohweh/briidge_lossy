@@ -28,55 +28,32 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         public let receivedBytes: Int
     }
 
-    struct InboundClientOpenSnapshot {
-        var accepted: Bool
-        var serviceID: Int?
-        var openKey: String?
-        var replacedChannelID: Int?
-        var duplicateActiveChannelID: Int?
-        var connectRequested: Bool
-        var connected: Bool
-        var pendingCount: Int
-        var openChannels: [Int]
-        var connectedChannels: [Int]
+    public struct InboundClientOpenSnapshot {
+        public let accepted: Bool; public let serviceID: Int?; public let openKey: String?
+        public let replacedChannelID: Int?; public let duplicateActiveChannelID: Int?
+        public let connectRequested: Bool; public let connected: Bool; public let pendingCount: Int
+        public let openChannels: [Int]; public let connectedChannels: [Int]
     }
 
-    struct InboundClientDataSnapshot {
-        var buffered: Bool
-        var dropped: Bool
-        var sentImmediately: Bool
-        var pendingCount: Int
-        var sentPackets: [Data]
+    public struct InboundClientDataSnapshot {
+        public let buffered: Bool; public let dropped: Bool; public let sentImmediately: Bool
+        public let pendingCount: Int; public let sentPackets: [Data]
     }
 
-    struct InboundClientFragmentSnapshot {
-        var buffered: Bool
-        var dropped: Bool
-        var sentImmediately: Bool
-        var pendingCount: Int
-        var sentPackets: [Data]
-        var datagramID: Int
-        var totalLen: Int
-        var receivedBytes: Int
+    public struct InboundClientFragmentSnapshot {
+        public let buffered: Bool; public let dropped: Bool; public let sentImmediately: Bool
+        public let pendingCount: Int; public let sentPackets: [Data]
+        public let datagramID: Int; public let totalLen: Int; public let receivedBytes: Int
     }
 
-    struct ClientConnectSnapshot {
-        var connected: Bool
-        var serviceID: Int?
-        var openKey: String?
-        var pendingCount: Int
-        var flushedPackets: [Data]
-        var localAddrHost: String?
-        var localAddrPort: Int?
-        var peerAddrHost: String?
-        var peerAddrPort: Int?
-        var connectedChannels: [Int]
+    public struct ClientConnectSnapshot {
+        public let connected: Bool; public let serviceID: Int?; public let openKey: String?; public let pendingCount: Int
+        public let flushedPackets: [Data]; public let localAddrHost: String?; public let localAddrPort: Int?
+        public let peerAddrHost: String?; public let peerAddrPort: Int?; public let connectedChannels: [Int]
     }
 
-    struct LocalClientDatagramSnapshot {
-        var frames: [Data]
-        var nextCounter: Int
-        var nextFragmentDatagramID: Int
+    public struct LocalClientDatagramSnapshot {
+        public let frames: [Data]; public let nextCounter: Int; public let nextFragmentDatagramID: Int
     }
 
     public struct CloseSnapshot {
@@ -86,12 +63,9 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         public let activeChannels: [Int]
     }
 
-    struct ClientCloseSnapshot {
-        var closed: Bool
-        var chanID: Int
-        var openChannels: [Int]
-        var connectedChannels: [Int]
-        var pendingChannels: [Int]
+    public struct ClientCloseSnapshot {
+        public let closed: Bool; public let chanID: Int; public let openChannels: [Int]
+        public let connectedChannels: [Int]; public let pendingChannels: [Int]
     }
 
     private struct ClientKey: Hashable {
@@ -307,7 +281,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         }
     }
 
-    func handleInboundClientOpen(chanID: Int, payload: Data, counter: Int = 0, peerID: Int? = nil) -> InboundClientOpenSnapshot {
+    public func handleInboundClientOpen(chanID: Int, payload: Data, counter: Int = 0, peerID: Int? = nil) -> InboundClientOpenSnapshot {
         let empty = InboundClientOpenSnapshot(
             accepted: false,
             serviceID: nil,
@@ -398,7 +372,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleInboundClientData(chanID: Int, body: Data, counter: Int = 1) -> InboundClientDataSnapshot {
+    public func handleInboundClientData(chanID: Int, body: Data, counter: Int = 1) -> InboundClientDataSnapshot {
         guard body.count <= datagramCap else {
             return InboundClientDataSnapshot(
                 buffered: false,
@@ -459,7 +433,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleInboundClientFragment(chanID: Int, payload: Data, counter: Int = 1) -> InboundClientFragmentSnapshot {
+    public func handleInboundClientFragment(chanID: Int, payload: Data, counter: Int = 1) -> InboundClientFragmentSnapshot {
         let empty = InboundClientFragmentSnapshot(
             buffered: false,
             dropped: false,
@@ -513,7 +487,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         }
     }
 
-    func handleClientConnected(
+    public func handleClientConnected(
         chanID: Int,
         localAddrHost: String? = nil,
         localAddrPort: Int? = nil,
@@ -557,7 +531,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleLocalClientDatagram(chanID: Int, payload: Data) throws -> LocalClientDatagramSnapshot? {
+    public func handleLocalClientDatagram(chanID: Int, payload: Data) throws -> LocalClientDatagramSnapshot? {
         guard clientServiceIDByChannel[chanID] != nil else {
             return nil
         }
@@ -581,7 +555,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleInboundClientClose(chanID: Int, counter: Int = 2) -> ClientCloseSnapshot {
+    public func handleInboundClientClose(chanID: Int, counter: Int = 2) -> ClientCloseSnapshot {
         guard (try? clientSession.receive(.init(
             channelID: UInt16(clamping: chanID),
             protocolType: ObstacleBridgeChannelMuxSessionProtocol.udp.rawValue,
