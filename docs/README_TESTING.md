@@ -86,6 +86,10 @@ Representative anchors for those areas:
   the adapter probes then exercise only packet-device delivery, including the
   packet-flow lifecycle fence that rejects stale deferred drains.
 - current overlay failover coverage pins ordered-peer rotation, completed candidate cycles, reset-on-connected behavior, and fresh-socket rotation for Python `myudp` clients and the native Swift UDP owner through [tests/unit/test_stream_peer_rotation.py](../tests/unit/test_stream_peer_rotation.py), [tests/unit/test_peer_resolution.py](../tests/unit/test_peer_resolution.py), and [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py)
+- WebSocket proxy coverage verifies environment and manual endpoint selection,
+  `NO_PROXY` bypasses, and credential-bearing proxy URIs. Credentials are
+  decoded only for the CONNECT Basic header and are not treated as endpoint
+  host material.
 - Linux Swift adapter coverage separately exercises one shared myudp descriptor admitting two independently authenticated PSK peers before exposing either child session.
 - The foreground myudp listener probes retain separate authenticated child projections in local Admin, and pin rejection of a second endpoint once the configured admission bound is full.
 - The same listener tests reject ambiguous local-service maps rather than binding one configured port independently for every admitted peer.

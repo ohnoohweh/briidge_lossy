@@ -637,16 +637,16 @@ The tables below are generated from the current parser registrations in `bridge.
 | `--ws-send-timeout` | `3.0` | Seconds to wait for a WebSocket frame send before forcing reconnect (default 3.0). |
 | `--ws-tcp-user-timeout-ms` | `10000` | TCP_USER_TIMEOUT in milliseconds for WebSocket sockets (default 10000, 0 disables). |
 | `--ws-reconnect-grace` | `3.0` | Seconds to wait before reporting DISCONNECTED after WS transport loss (default 3.0). |
-| `--ws-proxy-mode` | `off` | WebSocket peer-client proxy mode: `off`, `manual`, or `system` (Windows only). |
-| `--ws-proxy-host` | `` | Manual WebSocket proxy host for `--ws-proxy-mode manual` (Windows only). |
+| `--ws-proxy-mode` | platform default | WebSocket peer-client proxy mode: `off`, `env`, `manual`, or `system` (Windows). |
+| `--ws-proxy-host` | `` | Manual proxy authority for `--ws-proxy-mode manual`; may include percent-encoded `user:password@`. |
 | `--ws-proxy-port` | `8080` | Manual WebSocket proxy port for `--ws-proxy-mode manual` (Windows only). |
 | `--ws-proxy-auth` | `none` | WebSocket proxy auth mode: `none` or `negotiate` (Windows only). |
 
-WebSocket proxy tunneling is currently scoped narrowly:
+WebSocket proxy tunneling is scoped to peer-client WebSocket connections:
 
-- Windows only
-- WebSocket peer client only
-- HTTP proxy traversal via `CONNECT`
+- Linux/POSIX uses `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` by default; Windows uses system proxy policy.
+- Manual endpoint selection and HTTP `CONNECT` work for both WS and WSS.
+- User-info in a proxy URL is sent as HTTP Basic authorization only during CONNECT and is not shown in runtime status.
 
 Current direct WebSocket peer-client bootstrap also performs a separate `GET /` preflight on a separate TCP connection before the later WebSocket upgrade attempt. That preflight must return `200 OK`, the client downloads the full response body before continuing, and the later WebSocket upgrade is refused when the preflight status is not `200`. The proxy-tunneled path skips this preflight.
 

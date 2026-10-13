@@ -608,6 +608,7 @@ REQ-WSP-007:
     - tests/unit/test_ws_payload_mode.py::test_env_proxy_mode_honors_no_proxy_bypass
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_on_linux_uses_http_proxy_env
     - tests/unit/test_ws_payload_mode.py::test_system_proxy_mode_on_linux_honors_no_proxy_env
+    - tests/unit/test_ws_payload_mode.py::test_proxy_uri_credentials_are_separated_from_endpoint_and_encoded_for_basic_auth
 
 REQ-WSP-008:
   integration_tests:
@@ -616,6 +617,7 @@ REQ-WSP-008:
   unit_tests:
     - tests/unit/test_ws_payload_mode.py::test_manual_proxy_mode_returns_endpoint_off_windows
     - tests/unit/test_ws_payload_mode.py::test_connect_uses_proxy_socket_when_proxy_mode_enabled
+    - tests/unit/test_ws_payload_mode.py::test_manual_proxy_uri_credentials_are_forwarded_as_basic_authorization
 
 REQ-WSP-009:
   integration_tests:

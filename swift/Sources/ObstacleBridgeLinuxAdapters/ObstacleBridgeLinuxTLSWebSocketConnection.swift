@@ -14,6 +14,7 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         private var bytes = Data()
         private var inactive = false
         private var failure: Error?
+        private var handshakeComplete = false
 
         func channelRead(context: ChannelHandlerContext, data: NIOAny) {
             var buffer = unwrapInboundIn(data)
@@ -24,6 +25,12 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         func errorCaught(context: ChannelHandlerContext, error: Error) {
             condition.lock(); failure = error; inactive = true; condition.broadcast(); condition.unlock()
             context.close(promise: nil)
+        }
+        func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+            if case TLSUserEvent.handshakeCompleted = event {
+                condition.lock(); handshakeComplete = true; condition.broadcast(); condition.unlock()
+            }
+            context.fireUserInboundEventTriggered(event)
         }
         func channelInactive(context: ChannelHandlerContext) {
             condition.lock(); inactive = true; condition.broadcast(); condition.unlock()
@@ -44,6 +51,15 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
             let result = Data(bytes.prefix(count))
             bytes.removeFirst(count)
             return result
+        }
+        func waitForHandshake(timeoutMilliseconds: Int) throws {
+            let deadline = Date().addingTimeInterval(Double(max(1, timeoutMilliseconds)) / 1_000)
+            condition.lock(); defer { condition.unlock() }
+            while !handshakeComplete && !inactive && failure == nil {
+                guard condition.wait(until: deadline) else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(ETIMEDOUT) }
+            }
+            if let failure { throw failure }
+            guard handshakeComplete else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
         }
     }
 
@@ -84,7 +100,7 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
     private var channel: (any Channel)?
     private var closed = false
 
-    init(host: String, port: Int, trustRootsPath: String?, timeoutMilliseconds: Int) throws {
+    init(host: String, port: Int, trustRootsPath: String?, proxy: (String, Int)? = nil, proxyAuthorization: String? = nil, timeoutMilliseconds: Int) throws {
         self.timeoutMilliseconds = max(1, timeoutMilliseconds)
         var configuration = TLSConfiguration.makeClientConfiguration()
         configuration.certificateVerification = .fullVerification
@@ -92,17 +108,24 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         // private deployments; neither path disables verification.
         if let trustRootsPath { configuration.additionalTrustRoots = [.file(trustRootsPath)] }
         let context = try NIOSSLContext(configuration: configuration)
-        let handshake = HandshakeObserver()
         do {
             let connected = try ClientBootstrap(group: eventLoopGroup).channelInitializer { channel in
-                do {
-                    return channel.pipeline.addHandlers([
-                        try NIOSSLClientHandler(context: context, serverHostname: host), handshake, self.inbound,
-                    ])
-                } catch { return channel.eventLoop.makeFailedFuture(error) }
-            }.connect(host: host, port: port).wait()
+                if proxy == nil {
+                    do { return channel.pipeline.addHandlers([try NIOSSLClientHandler(context: context, serverHostname: host), self.inbound]) }
+                    catch { return channel.eventLoop.makeFailedFuture(error) }
+                }
+                return channel.pipeline.addHandler(self.inbound)
+            }.connect(host: proxy?.0 ?? host, port: proxy?.1 ?? port).wait()
             lock.lock(); channel = connected; lock.unlock()
-            try handshake.wait(timeoutMilliseconds: self.timeoutMilliseconds)
+            if proxy != nil {
+                let authority = host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
+                let authorization = proxyAuthorization.map { "Proxy-Authorization: \($0)\r\n" } ?? ""
+                try write(Data("CONNECT \(authority) HTTP/1.1\r\nHost: \(authority)\r\nProxy-Connection: Keep-Alive\r\n\(authorization)\r\n".utf8))
+                let response = try readUntil(Data("\r\n\r\n".utf8), maximum: 16_384)
+                guard let status = String(data: response, encoding: .utf8)?.split(separator: "\r\n").first, status.hasPrefix("HTTP/1.1 200") else { throw ObstacleBridgeLinuxOverlayTransportError.proxyNegotiationFailed("CONNECT did not return HTTP 200") }
+                try connected.pipeline.addHandler(try NIOSSLClientHandler(context: context, serverHostname: host), position: .first).wait()
+            }
+            try inbound.waitForHandshake(timeoutMilliseconds: self.timeoutMilliseconds)
         } catch {
             close(); throw error
         }

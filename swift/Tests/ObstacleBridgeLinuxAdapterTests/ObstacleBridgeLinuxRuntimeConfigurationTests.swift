@@ -62,12 +62,54 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.webSocketTrustRootsPath == "/etc/obstaclebridge/wss-roots.pem")
     }
 
+    @Test func requiresDistinctIdentityMaterialForWSSListener() throws {
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("WSS listener requires ws_session.ws_cert and ws_session.ws_key")) {
+            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+                "runner": ["overlay_transport": "ws", "listener_mode": true],
+                "ws_session": ["ws_own_port": 443, "ws_tls": true],
+                "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+            ]))
+        }
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "ws", "listener_mode": true],
+            "ws_session": ["ws_own_port": 443, "ws_tls": true, "ws_cert": "/run/cert.pem", "ws_key": "/run/key.pem"],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+        ]))
+        #expect(config.webSocketCertificatePath == "/run/cert.pem")
+        #expect(config.webSocketPrivateKeyPath == "/run/key.pem")
+    }
+
     @Test func parsesWebSocketTextPayloadMode() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "ws"],
             "ws_session": ["ws_peer": "peer.example", "ws_peer_port": 8080, "ws_payload_mode": "json-base64"],
         ]))
         #expect(config.webSocketPayloadMode == "json-base64")
+    }
+
+    @Test func parsesManualWebSocketProxyPolicy() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "ws"],
+            "ws_session": ["ws_peer": "peer.example", "ws_peer_port": 8080, "ws_proxy_mode": "manual", "ws_proxy_host": "proxy.example", "ws_proxy_port": 3128],
+        ]))
+        #expect(config.webSocketProxy.mode == .manual)
+        #expect(config.webSocketProxy.host == "proxy.example")
+        #expect(config.webSocketProxy.port == 3128)
+    }
+
+    @Test func environmentProxyPolicySelectsAndBypassesEndpoints() throws {
+        let policy = ObstacleBridgeLinuxHTTPProxy()
+        #expect(try policy.endpoint(targetHost: "peer.example", secure: true, environment: ["HTTPS_PROXY": "http://proxy.example:8443"])?.0 == "proxy.example")
+        #expect(try policy.endpoint(targetHost: "peer.example", secure: true, environment: ["HTTPS_PROXY": "http://proxy.example:8443"])?.1 == 8443)
+        #expect(try policy.endpoint(targetHost: "api.internal", secure: false, environment: ["HTTP_PROXY": "proxy.example:8080", "NO_PROXY": ".internal"]) == nil)
+    }
+
+    @Test func proxyURLCredentialsProduceBasicAuthorizationWithoutChangingEndpoint() throws {
+        let policy = ObstacleBridgeLinuxHTTPProxy(mode: .manual, host: "user%40name:pa%3Ass@proxy.example", port: 8081)
+        let endpoint = try policy.endpoint(targetHost: "peer.example", secure: true)
+        #expect(endpoint?.0 == "proxy.example")
+        #expect(endpoint?.1 == 8081)
+        #expect(policy.basicAuthorization(targetHost: "peer.example", secure: true) == "Basic dXNlckBuYW1lOnBhOnNz")
     }
 
     @Test func parsesBoundedMuxCompressionConfiguration() throws {

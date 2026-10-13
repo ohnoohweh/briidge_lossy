@@ -84,7 +84,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         guard let trustRootsPath = peer.trustRootsPath else { throw OverlayTestError.peerDidNotStart }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(
             host: "localhost", port: peer.port, transport: .ws,
-            wsPath: "/overlay", wsTLS: true, wsTrustRootsPath: trustRootsPath
+            wsPath: "/overlay", wsTLS: true, wsTrustRootsPath: trustRootsPath, wsProxy: .init(mode: .off)
         )
         #expect(try client.roundTrip(Data("swift-linux-wss".utf8)) == Data("swift-linux-wss".utf8))
         #expect(client.snapshot.state == "connected")
@@ -94,10 +94,23 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         let peer = try PythonOverlayPeer(mode: "wss")
         defer { peer.stop() }
         let client = try ObstacleBridgeLinuxOverlayTransportClient(
-            host: "localhost", port: peer.port, transport: .ws, wsPath: "/overlay", wsTLS: true
+            host: "localhost", port: peer.port, transport: .ws, wsPath: "/overlay", wsTLS: true, wsProxy: .init(mode: .off)
         )
         #expect(throws: (any Error).self) { try client.roundTrip(Data("untrusted".utf8), attempts: 1) }
         #expect(client.snapshot.state == "failed")
+    }
+
+    @Test func tlsWebSocketRoundTripsThroughHTTPConnectProxy() throws {
+        let peer = try PythonOverlayPeer(mode: "wss-proxy")
+        defer { peer.stop() }
+        guard let trustRootsPath = peer.trustRootsPath else { throw OverlayTestError.peerDidNotStart }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(
+            host: "localhost", port: 443, transport: .ws, wsPath: "/overlay", wsTLS: true,
+            wsTrustRootsPath: trustRootsPath,
+            wsProxy: .init(mode: .manual, host: "127.0.0.1", port: peer.port)
+        )
+        #expect(try client.roundTrip(Data("wss-proxy".utf8)) == Data("wss-proxy".utf8))
+        #expect(client.snapshot.state == "connected")
     }
 
     @Test func webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer() throws {
@@ -765,7 +778,7 @@ final class PythonOverlayPeer {
         let virtualEnvironmentPython = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(".venv/bin/python")
             .path
-        process.executableURL = URL(fileURLWithPath: (mode == "quic" || mode == "wss") && FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython) ? virtualEnvironmentPython : "/usr/bin/python3")
+        process.executableURL = URL(fileURLWithPath: (mode == "quic" || mode == "wss" || mode == "wss-proxy") && FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython) ? virtualEnvironmentPython : "/usr/bin/python3")
         process.arguments = ["-u", "-c", script]
         process.standardOutput = stdout
         process.standardError = Pipe()
@@ -780,7 +793,7 @@ final class PythonOverlayPeer {
         self.process = process
         self.port = port
         self.trustRootsPath = fields.count == 2 ? fields[1] : nil
-        self.forceStop = mode == "quic" || mode == "wss"
+        self.forceStop = mode == "quic" || mode == "wss" || mode == "wss-proxy"
         started = true
     }
 
@@ -799,6 +812,47 @@ final class PythonOverlayPeer {
     }
 
     private static func script(for mode: String) -> String {
+        if mode == "wss-proxy" {
+            return """
+            import base64, datetime, hashlib, ipaddress, socket, ssl, tempfile, threading
+            from pathlib import Path
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.x509.oid import NameOID
+            tmp=Path(tempfile.mkdtemp()); key=ec.generate_private_key(ec.SECP256R1()); now=datetime.datetime.now(datetime.timezone.utc)
+            name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'localhost')])
+            cert=(x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key()).serial_number(x509.random_serial_number()).not_valid_before(now-datetime.timedelta(days=1)).not_valid_after(now+datetime.timedelta(days=1)).add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost')]),critical=False).sign(key,hashes.SHA256()))
+            cert_path,key_path=tmp/'cert.pem',tmp/'key.pem'; cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM)); key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.TraditionalOpenSSL,serialization.NoEncryption()))
+            origin=socket.socket(); origin.bind(('127.0.0.1',0)); origin.listen(1); origin_port=origin.getsockname()[1]
+            def exact(c,n):
+                out=b''
+                while len(out)<n: out+=c.recv(n-len(out))
+                return out
+            def serve_origin():
+                raw,_=origin.accept(); c=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); c.load_cert_chain(cert_path,key_path); c=c.wrap_socket(raw,server_side=True); req=b''
+                while b'\\r\\n\\r\\n' not in req: req+=c.recv(4096)
+                key=[x.split(b':',1)[1].strip() for x in req.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]; accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest()); c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
+                h=exact(c,2); n=h[1]&127
+                if n==126: n=int.from_bytes(exact(c,2),'big')
+                mask=exact(c,4); p=bytes(v^mask[i%4] for i,v in enumerate(exact(c,n))); c.sendall(bytes([130,len(p)])+p); c.close(); origin.close()
+            threading.Thread(target=serve_origin,daemon=True).start()
+            proxy=socket.socket(); proxy.bind(('127.0.0.1',0)); proxy.listen(1); print(str(proxy.getsockname()[1])+'|'+str(cert_path),flush=True)
+            client,_=proxy.accept(); request=b''
+            while b'\\r\\n\\r\\n' not in request: request+=client.recv(4096)
+            assert request.startswith(b'CONNECT localhost:443 '); upstream=socket.create_connection(('127.0.0.1',origin_port)); client.sendall(b'HTTP/1.1 200 Connection Established\\r\\n\\r\\n')
+            def relay(a,b):
+                try:
+                    while True:
+                        d=a.recv(4096)
+                        if not d: break
+                        b.sendall(d)
+                finally:
+                    try: b.shutdown(socket.SHUT_WR)
+                    except OSError: pass
+            t=threading.Thread(target=relay,args=(client,upstream),daemon=True); t.start(); relay(upstream,client); t.join(); client.close(); upstream.close(); proxy.close()
+            """
+        }
         if mode == "wss" {
             return """
             import base64, datetime, hashlib, ipaddress, socket, ssl, tempfile

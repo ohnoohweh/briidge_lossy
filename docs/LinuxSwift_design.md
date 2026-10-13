@@ -326,8 +326,9 @@ memory, scheduler behavior, and termination policy differ by platform.
 - Linux lacks privileged `/dev/net/tun` data-plane qualification. The
   foreground executable rejects TUN configuration until that adapter and its
   evidence exist.
-- Linux has no TLS WebSocket listener, HTTP proxy, or package/service-manager
-  support. Outbound WSS is limited to the qualified client boundary below.
+- Linux does not provide the separate local `proxy_provider` capability. This
+  is distinct from the admitted outbound WebSocket HTTP proxy client, which
+  resolves policy and owns its CONNECT tunnel below SecureLink.
 - The foreground myudp listener rejects `own_servers` and `remote_servers`.
   This is intentional parity with listener-mode service policy: a listener
   does not infer a target peer for a locally accepted connection, and binding
@@ -422,7 +423,7 @@ Known gaps after `LSW-005B.1`: Linux has no QUIC listener owner, no configured
 custom trust-anchor input, no peer-family preference mapping, and no full
 ChannelMux service-flow qualification over QUIC. Those are the explicit
 `LSW-005B.2` follow-up; configuration rejects QUIC listener mode until that
-owner exists. TLS WebSocket remains separate under `LSW-005C`.
+ owner exists. TLS WebSocket listener ownership is separate under `LSW-005C.1`.
 
 ## LSW-005B.2.1 trust-material boundary
 
@@ -483,11 +484,91 @@ its configured PEM root, and proves that the same peer is rejected without
 that root. This is intentionally an outbound client boundary; it does not
 make a Linux WSS listener or proxy an admitted mode.
 
-Known gaps after `LSW-005C`: WSS listener ownership, HTTP proxy negotiation,
-and package/service-manager integration remain unavailable. WSS does not add a
-trust bypass or a second WebSocket protocol implementation. Those capabilities
-need their own adapter and qualification packages rather than extending this
-client boundary.
+WSS listener ownership, proxy negotiation, and deployment integration are
+separate adapter concerns; the client boundary does not add a trust bypass or a
+second WebSocket protocol implementation.
+
+## LSW-005C.1 WSS listener ownership
+
+The Linux listener binds loopback TCP through NIO, terminates TLS before
+admitting a WebSocket HTTP upgrade, and transfers only upgraded binary frames
+to the existing SecureLink PSK session boundary. Certificate and private-key
+paths are required for `runner.listener_mode=true`, `overlay_transport=ws`, and
+`ws_tls=true`; an outbound `ws_ca_cert` is never repurposed as listener
+identity material. The foreground owner selects this listener only for WSS,
+leaving TCP and cleartext WS ownership unchanged.
+
+The listener has no proxy role: outbound proxy selection and CONNECT ownership
+remain in the C.2 client adapter. Listener certificates are operator-provided
+PEM files; automated issuance, client-certificate policy, and public-interface
+exposure are not admitted by this loopback boundary.
+
+## LSW-005C.2.1 clear-WebSocket proxy bootstrap
+
+Linux clear-WebSocket clients resolve proxy policy at the transport boundary:
+`off` forces a direct socket, `env` selects the POSIX HTTP proxy environment,
+and `manual` selects the configured endpoint. `NO_PROXY` returns to the direct
+path. When a proxy is selected, the owner completes HTTP `CONNECT` before it
+sends the WebSocket upgrade, so the WebSocket framing and SecureLink layers do
+not observe proxy bytes.
+
+## LSW-005C.2.2 WSS tunnel promotion
+
+The WSS owner connects to the selected proxy without TLS, consumes the complete
+successful `CONNECT` header, then inserts its verified NIO TLS handler ahead
+of the established byte sink. TLS handshake completion remains mandatory before
+the WebSocket upgrade, so a proxy cannot alter certificate verification or
+inject HTTP bytes into the upgrade stream.
+
+The transport snapshot preserves a proxy-specific CONNECT failure reason until
+a later successful epoch replaces it. The mixed-runtime fixture proves an
+operator-configured WSS client completes CONNECT, full certificate validation,
+WebSocket upgrade, and one application exchange through an HTTP proxy.
+
+Proxy endpoint strings may carry percent-encoded user-info. Both Linux Swift
+and Python split that user-info from the dial endpoint and emit it only as a
+Basic `Proxy-Authorization` header on CONNECT; endpoint selection, logs, and
+status retain only the proxy host and port. This applies equally to
+`HTTP_PROXY`/`HTTPS_PROXY` and the manual WebSocket proxy host setting.
+
+Known gaps after `LSW-005C.2`: challenge-based proxy authentication, chained
+proxies, and HTTP/2 proxy transports remain outside this owner. They would require a
+separate credential and connection-pool policy, rather than extending the
+single-epoch WebSocket bootstrap.
+
+### Apple-equivalent ownership seam
+
+The Linux TLS listener and outbound connection own only the transport epoch:
+TCP/TLS channel lifetime, HTTP upgrade, WebSocket frame I/O, and close. They
+hand an authenticated byte stream to SecureLink and the configured runtime in
+the same way that Apple
+`ObstacleBridgeWebSocketOverlayTransportOwner` owns its URLSession/Security
+WebSocket task and hands overlay records upward. Neither owner embeds
+ChannelMux, TUN, service catalog, or reconnect policy in the TLS/WebSocket
+adapter. This keeps a future Apple listener or proxy implementation a platform
+resource-owner substitution rather than a second application protocol path.
+
+The shared cross-platform contract is: verified TLS precedes upgrade; failed
+TLS, upgrade, or proxy setup creates no adopted SecureLink epoch; the owner
+closes all transport resources before it reports a terminal epoch; and custom
+trust roots extend rather than replace platform trust. Apple continues to use
+URLSession/Security policy, while Linux uses NIO/OpenSSL policy behind that
+contract.
+
+## Linux package and service-manager integration
+
+The distributable Linux archive includes the executable, the systemd unit
+template, and an explicit installer. `install_linux_service.sh` renders an
+operator-selected binary, configuration, account, state directory, and Admin
+port, then reloads systemd; `--dry-run` renders without changing the host.
+`package_linux_app.sh` constructs the archive from a supplied executable. A
+service-manager marker in runtime JSON no longer rejects foreground startup:
+systemd remains the process supervisor rather than a runtime protocol mode.
+
+Known gaps after package/service-manager integration: RPM/DEB repository
+metadata, automatic upgrades, and privilege provisioning are deliberately not
+performed by the archive or installer. Operators explicitly choose service
+enablement and any required network capability.
 
 ## Platform decisions still required
 

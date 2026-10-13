@@ -48,6 +48,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// Optional PEM roots for a verified outbound WSS client.  A missing value
     /// selects the backend's system trust store rather than disabling checks.
     public let webSocketTrustRootsPath: String?
+    /// PEM certificate and private key used only by a WSS listener.
+    public let webSocketCertificatePath: String?
+    public let webSocketPrivateKeyPath: String?
+    public let webSocketProxy: ObstacleBridgeLinuxHTTPProxy
     public let quicALPN: String
     public let quicInsecure: Bool
     /// Optional PEM trust-root bundle for an outbound QUIC client. `nil`
@@ -61,7 +65,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -71,6 +75,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.webSocketPayloadMode = webSocketPayloadMode
         self.webSocketTLS = webSocketTLS
         self.webSocketTrustRootsPath = webSocketTrustRootsPath
+        self.webSocketCertificatePath = webSocketCertificatePath
+        self.webSocketPrivateKeyPath = webSocketPrivateKeyPath
+        self.webSocketProxy = webSocketProxy
         self.quicALPN = quicALPN
         self.quicInsecure = quicInsecure
         self.quicTrustRootsPath = quicTrustRootsPath
@@ -101,10 +108,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
         }
         if let proxy = root["proxy_provider"] as? [String: Any], boolean(proxy["enabled"]) == true {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift proxy mode is unavailable; run a supported Python deployment explicitly instead of expecting fallback")
-        }
-        if root["service_manager"] != nil || root["linux_package"] != nil || boolean(runner["service_mode"]) == true {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift package/service-manager mode is unavailable; run the foreground executable under an operator-owned supervisor")
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift local proxy_provider mode is unavailable; outbound WebSocket proxy configuration remains supported")
         }
         let listenerMode = boolean(runner["listener_mode"]) == true
         guard let transportText = string(runner["overlay_transport"] ?? root["overlay_transport"]),
@@ -143,6 +147,16 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires \(sessionName).\(portKey) between 1 and 65535")
         }
         if transport == .ws { _ = try ObstacleBridgeWebSocketPayloadCodec.mode(string(session["ws_payload_mode"]) ?? "binary") }
+        let wsTLS = boolean(session["ws_tls"]) ?? false
+        let wsCertificate = string(session["ws_cert"])
+        let wsPrivateKey = string(session["ws_key"])
+        let wsProxyMode = ObstacleBridgeLinuxWebSocketProxyMode(rawValue: (string(session["ws_proxy_mode"]) ?? "env").lowercased())
+        guard let wsProxyMode else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("ws_session.ws_proxy_mode must be off, env, or manual") }
+        let wsProxy = ObstacleBridgeLinuxHTTPProxy(mode: wsProxyMode, host: string(session["ws_proxy_host"]) ?? "", port: integer(session["ws_proxy_port"]) ?? 8080)
+        if listenerMode, transport == .ws, wsTLS,
+           (wsCertificate?.isEmpty != false || wsPrivateKey?.isEmpty != false) {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("WSS listener requires ws_session.ws_cert and ws_session.ws_key")
+        }
         let secure = root["secure_link"] as? [String: Any] ?? [:]
         let secureMode = (string(secure["secure_link_mode"]) ?? "off").lowercased()
         let psk: Data?
@@ -175,8 +189,11 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             listenerMode: listenerMode,
             webSocketPath: string(session["ws_path"]) ?? "/",
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
-            webSocketTLS: boolean(session["ws_tls"]) ?? false,
+            webSocketTLS: wsTLS,
             webSocketTrustRootsPath: string(session["ws_ca_cert"]),
+            webSocketCertificatePath: wsCertificate,
+            webSocketPrivateKeyPath: wsPrivateKey,
+            webSocketProxy: wsProxy,
             quicALPN: string(session["quic_alpn"]) ?? "hq-29",
             quicInsecure: boolean(session["quic_insecure"]) ?? false,
             quicTrustRootsPath: string(session["quic_ca_cert"]),

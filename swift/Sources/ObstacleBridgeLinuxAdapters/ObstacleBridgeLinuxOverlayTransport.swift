@@ -36,6 +36,7 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
     case unexpectedEOF
     case invalidFrame
     case webSocketHandshakeFailed
+    case proxyNegotiationFailed(String)
     case webSocketProtocolError
     case cancelled
 
@@ -47,6 +48,7 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
         case .unexpectedEOF: return "overlay peer closed the connection"
         case .invalidFrame: return "invalid overlay frame"
         case .webSocketHandshakeFailed: return "WebSocket upgrade was rejected"
+        case .proxyNegotiationFailed(let detail): return "HTTP proxy negotiation failed: \(detail)"
         case .webSocketProtocolError: return "invalid WebSocket frame"
         case .cancelled: return "overlay connection was cancelled"
         }
@@ -79,13 +81,14 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let wsPayloadMode: ObstacleBridgeWebSocketPayloadMode
     private let wsTLS: Bool
     private let wsTrustRootsPath: String?
+    private let wsProxy: ObstacleBridgeLinuxHTTPProxy
     private let quicALPN: String
     private let quicInsecure: Bool
     private let quicTrustRootsPath: String?
     private let receiveTimeoutMilliseconds: Int
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, wsProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -100,6 +103,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.wsTLS = wsTLS
         let normalizedWebSocketTrustRoots = wsTrustRootsPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.wsTrustRootsPath = normalizedWebSocketTrustRoots?.isEmpty == false ? normalizedWebSocketTrustRoots : nil
+        self.wsProxy = wsProxy
         let normalizedALPN = quicALPN.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedALPN.isEmpty else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
         self.quicALPN = normalizedALPN
@@ -127,13 +131,13 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     result = try readTCPApplicationFrame(connection)
                 case .ws:
                     if wsTLS {
-                        let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                        let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, proxy: try wsProxy.endpoint(targetHost: host, secure: true), proxyAuthorization: wsProxy.basicAuthorization(targetHost: host, secure: true), timeoutMilliseconds: receiveTimeoutMilliseconds)
                         defer { connection.close() }
                         try performWebSocketUpgrade(connection)
                         let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
                         result = try readWebSocketApplicationPayload(connection)
                     } else {
-                        let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                        let connection = try openWebSocketConnection()
                         defer { connection.close() }
                         try performWebSocketUpgrade(connection)
                         let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
@@ -188,7 +192,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 })
             }
             if transport == .ws, wsTLS {
-                let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, proxy: try wsProxy.endpoint(targetHost: host, secure: true), proxyAuthorization: wsProxy.basicAuthorization(targetHost: host, secure: true), timeoutMilliseconds: receiveTimeoutMilliseconds)
                 try performWebSocketUpgrade(connection)
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
                 let send: (Data) throws -> Void = { [weak self] payload in
@@ -202,7 +206,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 }
                 return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: { connection.close() })
             }
-            let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+            let connection = transport == .ws ? try openWebSocketConnection() : try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
             if transport == .ws { try performWebSocketUpgrade(connection) }
             snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
             let send: (Data) throws -> Void = { [weak self] payload in
@@ -237,6 +241,21 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
 
     private func tcpWire(_ payload: Data) throws -> Data {
         try ObstacleBridgeOverlayEnvelope.encodeTCP(.init(kind: .application, payload: payload))
+    }
+
+    private func openWebSocketConnection() throws -> POSIXStreamConnection {
+        guard let proxy = try wsProxy.endpoint(targetHost: host, secure: false) else {
+            return try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+        }
+        let connection = try POSIXStreamConnection(host: proxy.0, port: proxy.1, timeoutMilliseconds: receiveTimeoutMilliseconds)
+        do {
+            let authority = host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
+            let authorization = wsProxy.basicAuthorization(targetHost: host, secure: false).map { "Proxy-Authorization: \($0)\r\n" } ?? ""
+            try connection.write(Data("CONNECT \(authority) HTTP/1.1\r\nHost: \(authority)\r\nProxy-Connection: Keep-Alive\r\n\(authorization)\r\n".utf8))
+            let response = try connection.readUntil(Data("\r\n\r\n".utf8), maximum: 16_384)
+            guard let status = String(data: response, encoding: .utf8)?.split(separator: "\r\n").first, status.hasPrefix("HTTP/1.1 200") else { throw ObstacleBridgeLinuxOverlayTransportError.proxyNegotiationFailed("CONNECT did not return HTTP 200") }
+            return connection
+        } catch { connection.close(); throw error }
     }
 
     private func readTCPApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {

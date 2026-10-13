@@ -112,12 +112,14 @@
       "files": [
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdapters.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxHTTPProxy.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPListener.swift",
       "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPListenerRuntime.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceSocketOwner.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTCPListener.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTLSWebSocketListener.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTLSWebSocketConnection.swift"
       ]
     },

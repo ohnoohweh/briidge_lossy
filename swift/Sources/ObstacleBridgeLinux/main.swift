@@ -158,22 +158,40 @@ enum ObstacleBridgeLinuxMain {
             var resources: [Any] = []
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
-                let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port, transport: configuration.transport, webSocketPath: configuration.webSocketPath)
+                let acceptSession: @Sendable (Data) throws -> ObstacleBridgeLinuxConfiguredSession
+                let listenerOpen: @Sendable () -> Bool
+                if configuration.transport == .ws, configuration.webSocketTLS {
+                    let listener = try ObstacleBridgeLinuxTLSWebSocketPSKListener(
+                        port: configuration.port,
+                        certificatePath: configuration.webSocketCertificatePath!,
+                        privateKeyPath: configuration.webSocketPrivateKeyPath!,
+                        webSocketPath: configuration.webSocketPath,
+                        timeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
+                    )
+                    acceptSession = { try listener.acceptConfiguredSession(psk: psk, serverNonce: $0) }
+                    listenerOpen = { listener.isOpen }
+                    resources.append(listener)
+                } else {
+                    let listener = try ObstacleBridgeLinuxTCPPSKListener(port: configuration.port, transport: configuration.transport, webSocketPath: configuration.webSocketPath)
+                    acceptSession = { try listener.acceptConfiguredSession(psk: psk, serverNonce: $0) }
+                    listenerOpen = { listener.isOpen }
+                    resources.append(listener)
+                }
                 let acceptor = DispatchQueue(label: "org.obstaclebridge.linux.\(configuration.transport.rawValue)-listener")
                 acceptor.async {
-                    while listener.isOpen {
+                    while listenerOpen() {
                         var generator = SystemRandomNumberGenerator()
                         let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
                         do {
-                            runtime.adoptInboundSession(try listener.acceptConfiguredSession(psk: psk, serverNonce: nonce))
-                        } catch where listener.isOpen {
-                            writeError("ObstacleBridgeLinux: TCP listener admission failed: \(error.localizedDescription)")
+                            runtime.adoptInboundSession(try acceptSession(nonce))
+                        } catch where listenerOpen() {
+                            writeError("ObstacleBridgeLinux: listener admission failed: \(error.localizedDescription)")
                         } catch {
                             break
                         }
                     }
                 }
-                resources.append(listener); resources.append(acceptor)
+                resources.append(acceptor)
             } else {
                 runtime.start()
             }

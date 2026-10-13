@@ -26,8 +26,10 @@ from .bridge_proxy_common import (
     build_proxy_connect_request,
     build_windows_negotiate_spn,
     env_get_proxy_for_target,
+    env_proxy_basic_auth_for_target,
     open_http_connect_tunnel,
     parse_proxy_authority,
+    proxy_basic_auth_from_spec,
     parse_proxy_spec,
     read_http_proxy_response,
     resolve_proxy_endpoint,
@@ -1134,6 +1136,11 @@ class WebSocketSession(ISession):
             target_port=int(target_port),
             proxy=proxy,
             auth_mode=self._ws_proxy_auth,
+            basic_auth=(
+                proxy_basic_auth_from_spec(self._ws_proxy_host)
+                if self._ws_proxy_mode == "manual"
+                else env_proxy_basic_auth_for_target(target_host, secure=self._use_tls)
+            ),
             timeout=self._ws_connect_timeout_s,
             log=self._log,
             log_prefix=f"[WS-PROXY] ({self._probe_id})",
