@@ -102,7 +102,7 @@ may start only after its predecessor's definition of done has evidence.
 | `LSW-SC.3` | Reduce the 13 retained Apple files to adapters and enforce the boundary. | Each retained file has a documented Apple-only dependency and imports `ObstacleBridgeCore` for shared behavior; no retained file recreates a protocol codec, state machine, configuration parser, or Admin policy; a repository guard rejects a portable implementation or an Apple-framework-free new `.swift` file under `ObstacleBridgeShared`; Core has no Apple imports; and macOS/iOS build and parity probes pass. |
 | `LSW-SC.4` | Retire transitional shims and make the ownership map current. | Obsolete duplicate files and Xcode flat-source references are removed; `LinuxSwift_r001_inventory.json`, `LinuxSwift_source_map.md`, Xcode patch tests, traceability, and this design describe only the delivered owner; Linux, macOS, and iOS compile from that owner; and the clean-up leaves no pending file in this section. |
 
-### Linux adoption packages
+### Remaining Linux adoption packages
 
 Extraction is not Linux delivery. The following packages make each Core
 extraction an exercised Linux dependency without duplicating protocol or
@@ -114,8 +114,6 @@ implementation already governed by the requirements inventory.
 | `LSW-SC.1L-A` | Adopt the direct `LSW-SC.1` extractions already in Core in Linux. | The relevant Linux adapter/runtime imports `ObstacleBridgeCore` and calls each applicable API in production code, without recreating its codec, snapshot shaping, planner, or lifecycle state machine. Focused Linux adapter tests execute the Core path for UDP frame/batch/control handling, Admin snapshot selection, overlay planning, and each admitted transport lifecycle. Python/Swift vectors remain byte- and state-equivalent where an existing parity fixture covers that behavior. `swift test --filter ObstacleBridgeLinuxAdapterTests` and the applicable mixed-runtime probes pass on Linux. |
 | `LSW-SC.1L-B` | Adopt every later `LSW-SC.1` extraction as it lands. | Each extraction adds or updates the corresponding Linux caller and focused Linux adapter evidence in the same change. The caller uses the moved Core API rather than a Linux-local equivalent; its failure/backpressure/lifecycle edge is exercised; and the source inventory names the Core owner. No `LSW-SC.1` file is counted complete solely because Apple callers compile. |
 | `LSW-SC.1L-C` | Qualify the complete `LSW-SC.1` Core surface in the Linux product. | Every one of the 17 source rows has a linked Linux production caller or an explicit product-scoped non-admission reason in the source inventory. The Linux runtime executes all admitted callers in its clean build and focused adapter suite, and mixed-runtime evidence covers the protocol-bearing rows. No Apple flat-source compile result is used as Linux execution evidence. |
-| `LSW-SC.1L-D` | Admit the moved Admin configuration, Admin Web, and onboarding policy to the Linux Admin surface, or record their deliberate product exclusion. | Linux configuration mutation, Admin UI/security payloads, and invite/onboarding handling each either call `ObstacleBridgeAdminConfigSupport`, `ObstacleBridgeAdminWebSupport`, and `ObstacleBridgeOnboarding` from a production route or have a separate source-inventory product-scope reason. Each admitted route has success and rejected-input tests that execute the Core policy; no Linux-local normalization, schema, or invite sanitization remains. |
-| `LSW-SC.1L-E` | Make the moved native service specification and ChannelMux compatibility codec the Linux service-control representation. | Linux configuration-to-service admission constructs `ObstacleBridgeNativeServiceSpec`; every legacy service-control encode/decode path uses `ObstacleBridgeChannelMuxCompatibilityCodec` (or is explicitly product-excluded in the inventory). Focused Linux tests cover TCP and UDP service specs, malformed control payload rejection, and a Python/Swift control-vector where the wire format is shared. |
 | `LSW-SC.1L-F` | Replace Linux-local ChannelMux TCP and UDP lifecycle state with the moved Core runtimes. | Linux socket/listener owners translate `ObstacleBridgeChannelMuxTcpRuntime` and `ObstacleBridgeChannelMuxUdpRuntime` effects into POSIX/NIO reads, writes, dial, close, and backpressure operations. A focused suite proves local accept, remote OPEN, data, close, reconnect/epoch reset, and rejected malformed or stale frames for both protocols. No Linux reconnect owner duplicates channel allocation, counters, pending-buffer, or close state. |
 | `LSW-SC.1L-G` | Adopt SecureLink transport and overlay-layer effects at Linux transport boundaries. | Each Linux lower transport drives `ObstacleBridgeSecureLinkPskTransportAdapter` and `ObstacleBridgeOverlayLayerTransportAdapter` for connect, disconnect, inbound/outbound frames, retry, readiness, and liveness samples; Linux executes only the resulting I/O effects. Tests cover queued pre-auth payloads, authentication failure/retry, rekey, compression failure, readiness gating, and transport-delay rotation without Linux-local copies of these decisions. |
 | `LSW-SC.1L-H` | Adopt the moved UDP peer runtime behind the Linux myUDP descriptor owner. | `ObstacleBridgeLinuxMyUDPTransport` delegates data batching, control records, retransmit timers, in-order delivery, and epoch reset to `ObstacleBridgeUdpOverlayPeerRuntime`; the adapter retains datagram send/receive only. Focused tests and a Python interoperation vector cover loss, duplicate/out-of-order records, control acknowledgement, timer retransmit, and counter rollover. |
@@ -250,14 +248,12 @@ required Linux-host evidence for this admission.
 `LinuxSwift_r001_inventory.json` now records one machine-checked admission row
 per direct `LSW-SC.1` source, including linked Linux callers, product-scoped
 non-admission reasons, and the remaining deferred/partial gaps.
-There is no Linux caller yet for the moved Admin configuration/web and
-onboarding policy, ChannelMux compatibility/TCP/
-UDP runtime, overlay-layer adapter, or the
-remaining TCP/QUIC/WebSocket runtime lifecycle owners. The latter lifecycle
-owners need explicit effect-to-POSIX translations rather than wrapping the
-existing Linux reconnect owner. Before an absent caller is counted as intentionally
-out-of-scope, its source-inventory row must carry the product-scoped reason
-required by `LSW-SC.1L-C`; none has been recorded for these rows yet.
+The Linux Admin product deliberately remains read-only and has no Apple Admin
+UI/security-advisor or invite/onboarding route; the inventory records those
+product-scope exclusions. Linux has no legacy compatibility-control format.
+The remaining gaps are ChannelMux TCP/UDP runtime, overlay-layer lifecycle,
+and TCP/QUIC/WebSocket lifecycle owners. They need explicit Core-effect to
+POSIX translations rather than wrapping the existing Linux reconnect owner.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
