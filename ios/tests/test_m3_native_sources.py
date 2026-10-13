@@ -641,15 +641,17 @@ def test_admin_api_source_exists() -> None:
 
 def test_tun_probe_diagnostics_support_source_exists() -> None:
     support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeTunProbeWaiterKey: Hashable" in support
     assert "final class ObstacleBridgeTunProbeWaiterState" in support
     assert "struct ObstacleBridgeTunProbeReply" in support
     assert "struct ObstacleBridgeTunProbeHistory" in support
     assert "enum ObstacleBridgeTunProbeDiagnosticsSupport" in support
-    assert 'static let localReplyStageKeys = [' in support
-    assert 'static let tunICMPStageKeys = [' in support
-    assert 'static let tunProbeBoundaryKeys = [' in support
+    assert "ObstacleBridgeTunProbeDiagnosticsPolicy.localReplyStageKeys" in support
+    assert "static let localReplyStageKeys = [" in policy
+    assert "static let tunICMPStageKeys = [" in policy
+    assert "static let tunProbeBoundaryKeys = [" in policy
     assert 'static func makeTunICMPStageCounts() -> [String: Int]' in support
     assert 'static func makeTunProbeBoundaryCounts() -> [String: Int]' in support
     assert 'static func makeLocalReplyStageCounts() -> [String: Int]' in support
@@ -665,6 +667,8 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
     assert 'static func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' in support
     assert 'static func observeTunProbeReply(' in support
     assert 'static func tunProbeRuntimeDiagSnapshot(' in support
+    assert "ObstacleBridgeTunProbeDiagnosticsPolicy.result(" in support
+    assert "static func runtimeSnapshot(" in policy
 
 
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:

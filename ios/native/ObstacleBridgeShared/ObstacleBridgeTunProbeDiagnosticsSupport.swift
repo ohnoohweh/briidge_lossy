@@ -26,58 +26,20 @@ struct ObstacleBridgeTunProbeHistory {
 }
 
 enum ObstacleBridgeTunProbeDiagnosticsSupport {
-    static let localReplyStageKeys = [
-        "local_reply_skip_overlay_inactive",
-        "local_reply_drop_oversize",
-        "local_reply_drop_throttled",
-        "local_reply_drop_shared_route",
-        "local_reply_virtual_probe_delivery",
-        "local_reply_drop_no_channel",
-        "local_reply_drop_missing_service_spec",
-        "local_reply_bound_new_channel",
-        "local_reply_before_overlay_send",
-    ]
-
-    static let tunICMPStageKeys = [
-        "from_local_tun_read",
-        "overlay_tx_before_send_app",
-        "overlay_rx_after_unpack",
-        "from_peer_before_local_write",
-        "to_local_tun_written",
-    ] + localReplyStageKeys
-
-    static let tunProbeBoundaryKeys = [
-        "probe_attempt_started",
-        "probe_waiter_registered",
-        "probe_injected_local_virtual",
-        "probe_injected_kernel",
-        "probe_injected_channelmux",
-        "probe_send_completed",
-        "probe_reply_matched",
-        "probe_reply_consumed_before_local_write",
-        "probe_reply_late_after_timeout",
-        "own_probe_reply_unmatched",
-        "foreign_probe_reply_unmatched",
-        "probe_reply_unmatched",
-        "probe_timeout",
-        "probe_exception",
-        "helper_read_packet",
-        "helper_read_probe_packet",
-        "helper_write_packet",
-        "helper_write_probe_packet",
-        "helper_write_error",
-    ]
+    static let localReplyStageKeys = ObstacleBridgeTunProbeDiagnosticsPolicy.localReplyStageKeys
+    static let tunICMPStageKeys = ObstacleBridgeTunProbeDiagnosticsPolicy.tunICMPStageKeys
+    static let tunProbeBoundaryKeys = ObstacleBridgeTunProbeDiagnosticsPolicy.tunProbeBoundaryKeys
 
     static func makeTunICMPStageCounts() -> [String: Int] {
-        Dictionary(uniqueKeysWithValues: tunICMPStageKeys.map { ($0, 0) })
+        ObstacleBridgeTunProbeDiagnosticsPolicy.makeCounts(tunICMPStageKeys)
     }
 
     static func makeTunProbeBoundaryCounts() -> [String: Int] {
-        Dictionary(uniqueKeysWithValues: tunProbeBoundaryKeys.map { ($0, 0) })
+        ObstacleBridgeTunProbeDiagnosticsPolicy.makeCounts(tunProbeBoundaryKeys)
     }
 
     static func makeLocalReplyStageCounts() -> [String: Int] {
-        Dictionary(uniqueKeysWithValues: localReplyStageKeys.map { ($0, 0) })
+        ObstacleBridgeTunProbeDiagnosticsPolicy.makeCounts(localReplyStageKeys)
     }
 
     static func recordTunICMPStage(
@@ -85,49 +47,28 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         tunICMPStageCounts: inout [String: Int],
         localReplyStageCounts: inout [String: Int]
     ) {
-        guard tunICMPStageCounts[key] != nil else {
-            return
-        }
-        tunICMPStageCounts[key] = Int(tunICMPStageCounts[key] ?? 0) + 1
-        if localReplyStageCounts[key] != nil {
-            localReplyStageCounts[key] = Int(localReplyStageCounts[key] ?? 0) + 1
-        }
+        ObstacleBridgeTunProbeDiagnosticsPolicy.record(key, counts: &tunICMPStageCounts)
+        ObstacleBridgeTunProbeDiagnosticsPolicy.record(key, counts: &localReplyStageCounts)
     }
 
     static func recordTunProbeBoundary(_ key: String, tunProbeBoundaryCounts: inout [String: Int]) {
-        guard tunProbeBoundaryCounts[key] != nil else {
-            return
-        }
-        tunProbeBoundaryCounts[key] = Int(tunProbeBoundaryCounts[key] ?? 0) + 1
+        ObstacleBridgeTunProbeDiagnosticsPolicy.record(key, counts: &tunProbeBoundaryCounts)
     }
 
     static func tunProbeCacheKey(probeKind: String, ifname: String, target: String) -> String {
-        "\(probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())|\(ifname)|\(target)"
+        ObstacleBridgeTunProbeDiagnosticsPolicy.cacheKey(probeKind: probeKind, ifname: ifname, target: target)
     }
 
     static func tunProbeLabel(_ probeKind: String) -> String {
-        switch probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-        case "peer":
-            return "TUN connectivity verified"
-        case "global":
-            return "TUN global connectivity verified"
-        default:
-            return "TUN connectivity verification"
-        }
+        ObstacleBridgeTunProbeDiagnosticsPolicy.label(probeKind)
     }
 
     static func tunProbeKindCode(_ probeKind: String) -> UInt8 {
-        probeKind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "global"
-            ? ObstacleBridgeTunPing.probeKindGlobal
-            : ObstacleBridgeTunPing.probeKindPeer
+        ObstacleBridgeTunProbeDiagnosticsPolicy.kindCode(probeKind)
     }
 
     static func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any] {
-        [
-            "status": status,
-            "resolved_ip": resolvedIP,
-            "detail": detail,
-        ]
+        ObstacleBridgeTunProbeDiagnosticsPolicy.nameResolution(status: status, resolvedIP: resolvedIP, detail: detail)
     }
 
     static func tunProbeResult(
@@ -143,31 +84,12 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         lastSuccessAgoS: Double? = nil,
         lastSuccessRTTMS: Double? = nil
     ) -> [String: Any] {
-        var result: [String: Any] = [
-            "label": tunProbeLabel(probeKind),
-            "ok": ok,
-            "state": state,
-            "summary": summary,
-            "detail": detail,
-            "target": target,
-            "resolved_target": resolvedTarget,
-            "name_resolution": nameResolution,
-            "method": "internal_icmp_echo",
-            "checked_at_unix_ts": Date().timeIntervalSince1970,
-            "value_ms": NSNull(),
-            "last_success_ago_s": NSNull(),
-            "last_success_rtt_ms": NSNull(),
-        ]
-        if let valueMS {
-            result["value_ms"] = valueMS
-            result["last_success_rtt_ms"] = valueMS
-        } else if let lastSuccessRTTMS {
-            result["last_success_rtt_ms"] = lastSuccessRTTMS
-        }
-        if let lastSuccessAgoS {
-            result["last_success_ago_s"] = lastSuccessAgoS
-        }
-        return result
+        ObstacleBridgeTunProbeDiagnosticsPolicy.result(
+            probeKind: probeKind, target: target, ok: ok, state: state,
+            summary: summary, detail: detail, checkedAtUnixTS: Date().timeIntervalSince1970,
+            resolvedTarget: resolvedTarget, nameResolution: nameResolution, valueMS: valueMS,
+            lastSuccessAgoS: lastSuccessAgoS, lastSuccessRTTMS: lastSuccessRTTMS
+        )
     }
 
     static func sourceProbeFamilies(tunnelAddress: String, tunnelAddress6: String) -> [Int32] {
@@ -300,23 +222,15 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         secureLinkFailureReason: String,
         backpressure: [String: Any]
     ) -> [String: Any] {
-        [
-            "probe_kind": probeKind,
-            "ifname": ifname.trimmingCharacters(in: .whitespacesAndNewlines),
-            "target": target.trimmingCharacters(in: .whitespacesAndNewlines),
-            "resolved_target": resolvedTarget.trimmingCharacters(in: .whitespacesAndNewlines),
-            "timeout_s": timeoutSeconds,
-            "captured_at_unix_ts": Date().timeIntervalSince1970,
-            "overlay_transport": overlayTransport,
-            "overlay_connected": overlayConnected,
-            "session_connected": sessionConnected,
-            "session_app_ready": sessionAppReady,
-            "accepting_enabled": acceptingEnabled,
-            "secure_link_state": secureLinkState,
-            "secure_link_last_event": secureLinkLastEvent,
-            "secure_link_failure_reason": secureLinkFailureReason,
-            "backpressure": backpressure,
-        ]
+        ObstacleBridgeTunProbeDiagnosticsPolicy.runtimeSnapshot(
+            probeKind: probeKind, ifname: ifname, target: target, resolvedTarget: resolvedTarget,
+            timeoutSeconds: timeoutSeconds, capturedAtUnixTS: Date().timeIntervalSince1970,
+            overlayTransport: overlayTransport, overlayConnected: overlayConnected,
+            sessionConnected: sessionConnected, sessionAppReady: sessionAppReady,
+            acceptingEnabled: acceptingEnabled, secureLinkState: secureLinkState,
+            secureLinkLastEvent: secureLinkLastEvent,
+            secureLinkFailureReason: secureLinkFailureReason, backpressure: backpressure
+        )
     }
 
     private static func resolveHost(_ host: String, family: Int32) -> String? {

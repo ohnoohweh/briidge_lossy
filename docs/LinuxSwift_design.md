@@ -72,7 +72,7 @@ adjacent field is the known gap that keeps the package open.
 
 | Package | DoD / current design | Known gap |
 | --- | --- | --- |
-| `LSW-SC.2` | Mixed Apple sources are split through typed Core ports, leaving Apple framework and ABI handling in adapters. | Resolver address-selection/normalization policy and remaining mixed contracts have not reached Core ports. |
+| `LSW-SC.2` | Mixed Apple sources are split through typed Core ports, leaving Apple framework and ABI handling in adapters. | Remaining mixed contracts beyond the extracted peer-address policy still need Core ports. |
 | `LSW-SC.3` | `ObstacleBridgeShared` is constrained to Apple-resource adapters; portable behavior belongs in Core. | The retained Apple-file set still needs per-file dependency classification and an enforced repository boundary. |
 | `LSW-SC.4` | The source inventory remains the ownership authority while transition work is active. | Transitional shims, flat Xcode references, and inventory/traceability cleanup depend on SC.2 and SC.3. |
 | `LSW-SC.1L-A` | Linux already executes Core ChannelMux TCP/UDP effects for local listeners and admitted remote dials. | Linux adoption evidence is still missing for the remaining direct Core surfaces, including UDP control/batch handling, Admin selection, and overlay planning. |

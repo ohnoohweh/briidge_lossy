@@ -518,6 +518,11 @@ and filtering. Apple retains POSIX numeric-address detection, name resolution,
 and sockaddr conversion. Linux resolver adoption remains separately owned by
 `LSW-SC.2L-A` and must use this policy rather than duplicate it.
 
+Implementation note: Swift Core owns TUN-probe counter construction and
+diagnostic projection with adapter-supplied timestamps. Apple retains POSIX
+target resolution and semaphore-backed waiter delivery. Linux adoption remains
+separately owned by `LSW-SC.2L-A`.
+
 Implementation note: the Peer-page Transport layout keeps Transport State, Reconnect, and Resolved Peer on its first line. Its second line uses one-quarter width each for Connection Uptime and Last Incoming, and one-half width for Own Public IP. Each peer identity cell shall span exactly its own rendered detail rows, so a peer such as `ws:0:-1` cannot visually extend into the following peer.
 
 Implementation note: shared-TUN bindings use a process-wide identity composed from the owning ChannelMux holder and its mux-local peer id. This prevents equal peer ids from independent WS and myUDP listener muxes from being conflated; local-TUN replies route through the holder that owns the selected binding, and the Admin snapshot resolves that identity back to the holder’s transport-qualified connection id. Disconnect cleanup removes that identity and binding state from every holder of the shared device. RX/TX counters are mirrored across device holders so either holder supplies an observationally consistent Admin snapshot.

@@ -843,6 +843,7 @@ def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -
 def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     shared_probe_support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    core_probe_policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
 
     assert "private let adminSnapshotQueue = DispatchQueue(label: \"ObstacleBridgeHostRunner.AdminSnapshots\")" in source
     assert "private var adminSnapshotTimer: DispatchSourceTimer?" in source
@@ -865,11 +866,11 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert 'target: peerTarget' in source
     assert 'target: globalHost' in source
     assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
-    assert '"method": "internal_icmp_echo"' in shared_probe_support
-    assert '"resolved_target": resolvedTarget' in shared_probe_support
-    assert '"name_resolution": nameResolution' in shared_probe_support
+    assert '"method": "internal_icmp_echo"' in core_probe_policy
+    assert '"resolved_target": resolvedTarget' in core_probe_policy
+    assert '"name_resolution": nameResolution' in core_probe_policy
     assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' not in source
-    assert '"last_success_ago_s": NSNull()' in shared_probe_support
+    assert '"last_success_ago_s": NSNull()' in core_probe_policy
     assert "let payload = ObstacleBridgeTunPing.probePayload(" in source
     assert 'private var tunICMPStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunICMPStageCounts()' in source
     assert 'private var tunProbeBoundaryCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunProbeBoundaryCounts()' in source
