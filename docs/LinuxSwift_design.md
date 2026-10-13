@@ -249,6 +249,12 @@ owners need explicit effect-to-POSIX translations rather than wrapping the
 existing Linux reconnect owner. Before an absent caller is counted as intentionally
 out-of-scope, its source-inventory row must carry the product-scoped reason
 required by `LSW-SC.1L-C`; none has been recorded for these rows yet.
+The SecureLink migration must additionally preserve Linux's current
+caller-supplied session-ID and nonce contract used by deterministic handshake,
+duplex, and rekey tests. The moved transport adapter currently generates those
+values internally, so its Core interface needs injected handshake material (or
+an equivalent explicit effect facade) before Linux can adopt it without
+changing the protocol contract.
 
 The Admin-component runner now compiles the full Core ChannelMux dependency
 closure. Its focused Admin UI and security-advisor vectors pass. Its separate
