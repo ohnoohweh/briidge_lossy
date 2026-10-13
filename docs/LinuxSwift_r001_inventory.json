@@ -71,6 +71,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskRuntime.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompressLayerRuntime.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressProtocolRuntime.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuthPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift",

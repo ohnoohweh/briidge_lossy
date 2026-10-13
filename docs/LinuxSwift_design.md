@@ -281,6 +281,12 @@ Linux has not admitted a configuration-mutation surface and must either use
 this policy through a Linux digest/clock port or record its product-scoped
 non-admission in the source inventory.
 
+`ObstacleBridgeAdminAuth` now follows the same boundary: Core owns challenge
+and session state, expiry, cookie parsing, cookie-header formatting, and proof
+decisions. The Apple adapter retains its serialized queue, UUID/time sources,
+CryptoKit digest binding, and HTTP response conversion. Linux has no Admin
+authentication route today, so its separate `LSW-SC.2L-A` admission is open.
+
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
 | `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |

@@ -12,8 +12,7 @@ final class ObstacleBridgeAdminAuth {
     private let bearerTokenProvider: () -> String
     private let cookieScopeProvider: () -> String
 
-    private var authChallenges: [String: [String: Any]] = [:]
-    private var authSessions: [String: TimeInterval] = [:]
+    private var state = ObstacleBridgeAdminAuthPolicy.State()
 
     init(
         queueLabel: String,
@@ -33,8 +32,7 @@ final class ObstacleBridgeAdminAuth {
 
     func resetState() {
         queue.sync {
-            authChallenges.removeAll()
-            authSessions.removeAll()
+            state.reset()
         }
     }
 
@@ -43,9 +41,7 @@ final class ObstacleBridgeAdminAuth {
             return true
         }
         return queue.sync {
-            pruneStateLocked()
-            let token = Self.parseCookieHeader(headers)[sessionCookieName()] ?? ""
-            return !token.isEmpty && authSessions[token] != nil
+            state.isAuthenticated(headers: headers, cookieName: sessionCookieName(), now: Date().timeIntervalSince1970)
         }
     }
 
@@ -70,13 +66,9 @@ final class ObstacleBridgeAdminAuth {
             ])
         }
         return queue.sync {
-            pruneStateLocked()
             let challengeID = UUID().uuidString.lowercased()
             let seed = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + challengeID
-            authChallenges[challengeID] = [
-                "seed": seed,
-                "expires_at": Date().timeIntervalSince1970 + Self.authChallengeTTL,
-            ]
+            _ = state.issueChallenge(identifier: challengeID, seed: seed, now: Date().timeIntervalSince1970, ttl: Self.authChallengeTTL)
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": true,
                 "auth_required": true,
@@ -108,25 +100,31 @@ final class ObstacleBridgeAdminAuth {
         }
         let challengeID = (payload["challenge_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let proof = (payload["proof"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let seed: String? = queue.sync {
-            pruneStateLocked()
-            let item = authChallenges.removeValue(forKey: challengeID)
-            return item?["seed"] as? String
+        let result = queue.sync {
+            state.consumeChallenge(
+                identifier: challengeID,
+                proof: proof,
+                username: usernameProvider(),
+                password: passwordProvider(),
+                now: Date().timeIntervalSince1970,
+                digest: Self.sha256Hex
+            )
         }
-        guard let seed else {
+        switch result {
+        case .invalidOrExpiredChallenge:
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": false,
                 "authenticated": false,
                 "error": "invalid or expired challenge",
             ], statusLine: "HTTP/1.1 403 Forbidden")
-        }
-        let expected = Self.buildAuthProof(seed: seed, username: usernameProvider(), password: passwordProvider())
-        guard proof == expected else {
+        case .invalidProof:
             return ObstacleBridgeAdminAPI.jsonResponse([
                 "ok": false,
                 "authenticated": false,
                 "error": "authentication failed",
             ], statusLine: "HTTP/1.1 403 Forbidden")
+        case .authenticated:
+            break
         }
         return ObstacleBridgeAdminAPI.jsonResponse([
             "ok": true,
@@ -138,12 +136,7 @@ final class ObstacleBridgeAdminAuth {
         guard method.uppercased() == "POST" else {
             return ObstacleBridgeAdminAPI.plainTextResponse(statusLine: "HTTP/1.1 405 Method Not Allowed", body: "Method Not Allowed")
         }
-        let token = Self.parseCookieHeader(headers)[sessionCookieName()] ?? ""
-        if !token.isEmpty {
-            _ = queue.sync {
-                authSessions.removeValue(forKey: token)
-            }
-        }
+        queue.sync { state.revokeSession(headers: headers, cookieName: sessionCookieName()) }
         return ObstacleBridgeAdminAPI.jsonResponse([
             "ok": true,
             "authenticated": false,
@@ -164,51 +157,24 @@ final class ObstacleBridgeAdminAuth {
     private func issueSessionHeaders() -> [(String, String)] {
         let token = UUID().uuidString.replacingOccurrences(of: "-", with: "") + UUID().uuidString.replacingOccurrences(of: "-", with: "")
         queue.sync {
-            pruneStateLocked()
-            authSessions[token] = Date().timeIntervalSince1970 + Self.authSessionTTL
+            state.issueSession(token: token, now: Date().timeIntervalSince1970, ttl: Self.authSessionTTL)
         }
         return [sessionHeader(token: token)]
     }
 
     private func sessionHeader(token: String) -> (String, String) {
-        ("Set-Cookie", "\(sessionCookieName())=\(token); Path=/; HttpOnly; SameSite=Strict")
+        ObstacleBridgeAdminAuthPolicy.sessionHeader(cookieName: sessionCookieName(), token: token)
     }
 
     private func expiredSessionHeader() -> (String, String) {
-        ("Set-Cookie", "\(sessionCookieName())=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+        ObstacleBridgeAdminAuthPolicy.expiredSessionHeader(cookieName: sessionCookieName())
     }
 
     private func sessionCookieName() -> String {
-        let digest = SHA256.hash(data: Data(cookieScopeProvider().utf8)).map { String(format: "%02x", $0) }.joined()
-        return "admin_web_session_\(digest.prefix(12))"
+        ObstacleBridgeAdminAuthPolicy.sessionCookieName(scope: cookieScopeProvider(), digest: Self.sha256Hex)
     }
 
-    private func pruneStateLocked() {
-        let now = Date().timeIntervalSince1970
-        authChallenges = authChallenges.filter { _, item in
-            (item["expires_at"] as? TimeInterval ?? 0) > now
-        }
-        authSessions = authSessions.filter { _, expiresAt in
-            expiresAt > now
-        }
-    }
-
-    private static func parseCookieHeader(_ headers: [String: String]) -> [String: String] {
-        let raw = headers["cookie"] ?? ""
-        var cookies: [String: String] = [:]
-        for part in raw.split(separator: ";") {
-            let item = String(part).trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !item.isEmpty, let equals = item.firstIndex(of: "=") else {
-                continue
-            }
-            let key = String(item[..<equals]).trimmingCharacters(in: .whitespacesAndNewlines)
-            let value = String(item[item.index(after: equals)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-            cookies[key] = value
-        }
-        return cookies
-    }
-
-    private static func buildAuthProof(seed: String, username: String, password: String) -> String {
-        SHA256.hash(data: Data("\(seed):\(username):\(password)".utf8)).map { String(format: "%02x", $0) }.joined()
+    private static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
