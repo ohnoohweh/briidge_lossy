@@ -177,6 +177,11 @@ record for adapter use; the unused initializer that accepted the mixed
 runtime-configuration record was removed rather than retaining a Core-to-Apple
 type dependency.
 
+`ObstacleBridgeAdminWebSupport.swift` is Core-owned. Static-path admission,
+content-type selection, Admin UI state, and security-advisor policy now read
+only portable Foundation values and the configuration dictionary; Apple hosts
+remain responsible for HTTP serving the returned response.
+
 `ObstacleBridgePeerAddressProtocolRuntime.swift` now performs bounded
 IPv4/IPv6 parsing and canonical formatting in Core without Darwin or Glibc
 socket conversion. `ObstacleBridgeOverlayLayerTransportAdapter.swift` is
@@ -184,9 +189,8 @@ therefore Core-owned as well, preserving the mapped-IPv4 and malformed-frame
 admission rules while composing the portable compression and SecureLink
 effects.
 
-The open `LSW-SC.1` gaps are the remaining 3 files in the preceding table:
-`ObstacleBridgeAdminConfigSupport.swift`,
-`ObstacleBridgeAdminWebSupport.swift`, and `ObstacleBridgeOnboarding.swift`.
+The open `LSW-SC.1` gaps are the remaining 2 files:
+`ObstacleBridgeAdminConfigSupport.swift` and `ObstacleBridgeOnboarding.swift`.
 They cannot be moved as a single file-system operation because their present
 Apple callers compile a flat source list and several depend on the `LSW-SC.2`
 configuration, packet-device, and connection contracts. The next extraction
@@ -200,11 +204,11 @@ transport policy, but this package must replace any overlapping Linux-local
 planner, lifecycle, snapshot, or myUDP facade with the moved Core type and add
 direct Linux adapter evidence before those extractions count as Linux-adopted.
 
-The Admin-component parity fixture also needs its flat `swiftc` inventory to
-include the Core ChannelMux dependencies that its compatibility facade
-references. That fixture is not proof of an Apple-only dependency in either
-extracted file; until its inventory is closed, it is excluded from
-`LSW-SC.1` completion evidence.
+The Admin-component runner now compiles the full Core ChannelMux dependency
+closure. Its focused Admin UI and security-advisor vectors pass. Its separate
+status/tunnel snapshot assertions currently have response-shape drift outside
+the moved Admin Web policy, so those assertions are not used as `LSW-SC.1`
+completion evidence until their fixture expectations are reconciled.
 
 ### `LSW-SC.2` — Core contracts with Apple implementations below them
 

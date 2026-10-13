@@ -48,13 +48,13 @@ enum ObstacleBridgeAdminWebSupport {
         platform: String,
         runtimeDependencies: [String: Any]
     ) -> [String: Any] {
-        let bootstrapState = ObstacleBridgeRuntimeConfig.adminUIBootstrapState(from: runtimeConfig)
+        let bootstrapState = adminUIBootstrapState(from: runtimeConfig)
         return [
             "home_tab_enabled": true,
             "landing_page_enabled": false,
-            "security_advisor_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false),
-            "security_advisor_startup_enabled": !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_startup_disable"]) ?? false),
-            "first_tab": ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_first_tab"]) ?? "home",
+            "security_advisor_enabled": !(boolValue(value(for: "admin_web_security_advisor_disable", in: runtimeConfig)) ?? false),
+            "security_advisor_startup_enabled": !(boolValue(value(for: "admin_web_security_advisor_startup_disable", in: runtimeConfig)) ?? false),
+            "first_tab": stringValue(value(for: "admin_web_first_tab", in: runtimeConfig)) ?? "home",
             "first_start_detected": bootstrapState.firstStartDetected,
             "config_file_state": bootstrapState.configFileState,
             "platform": platform,
@@ -66,18 +66,18 @@ enum ObstacleBridgeAdminWebSupport {
         runtimeConfig: [String: Any],
         bindHostFallback: String
     ) -> [String: Any] {
-        let enabled = !(ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_security_advisor_disable"]) ?? false)
-        let bind = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["admin_web_bind"]) ?? bindHostFallback)
+        let enabled = !(boolValue(value(for: "admin_web_security_advisor_disable", in: runtimeConfig)) ?? false)
+        let bind = (stringValue(value(for: "admin_web_bind", in: runtimeConfig)) ?? bindHostFallback)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let adminLocalOnly = isLoopbackHost(bind)
-        let secureMode = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off")
+        let secureMode = (stringValue(value(for: "secure_link_mode", in: runtimeConfig)) ?? "off")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let securePSK = ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_psk"]) ?? ""
-        let authDisabled = ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web_auth_disable"]) ?? false
+        let securePSK = stringValue(value(for: "secure_link_psk", in: runtimeConfig)) ?? ""
+        let authDisabled = boolValue(value(for: "admin_web_auth_disable", in: runtimeConfig)) ?? false
         var findings: [[String: Any]] = []
         if enabled {
-            if (ObstacleBridgeRuntimeConfig.boolValue(from: runtimeConfig["admin_web"]) ?? false), authDisabled {
+            if (boolValue(value(for: "admin_web", in: runtimeConfig)) ?? false), authDisabled {
                 let adminMessage = adminLocalOnly
                     ? "Admin Web password protection is recommended even on localhost-only setups. Enable admin authentication in the configuration unless you intentionally want friction-free local access."
                     : "Admin Web is reachable beyond localhost and admin authentication is disabled in the configuration. This should be treated as a warning. Enable admin authentication or bind Admin Web to localhost."
@@ -165,5 +165,57 @@ enum ObstacleBridgeAdminWebSupport {
             return true
         }
         return lowered == "127.0.0.1" || lowered == "::1"
+    }
+
+    private static func value(for key: String, in payload: [String: Any]) -> Any? {
+        if let direct = payload[key] {
+            return direct
+        }
+        for value in payload.values {
+            if let nested = value as? [String: Any], let match = self.value(for: key, in: nested) {
+                return match
+            }
+        }
+        return nil
+    }
+
+    private static func boolValue(_ value: Any?) -> Bool? {
+        if let value = value as? Bool { return value }
+        if let value = value as? NSNumber { return value.boolValue }
+        guard let value = value as? String else { return nil }
+        switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "1", "true", "yes", "on": return true
+        case "0", "false", "no", "off": return false
+        default: return nil
+        }
+    }
+
+    private static func intValue(_ value: Any?) -> Int? {
+        if let value = value as? NSNumber { return value.intValue }
+        if let value = value as? Int { return value }
+        if let value = value as? String { return Int(value) }
+        return nil
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        guard let value else { return nil }
+        if let value = value as? String {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return trimmed.isEmpty ? nil : trimmed
+        }
+        if let value = value as? NSNumber { return value.stringValue }
+        return nil
+    }
+
+    private static func adminUIBootstrapState(from runtimeConfig: [String: Any]) -> (firstStartDetected: Bool, configFileState: String) {
+        let transportText = stringValue(value(for: "overlay_transport", in: runtimeConfig)) ?? "myudp"
+        let transport = transportText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.first(where: { !$0.isEmpty }) ?? "myudp"
+        let prefix = transport == "myudp" ? "udp" : transport
+        let peerConfigured = !(stringValue(value(for: "\(prefix)_peer", in: runtimeConfig)) ?? "").isEmpty
+            && (intValue(value(for: "\(prefix)_peer_port", in: runtimeConfig)) ?? 0) > 0
+        let ownConfigured = !(value(for: "own_servers", in: runtimeConfig) as? [Any] ?? []).isEmpty
+        let remoteConfigured = !(value(for: "remote_servers", in: runtimeConfig) as? [Any] ?? []).isEmpty
+        let firstStartDetected = !peerConfigured && !ownConfigured && !remoteConfigured
+        return (firstStartDetected, firstStartDetected ? "empty" : "loaded")
     }
 }
