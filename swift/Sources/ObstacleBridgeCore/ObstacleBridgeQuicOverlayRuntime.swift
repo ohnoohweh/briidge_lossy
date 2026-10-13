@@ -1,13 +1,13 @@
 import Foundation
 
-final class ObstacleBridgeQuicOverlayRuntime {
+public final class ObstacleBridgeQuicOverlayRuntime {
     private static let lenFieldSize = 4
     private static let kindApp: UInt8 = 0x00
-    struct SendSnapshot {
+    public struct SendSnapshot {
         var txBytes: Int
         var peerTxNotifications: [Int]
         var writtenHex: [String]
-        var writtenBuffers: [Data]
+        public var writtenBuffers: [Data]
         var earlyBufBytes: Int
         var earlyBufHex: String?
         var connectRequested: Bool
@@ -75,7 +75,7 @@ final class ObstacleBridgeQuicOverlayRuntime {
     private var nextPeerID: Int
     private var serverPeerIDs: Set<Int> = []
 
-    init(
+    public init(
         earlyMax: Int = 1024 * 1024,
         earlyTTL: Double = 3.0,
         wbufThreshold: Int = 128 * 1024,
@@ -87,7 +87,7 @@ final class ObstacleBridgeQuicOverlayRuntime {
         self.nextPeerID = max(1, nextPeerID)
     }
 
-    func sendApp(payload: Data, writerPresent: Bool, peerConfigured: Bool, now: Double = 0.0) -> SendSnapshot {
+    public func sendApp(payload: Data, writerPresent: Bool, peerConfigured: Bool, now: Double = 0.0) -> SendSnapshot {
         guard !payload.isEmpty else {
             return SendSnapshot(
                 txBytes: txBytes,

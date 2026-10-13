@@ -231,7 +231,8 @@ and socket-write mechanics locally.
 Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
 `ObstacleBridgeAdminAPI`, `ObstacleBridgeAdminSnapshotSupport`,
 `ObstacleBridgeUdpOverlayCodec`, `ObstacleBridgeOverlayStackPlanner`, and
-`ObstacleBridgeTcpOverlayRuntime` for TCP/QUIC application-frame effects, plus
+`ObstacleBridgeTcpOverlayRuntime` and `ObstacleBridgeQuicOverlayRuntime` for
+their respective application-frame effects, plus
 `ObstacleBridgeWebSocketOverlayRuntime` for clear-WebSocket proxy CONNECT
 policy.
 POSIX/NIO retains only the connection and byte I/O below that Core effect.

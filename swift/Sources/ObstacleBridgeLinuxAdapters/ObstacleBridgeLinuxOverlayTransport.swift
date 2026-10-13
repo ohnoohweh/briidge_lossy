@@ -89,6 +89,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     /// Core owns application-frame construction and early-send state. Linux
     /// owns the concrete POSIX/NIO connection below this boundary.
     private let tcpOverlayRuntime = ObstacleBridgeTcpOverlayRuntime()
+    /// Core owns QUIC application-frame construction; Linux owns NIO-QUIC I/O.
+    private let quicOverlayRuntime = ObstacleBridgeQuicOverlayRuntime()
     /// Core owns HTTP CONNECT request policy; Linux owns the proxy socket.
     private let webSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
@@ -156,7 +158,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .quic:
                     let connection = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
-                    try connection.write(try tcpWire(payload))
+                    try connection.write(try quicWire(payload))
                     result = try readTCPApplicationFrame(connection)
                 }
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: attempt, failureReason: nil)
@@ -187,7 +189,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
                 let send: (Data) throws -> Void = { [weak self] payload in
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
-                    try quic.write(try self.tcpWire(payload))
+                    try quic.write(try self.quicWire(payload))
                 }
                 let receive: () throws -> Data = { [weak self] in
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
@@ -247,6 +249,18 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
 
     private func tcpWire(_ payload: Data) throws -> Data {
         let effect = tcpOverlayRuntime.sendApp(
+            payload: payload,
+            writerPresent: true,
+            peerConfigured: true
+        )
+        guard let wire = effect.writtenBuffers.first else {
+            throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+        }
+        return wire
+    }
+
+    private func quicWire(_ payload: Data) throws -> Data {
+        let effect = quicOverlayRuntime.sendApp(
             payload: payload,
             writerPresent: true,
             peerConfigured: true
