@@ -21,57 +21,35 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         public let writtenBuffers: [Data]
     }
 
-    struct InboundClientOpenSnapshot {
-        var accepted: Bool
-        var serviceID: Int?
-        var openKey: String?
-        var connectRequested: Bool
-        var connected: Bool
-        var pendingCount: Int
-        var openChannels: [Int]
-        var connectedChannels: [Int]
+    public struct InboundClientOpenSnapshot {
+        public let accepted: Bool; public let serviceID: Int?; public let openKey: String?
+        public let connectRequested: Bool; public let connected: Bool; public let pendingCount: Int
+        public let openChannels: [Int]; public let connectedChannels: [Int]
     }
 
-    struct InboundClientDataSnapshot {
-        var buffered: Bool
-        var sentImmediately: Bool
-        var pendingCount: Int
-        var writtenBuffers: [Data]
+    public struct InboundClientDataSnapshot {
+        public let buffered: Bool; public let sentImmediately: Bool
+        public let pendingCount: Int; public let writtenBuffers: [Data]
     }
 
-    struct ClientConnectSnapshot {
-        var connected: Bool
-        var serviceID: Int?
-        var openKey: String?
-        var pendingCount: Int
-        var flushedBuffers: [Data]
-        var localAddrHost: String?
-        var localAddrPort: Int?
-        var peerAddrHost: String?
-        var peerAddrPort: Int?
-        var connectedChannels: [Int]
+    public struct ClientConnectSnapshot {
+        public let connected: Bool; public let serviceID: Int?; public let openKey: String?; public let pendingCount: Int
+        public let flushedBuffers: [Data]; public let localAddrHost: String?; public let localAddrPort: Int?
+        public let peerAddrHost: String?; public let peerAddrPort: Int?; public let connectedChannels: [Int]
     }
 
-    struct LocalClientDataSnapshot {
-        var frames: [Data]
-        var nextCounter: Int
+    public struct LocalClientDataSnapshot {
+        public let frames: [Data]; public let nextCounter: Int
     }
 
-    struct LocalClientCloseSnapshot {
-        var closed: Bool
-        var chanID: Int
-        var frames: [Data]
-        var openChannels: [Int]
-        var connectedChannels: [Int]
-        var pendingChannels: [Int]
+    public struct LocalClientCloseSnapshot {
+        public let closed: Bool; public let chanID: Int; public let frames: [Data]
+        public let openChannels: [Int]; public let connectedChannels: [Int]; public let pendingChannels: [Int]
     }
 
-    struct ClientCloseSnapshot {
-        var closed: Bool
-        var chanID: Int
-        var openChannels: [Int]
-        var connectedChannels: [Int]
-        var pendingChannels: [Int]
+    public struct ClientCloseSnapshot {
+        public let closed: Bool; public let chanID: Int; public let openChannels: [Int]
+        public let connectedChannels: [Int]; public let pendingChannels: [Int]
     }
 
     public struct ServerCloseSnapshot {
@@ -222,7 +200,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         return ServerCloseSnapshot(closed: hadChannel, chanID: chanID, localConnectionClosed: hadChannel, frames: [], activeChannels: serverActiveChannels.sorted())
     }
 
-    func handleInboundClientOpen(chanID: Int, payload: Data, counter: Int = 0, peerID: Int? = nil) -> InboundClientOpenSnapshot {
+    public func handleInboundClientOpen(chanID: Int, payload: Data, counter: Int = 0, peerID: Int? = nil) -> InboundClientOpenSnapshot {
         guard let effects = try? clientSession.receive(.init(
             channelID: UInt16(clamping: chanID),
             protocolType: ObstacleBridgeChannelMuxSessionProtocol.tcp.rawValue,
@@ -242,7 +220,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         return admittedClientOpen(chanID: chanID, service: admittedService, peerID: peerID)
     }
 
-    func handleInboundClientOpenChunk(chanID: Int, payload: Data, counter: Int, peerID: Int? = nil) -> InboundClientOpenSnapshot? {
+    public func handleInboundClientOpenChunk(chanID: Int, payload: Data, counter: Int, peerID: Int? = nil) -> InboundClientOpenSnapshot? {
         guard let effects = try? clientSession.receive(.init(
             channelID: UInt16(clamping: chanID),
             protocolType: ObstacleBridgeChannelMuxSessionProtocol.tcp.rawValue,
@@ -303,7 +281,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleInboundClientData(chanID: Int, body: Data, counter: Int) -> InboundClientDataSnapshot {
+    public func handleInboundClientData(chanID: Int, body: Data, counter: Int) -> InboundClientDataSnapshot {
         guard let effects = try? clientSession.receive(.init(
             channelID: UInt16(clamping: chanID),
             protocolType: ObstacleBridgeChannelMuxSessionProtocol.tcp.rawValue,
@@ -333,7 +311,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleClientConnected(
+    public func handleClientConnected(
         chanID: Int,
         localAddrHost: String? = nil,
         localAddrPort: Int? = nil,
@@ -377,7 +355,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleLocalClientData(chanID: Int, payload: Data, overlayConnected: Bool) throws -> LocalClientDataSnapshot? {
+    public func handleLocalClientData(chanID: Int, payload: Data, overlayConnected: Bool) throws -> LocalClientDataSnapshot? {
         guard overlayConnected, clientTransports[chanID] != nil else {
             return nil
         }
@@ -388,7 +366,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleLocalClientEOF(chanID: Int, overlayConnected: Bool) throws -> LocalClientCloseSnapshot {
+    public func handleLocalClientEOF(chanID: Int, overlayConnected: Bool) throws -> LocalClientCloseSnapshot {
         let hadOpen = clientOpenKeyByChannel[chanID] != nil
         let hadTransport = clientTransports.removeValue(forKey: chanID) != nil
         let hadPending = clientPending.removeValue(forKey: chanID) != nil
@@ -411,7 +389,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleInboundClientClose(chanID: Int, counter: Int) -> ClientCloseSnapshot {
+    public func handleInboundClientClose(chanID: Int, counter: Int) -> ClientCloseSnapshot {
         guard (try? clientSession.receive(.init(
             channelID: UInt16(clamping: chanID),
             protocolType: ObstacleBridgeChannelMuxSessionProtocol.tcp.rawValue,
