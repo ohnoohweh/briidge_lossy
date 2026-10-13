@@ -12,7 +12,7 @@ struct ObstacleBridgeConnectionLifecycleEvent {
     let changedAt: TimeInterval
 }
 
-final class ObstacleBridgeOverlayLayerTransportAdapter {
+public final class ObstacleBridgeOverlayLayerTransportAdapter {
     // This is the layered application-readiness grace used by every native
     // overlay owner. Transport-up alone never makes the overlay usable.
     static let outerReadinessGrace: TimeInterval = 15.0
@@ -111,6 +111,19 @@ final class ObstacleBridgeOverlayLayerTransportAdapter {
             return false
         }
         return (last["app_ready"] as? Bool) ?? false
+    }
+
+    /// The transport owner reports facts; Core owns the conjunction that
+    /// admits application traffic across its configured layers.
+    public static func applicationReady(
+        transportConnected: Bool,
+        secureLinkRequired: Bool,
+        secureLinkAuthenticated: Bool,
+        compressionHealthy: Bool
+    ) -> Bool {
+        transportConnected
+            && (!secureLinkRequired || secureLinkAuthenticated)
+            && compressionHealthy
     }
 
     static func inflowAllowed(from layers: [[String: Any]]) -> Bool {

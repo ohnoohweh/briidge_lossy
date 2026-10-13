@@ -3,6 +3,21 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeWebSocketOverlayRuntimeTests {
+    @Test func overlayLayerReadinessRequiresEveryConfiguredLayer() {
+        #expect(!ObstacleBridgeOverlayLayerTransportAdapter.applicationReady(
+            transportConnected: true,
+            secureLinkRequired: true,
+            secureLinkAuthenticated: false,
+            compressionHealthy: true
+        ))
+        #expect(ObstacleBridgeOverlayLayerTransportAdapter.applicationReady(
+            transportConnected: true,
+            secureLinkRequired: true,
+            secureLinkAuthenticated: true,
+            compressionHealthy: true
+        ))
+    }
+
     @Test func secureLinkAdapterHonorsInjectedHandshakeMaterial() throws {
         let client = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: "adapter-psk")
         let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")

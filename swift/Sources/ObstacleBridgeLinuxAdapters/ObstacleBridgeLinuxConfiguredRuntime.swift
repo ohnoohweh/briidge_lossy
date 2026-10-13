@@ -418,7 +418,12 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// identifies only the configured secure-link mode, never its secret.
     public func status() -> ObstacleBridgeLinuxRuntimeStatus {
         let coreState = activeSession?.secureLinkProtocolState
-        let appReady = snapshot.state == "connected" && (secureLinkState == "off" || secureLinkState == "authenticated")
+        let appReady = ObstacleBridgeOverlayLayerTransportAdapter.applicationReady(
+            transportConnected: snapshot.state == "connected",
+            secureLinkRequired: configuration.secureLinkPSK != nil,
+            secureLinkAuthenticated: secureLinkState == "authenticated",
+            compressionHealthy: true
+        )
         return .init(
             transport: configuration.transport.rawValue,
             state: snapshot.state,
