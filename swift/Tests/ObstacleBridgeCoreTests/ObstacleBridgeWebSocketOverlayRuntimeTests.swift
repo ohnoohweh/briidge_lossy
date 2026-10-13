@@ -3,6 +3,17 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeWebSocketOverlayRuntimeTests {
+    @Test func udpPeerRuntimeEmitsAndDeliversPortableRecordEffects() throws {
+        let sender = ObstacleBridgeUdpOverlayPeerRuntime()
+        try sender.enqueueApplicationPayload(Data("udp-core".utf8), nowNS: 10)
+        let outbound = try sender.flushSendQueue(nowNS: 10)
+        #expect(outbound.frames.count == 1)
+
+        let receiver = ObstacleBridgeUdpOverlayPeerRuntime()
+        let inbound = try receiver.receiveWire(outbound.frames[0], nowNS: 20)
+        #expect(inbound.deliveredPayloads == [Data("udp-core".utf8)])
+    }
+
     @Test func quicRuntimeProducesThePortableApplicationEnvelope() throws {
         let runtime = ObstacleBridgeQuicOverlayRuntime()
         let effect = runtime.sendApp(

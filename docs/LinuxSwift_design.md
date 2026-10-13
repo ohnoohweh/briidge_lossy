@@ -218,15 +218,13 @@ transport policy, but this package must replace any overlapping Linux-local
 planner, lifecycle, snapshot, or myUDP facade with the moved Core type and add
 direct Linux adapter evidence before those extractions count as Linux-adopted.
 
-The first Linux adoption slice sends only `ObstacleBridgeUdpOverlayCodec`-
-validated datagrams at the POSIX boundary and shapes the Admin transport
-projection through `ObstacleBridgeAdminSnapshotSupport`. The POSIX owners
-retain descriptor I/O and HTTP serialization; Core owns record acceptance and
-the selected runtime envelope. Linux configuration admission also calls the
-portable overlay-stack planner, preserving one layer-order and policy decision
-before any POSIX transport is opened. The Linux Admin adapter also obtains its
-JSON response body from `ObstacleBridgeAdminAPI`, retaining only status-line
-and socket-write mechanics locally.
+Current Linux adoption sends only `ObstacleBridgeUdpOverlayCodec`-validated
+datagrams at the POSIX boundary, shapes the Admin transport projection through
+`ObstacleBridgeAdminSnapshotSupport`, and obtains Admin JSON response bodies
+from `ObstacleBridgeAdminAPI`. Linux configuration admission calls the portable
+overlay-stack planner before any POSIX transport is opened. The POSIX owners
+retain descriptor I/O and HTTP serialization; Core owns record acceptance,
+selected runtime envelopes, and the admitted framing/effect paths.
 
 Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
 `ObstacleBridgeAdminAPI`, `ObstacleBridgeAdminSnapshotSupport`,
@@ -234,17 +232,19 @@ Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
 `ObstacleBridgeTcpOverlayRuntime` and `ObstacleBridgeQuicOverlayRuntime` for
 their respective application-frame effects, plus
 `ObstacleBridgeWebSocketOverlayRuntime` for clear-WebSocket proxy CONNECT
-policy.
-POSIX/NIO retains only the connection and byte I/O below that Core effect.
+policy. Linux myUDP now delegates record batching, inbound delivery, and timer
+effects to `ObstacleBridgeUdpOverlayPeerRuntime`; the adapter retains descriptor
+send/receive and its small delivered-record queue. POSIX/NIO retains only the
+connection and byte I/O below those Core effects.
 The current macOS host can compile the portable Core target but does not expose
 SwiftPM's Linux adapter target; the focused Linux adapter suite remains
 required Linux-host evidence for this admission.
 There is no Linux caller yet for the moved Admin configuration/web and
 onboarding policy, native service specification, ChannelMux compatibility/TCP/
-UDP runtime, SecureLink transport adapter, UDP peer runtime, overlay-layer
-adapter, or the remaining TCP/QUIC/WebSocket runtime lifecycle owners. The latter lifecycle owners
-need explicit effect-to-POSIX translations rather than wrapping the existing
-Linux reconnect owner. Before an absent caller is counted as intentionally
+UDP runtime, SecureLink transport adapter, overlay-layer adapter, or the
+remaining TCP/QUIC/WebSocket runtime lifecycle owners. The latter lifecycle
+owners need explicit effect-to-POSIX translations rather than wrapping the
+existing Linux reconnect owner. Before an absent caller is counted as intentionally
 out-of-scope, its source-inventory row must carry the product-scoped reason
 required by `LSW-SC.1L-C`; none has been recorded for these rows yet.
 

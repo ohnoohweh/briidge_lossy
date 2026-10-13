@@ -1,15 +1,22 @@
 import Foundation
 
-final class ObstacleBridgeUdpOverlayPeerRuntime {
-    struct OutboundDataSnapshot {
-        var counters: [Int]
-        var frames: [Data]
+public final class ObstacleBridgeUdpOverlayPeerRuntime {
+    public struct OutboundDataSnapshot {
+        public var counters: [Int]
+        public var frames: [Data]
         var sendBuffer: [Int]
         var waitingCount: Int
         var sendTXNS: [Int: UInt64]
         var sendAttempts: [Int: Int]
         var lastSendNS: UInt64
         var nextCounter: Int
+    }
+
+    /// Portable I/O effect for a datagram owner. The owner performs only the
+    /// actual descriptor write and queues delivered application records.
+    public struct InboundWireSnapshot {
+        public var emittedFrames: [Data]
+        public var deliveredPayloads: [Data]
     }
 
     struct OutboundControlSnapshot {
@@ -108,7 +115,7 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
     private(set) var framesToSecureLink = 0
     private(set) var framesFromSecureLink = 0
 
-    init(
+    public init(
         establishedNS: UInt64 = 0,
         lastSentLastInOrder: Int = 0,
         lastControlSentNS: UInt64 = 0,
@@ -186,11 +193,11 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
 
     // The owner can enqueue a burst before its next queue turn so small records
     // share a DATA_BATCH without delaying control or retransmission datagrams.
-    func enqueueApplicationPayload(_ payload: Data, nowNS: UInt64) throws {
+    public func enqueueApplicationPayload(_ payload: Data, nowNS: UInt64) throws {
         try peerEngine.enqueueApplicationRecord(payload, nowNanoseconds: nowNS)
     }
 
-    func flushSendQueue(nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {
+    public func flushSendQueue(nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {
         let effect = try peerEngine.flush(nowNanoseconds: nowNS)
         let snapshot = peerEngine.snapshot()
         synchronizePeerEngine(snapshot)
@@ -207,6 +214,33 @@ final class ObstacleBridgeUdpOverlayPeerRuntime {
             lastSendNS: snapshot.lastSendNanoseconds,
             nextCounter: Int(snapshot.nextCounter)
         )
+    }
+
+    public func receiveWire(
+        _ wire: Data,
+        nowNS: UInt64,
+        transportWritable: Bool = true
+    ) throws -> InboundWireSnapshot {
+        let effect = try peerEngine.receiveWire(
+            wire,
+            nowNanoseconds: nowNS,
+            transportWritable: transportWritable
+        )
+        synchronizePeerEngine(peerEngine.snapshot())
+        if let parsed = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(wire),
+           let chunks = ObstacleBridgeUdpOverlayCodec.decodeDataBatch(parsed.payload) {
+            batchDatagramsReceived += 1
+            batchChunksReceived += chunks.count
+            batchStreamBytesReceived += chunks.reduce(0) { $0 + $1.data.count }
+        }
+        return .init(emittedFrames: effect.outboundDatagrams, deliveredPayloads: effect.deliveredRecords)
+    }
+
+    public func tick(nowNS: UInt64) throws -> [Data] {
+        let effect = try peerEngine.tick(nowNanoseconds: nowNS)
+        synchronizePeerEngine(peerEngine.snapshot())
+        retransmittedChunks += effect.outboundDataCounters.count
+        return effect.outboundDatagrams
     }
 
     func buildOutboundControl(nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundControlSnapshot {
