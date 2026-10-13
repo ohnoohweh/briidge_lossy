@@ -317,6 +317,11 @@ connection state/traffic transitions. Apple retains only Network.framework
 endpoint projection and connection drivers; Linux admission remains separately
 owned by `LSW-SC.2L-A` through its connection owner.
 
+`ObstacleBridgeWebAdminLiveTopicPolicy` owns Admin live-topic admission,
+tab-to-topic projection, and polling intervals. Apple retains the
+Network.framework listener and WebSocket session driver. Linux Admin-Web
+admission remains separately owned by `LSW-SC.2L-A`.
+
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
 | `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |

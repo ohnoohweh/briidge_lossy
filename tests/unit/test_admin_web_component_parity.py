@@ -26,6 +26,10 @@ SWIFT_PEER_ADDRESS_RESOLVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeSh
 SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminWebSupport.swift"
 SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminSnapshotSupport.swift"
 SWIFT_ADMIN_API_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminAPI.swift"
+SWIFT_ADMIN_CONFIG_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminConfigSupport.swift"
+SWIFT_NATIVE_SERVICE_SPEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeNativeServiceSpec.swift"
+SWIFT_ONBOARDING_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOnboarding.swift"
+SWIFT_ADMIN_LIVE_TOPIC_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebAdminLiveTopicPolicy.swift"
 SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebAdminServer.swift"
 SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_component_runner.swift"
 
@@ -173,6 +177,10 @@ def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -
         str(SWIFT_ADMIN_WEB_SUPPORT_SOURCE),
         str(SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE),
         str(SWIFT_ADMIN_API_SOURCE),
+        str(SWIFT_ADMIN_CONFIG_SUPPORT_SOURCE),
+        str(SWIFT_NATIVE_SERVICE_SPEC_SOURCE),
+        str(SWIFT_ONBOARDING_SOURCE),
+        str(SWIFT_ADMIN_LIVE_TOPIC_POLICY_SOURCE),
         str(SWIFT_ADMIN_WEBSERVER_SOURCE),
         str(SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE),
     ]

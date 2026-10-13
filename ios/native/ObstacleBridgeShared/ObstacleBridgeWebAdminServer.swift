@@ -32,7 +32,7 @@ final class ObstacleBridgeWebAdminServer {
         let consumed: Int
     }
 
-    private static let liveTopics = ["status", "connections", "peers", "tun_routing", "meta"]
+    private static let liveTopics = ObstacleBridgeWebAdminLiveTopicPolicy.allTopics
     private static let liveWebSocketGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
     private let listener: NWListener
@@ -180,7 +180,7 @@ final class ObstacleBridgeWebAdminServer {
                 connection: connection,
                 queue: queue,
                 topicProvider: liveTopicProvider,
-                intervalProvider: Self.liveTopicInterval,
+                intervalProvider: ObstacleBridgeWebAdminLiveTopicPolicy.interval,
                 onClose: { [weak self] session in
                     self?.liveSessions.removeValue(forKey: ObjectIdentifier(session))
                 }
@@ -288,63 +288,16 @@ final class ObstacleBridgeWebAdminServer {
         return upgrade == "websocket" && connection.contains("upgrade")
     }
 
-    private static func liveTopicInterval(_ topic: String) -> TimeInterval {
-        switch topic {
-        case "meta":
-            return 5.0
-        case "status", "connections", "peers", "tun_routing":
-            return 1.0
-        default:
-            return 1.0
-        }
-    }
-
     static func liveTopicsForControlMessage(
         subscribe: Any?,
         activeTabs: [Any]?,
         currentTopics: Set<String>? = nil
     ) -> Set<String> {
-        var topics = currentTopics ?? Set(liveTopics)
-        let requested = parseLiveTopics(subscribe)
-        if !requested.isEmpty {
-            topics = requested
-        }
-        if let activeTabs, !activeTabs.isEmpty {
-            var nextTopics: Set<String> = ["status"]
-            let tabs = Set(activeTabs.compactMap { item in
-                let text = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                return text.isEmpty ? nil : text
-            })
-            if tabs.contains("status") {
-                nextTopics.formUnion(["connections", "peers"])
-            }
-            if tabs.contains("tun-routing") {
-                nextTopics.insert("tun_routing")
-            }
-            if tabs.contains("misc") {
-                nextTopics.insert("meta")
-            }
-            topics = nextTopics
-        }
-        return topics
+        ObstacleBridgeWebAdminLiveTopicPolicy.topicsForControlMessage(subscribe: subscribe, activeTabs: activeTabs, currentTopics: currentTopics)
     }
 
     static func parseLiveTopics(_ value: Any?) -> Set<String> {
-        if let value = value as? String {
-            let topic = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            return liveTopics.contains(topic) ? [topic] : []
-        }
-        if let sequence = value as? [Any] {
-            var topics: Set<String> = []
-            for item in sequence {
-                let topic = String(describing: item).trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-                if liveTopics.contains(topic) {
-                    topics.insert(topic)
-                }
-            }
-            return topics
-        }
-        return []
+        ObstacleBridgeWebAdminLiveTopicPolicy.parseTopics(value)
     }
 
     private static let authExemptPaths: Set<String> = [

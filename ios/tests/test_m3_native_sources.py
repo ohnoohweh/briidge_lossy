@@ -543,6 +543,7 @@ def test_shared_peer_address_resolver_selects_posix_module_per_host() -> None:
 
 def test_webadmin_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
+    live_policy = (CORE_SWIFT_DIR / "ObstacleBridgeWebAdminLiveTopicPolicy.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebAdminServer" in runtime
     assert "normalizedListenerHost(" in runtime
@@ -553,9 +554,9 @@ def test_webadmin_server_source_exists() -> None:
     assert "101 Switching Protocols" in runtime
     assert "Sec-WebSocket-Accept" in runtime
     assert "broadcastLiveTopic(" in runtime
-    assert "liveTopicInterval(" in runtime
+    assert "ObstacleBridgeWebAdminLiveTopicPolicy.interval" in runtime
     assert "type\": \"hello\"" in runtime
-    assert '"tun_routing"' in runtime
+    assert '"tun_routing"' in live_policy
 
 
 def test_proxy_server_source_exists() -> None:

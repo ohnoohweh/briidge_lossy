@@ -674,6 +674,7 @@ ARC-CMP-005:
   # The shared Telemetry tab retains only bounded delivery and collector
   # summaries; it never reflects telemetry event payloads or credentials.
   unit_tests:
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
