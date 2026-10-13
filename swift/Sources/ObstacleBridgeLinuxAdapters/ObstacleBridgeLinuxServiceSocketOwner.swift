@@ -13,6 +13,14 @@ public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable {
     case targetConnectFailure(Int32)
 }
 
+/// The Linux resource-owner result of replacing an overlay transport epoch.
+/// Core determines the portable channels that are withdrawn; the owner closes
+/// only the descriptors and endpoint routing retained for those channels.
+public struct ObstacleBridgeLinuxServiceSocketOwnerEpochReset: Equatable, Sendable {
+    public let withdrawnTCPChannels: [UInt16]
+    public let withdrawnUDPChannels: [UInt16]
+}
+
 /// POSIX descriptor owner for one configured TCP or UDP service. All socket
 /// callbacks and data-plane mutation run on one serial queue; no descriptor or
 /// channel state is touched by the overlay thread directly.
@@ -98,6 +106,23 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
 
     public func handleInbound(_ frame: ObstacleBridgeChannelMuxFrame) {
         queue.async { [weak self] in self?.handleInboundOnQueue(frame) }
+    }
+
+    /// Withdraws resource ownership for channels bound to the prior overlay
+    /// epoch. This is synchronous so a replacement transport cannot route a
+    /// frame through a descriptor or UDP peer mapping from the old epoch.
+    @discardableResult
+    public func resetTransportEpoch(instanceID: UInt64, connectionSequence: UInt32) -> ObstacleBridgeLinuxServiceSocketOwnerEpochReset {
+        queue.sync {
+            let tcp = tcpRuntime.resetTransportEpoch(instanceID: instanceID, connectionSeq: connectionSequence)
+            let udp = udpRuntime.resetTransportEpoch(instanceID: instanceID, connectionSeq: connectionSequence)
+            let tcpChannels = Set(tcp.withdrawnServerChannels + tcp.withdrawnClientChannels)
+                .compactMap(UInt16.init(exactly:)).sorted()
+            let udpChannels = Set(udp.withdrawnServerChannels + udp.withdrawnClientChannels)
+                .compactMap(UInt16.init(exactly:)).sorted()
+            for channelID in Set(tcpChannels + udpChannels) { closeChannel(channelID) }
+            return .init(withdrawnTCPChannels: tcpChannels, withdrawnUDPChannels: udpChannels)
+        }
     }
 
     public func snapshot() -> ObstacleBridgeLinuxServiceDataPlaneSnapshot { queue.sync { plane.snapshot() } }
@@ -294,6 +319,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         connectionSources.removeValue(forKey: channelID)?.cancel()
         descriptors.removeValue(forKey: channelID)
         udpPeers.removeValue(forKey: channelID)
+        udpChannels = udpChannels.filter { $0.value != channelID }
         coreTCPChannels.remove(channelID)
         coreUDPChannels.remove(channelID)
         coreTCPClientChannels.remove(channelID)
