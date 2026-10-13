@@ -553,6 +553,9 @@ contract is exercised rather than bypassed by an absent counter. Its standalone
 Swift compilation includes both the Core ChannelMux codec and its compatibility
 extension, so macOS parity evidence exercises the same source closure as the
 Core target rather than relying on an incidental compile order.
+The iOS TUN helper probe likewise compiles RuntimeConfig with its NativeService
+and Admin-config Core dependencies, preserving the product source closure while
+its shared resolver remains portable across Darwin and Glibc hosts.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

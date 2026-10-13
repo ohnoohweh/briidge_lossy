@@ -320,6 +320,13 @@ its listener owner must execute the Core decisions rather than reproduce them.
 | `ObstacleBridgeTunProbeDiagnosticsSupport.swift` | Probe correlation/history/timeout policy; inject clock and packet I/O. |
 | `ObstacleBridgeWebAdminServer.swift` | HTTP request interpretation and Admin policy; retain only `NWListener`/HTTP transport. |
 
+Standalone Apple-source probes compile RuntimeConfig with the exact Core
+configuration types it references; source ordering is never treated as a
+dependency provider. `ObstacleBridgePeerAddressResolver` selects Darwin or
+Glibc only for POSIX name-resolution calls. That import boundary does not move
+address selection or normalization policy out of the pending `LSW-SC.2` Core
+port.
+
 ### `LSW-SC.3` — retained Apple adapters
 
 These files may remain in `ios/native/ObstacleBridgeShared` only as the thin
@@ -421,6 +428,10 @@ memory, scheduler behavior, and termination policy differ by platform.
 - Linux does not provide the separate local `proxy_provider` capability. This
   is distinct from the admitted outbound WebSocket HTTP proxy client, which
   resolves policy and owns its CONNECT tunnel below SecureLink.
+- `ObstacleBridgePeerAddressResolver` remains an `LSW-SC.2` mixed source: its
+  Darwin/Glibc socket calls are portable adapter mechanics, but its address
+  selection and normalization policy still need the injected Core resolver
+  port before Linux can share that policy.
 - The foreground myudp listener rejects `own_servers` and `remote_servers`.
   This is intentional parity with listener-mode service policy: a listener
   does not infer a target peer for a locally accepted connection, and binding

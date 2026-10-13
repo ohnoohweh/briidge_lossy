@@ -1,5 +1,9 @@
 import Foundation
+#if canImport(Darwin)
 import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 
 struct ObstacleBridgeResolvedAddress {
     let family: Int32
@@ -194,16 +198,15 @@ enum ObstacleBridgePeerAddressResolver {
     }
 
     static func resolveAddressCandidates(host: String, port: Int, passive: Bool, family: Int32, errorDomain: String) throws -> [ObstacleBridgeResolvedAddress] {
-        var hints = addrinfo(
-            ai_flags: passive ? AI_PASSIVE : 0,
-            ai_family: family,
-            ai_socktype: SOCK_DGRAM,
-            ai_protocol: IPPROTO_UDP,
-            ai_addrlen: 0,
-            ai_canonname: nil,
-            ai_addr: nil,
-            ai_next: nil
-        )
+        var hints = addrinfo()
+        hints.ai_flags = passive ? AI_PASSIVE : 0
+        hints.ai_family = family
+        #if canImport(Darwin)
+        hints.ai_socktype = SOCK_DGRAM
+        #else
+        hints.ai_socktype = Int32(SOCK_DGRAM.rawValue)
+        #endif
+        hints.ai_protocol = Int32(IPPROTO_UDP)
         var results: UnsafeMutablePointer<addrinfo>?
         let status = getaddrinfo(host, String(port), &hints, &results)
         guard status == 0, let info = results else {

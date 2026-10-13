@@ -124,6 +124,15 @@ CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 
 
+def test_macos_build_uses_shared_peer_address_resolver() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgePeerAddressResolver.swift" in build_script
+    assert "#if canImport(Darwin)" in resolver
+    assert "import Darwin" in resolver
+
+
 def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> None:
     source = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
 
