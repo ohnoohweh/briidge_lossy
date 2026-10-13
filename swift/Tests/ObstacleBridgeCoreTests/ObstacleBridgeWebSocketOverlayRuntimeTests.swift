@@ -3,6 +3,22 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeWebSocketOverlayRuntimeTests {
+    @Test func secureLinkAdapterHonorsInjectedHandshakeMaterial() throws {
+        let client = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: "adapter-psk")
+        let server = ObstacleBridgeSecureLinkPskRuntime(clientMode: false, psk: "adapter-psk")
+        let nonce = Data(repeating: 7, count: 32)
+
+        let hello = try client.handleTransportConnected(sessionID: 91, clientNonce: nonce)
+        #expect(hello.emittedFrames.count == 1)
+        let serverHello = server.handleInboundFrame(hello.emittedFrames[0])
+        let proof = client.handleInboundFrame(serverHello.emittedFrames[0])
+        let acknowledgement = server.handleInboundFrame(proof.emittedFrames[0])
+        _ = client.handleInboundFrame(acknowledgement.emittedFrames[0])
+
+        #expect(client.protocolState?.authenticated == true)
+        #expect(client.protocolState?.sessionID == 91)
+    }
+
     @Test func nativeServiceSpecRetainsPortableScalarConfiguration() {
         let spec = ObstacleBridgeNativeServiceSpec(
             svcID: 7,

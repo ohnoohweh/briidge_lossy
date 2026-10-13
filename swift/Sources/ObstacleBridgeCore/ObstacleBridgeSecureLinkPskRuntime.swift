@@ -59,10 +59,12 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         return StatusSnapshot(clientMode: clientMode, authenticated: isAuthenticated, peerConfirmedAuthenticated: isAuthenticated, sessionID: sessionID, txCounter: txCounter, rxCounter: rxCounter, authFailCode: lastAuthFailCode, lastEvent: lastEvent, lastEventUnixTs: lastEventUnixTs, authenticatedSessionsTotal: Int(state?.authenticatedGenerationsTotal ?? 0), rekeySupported: true, rekeyInProgress: pendingSessionID != 0, rekeysCompletedTotal: Int(state?.rekeysCompletedTotal ?? 0), lastRekeyTrigger: lastRekeyTrigger, disconnectReason: disconnectReason, disconnectDetail: disconnectDetail, trustValidationState: trustValidationState, appDataSendingBlocked: clientRekeyHoldAfterCommit, framesFromClientPassedTotal: framesFromClientPassedTotal, framesFromClientDroppedTotal: framesFromClientDroppedTotal, framesToClientPassedTotal: framesToClientPassedTotal, handshakeAttemptsTotal: 0, consecutiveFailures: 0, retryBackoffSec: 0, nextRetryUnixTs: nil)
     }
     func handleTransportDisconnected() { coreClient?.reset(); coreServer?.reset(); reset(false); disconnectReason = "transport_disconnected"; record("transport_disconnected") }
-    func beginClientHandshake() throws -> OutboundSnapshot {
+    func beginClientHandshake(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
         guard clientMode, let coreClient else { throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState }
         coreClient.reset(); reset(false); record("handshake_started")
-        let f = try coreClient.begin(sessionID: sessionIDProvider(), clientNonce: Data(randomBytes(32).prefix(32))); return outbound([f])
+        let selectedSessionID = sessionID ?? sessionIDProvider()
+        let selectedNonce = clientNonce ?? Data(randomBytes(32).prefix(32))
+        let f = try coreClient.begin(sessionID: selectedSessionID, clientNonce: selectedNonce); return outbound([f])
     }
     func sendApp(_ payload: Data) throws -> OutboundSnapshot {
         if clientMode, let coreClient { var frames = [try coreClient.protect(payload)]; let trigger = coreClient.automaticRekeyTrigger(); if let r = try coreClient.pollAutomaticRekey() { lastRekeyTrigger = trigger ?? "automatic"; record("rekey_started"); frames.append(r) }; framesFromClientPassedTotal &+= 1; return outbound(frames) }
@@ -86,9 +88,11 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         default: return fail(frame.sessionID, Self.authFailUnsupported)
         }
     }
-    func requestClientRekey() throws -> OutboundSnapshot {
+    func requestClientRekey(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
         guard clientMode, let coreClient else { throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState }
-        let f = try coreClient.beginRekey(sessionID: nextSessionID(), clientNonce: Data(randomBytes(32).prefix(32))); lastRekeyTrigger = "operator"; record("rekey_started"); return outbound([f])
+        let selectedSessionID = sessionID ?? nextSessionID()
+        let selectedNonce = clientNonce ?? Data(randomBytes(32).prefix(32))
+        let f = try coreClient.beginRekey(sessionID: selectedSessionID, clientNonce: selectedNonce); lastRekeyTrigger = "operator"; record("rekey_started"); return outbound([f])
     }
     func pollDueFrames() throws -> [Data] { guard clientMode, let coreClient else { return [] }; let trigger = coreClient.automaticRekeyTrigger(); guard let frame = try coreClient.pollAutomaticRekey() else { return [] }; lastRekeyTrigger = trigger ?? "automatic"; record("rekey_started"); return [frame] }
     func expireHandshakeIfNeeded() { do { if clientMode, let c = coreClient { try c.expireHandshakeIfNeeded() } else if let s = coreServer { try s.expireHandshakeIfNeeded() } } catch { _ = fail(sessionID, Self.authFailLifecycle) } }
@@ -106,6 +110,7 @@ final class ObstacleBridgeSecureLinkPskRuntime {
     private func fail(_ failedSessionID: UInt64, _ code: Int) -> InboundSnapshot { coreClient?.reset(); coreServer?.reset(); reset(true); self.failedSessionID = failedSessionID; lastAuthFailCode = code; disconnectReason = "auth_failed"; disconnectDetail = "code=\(code)"; trustValidationState = "failed"; if !clientMode { framesFromClientDroppedTotal &+= 1 }; record(authFailEvent(code)); let f = ObstacleBridgeSecureLinkPskCodec.buildFrame(slType: Self.typeAuthFail, sessionID: failedSessionID, counter: 0, payload: Data([UInt8(code & 0xff)])); return inbound([f], [], code) }
     private func reset(_ keepSessionID: Bool) { if !keepSessionID { failedSessionID = 0; lastEvent = "bootstrap"; lastEventUnixTs = nil; lastRekeyTrigger = ""; disconnectReason = ""; disconnectDetail = ""; trustValidationState = "n/a"; framesFromClientPassedTotal = 0; framesFromClientDroppedTotal = 0; framesToClientPassedTotal = 0 }; lastAuthFailCode = 0 }
     private var coreState: ObstacleBridgeSecureLinkPSKState? { clientMode ? coreClient?.state : coreServer?.state }
+    var protocolState: ObstacleBridgeSecureLinkPSKState? { coreState }
     private var sessionID: UInt64 { coreState?.sessionID ?? failedSessionID }
     private var txCounter: UInt64 { coreState?.txCounter ?? 1 }
     private var rxCounter: UInt64 { coreState?.rxCounter ?? 0 }

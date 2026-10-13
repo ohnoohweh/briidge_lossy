@@ -67,6 +67,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private let lower: ObstacleBridgeLinuxOverlayTransportClient?
     private let lowerSession: ObstacleBridgeLinuxOverlayTransportSession
     private let secureLink: ObstacleBridgeSecureLinkPSKClient?
+    private let secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter?
     private let secureLinkServer: ObstacleBridgeSecureLinkPSKServer?
     private let requestLock = NSLock()
     private var receiveOwnerActive = false
@@ -77,6 +78,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         self.lower = lower
         self.lowerSession = lowerSession
         self.secureLink = secureLink
+        self.secureLinkAdapter = nil
         self.secureLinkServer = secureLinkServer
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
@@ -85,7 +87,17 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         self.lower = nil
         self.lowerSession = lowerSession
         self.secureLink = secureLink
+        self.secureLinkAdapter = nil
         self.secureLinkServer = secureLinkServer
+        self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+    }
+
+    init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLinkAdapter: ObstacleBridgeSecureLinkPskTransportAdapter, transport: ObstacleBridgeLinuxTransport) {
+        self.lower = lower
+        self.lowerSession = lowerSession
+        self.secureLink = nil
+        self.secureLinkAdapter = secureLinkAdapter
+        self.secureLinkServer = nil
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
 
@@ -95,6 +107,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             let ownerActive = receiveOwnerActive
             requestLock.unlock()
             if ownerActive { return try sendThroughReceiveOwner(payload) }
+            if let secureLinkAdapter {
+                let delivered = try exchangeAdapterFrames(try secureLinkAdapter.handleOutboundPayload(payload).emittedFrames)
+                guard let reply = delivered.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                return reply
+            }
             if let secureLink { return try secureLink.unprotect(lowerSession.exchange(secureLink.protect(payload))) }
             if let secureLinkServer { return try secureLinkServer.unprotect(lowerSession.exchange(secureLinkServer.protect(payload))) }
             return try lowerSession.exchange(payload)
@@ -110,7 +127,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public var supportsDuplexReceive: Bool { true }
     public func sendOneWay(_ payload: Data) throws {
         do {
-            if let secureLink { try lowerSession.send(secureLink.protect(payload)) }
+            if let secureLinkAdapter {
+                for wire in try secureLinkAdapter.handleOutboundPayload(payload).emittedFrames { try lowerSession.send(wire) }
+            }
+            else if let secureLink { try lowerSession.send(secureLink.protect(payload)) }
             else if let secureLinkServer { try lowerSession.send(secureLinkServer.protect(payload)) }
             else { try lowerSession.send(payload) }
         } catch {
@@ -122,6 +142,12 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public func receiveInbound() throws -> Data {
         do {
             let wire = try lowerSession.receive()
+            if let secureLinkAdapter {
+                let inbound = secureLinkAdapter.handleInboundFrame(wire)
+                for reply in inbound.emittedFrames { try lowerSession.send(reply) }
+                guard let payload = inbound.deliveredPayloads.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                return payload
+            }
             if let secureLink { return try secureLink.unprotect(wire) }
             if let secureLinkServer { return try secureLinkServer.unprotect(wire) }
             return wire
@@ -136,6 +162,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// validation and atomic key cutover; this adapter only performs the
     /// request/response exchanges required by its platform transport.
     public func rekey(sessionID: UInt64, clientNonce: Data) throws {
+        if let secureLinkAdapter {
+            _ = try exchangeAdapterFrames(try secureLinkAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+            return
+        }
         guard let secureLink else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
         do {
             let reply = try lowerSession.exchange(secureLink.beginRekey(sessionID: sessionID, clientNonce: clientNonce))
@@ -171,7 +201,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// Redacted Core-owned SecureLink state for the current adapter epoch.
     /// Neither role exposes its PSK, nonces, or traffic plaintext here.
     public var secureLinkProtocolState: ObstacleBridgeSecureLinkPSKState? {
-        secureLink?.state ?? secureLinkServer?.state
+        secureLinkAdapter?.protocolState ?? secureLink?.state ?? secureLinkServer?.state
     }
 
     public func close() {
@@ -185,6 +215,27 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     private func fail(_ error: Error) {
         snapshot = .init(transport: snapshot.transport, state: "failed", attempts: snapshot.attempts, failureReason: error.localizedDescription)
+    }
+
+    func completeClientHandshake(sessionID: UInt64, clientNonce: Data) throws {
+        guard let secureLinkAdapter else { return }
+        _ = try exchangeAdapterFrames(try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce).emittedFrames)
+        guard secureLinkAdapter.protocolState?.authenticated == true else {
+            throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+        }
+    }
+
+    private func exchangeAdapterFrames(_ initialFrames: [Data]) throws -> [Data] {
+        guard let secureLinkAdapter else { return [] }
+        var pending = initialFrames
+        var delivered: [Data] = []
+        while !pending.isEmpty {
+            let outbound = pending.removeFirst()
+            let inbound = secureLinkAdapter.handleInboundFrame(try lowerSession.exchange(outbound))
+            pending.append(contentsOf: inbound.emittedFrames)
+            delivered.append(contentsOf: inbound.deliveredPayloads)
+        }
+        return delivered
     }
 
     private func sendThroughReceiveOwner(_ payload: Data) throws -> Data {
@@ -254,12 +305,10 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 let lowerSession = try lower.openSession()
                 let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
-                    let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
-                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: client, transport: configuration.transport)
+                    let adapter = ObstacleBridgeSecureLinkPskTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
+                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLinkAdapter: adapter, transport: configuration.transport)
                     guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
-                    let hello = try client.begin(sessionID: sessionID, clientNonce: clientNonce)
-                    let clientProof = try client.handleServerHello(lowerSession.exchange(hello))
-                    try client.handleServerAcknowledgement(lowerSession.exchange(clientProof))
+                    try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
                     secureLinkState = "authenticated"
                     clearInFlightConnection(session)
                 } else {

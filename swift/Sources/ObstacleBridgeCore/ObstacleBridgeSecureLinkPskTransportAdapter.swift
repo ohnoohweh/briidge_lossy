@@ -1,19 +1,19 @@
 import Foundation
 
-final class ObstacleBridgeSecureLinkPskTransportAdapter {
+public final class ObstacleBridgeSecureLinkPskTransportAdapter {
     /// Emits bounded lifecycle evidence only.  It never includes protected
     /// payload bytes, nonces, or key material.
     typealias DiagnosticSink = (String, [String: Any]) -> Void
-    struct OutboundSnapshot {
-        var emittedFrames: [Data]
+    public struct OutboundSnapshot {
+        public var emittedFrames: [Data]
         var queuedPayloads: Int
         var authenticated: Bool
         var sessionID: UInt64
     }
 
-    struct InboundSnapshot {
-        var emittedFrames: [Data]
-        var deliveredPayloads: [Data]
+    public struct InboundSnapshot {
+        public var emittedFrames: [Data]
+        public var deliveredPayloads: [Data]
         var queuedPayloads: Int
         var authenticated: Bool
         var sessionID: UInt64
@@ -50,6 +50,14 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         self.diagnosticSink = diagnosticSink
     }
 
+    public convenience init(clientPSK: String) {
+        self.init(runtime: .init(clientMode: true, psk: clientPSK))
+    }
+
+    public var protocolState: ObstacleBridgeSecureLinkPSKState? {
+        runtime.protocolState
+    }
+
     func statusSnapshot() -> ObstacleBridgeSecureLinkPskRuntime.StatusSnapshot {
         var snapshot = runtime.statusSnapshot()
         let nowMono = timeProvider()
@@ -60,8 +68,8 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         return snapshot
     }
 
-    func requestSecureLinkRekey() throws -> OutboundSnapshot {
-        let snapshot = try runtime.requestClientRekey()
+    public func requestSecureLinkRekey(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
+        let snapshot = try runtime.requestClientRekey(sessionID: sessionID, clientNonce: clientNonce)
         return OutboundSnapshot(
             emittedFrames: snapshot.emittedFrames,
             queuedPayloads: pendingPayloads.count,
@@ -70,7 +78,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         )
     }
 
-    func pollDueFrames() throws -> OutboundSnapshot {
+    public func pollDueFrames() throws -> OutboundSnapshot {
         var emittedFrames = try runtime.pollDueFrames()
         if emittedFrames.isEmpty,
            transportConnected,
@@ -90,7 +98,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         )
     }
 
-    func handleTransportDisconnected() {
+    public func handleTransportDisconnected() {
         let status = runtime.statusSnapshot()
         emitDiagnostic("secure_link_transport_disconnected", [
             "session_id": diagnosticSessionID(status.sessionID),
@@ -105,7 +113,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         runtime.handleTransportDisconnected()
     }
 
-    func handleTransportConnected() throws -> OutboundSnapshot {
+    public func handleTransportConnected(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
         transportConnected = true
         if transportConnectedAtMono == nil {
             transportConnectedAtMono = timeProvider()
@@ -137,7 +145,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
             )
         }
 
-        let handshake = try runtime.beginClientHandshake()
+        let handshake = try runtime.beginClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
         handshakeAttemptsTotal += 1
         let emittedFrames = handshake.emittedFrames
         recordHandshakeStarted(reason: "transport_connected", frames: emittedFrames)
@@ -151,7 +159,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         )
     }
 
-    func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
+    public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let status = runtime.statusSnapshot()
         if status.appDataSendingBlocked {
             pendingPayloads.append(payload)
@@ -184,7 +192,7 @@ final class ObstacleBridgeSecureLinkPskTransportAdapter {
         )
     }
 
-    func handleInboundFrame(_ payload: Data) -> InboundSnapshot {
+    public func handleInboundFrame(_ payload: Data) -> InboundSnapshot {
         let previousStatus = runtime.statusSnapshot()
         let inboundFrame = ObstacleBridgeSecureLinkPskCodec.parseFrame(payload)
         let snapshot = runtime.handleInboundFrame(payload)
