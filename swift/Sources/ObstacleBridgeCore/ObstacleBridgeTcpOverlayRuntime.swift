@@ -159,6 +159,18 @@ public final class ObstacleBridgeTcpOverlayRuntime {
         backpressureSnapshot(writeBufferSize: writeBufferSize, threshold: threshold).signaled
     }
 
+    /// Allocates a portable listener peer identity. The socket owner retains
+    /// its descriptor and invokes `listenerPeerClosed` when that descriptor
+    /// is retired.
+    public func listenerPeerAccepted(host: String, port: Int, socketPresent: Bool) -> Int {
+        acceptServerPeer(peerHost: host, peerPort: port, socketPresent: socketPresent).peerID
+    }
+
+    @discardableResult
+    public func listenerPeerClosed(_ peerID: Int) -> Bool {
+        closeServerPeer(peerID: peerID).overlayConnected
+    }
+
     func connect(host: String, port: Int, socketPresent: Bool) -> ConnectSnapshot {
         peerHost = host
         peerPort = port

@@ -13,6 +13,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
     private let transport: ObstacleBridgeLinuxTransport
     private let webSocketPath: String
     public let port: Int
+    private let overlayRuntime = ObstacleBridgeTcpOverlayRuntime()
 
     public init(port: Int, transport: ObstacleBridgeLinuxTransport = .tcp, webSocketPath: String = "/") throws {
         guard (0...65535).contains(port) else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
@@ -77,6 +78,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk)
         try writeFrame(try server.handleClientHello(readFrame(clientFD, observedPeerPort: peerPort), serverNonce: serverNonce), fd: clientFD)
         try writeFrame(try server.handleClientProof(readFrame(clientFD, observedPeerPort: peerPort)), fd: clientFD)
+        let peerID = overlayRuntime.listenerPeerAccepted(host: "listener", port: peerPort, socketPresent: true)
         let lock = NSLock()
         var open = true
         let receive: () throws -> Data = { [weak self] in
@@ -89,7 +91,10 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
         }
         let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
             lock.lock(); let shouldClose = open; open = false; lock.unlock()
-            if shouldClose { _ = Glibc.close(clientFD) }
+            if shouldClose {
+                _ = self.overlayRuntime.listenerPeerClosed(peerID)
+                _ = Glibc.close(clientFD)
+            }
         })
         handedOff = true
         return ObstacleBridgeLinuxConfiguredSession(lowerSession: raw, secureLink: nil, secureLinkServer: server, transport: transport)
