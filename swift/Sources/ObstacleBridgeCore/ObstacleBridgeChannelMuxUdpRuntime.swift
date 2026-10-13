@@ -93,20 +93,21 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         var peerAddrPort: Int
     }
 
-    private let instanceID: UInt64
-    private let connectionSeq: UInt32
+    private var instanceID: UInt64
+    private var connectionSeq: UInt32
+    private let channelStride: UInt16
     private let sessionMaxAppPayload: Int
     private let datagramCap: Int
     private let clientPendingCap: Int
     /// Common lifecycle state for ordinary local UDP service datagrams.
     /// Fragment framing and bounded reassembly belong to the portable packet
     /// model; this runtime retains only local socket ownership.
-    private let serverSession: ObstacleBridgeChannelMuxSession
+    private var serverSession: ObstacleBridgeChannelMuxSession
     /// Common state for remotely opened UDP services. The native dictionaries
     /// below are restricted to the local `NWConnection` and its pending
     /// datagrams; OPEN/DATA/CLOSE admission and counter progression belong to
     /// the portable session.
-    private let clientSession: ObstacleBridgeChannelMuxSession
+    private var clientSession: ObstacleBridgeChannelMuxSession
     private var nextFragmentDatagramID: UInt32
     private var channelByClient: [ClientKey: Int]
     private var clientByChannel: [Int: ClientKey]
@@ -115,8 +116,8 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
     private var clientChannelByOpenKey: [ClientOpenKey: Int]
     private var clientPending: [Int: [Data]]
     private var clientTransports: [Int: ClientTransportState]
-    private let serverPacketReassembler: ObstacleBridgePacketReassembler
-    private let clientPacketReassembler: ObstacleBridgePacketReassembler
+    private var serverPacketReassembler: ObstacleBridgePacketReassembler
+    private var clientPacketReassembler: ObstacleBridgePacketReassembler
 
     public init(
         instanceID: UInt64,
@@ -131,6 +132,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         self.instanceID = instanceID
         self.connectionSeq = connectionSeq
         let normalizedChannelStride = max(1, chanIDStride)
+        self.channelStride = UInt16(clamping: normalizedChannelStride)
         self.sessionMaxAppPayload = sessionMaxAppPayload
         self.datagramCap = datagramCap
         self.clientPendingCap = max(1, clientPendingCap)
@@ -139,7 +141,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
             instanceID: instanceID,
             connectionSequence: connectionSeq,
             initialChannelID: UInt16(clamping: nextUdpID),
-            channelStride: UInt16(clamping: normalizedChannelStride)
+            channelStride: self.channelStride
         )
         self.clientSession = ObstacleBridgeChannelMuxSession(
             maximumApplicationPayload: sessionMaxAppPayload
@@ -154,6 +156,23 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         self.clientTransports = [:]
         self.serverPacketReassembler = ObstacleBridgePacketReassembler(maximumPacketLength: datagramCap)
         self.clientPacketReassembler = ObstacleBridgePacketReassembler(maximumPacketLength: datagramCap)
+    }
+
+    public struct EpochResetSnapshot {
+        public let withdrawnServerChannels: [Int]
+        public let withdrawnClientChannels: [Int]
+    }
+
+    public func resetTransportEpoch(instanceID: UInt64, connectionSeq: UInt32) -> EpochResetSnapshot {
+        let withdrawnServerChannels = clientByChannel.keys.sorted()
+        let withdrawnClientChannels = Set(clientOpenKeyByChannel.keys).union(clientTransports.keys).union(clientPending.keys).sorted()
+        self.instanceID = instanceID; self.connectionSeq = connectionSeq
+        serverSession = ObstacleBridgeChannelMuxSession(maximumApplicationPayload: sessionMaxAppPayload, instanceID: instanceID, connectionSequence: connectionSeq, initialChannelID: serverSession.nextAvailableChannelID, channelStride: channelStride)
+        clientSession = ObstacleBridgeChannelMuxSession(maximumApplicationPayload: sessionMaxAppPayload)
+        nextFragmentDatagramID = 1; channelByClient.removeAll(); clientByChannel.removeAll(); clientServiceIDByChannel.removeAll(); clientOpenKeyByChannel.removeAll(); clientChannelByOpenKey.removeAll(); clientPending.removeAll(); clientTransports.removeAll()
+        serverPacketReassembler = ObstacleBridgePacketReassembler(maximumPacketLength: datagramCap)
+        clientPacketReassembler = ObstacleBridgePacketReassembler(maximumPacketLength: datagramCap)
+        return EpochResetSnapshot(withdrawnServerChannels: withdrawnServerChannels, withdrawnClientChannels: withdrawnClientChannels)
     }
 
     func handleLocalServerDatagram(

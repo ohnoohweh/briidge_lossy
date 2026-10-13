@@ -259,10 +259,11 @@ and backpressure paths still need explicit Core-effect to POSIX translations.
 datagram/fragment/close records through `ObstacleBridgeNativeServiceSpec`, so
 an adapter consumes wire and local-I/O decisions without the compatibility
 codec type crossing its public boundary. TCP and UDP client OPEN/DATA/CLOSE,
-fragment delivery, and dial-completion records are public as well. Neither
-runtime yet owns a transport-epoch reset transition: its Core sessions retain
-the constructor epoch. A reset input/effect must be introduced before F.2 can
-replace the Linux socket-owner lifecycle; this is the remaining F.1 gap.
+fragment delivery, dial-completion, and transport-epoch reset records are
+public as well. Reset recreates only the transport-bound Core sessions and
+withdraws prior local channels; POSIX/NIO owners remain responsible for closing
+the corresponding descriptors in F.2. The remaining F.1 gap is focused Core
+evidence for reset rejection and fresh post-reset local admission.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
