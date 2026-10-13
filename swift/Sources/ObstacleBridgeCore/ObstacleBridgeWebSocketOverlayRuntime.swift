@@ -17,7 +17,7 @@ enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
     }
 }
 
-final class ObstacleBridgeWebSocketOverlayRuntime {
+public final class ObstacleBridgeWebSocketOverlayRuntime {
     enum InboundFrame {
         case app(Data)
         case ping(txNS: UInt64, echoNS: UInt64)
@@ -83,7 +83,7 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
 
     var configuredPayloadMode: String { payloadMode }
 
-    init(
+    public init(
         payloadMode: String,
         wsMaxSize: Int = 65535,
         sendTimeoutS: Double = 3.0,
@@ -353,7 +353,7 @@ final class ObstacleBridgeWebSocketOverlayRuntime {
         return fallback
     }
 
-    func buildProxyConnectRequest(targetHost: String, targetPort: Int, authHeader: String?) -> String {
+    public func buildProxyConnectRequest(targetHost: String, targetPort: Int, authHeader: String?) -> String {
         let authority = formatConnectAuthority(targetHost, targetPort)
         var lines = [
             "CONNECT \(authority) HTTP/1.1",

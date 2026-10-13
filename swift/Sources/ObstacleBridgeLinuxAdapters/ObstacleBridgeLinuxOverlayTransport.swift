@@ -89,6 +89,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     /// Core owns application-frame construction and early-send state. Linux
     /// owns the concrete POSIX/NIO connection below this boundary.
     private let tcpOverlayRuntime = ObstacleBridgeTcpOverlayRuntime()
+    /// Core owns HTTP CONNECT request policy; Linux owns the proxy socket.
+    private let webSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
     public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, wsProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
@@ -103,6 +105,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.transport = transport
         self.wsPath = wsPath.hasPrefix("/") ? wsPath : "/\(wsPath)"
         self.wsPayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(wsPayloadMode)
+        self.webSocketOverlayRuntime = try ObstacleBridgeWebSocketOverlayRuntime(payloadMode: wsPayloadMode)
         self.wsTLS = wsTLS
         let normalizedWebSocketTrustRoots = wsTrustRootsPath?.trimmingCharacters(in: .whitespacesAndNewlines)
         self.wsTrustRootsPath = normalizedWebSocketTrustRoots?.isEmpty == false ? normalizedWebSocketTrustRoots : nil
@@ -260,9 +263,12 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         }
         let connection = try POSIXStreamConnection(host: proxy.0, port: proxy.1, timeoutMilliseconds: receiveTimeoutMilliseconds)
         do {
-            let authority = host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
-            let authorization = wsProxy.basicAuthorization(targetHost: host, secure: false).map { "Proxy-Authorization: \($0)\r\n" } ?? ""
-            try connection.write(Data("CONNECT \(authority) HTTP/1.1\r\nHost: \(authority)\r\nProxy-Connection: Keep-Alive\r\n\(authorization)\r\n".utf8))
+            let request = webSocketOverlayRuntime.buildProxyConnectRequest(
+                targetHost: host,
+                targetPort: port,
+                authHeader: wsProxy.basicAuthorization(targetHost: host, secure: false)
+            )
+            try connection.write(Data(request.utf8))
             let response = try connection.readUntil(Data("\r\n\r\n".utf8), maximum: 16_384)
             guard let status = String(data: response, encoding: .utf8)?.split(separator: "\r\n").first, status.hasPrefix("HTTP/1.1 200") else { throw ObstacleBridgeLinuxOverlayTransportError.proxyNegotiationFailed("CONNECT did not return HTTP 200") }
             return connection

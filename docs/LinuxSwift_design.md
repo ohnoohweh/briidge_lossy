@@ -231,7 +231,9 @@ and socket-write mechanics locally.
 Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
 `ObstacleBridgeAdminAPI`, `ObstacleBridgeAdminSnapshotSupport`,
 `ObstacleBridgeUdpOverlayCodec`, `ObstacleBridgeOverlayStackPlanner`, and
-`ObstacleBridgeTcpOverlayRuntime` for TCP/QUIC application-frame effects.
+`ObstacleBridgeTcpOverlayRuntime` for TCP/QUIC application-frame effects, plus
+`ObstacleBridgeWebSocketOverlayRuntime` for clear-WebSocket proxy CONNECT
+policy.
 POSIX/NIO retains only the connection and byte I/O below that Core effect.
 The current macOS host can compile the portable Core target but does not expose
 SwiftPM's Linux adapter target; the focused Linux adapter suite remains
@@ -239,7 +241,7 @@ required Linux-host evidence for this admission.
 There is no Linux caller yet for the moved Admin configuration/web and
 onboarding policy, native service specification, ChannelMux compatibility/TCP/
 UDP runtime, SecureLink transport adapter, UDP peer runtime, overlay-layer
-adapter, or the remaining TCP/QUIC/WebSocket runtime owners. The latter lifecycle owners
+adapter, or the remaining TCP/QUIC/WebSocket runtime lifecycle owners. The latter lifecycle owners
 need explicit effect-to-POSIX translations rather than wrapping the existing
 Linux reconnect owner. Before an absent caller is counted as intentionally
 out-of-scope, its source-inventory row must carry the product-scoped reason
