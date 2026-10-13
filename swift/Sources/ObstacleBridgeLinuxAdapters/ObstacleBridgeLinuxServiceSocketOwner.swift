@@ -33,6 +33,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var udpChannels: [Data: UInt16] = [:]
     private var coreTCPChannels: Set<UInt16> = []
     private var coreUDPChannels: Set<UInt16> = []
+    private var coreTCPClientChannels: Set<UInt16> = []
     private var stopped = false
 
     public var specification: ObstacleBridgeLinuxServiceSpec { spec }
@@ -150,12 +151,16 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
             let payload = Data(bytes.prefix(Int(count)))
             if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
+            } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
+                emitCoreWires(snapshot.frames)
             } else {
                 _ = try? plane.localData(channelID: channelID, payload: payload)
                 flushFrames()
             }
         } else if count == 0 || !isUDP {
             if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerEOF(chanID: Int(channelID), overlayConnected: true) {
+                emitCoreWires(snapshot.frames)
+            } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientEOF(chanID: Int(channelID), overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
             } else { _ = try? plane.localEOF(channelID: channelID); flushFrames() }
             closeChannel(channelID)
@@ -164,6 +169,31 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
 
     private func handleInboundOnQueue(_ frame: ObstacleBridgeChannelMuxFrame) {
         guard !stopped else { return }
+        if frame.messageType == .open, frame.protocolType == .tcp {
+            let effect = tcpRuntime.handleInboundClientOpen(chanID: Int(frame.channelID), payload: frame.body, counter: Int(frame.counter))
+            if effect.accepted, effect.connectRequested,
+               let service = tcpRuntime.admittedClientService(chanID: Int(frame.channelID)),
+               let target = try? ObstacleBridgeLinuxServiceSpec(nativeSpec: service) {
+                do {
+                    try connectTarget(channelID: frame.channelID, spec: target)
+                    coreTCPClientChannels.insert(frame.channelID)
+                    _ = tcpRuntime.handleClientConnected(chanID: Int(frame.channelID))
+                } catch { _ = tcpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter) + 1) }
+                return
+            }
+        }
+        if coreTCPClientChannels.contains(frame.channelID) {
+            if frame.messageType == .data {
+                let effect = tcpRuntime.handleInboundClientData(chanID: Int(frame.channelID), body: frame.body, counter: Int(frame.counter))
+                for payload in effect.writtenBuffers { writeLocal(channelID: frame.channelID, payload: payload) }
+                return
+            }
+            if frame.messageType == .close {
+                let effect = tcpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter))
+                if effect.closed { closeChannel(frame.channelID) }
+                return
+            }
+        }
         if coreTCPChannels.contains(frame.channelID) {
             if frame.messageType == .data {
                 let effect = tcpRuntime.handleInboundServerData(chanID: Int(frame.channelID), body: frame.body, counter: Int(frame.counter))
@@ -233,6 +263,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         udpPeers.removeValue(forKey: channelID)
         coreTCPChannels.remove(channelID)
         coreUDPChannels.remove(channelID)
+        coreTCPClientChannels.remove(channelID)
     }
 
     private func nativeSpec() -> ObstacleBridgeNativeServiceSpec {

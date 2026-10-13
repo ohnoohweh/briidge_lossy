@@ -266,10 +266,10 @@ TCP and UDP reset withdrawals; `LSW-SC.1L-F.2` remains responsible for making
 the POSIX/NIO owners execute those effects.
 The Linux TCP and UDP listener owners execute their Core server accept,
 local-data/EOF or datagram, inbound-data/fragment, and remote-close effects on
-their descriptor queues. Remote OPEN/dial ownership still uses the generic
-Core session facade; its admitted target is now exposed as a portable native
-service record, but descriptor-dial execution still needs to move. That is the
-remaining F.2 migration gap.
+their descriptor queues. Remote TCP OPEN/dial ownership uses the Core-admitted
+native service record, and its descriptor reads/writes/close flow through the
+same Core client runtime. UDP remote OPEN/dial ownership still uses the generic
+Core session facade; that is the remaining F.2 migration gap.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
