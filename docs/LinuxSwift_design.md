@@ -255,6 +255,12 @@ The remaining gaps are ChannelMux TCP/UDP runtime, overlay-layer lifecycle,
 and QUIC listener plus backpressure owners. TCP and WebSocket listener peer
 add/remove and client effect execution are Core-owned; the remaining listener
 and backpressure paths still need explicit Core-effect to POSIX translations.
+`LSW-SC.1L-F.1` exposes the Core server-side TCP accept/data/close and UDP
+datagram/fragment/close records through `ObstacleBridgeNativeServiceSpec`, so
+an adapter consumes wire and local-I/O decisions without the compatibility
+codec type crossing its public boundary. Client OPEN/DATA/CLOSE, connection
+result, and epoch-reset records remain internal; those are the known gap for
+the next F.1 slice before F.2 can replace the Linux socket-owner lifecycle.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side

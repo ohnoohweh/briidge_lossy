@@ -3,29 +3,29 @@ import Foundation
 public final class ObstacleBridgeChannelMuxUdpRuntime {
     private static let udpFragmentHeaderSize = 8
 
-    struct LocalServerDatagramSnapshot {
-        var chanID: Int
-        var allocatedChannel: Bool
-        var frames: [Data]
-        var nextUdpID: Int
-        var nextCounter: Int
+    public struct LocalServerDatagramSnapshot {
+        public let chanID: Int
+        public let allocatedChannel: Bool
+        public let frames: [Data]
+        public let nextUdpID: Int
+        public let nextCounter: Int
     }
 
-    struct InboundServerDatagramSnapshot {
-        var delivered: Bool
-        var packet: Data?
-        var addrHost: String?
-        var addrPort: Int?
+    public struct InboundServerDatagramSnapshot {
+        public let delivered: Bool
+        public let packet: Data?
+        public let addrHost: String?
+        public let addrPort: Int?
     }
 
-    struct InboundServerFragmentSnapshot {
-        var delivered: Bool
-        var packet: Data?
-        var addrHost: String?
-        var addrPort: Int?
-        var datagramID: Int
-        var totalLen: Int
-        var receivedBytes: Int
+    public struct InboundServerFragmentSnapshot {
+        public let delivered: Bool
+        public let packet: Data?
+        public let addrHost: String?
+        public let addrPort: Int?
+        public let datagramID: Int
+        public let totalLen: Int
+        public let receivedBytes: Int
     }
 
     struct InboundClientOpenSnapshot {
@@ -79,11 +79,11 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         var nextFragmentDatagramID: Int
     }
 
-    struct CloseSnapshot {
-        var closed: Bool
-        var chanID: Int
-        var nextUdpID: Int
-        var activeChannels: [Int]
+    public struct CloseSnapshot {
+        public let closed: Bool
+        public let chanID: Int
+        public let nextUdpID: Int
+        public let activeChannels: [Int]
     }
 
     struct ClientCloseSnapshot {
@@ -230,7 +230,27 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleInboundServerData(chanID: Int, body: Data, counter: Int? = nil) -> InboundServerDatagramSnapshot {
+    public func handleLocalServerDatagram(
+        service: ObstacleBridgeNativeServiceSpec,
+        serviceKey: String,
+        payload: Data,
+        addrHost: String,
+        addrPort: Int,
+        overlayConnected: Bool,
+        acceptingEnabled: Bool
+    ) throws -> LocalServerDatagramSnapshot? {
+        try handleLocalServerDatagram(
+            spec: service.toChannelMuxServiceSpec(),
+            serviceKey: serviceKey,
+            payload: payload,
+            addrHost: addrHost,
+            addrPort: addrPort,
+            overlayConnected: overlayConnected,
+            acceptingEnabled: acceptingEnabled
+        )
+    }
+
+    public func handleInboundServerData(chanID: Int, body: Data, counter: Int? = nil) -> InboundServerDatagramSnapshot {
         guard let client = clientByChannel[chanID], body.count <= datagramCap else {
             return InboundServerDatagramSnapshot(delivered: false, packet: nil, addrHost: nil, addrPort: nil)
         }
@@ -242,7 +262,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         return .init(delivered: true, packet: packet, addrHost: client.addrHost, addrPort: client.addrPort)
     }
 
-    func handleInboundServerFragment(chanID: Int, payload: Data, counter: Int? = nil) -> InboundServerFragmentSnapshot {
+    public func handleInboundServerFragment(chanID: Int, payload: Data, counter: Int? = nil) -> InboundServerFragmentSnapshot {
         let empty = InboundServerFragmentSnapshot(
             delivered: false,
             packet: nil,
@@ -594,7 +614,7 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         )
     }
 
-    func handleInboundClose(chanID: Int, counter: Int? = nil) -> CloseSnapshot {
+    public func handleInboundClose(chanID: Int, counter: Int? = nil) -> CloseSnapshot {
         guard let counter,
               (try? serverSession.receive(.init(channelID: UInt16(chanID), protocolType: ObstacleBridgeChannelMuxSessionProtocol.udp.rawValue, counter: UInt16(clamping: counter), messageType: ObstacleBridgeChannelMuxSessionMessageType.close.rawValue, body: Data()))) != nil else {
             return .init(closed: false, chanID: chanID, nextUdpID: Int(serverSession.nextAvailableChannelID), activeChannels: clientByChannel.keys.sorted())

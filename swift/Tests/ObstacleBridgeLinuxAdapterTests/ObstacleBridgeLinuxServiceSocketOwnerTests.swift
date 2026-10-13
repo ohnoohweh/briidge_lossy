@@ -8,6 +8,40 @@ import Glibc
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxServiceSocketOwnerTests {
+    @Test func coreServerRuntimeEffectsArePublicToLinuxAdapters() throws {
+        let service = ObstacleBridgeNativeServiceSpec(
+            svcID: 9,
+            name: "core-effects",
+            listenProtocol: "tcp",
+            listenBind: "127.0.0.1",
+            listenPort: 0,
+            targetProtocol: "tcp",
+            targetHost: "127.0.0.1",
+            targetPort: 7
+        )
+        let tcp = ObstacleBridgeChannelMuxTcpRuntime(instanceID: 1, connectionSeq: 1)
+        let accepted = try #require(try tcp.acceptLocalServerConnection(
+            service: service,
+            overlayConnected: true,
+            acceptingEnabled: true
+        ))
+        #expect(accepted.frames.count == 1)
+        #expect(accepted.activeChannels == [accepted.chanID])
+
+        let udp = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 1, connectionSeq: 1)
+        let datagram = try #require(try udp.handleLocalServerDatagram(
+            service: service,
+            serviceKey: "127.0.0.1:5000",
+            payload: Data("core-effects".utf8),
+            addrHost: "127.0.0.1",
+            addrPort: 5000,
+            overlayConnected: true,
+            acceptingEnabled: true
+        ))
+        #expect(datagram.allocatedChannel)
+        #expect(datagram.frames.count == 2)
+    }
+
     @Test func tcpListenerPublishesOpenAndDataFrames() throws {
         let received = LockedFrames()
         let ready = DispatchSemaphore(value: 0)

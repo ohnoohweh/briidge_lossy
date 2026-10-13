@@ -1,24 +1,24 @@
 import Foundation
 
 public final class ObstacleBridgeChannelMuxTcpRuntime {
-    struct LocalServerAcceptSnapshot {
-        var chanID: Int
-        var frames: [Data]
-        var nextTcpID: Int
-        var nextCounter: Int
-        var activeChannels: [Int]
+    public struct LocalServerAcceptSnapshot {
+        public let chanID: Int
+        public let frames: [Data]
+        public let nextTcpID: Int
+        public let nextCounter: Int
+        public let activeChannels: [Int]
     }
 
-    struct LocalServerDataSnapshot {
-        var sent: Bool
-        var frames: [Data]
-        var nextCounter: Int
-        var activeChannels: [Int]
+    public struct LocalServerDataSnapshot {
+        public let sent: Bool
+        public let frames: [Data]
+        public let nextCounter: Int
+        public let activeChannels: [Int]
     }
 
-    struct InboundServerDataSnapshot {
-        var delivered: Bool
-        var writtenBuffers: [Data]
+    public struct InboundServerDataSnapshot {
+        public let delivered: Bool
+        public let writtenBuffers: [Data]
     }
 
     struct InboundClientOpenSnapshot {
@@ -74,12 +74,12 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         var pendingChannels: [Int]
     }
 
-    struct ServerCloseSnapshot {
-        var closed: Bool
-        var chanID: Int
-        var localConnectionClosed: Bool
-        var frames: [Data]
-        var activeChannels: [Int]
+    public struct ServerCloseSnapshot {
+        public let closed: Bool
+        public let chanID: Int
+        public let localConnectionClosed: Bool
+        public let frames: [Data]
+        public let activeChannels: [Int]
     }
 
     private struct ClientOpenKey: Hashable {
@@ -166,7 +166,19 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleLocalServerData(chanID: Int, payload: Data, overlayConnected: Bool) throws -> LocalServerDataSnapshot {
+    public func acceptLocalServerConnection(
+        service: ObstacleBridgeNativeServiceSpec,
+        overlayConnected: Bool,
+        acceptingEnabled: Bool
+    ) throws -> LocalServerAcceptSnapshot? {
+        try handleAcceptedServerConnection(
+            spec: service.toChannelMuxServiceSpec(),
+            overlayConnected: overlayConnected,
+            acceptingEnabled: acceptingEnabled
+        )
+    }
+
+    public func handleLocalServerData(chanID: Int, payload: Data, overlayConnected: Bool) throws -> LocalServerDataSnapshot {
         guard overlayConnected, serverActiveChannels.contains(chanID) else {
             return LocalServerDataSnapshot(sent: false, frames: [], nextCounter: counters[chanID] ?? 0, activeChannels: serverActiveChannels.sorted())
         }
@@ -182,7 +194,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         )
     }
 
-    func handleInboundServerData(chanID: Int, body: Data, counter: Int? = nil) -> InboundServerDataSnapshot {
+    public func handleInboundServerData(chanID: Int, body: Data, counter: Int? = nil) -> InboundServerDataSnapshot {
         guard serverActiveChannels.contains(chanID) else {
             return InboundServerDataSnapshot(delivered: false, writtenBuffers: [])
         }
@@ -193,7 +205,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         return InboundServerDataSnapshot(delivered: true, writtenBuffers: [payload])
     }
 
-    func handleLocalServerEOF(chanID: Int, overlayConnected: Bool) throws -> ServerCloseSnapshot {
+    public func handleLocalServerEOF(chanID: Int, overlayConnected: Bool) throws -> ServerCloseSnapshot {
         guard serverActiveChannels.contains(chanID) else {
             return ServerCloseSnapshot(closed: false, chanID: chanID, localConnectionClosed: false, frames: [], activeChannels: serverActiveChannels.sorted())
         }
@@ -202,7 +214,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         return ServerCloseSnapshot(closed: true, chanID: chanID, localConnectionClosed: true, frames: overlayConnected ? frames.map(\.wire) : [], activeChannels: serverActiveChannels.sorted())
     }
 
-    func handleInboundServerClose(chanID: Int, counter: Int? = nil) -> ServerCloseSnapshot {
+    public func handleInboundServerClose(chanID: Int, counter: Int? = nil) -> ServerCloseSnapshot {
         let accepted = counter.flatMap { value in
             try? serverSession.receive(.init(channelID: UInt16(chanID), protocolType: ObstacleBridgeChannelMuxSessionProtocol.tcp.rawValue, counter: UInt16(clamping: value), messageType: ObstacleBridgeChannelMuxSessionMessageType.close.rawValue, body: Data()))
         } != nil
