@@ -1,6 +1,6 @@
 import Foundation
 
-enum ObstacleBridgeOverlayStackPlannerError: Error, LocalizedError {
+public enum ObstacleBridgeOverlayStackPlannerError: Error, LocalizedError {
     case unsupportedOverlayTransports([String])
     case multiTransportClient
     case unsupportedSecureLinkMode(String)
@@ -8,7 +8,7 @@ enum ObstacleBridgeOverlayStackPlannerError: Error, LocalizedError {
     case missingSecureLinkPSK
     case unsupportedCompressAlgo(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .unsupportedOverlayTransports(let transports):
             return "Unsupported overlay transport(s): \(transports.joined(separator: ", "))"
@@ -26,20 +26,20 @@ enum ObstacleBridgeOverlayStackPlannerError: Error, LocalizedError {
     }
 }
 
-final class ObstacleBridgeOverlayStackPlanner {
-    struct TransportPlan {
-        var transport: String
-        var peerHost: String?
-        var secureLinkMode: String?
-        var compressWrapped: Bool
-        var compressConfiguredEnabled: Bool
-        var layersTopDown: [String]
+public final class ObstacleBridgeOverlayStackPlanner {
+    public struct TransportPlan {
+        public let transport: String
+        public let peerHost: String?
+        public let secureLinkMode: String?
+        public let compressWrapped: Bool
+        public let compressConfiguredEnabled: Bool
+        public let layersTopDown: [String]
     }
 
     private static let allowedTransports: Set<String> = ["myudp", "tcp", "quic", "ws"]
     private static let secureLinkTransports: Set<String> = ["myudp", "tcp", "ws", "quic"]
 
-    static func parseOverlayTransports(raw: String, hasConfiguredPeerByTransport: [String: Bool]) throws -> [String] {
+    public static func parseOverlayTransports(raw: String, hasConfiguredPeerByTransport: [String: Bool]) throws -> [String] {
         let trimmed = raw.isEmpty ? "myudp" : raw
         var parts = trimmed.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
         parts.removeAll { $0.isEmpty }
@@ -60,7 +60,7 @@ final class ObstacleBridgeOverlayStackPlanner {
         return seen
     }
 
-    static func planTransport(
+    public static func planTransport(
         transport: String,
         peerHost: String?,
         secureLinkEnabled: Bool,

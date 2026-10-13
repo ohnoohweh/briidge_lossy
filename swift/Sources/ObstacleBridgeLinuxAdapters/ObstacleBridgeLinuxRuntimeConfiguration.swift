@@ -179,6 +179,21 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             minimumBodyBytes: compressionMinimumBytes,
             allowedMessageTypes: compressionMessageTypes(string(root["compress_layer_types"]))
         )
+        // Keep Linux admission on the portable layer-ordering policy. The
+        // adapter owns only configuration spelling and its POSIX transports.
+        do {
+            _ = try ObstacleBridgeOverlayStackPlanner.planTransport(
+                transport: transport.rawValue,
+                peerHost: listenerMode ? nil : host,
+                secureLinkEnabled: secureMode != "off",
+                secureLinkModeRaw: secureMode,
+                secureLinkPSK: psk.map { String(decoding: $0, as: UTF8.self) } ?? "",
+                compressLayerEnabled: compressionPolicy.enabled,
+                compressLayerAlgoRaw: compressionAlgorithm
+            )
+        } catch {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
+        }
         let receiveIdleTimeoutMilliseconds = max(1, integer(root["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
