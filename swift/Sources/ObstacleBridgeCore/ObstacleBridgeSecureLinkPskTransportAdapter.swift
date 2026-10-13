@@ -296,7 +296,7 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
             "reason": reason,
             "session_id": diagnosticSessionID(status.sessionID),
             "handshake_attempt": handshakeAttemptsTotal,
-            "transport_connected_age_ms": elapsedMilliseconds(since: transportConnectedAtMono),
+            "transport_connected_age_ms": elapsedMilliseconds(since: transportConnectedAtMono) ?? NSNull(),
             "frame_types": diagnosticFrameTypes(frames),
         ])
     }
@@ -349,8 +349,8 @@ public final class ObstacleBridgeSecureLinkPskTransportAdapter {
         emitDiagnostic("secure_link_authenticated", [
             "session_id": diagnosticSessionID(status.sessionID),
             "handshake_attempt": handshakeAttemptsTotal,
-            "handshake_duration_ms": elapsedMilliseconds(since: handshakeStartedAtMono),
-            "transport_connected_age_ms": elapsedMilliseconds(since: transportConnectedAtMono),
+            "handshake_duration_ms": elapsedMilliseconds(since: handshakeStartedAtMono) ?? NSNull(),
+            "transport_connected_age_ms": elapsedMilliseconds(since: transportConnectedAtMono) ?? NSNull(),
         ])
     }
 

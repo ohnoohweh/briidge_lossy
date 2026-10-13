@@ -40,6 +40,11 @@ enum ObstacleBridgePeerAddressResolver {
         ObstacleBridgePeerAddressPolicy.familyName(portableFamily(family))
     }
 
+    static func rank(_ mode: ResolveMode, for family: Int32) -> Int {
+        guard let family = portableFamily(family) else { return 1 }
+        return mode.rank(for: family)
+    }
+
     static func stripBrackets(_ host: String) -> String {
         ObstacleBridgePeerAddressPolicy.stripBrackets(host)
     }

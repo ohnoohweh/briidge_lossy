@@ -37,7 +37,19 @@ var targets: [Target] = [
     ),
 ]
 
+var packageDependencies: [Package.Dependency] = [
+    .package(url: "https://github.com/apple/swift-crypto.git", exact: "5.0.0"),
+]
+
 #if os(Linux)
+packageDependencies += [
+    .package(url: "https://github.com/apple/swift-log.git", exact: "1.16.1"),
+    .package(url: "https://github.com/apple/swift-nio.git", exact: "2.104.0"),
+    .package(url: "https://github.com/apple/swift-nio-ssl.git", exact: "2.37.5"),
+    // Pin the qualified Linux QUIC backend because its public API evolves
+    // independently of this foreground runtime.
+    .package(url: "https://github.com/apple/swift-nio-quic.git", exact: "0.4.1"),
+]
 products.append(.executable(name: "ObstacleBridgeLinux", targets: ["ObstacleBridgeLinux"]))
 targets += [
     .target(
@@ -74,15 +86,7 @@ let package = Package(
         .iOS(.v16),
     ],
     products: products,
-    dependencies: [
-        .package(url: "https://github.com/apple/swift-crypto.git", exact: "5.0.0"),
-        .package(url: "https://github.com/apple/swift-log.git", exact: "1.16.1"),
-        .package(url: "https://github.com/apple/swift-nio.git", exact: "2.104.0"),
-        .package(url: "https://github.com/apple/swift-nio-ssl.git", exact: "2.37.5"),
-        // Pin the qualified Linux QUIC backend because its public API evolves
-        // independently of this foreground runtime.
-        .package(url: "https://github.com/apple/swift-nio-quic.git", exact: "0.4.1"),
-    ],
+    dependencies: packageDependencies,
     targets: targets,
     swiftLanguageModes: [.v6]
 )

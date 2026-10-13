@@ -820,8 +820,8 @@ final class ObstacleBridgeWebSocketOverlayTransportOwner: NSObject, URLSessionWe
                 }
             }
             return candidates.enumerated().sorted { lhs, rhs in
-                let lhsRank = mode.rank(for: lhs.element.family)
-                let rhsRank = mode.rank(for: rhs.element.family)
+                let lhsRank = ObstacleBridgePeerAddressResolver.rank(mode, for: lhs.element.family)
+                let rhsRank = ObstacleBridgePeerAddressResolver.rank(mode, for: rhs.element.family)
                 return lhsRank == rhsRank ? lhs.offset < rhs.offset : lhsRank < rhsRank
             }.map(\.element)
         }
