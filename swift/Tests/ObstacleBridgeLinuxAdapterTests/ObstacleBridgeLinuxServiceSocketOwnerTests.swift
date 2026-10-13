@@ -183,6 +183,36 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(closed.wait(timeout: .now() + 3) == .success)
     }
 
+    @Test func malformedRemoteOpenDoesNotClaimOrPoisonTCPDial() throws {
+        let target = try listeningTCP()
+        defer { _ = close(target.fd) }
+        let delivered = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
+        let result = LockedDatagramResult()
+        DispatchQueue.global().async {
+            let accepted = accept(target.fd, nil, nil)
+            guard accepted >= 0 else { return }
+            defer { _ = close(accepted) }
+            var bytes = [UInt8](repeating: 0, count: 64)
+            let count = read(accepted, &bytes, bytes.count)
+            if count > 0 { result.setFirst(Data(bytes.prefix(Int(count)))); delivered.signal() }
+            var descriptor = pollfd(fd: target.fd, events: Int16(POLLIN), revents: 0)
+            if poll(&descriptor, 1, 350) > 0 { result.setSecond(Data("unexpected dial".utf8)) }
+            finished.signal()
+        }
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 9, name: "owner", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
+        try owner.start(); defer { owner.stop() }
+        let service = ObstacleBridgeServiceSpec(serviceID: 9, name: "target", listenProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, targetHost: "127.0.0.1", targetPort: UInt16(target.port))
+        let open = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: 1, connectionSequence: 1, service: service)
+        owner.handleInbound(.init(channelID: 15, protocolType: .tcp, counter: 0, messageType: .open, body: Data("not-an-open".utf8)))
+        owner.handleInbound(.init(channelID: 15, protocolType: .tcp, counter: 0, messageType: .open, body: open))
+        owner.handleInbound(.init(channelID: 15, protocolType: .tcp, counter: 1, messageType: .data, body: Data("valid-after-malformed".utf8)))
+        #expect(delivered.wait(timeout: .now() + 3) == .success)
+        #expect(finished.wait(timeout: .now() + 3) == .success)
+        #expect(result.first == Data("valid-after-malformed".utf8))
+        #expect(result.second == nil)
+    }
+
     @Test func udpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {
         let target = try boundUDP()
         defer { _ = close(target.fd) }
