@@ -160,6 +160,29 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(closed.wait(timeout: .now() + 3) == .success)
     }
 
+    @Test func tcpRemoteCloseClosesCoreDialDescriptor() throws {
+        let target = try listeningTCP()
+        defer { _ = close(target.fd) }
+        let connected = DispatchSemaphore(value: 0)
+        let closed = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            let accepted = accept(target.fd, nil, nil)
+            guard accepted >= 0 else { return }
+            defer { _ = close(accepted) }
+            connected.signal()
+            var byte: UInt8 = 0
+            if read(accepted, &byte, 1) == 0 { closed.signal() }
+        }
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 7, name: "owner", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
+        try owner.start(); defer { owner.stop() }
+        let service = ObstacleBridgeServiceSpec(serviceID: 7, name: "target", listenProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, targetHost: "127.0.0.1", targetPort: UInt16(target.port))
+        let open = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: 1, connectionSequence: 1, service: service)
+        owner.handleInbound(.init(channelID: 13, protocolType: .tcp, counter: 0, messageType: .open, body: open))
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+        owner.handleInbound(.init(channelID: 13, protocolType: .tcp, counter: 1, messageType: .close, body: Data()))
+        #expect(closed.wait(timeout: .now() + 3) == .success)
+    }
+
     @Test func udpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {
         let target = try boundUDP()
         defer { _ = close(target.fd) }
