@@ -61,6 +61,10 @@ public struct ObstacleBridgeLinuxRuntimeStatus: Codable, Equatable, Sendable {
 /// session is explicit: callers must close it when their higher-level runtime
 /// decides the transport epoch has ended.
 public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
+    // The lower session's closures deliberately retain the client weakly to
+    // avoid a client/session cycle. Keep the client alive for this configured
+    // epoch so those closures remain usable after `connect` returns.
+    private let lower: ObstacleBridgeLinuxOverlayTransportClient?
     private let lowerSession: ObstacleBridgeLinuxOverlayTransportSession
     private let secureLink: ObstacleBridgeSecureLinkPSKClient?
     private let secureLinkServer: ObstacleBridgeSecureLinkPSKServer?
@@ -69,7 +73,16 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
+    init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
+        self.lower = lower
+        self.lowerSession = lowerSession
+        self.secureLink = secureLink
+        self.secureLinkServer = secureLinkServer
+        self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+    }
+
     init(lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
+        self.lower = nil
         self.lowerSession = lowerSession
         self.secureLink = secureLink
         self.secureLinkServer = secureLinkServer
@@ -242,7 +255,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
                     let client = try ObstacleBridgeSecureLinkPSKClient(psk: psk)
-                    session = ObstacleBridgeLinuxConfiguredSession(lowerSession: lowerSession, secureLink: client, transport: configuration.transport)
+                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: client, transport: configuration.transport)
                     guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     let hello = try client.begin(sessionID: sessionID, clientNonce: clientNonce)
                     let clientProof = try client.handleServerHello(lowerSession.exchange(hello))
@@ -250,7 +263,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                     secureLinkState = "authenticated"
                     clearInFlightConnection(session)
                 } else {
-                    session = ObstacleBridgeLinuxConfiguredSession(lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
+                    session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
                     guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     secureLinkState = "off"
                     clearInFlightConnection(session)
