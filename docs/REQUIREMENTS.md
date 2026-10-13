@@ -549,7 +549,10 @@ Repository governance update (public endpoint privacy): documentation, design ex
 
 The shared Python/Swift ChannelMux parity fixture supplies explicit inbound
 counters for server and client DATA/CLOSE frames, so the portable Core replay
-contract is exercised rather than bypassed by an absent counter.
+contract is exercised rather than bypassed by an absent counter. Its standalone
+Swift compilation includes both the Core ChannelMux codec and its compatibility
+extension, so macOS parity evidence exercises the same source closure as the
+Core target rather than relying on an incidental compile order.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

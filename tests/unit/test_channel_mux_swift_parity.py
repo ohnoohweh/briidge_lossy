@@ -24,6 +24,7 @@ from tests.unit import test_ws_payload_mode as ws_test_fixtures
 
 ROOT = Path(__file__).resolve().parents[2]
 SWIFT_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"
+SWIFT_CHANNELMUX_CORE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCodec.swift"
 SWIFT_SECURELINK_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPskCodec.swift"
 SWIFT_UDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayCodec.swift"
 SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
@@ -150,6 +151,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         *swift_core_crypto_compile_flags(),
         "-o",
         str(binary),
+        str(SWIFT_CHANNELMUX_CORE_CODEC_SOURCE),
         str(SWIFT_CODEC_SOURCE),
         str(SWIFT_SECURELINK_SOURCE),
         str(SWIFT_UDP_CODEC_SOURCE),

@@ -1652,9 +1652,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `70` | `0` | `70` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `71` | `0` | `71` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `82` | `154` | `236` |
+| Total parity-oriented evidence | Sum of the lanes above | `83` | `154` | `237` |
 
 Important caveat:
 
