@@ -152,6 +152,12 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     }
 
     private func sendWire(_ wire: Data) throws {
+        // The POSIX owner sends only records accepted by the portable facade.
+        // The peer engine remains the state owner; this boundary prevents a
+        // Linux-local wire interpretation from drifting from Core constants.
+        guard ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(wire) != nil else {
+            throw ObstacleBridgeLinuxMyUDPError.invalidReply
+        }
         let sent = wire.withUnsafeBytes { Glibc.send(descriptor, $0.baseAddress, wire.count, 0) }
         guard sent == wire.count else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
     }

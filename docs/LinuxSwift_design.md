@@ -204,6 +204,18 @@ transport policy, but this package must replace any overlapping Linux-local
 planner, lifecycle, snapshot, or myUDP facade with the moved Core type and add
 direct Linux adapter evidence before those extractions count as Linux-adopted.
 
+The first Linux adoption slice sends only `ObstacleBridgeUdpOverlayCodec`-
+validated datagrams at the POSIX boundary and shapes the Admin transport
+projection through `ObstacleBridgeAdminSnapshotSupport`. The POSIX owners
+retain descriptor I/O and HTTP serialization; Core owns record acceptance and
+the selected runtime envelope.
+
+Known gaps after this `LSW-SC.1L-A` slice: Linux has not yet adopted the
+portable overlay-stack planner or the extracted TCP, QUIC, WebSocket, and
+ChannelMux lifecycle owners as production state machines. Those replacements
+need explicit effect-to-POSIX translations rather than wrapping the existing
+Linux reconnect owner.
+
 The Admin-component runner now compiles the full Core ChannelMux dependency
 closure. Its focused Admin UI and security-advisor vectors pass. Its separate
 status/tunnel snapshot assertions currently have response-shape drift outside

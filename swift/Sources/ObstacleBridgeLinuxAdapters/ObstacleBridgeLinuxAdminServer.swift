@@ -125,12 +125,18 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             guard let data = try? JSONEncoder().encode(record) else { return nil }
             return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         }
+        let transportRuntime = ObstacleBridgeAdminSnapshotSupport.transportRuntimeEnvelope(
+            kind: status.transport,
+            status: status.state,
+            extra: ["app_ready": status.appReady, "failure_reason": status.failureReason as Any]
+        )
         let payload: [String: Any] = [
             "platform": "linux-swift",
             "overlay_transport": status.transport,
             "transport_state": status.state,
             "app_ready": status.appReady,
             "failure_reason": status.failureReason as Any,
+            "transport_runtime": transportRuntime,
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,

@@ -1,7 +1,7 @@
 import Foundation
 
-enum ObstacleBridgeAdminSnapshotSupport {
-    static func statusEnvelope(
+public enum ObstacleBridgeAdminSnapshotSupport {
+    public static func statusEnvelope(
         runtimeOwner: String,
         runtimeMode: String,
         adminWebName: String,
@@ -67,7 +67,7 @@ enum ObstacleBridgeAdminSnapshotSupport {
         ]
     }
 
-    static func transportRuntimeEnvelope(
+    public static func transportRuntimeEnvelope(
         kind: String,
         status: Any,
         myudp: [String: Any]? = nil,
@@ -123,7 +123,7 @@ enum ObstacleBridgeAdminSnapshotSupport {
         return Double(now - lastRxWall) / 1_000_000_000.0
     }
 
-    static func selectedTransportRuntime(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [String: Any] {
+    public static func selectedTransportRuntime(from transportRuntime: [String: Any], preferredKind: String? = nil) -> [String: Any] {
         let kind = (preferredKind ?? stringValue(transportRuntime["kind"]) ?? "myudp").lowercased()
         let key: String
         switch kind {
