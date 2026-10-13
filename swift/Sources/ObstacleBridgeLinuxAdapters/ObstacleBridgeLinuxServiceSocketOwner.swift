@@ -24,6 +24,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private let queue: DispatchQueue
     private let plane: ObstacleBridgeLinuxServiceDataPlane
     private let tcpRuntime: ObstacleBridgeChannelMuxTcpRuntime
+    private let udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
     private var listener: Int32 = -1
     private var listenerSource: DispatchSourceRead?
     private var connectionSources: [UInt16: DispatchSourceRead] = [:]
@@ -31,6 +32,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var udpPeers: [UInt16: (Data, socklen_t)] = [:]
     private var udpChannels: [Data: UInt16] = [:]
     private var coreTCPChannels: Set<UInt16> = []
+    private var coreUDPChannels: Set<UInt16> = []
     private var stopped = false
 
     public var specification: ObstacleBridgeLinuxServiceSpec { spec }
@@ -63,6 +65,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         self.queue = DispatchQueue(label: "org.obstaclebridge.linux.service.\(spec.serviceID)")
         self.plane = ObstacleBridgeLinuxServiceDataPlane(maximumQueuedFrames: maximumQueuedFrames, instanceID: instanceID, connectionSequence: connectionSequence)
         self.tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(instanceID: instanceID, connectionSeq: connectionSequence)
+        self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: instanceID, connectionSeq: connectionSequence)
     }
 
     public func start() throws {
@@ -121,14 +124,14 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         }
         guard count > 0 else { return }
         let addressData = Data(bytes: &address, count: Int(length))
-        let channelID: UInt16
-        if let existing = udpChannels[addressData] { channelID = existing }
-        else {
-            guard let created = try? plane.acceptLocalService(spec) else { return }
-            channelID = created; udpChannels[addressData] = created; udpPeers[created] = (addressData, length); flushFrames()
-        }
-        guard (try? plane.localData(channelID: channelID, payload: Data(bytes.prefix(Int(count))))) != nil else { return }
-        flushFrames()
+        guard let snapshot = try? udpRuntime.handleLocalServerDatagram(
+            service: nativeSpec(), serviceKey: addressData.base64EncodedString(), payload: Data(bytes.prefix(Int(count))),
+            addrHost: addressData.base64EncodedString(), addrPort: 0, overlayConnected: true, acceptingEnabled: true
+        ), let channelID = UInt16(exactly: snapshot.chanID) else { return }
+        udpChannels[addressData] = channelID
+        udpPeers[channelID] = (addressData, length)
+        coreUDPChannels.insert(channelID)
+        emitCoreWires(snapshot.frames)
     }
 
     private func installReadSource(fd: Int32, channelID: UInt16, isUDP: Bool) {
@@ -173,6 +176,23 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 return
             }
         }
+        if coreUDPChannels.contains(frame.channelID) {
+            if frame.messageType == .data {
+                let effect = udpRuntime.handleInboundServerData(chanID: Int(frame.channelID), body: frame.body, counter: Int(frame.counter))
+                if effect.delivered, let packet = effect.packet { writeLocal(channelID: frame.channelID, payload: packet) }
+                return
+            }
+            if frame.messageType == .dataFragment {
+                let effect = udpRuntime.handleInboundServerFragment(chanID: Int(frame.channelID), payload: frame.body, counter: Int(frame.counter))
+                if effect.delivered, let packet = effect.packet { writeLocal(channelID: frame.channelID, payload: packet) }
+                return
+            }
+            if frame.messageType == .close {
+                _ = udpRuntime.handleInboundClose(chanID: Int(frame.channelID), counter: Int(frame.counter))
+                closeChannel(frame.channelID)
+                return
+            }
+        }
         do {
             switch try plane.receive(frame) {
             case .connectRequested(let channelID, let remoteSpec):
@@ -212,6 +232,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         descriptors.removeValue(forKey: channelID)
         udpPeers.removeValue(forKey: channelID)
         coreTCPChannels.remove(channelID)
+        coreUDPChannels.remove(channelID)
     }
 
     private func nativeSpec() -> ObstacleBridgeNativeServiceSpec {

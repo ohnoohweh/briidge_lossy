@@ -264,10 +264,10 @@ withdraws prior local channels; POSIX/NIO owners remain responsible for closing
 the corresponding descriptors in F.2. Linux-adapter Core evidence covers the
 TCP and UDP reset withdrawals; `LSW-SC.1L-F.2` remains responsible for making
 the POSIX/NIO owners execute those effects.
-The Linux TCP listener owner already executes the Core TCP server accept,
-local-data/EOF, inbound-data, and remote-close effects on its descriptor queue.
-UDP listener data-plane execution and remote OPEN/dial ownership still use the
-generic Core session facade; those are the remaining F.2 migration gaps.
+The Linux TCP and UDP listener owners execute their Core server accept,
+local-data/EOF or datagram, inbound-data/fragment, and remote-close effects on
+their descriptor queues. Remote OPEN/dial ownership still uses the generic
+Core session facade; that is the remaining F.2 migration gap.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
