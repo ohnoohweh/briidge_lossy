@@ -222,10 +222,17 @@ before any POSIX transport is opened. The Linux Admin adapter also obtains its
 JSON response body from `ObstacleBridgeAdminAPI`, retaining only status-line
 and socket-write mechanics locally.
 
-Known gaps after this `LSW-SC.1L-A` slice: Linux has not yet adopted the
-extracted TCP, QUIC, WebSocket, and ChannelMux lifecycle owners as production
-state machines. Those replacements need explicit effect-to-POSIX translations
-rather than wrapping the existing Linux reconnect owner.
+Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
+only `ObstacleBridgeAdminAPI`, `ObstacleBridgeAdminSnapshotSupport`,
+`ObstacleBridgeUdpOverlayCodec`, and `ObstacleBridgeOverlayStackPlanner`.
+There is no Linux caller yet for the moved Admin configuration/web and
+onboarding policy, native service specification, ChannelMux compatibility/TCP/
+UDP runtime, SecureLink transport adapter, UDP peer runtime, overlay-layer
+adapter, or TCP/QUIC/WebSocket runtime owners. The latter lifecycle owners
+need explicit effect-to-POSIX translations rather than wrapping the existing
+Linux reconnect owner. Before an absent caller is counted as intentionally
+out-of-scope, its source-inventory row must carry the product-scoped reason
+required by `LSW-SC.1L-C`; none has been recorded for these rows yet.
 
 The Admin-component runner now compiles the full Core ChannelMux dependency
 closure. Its focused Admin UI and security-advisor vectors pass. Its separate
