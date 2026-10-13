@@ -30,7 +30,6 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var spec: ObstacleBridgeLinuxServiceSpec
     private let frameSink: FrameSink
     private let queue: DispatchQueue
-    private let plane: ObstacleBridgeLinuxServiceDataPlane
     private let tcpRuntime: ObstacleBridgeChannelMuxTcpRuntime
     private let udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
     private var listener: Int32 = -1
@@ -43,6 +42,10 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var coreUDPChannels: Set<UInt16> = []
     private var coreTCPClientChannels: Set<UInt16> = []
     private var coreUDPClientChannels: Set<UInt16> = []
+    private var openedTCPChannels = 0
+    private var openedUDPChannels = 0
+    private var malformedFrames = 0
+    private var serviceFailures = 0
     private var stopped = false
 
     public var specification: ObstacleBridgeLinuxServiceSpec { spec }
@@ -73,7 +76,6 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         self.spec = spec
         self.frameSink = frameSink
         self.queue = DispatchQueue(label: "org.obstaclebridge.linux.service.\(spec.serviceID)")
-        self.plane = ObstacleBridgeLinuxServiceDataPlane(maximumQueuedFrames: maximumQueuedFrames, instanceID: instanceID, connectionSequence: connectionSequence)
         self.tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(instanceID: instanceID, connectionSeq: connectionSequence)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: instanceID, connectionSeq: connectionSequence)
     }
@@ -125,7 +127,17 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         }
     }
 
-    public func snapshot() -> ObstacleBridgeLinuxServiceDataPlaneSnapshot { queue.sync { plane.snapshot() } }
+    public func snapshot() -> ObstacleBridgeLinuxServiceDataPlaneSnapshot {
+        queue.sync {
+            .init(
+                activeTCPChannels: coreTCPChannels.count + coreTCPClientChannels.count,
+                activeUDPChannels: coreUDPChannels.count + coreUDPClientChannels.count,
+                queuedFrames: 0, droppedFrames: 0, malformedFrames: malformedFrames,
+                serviceFailures: serviceFailures, openedTCPChannels: openedTCPChannels,
+                openedUDPChannels: openedUDPChannels
+            )
+        }
+    }
 
     private func listenerReadable() {
         guard !stopped else { return }
@@ -139,6 +151,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
               let channelID = UInt16(exactly: snapshot.chanID) else { if fd >= 0 { _ = close(fd) }; return }
         descriptors[channelID] = fd
         coreTCPChannels.insert(channelID)
+        openedTCPChannels += 1
         installReadSource(fd: fd, channelID: channelID, isUDP: false)
         emitCoreWires(snapshot.frames)
     }
@@ -158,6 +171,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         udpChannels[addressData] = channelID
         udpPeers[channelID] = (addressData, length)
         coreUDPChannels.insert(channelID)
+        if snapshot.allocatedChannel { openedUDPChannels += 1 }
         emitCoreWires(snapshot.frames)
     }
 
@@ -182,15 +196,14 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
             } else if coreUDPClientChannels.contains(channelID), let snapshot = try? udpRuntime.handleLocalClientDatagram(chanID: Int(channelID), payload: payload) {
                 emitCoreWires(snapshot.frames)
             } else {
-                _ = try? plane.localData(channelID: channelID, payload: payload)
-                flushFrames()
+                malformedFrames += 1
             }
         } else if count == 0 || !isUDP {
             if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerEOF(chanID: Int(channelID), overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
             } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientEOF(chanID: Int(channelID), overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
-            } else { _ = try? plane.localEOF(channelID: channelID); flushFrames() }
+            } else { malformedFrames += 1 }
             closeChannel(channelID)
         }
     }
@@ -205,10 +218,15 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 do {
                     try connectTarget(channelID: frame.channelID, spec: target)
                     coreTCPClientChannels.insert(frame.channelID)
+                    openedTCPChannels += 1
                     _ = tcpRuntime.handleClientConnected(chanID: Int(frame.channelID))
-                } catch { _ = tcpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter) + 1) }
-                return
+                } catch {
+                    serviceFailures += 1
+                    _ = tcpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter) + 1)
+                }
             }
+            if !effect.accepted { malformedFrames += 1 }
+            return
         }
         if frame.messageType == .open, frame.protocolType == .udp {
             let effect = udpRuntime.handleInboundClientOpen(chanID: Int(frame.channelID), payload: frame.body, counter: Int(frame.counter))
@@ -218,10 +236,15 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 do {
                     try connectTarget(channelID: frame.channelID, spec: target)
                     coreUDPClientChannels.insert(frame.channelID)
+                    openedUDPChannels += 1
                     _ = udpRuntime.handleClientConnected(chanID: Int(frame.channelID))
-                } catch { _ = udpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter) + 1) }
-                return
+                } catch {
+                    serviceFailures += 1
+                    _ = udpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter) + 1)
+                }
             }
+            if !effect.accepted { malformedFrames += 1 }
+            return
         }
         if coreTCPClientChannels.contains(frame.channelID) {
             if frame.messageType == .data {
@@ -281,21 +304,10 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 return
             }
         }
-        do {
-            switch try plane.receive(frame) {
-            case .connectRequested(let channelID, let remoteSpec):
-                try connectTarget(channelID: channelID, spec: remoteSpec)
-            case .deliverLocal(let channelID, let payload):
-                writeLocal(channelID: channelID, payload: payload)
-            case .closeLocal(let channelID):
-                if let fd = descriptors[channelID] { _ = shutdown(fd, Int32(SHUT_WR)) }
-            case nil:
-                break
-            }
-        } catch {
-            // The data plane owns bounded malformed/drop counters; keeping the
-            // socket owner alive isolates one invalid peer frame.
-        }
+        // Every production service frame is admitted by one of the Core
+        // runtimes above. Unknown or lifecycle-invalid frames are contained at
+        // this resource boundary and never reach a second session owner.
+        malformedFrames += 1
     }
 
     private func connectTarget(channelID: UInt16, spec remoteSpec: ObstacleBridgeLinuxServiceSpec) throws {
@@ -339,8 +351,6 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         }
         if !frames.isEmpty { frameSink(self, frames) }
     }
-
-    private func flushFrames() { let frames = plane.drainOutbound(); if !frames.isEmpty { frameSink(self, frames) } }
 
     private func bindSocket(host: String, port: Int, type: __socket_type) throws -> Int32 {
         let fd = socket(AF_INET, Int32(type.rawValue), 0); guard fd >= 0 else { throw ObstacleBridgeLinuxServiceSocketOwnerError.socketFailure(errno) }
