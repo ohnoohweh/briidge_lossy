@@ -261,6 +261,10 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         clientSession.service(channelID: UInt16(clamping: chanID)).flatMap(ObstacleBridgeChannelMuxCodec.serviceSpec)
     }
 
+    public func admittedClientService(chanID: Int) -> ObstacleBridgeNativeServiceSpec? {
+        clientSession.service(channelID: UInt16(clamping: chanID)).map(ObstacleBridgeNativeServiceSpec.init(coreSpec:))
+    }
+
     private func admittedClientOpen(chanID: Int, service: ObstacleBridgeServiceSpec, peerID: Int?) -> InboundClientOpenSnapshot {
         guard let spec = ObstacleBridgeChannelMuxCodec.serviceSpec(service) else {
             return InboundClientOpenSnapshot(

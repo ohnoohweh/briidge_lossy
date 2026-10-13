@@ -47,6 +47,28 @@ public struct ObstacleBridgeNativeServiceSpec {
         self.options = channelMuxSpec.options
     }
 
+    init(coreSpec: ObstacleBridgeServiceSpec) {
+        self.svcID = Int(coreSpec.serviceID)
+        self.name = coreSpec.name
+        self.listenProtocol = Self.protocolName(coreSpec.listenProtocol)
+        self.listenBind = coreSpec.listenHost
+        self.listenPort = Int(coreSpec.listenPort)
+        self.targetProtocol = Self.protocolName(coreSpec.targetProtocol)
+        self.targetHost = coreSpec.targetHost
+        self.targetPort = Int(coreSpec.targetPort)
+        self.lifecycleHooks = nil
+        self.options = nil
+    }
+
+    private static func protocolName(_ value: UInt8) -> String {
+        switch ObstacleBridgeChannelMuxSessionProtocol(rawValue: value) {
+        case .udp: return "udp"
+        case .tcp: return "tcp"
+        case .tun: return "tun"
+        case nil: return ""
+        }
+    }
+
     func toChannelMuxServiceSpec() -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
         ObstacleBridgeChannelMuxCodec.ServiceSpec(
             svcID: svcID,

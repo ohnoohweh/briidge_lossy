@@ -419,6 +419,10 @@ public final class ObstacleBridgeChannelMuxUdpRuntime {
         return deliverAdmittedClientData(chanID: chanID, body: admittedBody)
     }
 
+    public func admittedClientService(chanID: Int) -> ObstacleBridgeNativeServiceSpec? {
+        clientSession.service(channelID: UInt16(clamping: chanID)).map(ObstacleBridgeNativeServiceSpec.init(coreSpec:))
+    }
+
     private func deliverAdmittedClientData(chanID: Int, body: Data) -> InboundClientDataSnapshot {
         if clientTransports[chanID] != nil {
             return InboundClientDataSnapshot(

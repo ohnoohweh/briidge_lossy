@@ -267,7 +267,9 @@ the POSIX/NIO owners execute those effects.
 The Linux TCP and UDP listener owners execute their Core server accept,
 local-data/EOF or datagram, inbound-data/fragment, and remote-close effects on
 their descriptor queues. Remote OPEN/dial ownership still uses the generic
-Core session facade; that is the remaining F.2 migration gap.
+Core session facade; its admitted target is now exposed as a portable native
+service record, but descriptor-dial execution still needs to move. That is the
+remaining F.2 migration gap.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
