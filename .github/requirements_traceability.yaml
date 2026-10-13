@@ -110,6 +110,8 @@ REQ-OVL-007:
     - tests/unit/test_ws_payload_mode.py::test_connect_multi_ws_peer_uses_resolved_candidate_for_uri_and_preflight
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_prefers_ipv6_literal_when_available
     - tests/unit/test_peer_resolution.py::test_resolve_multi_peer_falls_back_to_ipv4_when_ipv6_candidate_fails
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift::parsesConfiguredHostsAndNormalizesLiterals
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift::ordersAndFiltersCandidatesWithoutSocketTypes
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configDrivenRuntimeRotatesToNextConfiguredCandidate
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configuredRuntimeReconnectsWithFreshTransportEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::configuredRuntimeRetriesFailedTransactionOnFreshEpoch

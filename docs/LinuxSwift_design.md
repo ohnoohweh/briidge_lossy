@@ -322,6 +322,13 @@ tab-to-topic projection, and polling intervals. Apple retains the
 Network.framework listener and WebSocket session driver. Linux Admin-Web
 admission remains separately owned by `LSW-SC.2L-A`.
 
+`ObstacleBridgePeerAddressPolicy` owns configured-host parsing, resolve-mode
+preference, literal IPv4-to-IPv6 mapping, socket-family compatibility
+decisions, and deterministic candidate ordering/filtering. The Apple resolver
+retains only numeric-address detection plus `getaddrinfo`/`getnameinfo` and
+sockaddr conversion. Linux POSIX resolver adoption remains separately owned by
+`LSW-SC.2L-A`; it must apply this policy instead of recreating those decisions.
+
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
 | `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |
@@ -330,7 +337,7 @@ admission remains separately owned by `LSW-SC.2L-A`.
 | `ObstacleBridgeConfigSecretCodec.swift` | Secret envelope policy and serialization; inject key-storage/crypto provider. |
 | `ObstacleBridgeOverlayChannelCore.swift` | Overlay channel policy and effect model; retain only `Network` connection binding. |
 | `ObstacleBridgeOverlayConnectionSupport.swift` | Connection state and send/receive policy; retain only Apple connection-driver implementation. |
-| `ObstacleBridgePeerAddressResolver.swift` | Address selection and normalization policy; inject resolver. |
+| `ObstacleBridgePeerAddressResolver.swift` | POSIX numeric-address detection, name resolution, and sockaddr conversion; Core owns selection and normalization policy. |
 | `ObstacleBridgeProxyServer.swift` | Proxy protocol parsing/session policy; retain only listener/connection I/O. |
 | `ObstacleBridgeRuntimeConfig.swift` | Configuration schema, parsing, defaults, and derived portable settings; inject filesystem/environment access. |
 | `ObstacleBridgeTunHelperContract.swift` | Helper commands, envelopes, and validation; retain only macOS helper execution and transport binding. |
@@ -341,9 +348,7 @@ admission remains separately owned by `LSW-SC.2L-A`.
 Standalone Apple-source probes compile RuntimeConfig with the exact Core
 configuration types it references; source ordering is never treated as a
 dependency provider. `ObstacleBridgePeerAddressResolver` selects Darwin or
-Glibc only for POSIX name-resolution calls. That import boundary does not move
-address selection or normalization policy out of the pending `LSW-SC.2` Core
-port.
+Glibc only for POSIX name-resolution calls.
 
 ### `LSW-SC.3` — retained Apple adapters
 

@@ -76,6 +76,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebAdminLiveTopicPolicy.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift",

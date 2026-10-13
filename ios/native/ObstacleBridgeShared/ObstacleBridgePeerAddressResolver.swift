@@ -14,86 +14,38 @@ struct ObstacleBridgeResolvedAddress {
 }
 
 enum ObstacleBridgePeerAddressResolver {
-    enum ResolveMode {
-        case preferIPv6
-        case ipv4
-        case ipv6
+    typealias ResolveMode = ObstacleBridgePeerAddressPolicy.ResolveMode
 
-        init(rawValue: String) {
-            switch rawValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "ipv4":
-                self = .ipv4
-            case "ipv6":
-                self = .ipv6
-            default:
-                self = .preferIPv6
-            }
+    private static func portableFamily(_ family: Int32) -> ObstacleBridgePeerAddressPolicy.Family? {
+        switch family {
+        case AF_INET:
+            return .ipv4
+        case AF_INET6:
+            return .ipv6
+        default:
+            return nil
         }
+    }
 
-        func rank(for family: Int32) -> Int {
-            switch self {
-            case .preferIPv6, .ipv6:
-                return family == AF_INET6 ? 0 : 1
-            case .ipv4:
-                return family == AF_INET ? 0 : 1
-            }
-        }
-
-        var localhostFallback: (host: String, family: Int32)? {
-            switch self {
-            case .ipv4:
-                return ("127.0.0.1", AF_INET)
-            case .ipv6:
-                return ("::1", AF_INET6)
-            case .preferIPv6:
-                return nil
-            }
-        }
-
-        var preferredFamily: Int32? {
-            switch self {
-            case .ipv4:
-                return AF_INET
-            case .ipv6:
-                return AF_INET6
-            case .preferIPv6:
-                return nil
-            }
+    private static func socketFamily(_ family: ObstacleBridgePeerAddressPolicy.Family) -> Int32 {
+        switch family {
+        case .ipv4:
+            return AF_INET
+        case .ipv6:
+            return AF_INET6
         }
     }
 
     static func familyName(_ family: Int32) -> String {
-        switch family {
-        case AF_INET:
-            return "ipv4"
-        case AF_INET6:
-            return "ipv6"
-        default:
-            return "unspecified"
-        }
+        ObstacleBridgePeerAddressPolicy.familyName(portableFamily(family))
     }
 
     static func stripBrackets(_ host: String) -> String {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-            return String(trimmed.dropFirst().dropLast())
-        }
-        return trimmed
+        ObstacleBridgePeerAddressPolicy.stripBrackets(host)
     }
 
     static func splitConfiguredPeerHosts(_ host: String) -> [String] {
-        let rendered = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rendered.isEmpty else {
-            return []
-        }
-        guard rendered.contains(",") || rendered.contains(";") else {
-            return [rendered]
-        }
-        return rendered
-            .replacingOccurrences(of: ";", with: ",")
-            .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
+        ObstacleBridgePeerAddressPolicy.splitConfiguredPeerHosts(host)
     }
 
     static func hostIPFamily(_ host: String) -> Int32? {
@@ -121,7 +73,7 @@ enum ObstacleBridgePeerAddressResolver {
     }
 
     static func ipv4MappedIPv6(_ host: String) -> String {
-        return "::ffff:\(host)"
+        ObstacleBridgePeerAddressPolicy.ipv4MappedIPv6(host)
     }
 
     static func numericHostPort(from storage: Data, length: socklen_t) throws -> (String, Int) {
@@ -251,33 +203,34 @@ enum ObstacleBridgePeerAddressResolver {
         guard !rendered.isEmpty else {
             throw NSError(domain: errorDomain, code: 37, userInfo: [NSLocalizedDescriptionKey: "overlay peer requires a non-empty host name"])
         }
-        if let family = hostIPFamily(rendered) {
-            var resolvedHost = rendered
-            var resolvedFamily = family
-            if strictFamily {
-                switch mode {
-                case .ipv4 where family != AF_INET:
-                    throw NSError(domain: errorDomain, code: 38, userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an IPv4 address"])
-                case .ipv6 where family != AF_INET6:
-                    if family == AF_INET {
-                        resolvedHost = ipv4MappedIPv6(rendered)
-                        resolvedFamily = AF_INET6
-                    } else {
-                        throw NSError(domain: errorDomain, code: 39, userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an IPv6 address"])
-                    }
-                default:
-                    break
-                }
+        if let family = hostIPFamily(rendered), let portableFamily = portableFamily(family) {
+            switch ObstacleBridgePeerAddressPolicy.literalResolution(
+                host: rendered,
+                family: portableFamily,
+                mode: mode,
+                strictFamily: strictFamily
+            ) {
+            case let .resolve(host: resolvedHost, family: resolvedFamily):
+                return [try resolveAddress(
+                    host: resolvedHost,
+                    port: port,
+                    passive: false,
+                    family: socketFamily(resolvedFamily),
+                    errorDomain: errorDomain
+                )]
+            case let .incompatible(expected):
+                let code = expected == .ipv4 ? 38 : 39
+                let expectedName = expected == .ipv4 ? "IPv4" : "IPv6"
+                throw NSError(domain: errorDomain, code: code, userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(rendered)' is not an \(expectedName) address"])
             }
-            return [try resolveAddress(host: resolvedHost, port: port, passive: false, family: resolvedFamily, errorDomain: errorDomain)]
         }
 
-        let lookupFamily = strictFamily ? (mode.preferredFamily ?? AF_UNSPEC) : AF_UNSPEC
+        let lookupFamily = strictFamily ? mode.preferredFamily.map(socketFamily) ?? AF_UNSPEC : AF_UNSPEC
         do {
             return try resolveAddressCandidates(host: rendered, port: port, passive: false, family: lookupFamily, errorDomain: errorDomain)
         } catch {
             if rendered.lowercased() == "localhost", let fallback = mode.localhostFallback {
-                return [try resolveAddress(host: fallback.host, port: port, passive: false, family: fallback.family, errorDomain: errorDomain)]
+                return [try resolveAddress(host: fallback.host, port: port, passive: false, family: socketFamily(fallback.family), errorDomain: errorDomain)]
             }
             throw error
         }
@@ -289,11 +242,20 @@ enum ObstacleBridgePeerAddressResolver {
         resolveMode: ResolveMode,
         errorDomain: String
     ) throws -> ObstacleBridgeResolvedAddress {
-        guard candidate.family != socketFamily else {
-            return candidate
+        guard let candidateFamily = portableFamily(candidate.family), let portableSocketFamily = portableFamily(socketFamily) else {
+            throw NSError(
+                domain: errorDomain,
+                code: 41,
+                userInfo: [NSLocalizedDescriptionKey: "overlay peer '\(candidate.host)' is not compatible with socket family \(familyName(socketFamily))"]
+            )
         }
-        if socketFamily == AF_INET6, candidate.family == AF_INET {
+        switch ObstacleBridgePeerAddressPolicy.normalization(for: candidateFamily, socketFamily: portableSocketFamily) {
+        case .keep:
+            return candidate
+        case .mapIPv4ToIPv6:
             return try resolveAddress(host: ipv4MappedIPv6(candidate.host), port: candidate.port, passive: false, family: AF_INET6, errorDomain: errorDomain)
+        case .incompatible:
+            break
         }
         throw NSError(
             domain: errorDomain,
@@ -323,23 +285,21 @@ enum ObstacleBridgePeerAddressResolver {
             }
         }
 
-        candidates.sort { lhs, rhs in
-            let lhsRank = mode.rank(for: lhs.family)
-            let rhsRank = mode.rank(for: rhs.family)
-            if lhsRank != rhsRank {
-                return lhsRank < rhsRank
-            }
-            if lhs.family != rhs.family {
-                return lhs.family < rhs.family
-            }
-            if lhs.host != rhs.host {
-                return lhs.host < rhs.host
-            }
-            return lhs.port < rhs.port
+        let portableCandidates = candidates.compactMap { candidate -> ObstacleBridgePeerAddressPolicy.Candidate? in
+            guard let family = portableFamily(candidate.family) else { return nil }
+            return ObstacleBridgePeerAddressPolicy.Candidate(family: family, host: candidate.host, port: candidate.port)
         }
+        candidates = ObstacleBridgePeerAddressPolicy.orderedCandidateIndices(portableCandidates, mode: mode).map { candidates[$0] }
 
         if let bindFamily = bindFamilyConstraint(bindHost) {
-            let compatible = candidates.filter { $0.family == bindFamily }
+            guard let portableBindFamily = portableFamily(bindFamily) else {
+                return candidates
+            }
+            let candidateKeys = candidates.compactMap { candidate -> ObstacleBridgePeerAddressPolicy.Candidate? in
+                guard let family = portableFamily(candidate.family) else { return nil }
+                return ObstacleBridgePeerAddressPolicy.Candidate(family: family, host: candidate.host, port: candidate.port)
+            }
+            let compatible = ObstacleBridgePeerAddressPolicy.compatibleCandidateIndices(candidateKeys, family: portableBindFamily).map { candidates[$0] }
             if !compatible.isEmpty {
                 return compatible
             }

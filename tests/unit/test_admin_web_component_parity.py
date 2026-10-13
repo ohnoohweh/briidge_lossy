@@ -22,6 +22,7 @@ SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeC
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
 SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"
 SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeRuntimeConfig.swift"
+SWIFT_PEER_ADDRESS_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePeerAddressPolicy.swift"
 SWIFT_PEER_ADDRESS_RESOLVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgePeerAddressResolver.swift"
 SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminWebSupport.swift"
 SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminSnapshotSupport.swift"
@@ -172,6 +173,7 @@ def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -
         str(SWIFT_CHANNELMUX_CORE_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_CODEC_SOURCE),
         str(SWIFT_OVERLAY_STACK_PLANNER_SOURCE),
+        str(SWIFT_PEER_ADDRESS_POLICY_SOURCE),
         str(SWIFT_PEER_ADDRESS_RESOLVER_SOURCE),
         str(SWIFT_RUNTIME_CONFIG_SOURCE),
         str(SWIFT_ADMIN_WEB_SUPPORT_SOURCE),
