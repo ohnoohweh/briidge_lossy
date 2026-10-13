@@ -35,7 +35,6 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
     case ioFailure(Int32)
     case unexpectedEOF
     case invalidFrame
-    case unsupportedWebSocketTLS
     case webSocketHandshakeFailed
     case webSocketProtocolError
     case cancelled
@@ -47,7 +46,6 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
         case .socketFailure(let code), .connectFailure(let code), .ioFailure(let code): return "POSIX socket failure errno=\(code)"
         case .unexpectedEOF: return "overlay peer closed the connection"
         case .invalidFrame: return "invalid overlay frame"
-        case .unsupportedWebSocketTLS: return "wss is not admitted until a Linux TLS backend is qualified"
         case .webSocketHandshakeFailed: return "WebSocket upgrade was rejected"
         case .webSocketProtocolError: return "invalid WebSocket frame"
         case .cancelled: return "overlay connection was cancelled"
@@ -60,6 +58,14 @@ public struct ObstacleBridgeLinuxOverlaySnapshot: Equatable, Sendable {
     public let state: String
     public let attempts: Int
     public let failureReason: String?
+}
+
+/// Common byte-stream boundary for cleartext and TLS WebSocket connections.
+/// WebSocket framing stays transport-agnostic above this boundary.
+protocol ObstacleBridgeLinuxWebSocketByteConnection: AnyObject {
+    func write(_ data: Data) throws
+    func readExactly(_ count: Int) throws -> Data
+    func readUntil(_ delimiter: Data, maximum: Int) throws -> Data
 }
 
 /// Linux POSIX lower-transport probes. They intentionally own only the raw
@@ -275,7 +281,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         }
     }
 
-    private func performWebSocketUpgrade(_ connection: POSIXStreamConnection) throws {
+    private func performWebSocketUpgrade(_ connection: some ObstacleBridgeLinuxWebSocketByteConnection) throws {
         var rng = SystemRandomNumberGenerator()
         let key = Data((0..<16).map { _ in UInt8.random(in: .min ... .max, using: &rng) }).base64EncodedString()
         let request = "GET \(wsPath) HTTP/1.1\r\nHost: \(host):\(port)\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: \(key)\r\nX-ObstacleBridge-WS-Payload-Mode: \(wsPayloadMode.rawValue)\r\n\r\n"
@@ -321,7 +327,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: payload))
     }
 
-    private func readWebSocketApplicationPayload(_ connection: POSIXStreamConnection) throws -> Data {
+    private func readWebSocketApplicationPayload(_ connection: some ObstacleBridgeLinuxWebSocketByteConnection) throws -> Data {
         while true {
             switch try ObstacleBridgeOverlayEnvelope.decodeWebSocket(try readWebSocketApplicationFrame(connection), mode: wsPayloadMode) {
             case .application(let payload): return payload
@@ -334,7 +340,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         }
     }
 
-    private func readWebSocketApplicationFrame(_ connection: POSIXStreamConnection) throws -> ObstacleBridgeWebSocketPayload {
+    private func readWebSocketApplicationFrame(_ connection: some ObstacleBridgeLinuxWebSocketByteConnection) throws -> ObstacleBridgeWebSocketPayload {
         while true {
             let header = try connection.readExactly(2)
             guard header[0] & 0x80 != 0 else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketProtocolError }
@@ -407,7 +413,7 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     }
 }
 
-private final class POSIXStreamConnection {
+private final class POSIXStreamConnection: ObstacleBridgeLinuxWebSocketByteConnection {
     private var fd: Int32
     private let descriptorLock = NSLock()
 

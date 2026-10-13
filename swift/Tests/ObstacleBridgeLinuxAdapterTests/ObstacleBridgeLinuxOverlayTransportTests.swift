@@ -78,6 +78,28 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(client.snapshot.state == "connected")
     }
 
+    @Test func tlsWebSocketRoundTripsWithConfiguredTrustRootAgainstPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "wss")
+        defer { peer.stop() }
+        guard let trustRootsPath = peer.trustRootsPath else { throw OverlayTestError.peerDidNotStart }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(
+            host: "localhost", port: peer.port, transport: .ws,
+            wsPath: "/overlay", wsTLS: true, wsTrustRootsPath: trustRootsPath
+        )
+        #expect(try client.roundTrip(Data("swift-linux-wss".utf8)) == Data("swift-linux-wss".utf8))
+        #expect(client.snapshot.state == "connected")
+    }
+
+    @Test func tlsWebSocketRejectsUntrustedPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "wss")
+        defer { peer.stop() }
+        let client = try ObstacleBridgeLinuxOverlayTransportClient(
+            host: "localhost", port: peer.port, transport: .ws, wsPath: "/overlay", wsTLS: true
+        )
+        #expect(throws: (any Error).self) { try client.roundTrip(Data("untrusted".utf8), attempts: 1) }
+        #expect(client.snapshot.state == "failed")
+    }
+
     @Test func webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer() throws {
         for mode in ["base64", "json-base64", "semi-text-shape"] {
             let peer = try PythonOverlayPeer(mode: "ws-text-\(mode)")
@@ -729,6 +751,7 @@ final class PythonOverlayPeer {
     private static let launchSlots = DispatchSemaphore(value: 2)
     let process: Process
     let port: Int
+    let trustRootsPath: String?
     private let forceStop: Bool
     private var stopped = false
 
@@ -742,20 +765,22 @@ final class PythonOverlayPeer {
         let virtualEnvironmentPython = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(".venv/bin/python")
             .path
-        process.executableURL = URL(fileURLWithPath: mode == "quic" && FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython) ? virtualEnvironmentPython : "/usr/bin/python3")
+        process.executableURL = URL(fileURLWithPath: (mode == "quic" || mode == "wss") && FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython) ? virtualEnvironmentPython : "/usr/bin/python3")
         process.arguments = ["-u", "-c", script]
         process.standardOutput = stdout
         process.standardError = Pipe()
         try process.run()
         let line = String(data: stdout.fileHandleForReading.availableData, encoding: .utf8) ?? ""
-        guard let port = Int(line.trimmingCharacters(in: .whitespacesAndNewlines)), port > 0 else {
+        let fields = line.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "|", maxSplits: 1).map(String.init)
+        guard let portText = fields.first, let port = Int(portText), port > 0 else {
             process.terminate()
             process.waitUntilExit()
             throw OverlayTestError.peerDidNotStart
         }
         self.process = process
         self.port = port
-        self.forceStop = mode == "quic"
+        self.trustRootsPath = fields.count == 2 ? fields[1] : nil
+        self.forceStop = mode == "quic" || mode == "wss"
         started = true
     }
 
@@ -774,6 +799,52 @@ final class PythonOverlayPeer {
     }
 
     private static func script(for mode: String) -> String {
+        if mode == "wss" {
+            return """
+            import base64, datetime, hashlib, ipaddress, socket, ssl, tempfile
+            from pathlib import Path
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes, serialization
+            from cryptography.hazmat.primitives.asymmetric import ec
+            from cryptography.x509.oid import NameOID
+            tmp = Path(tempfile.mkdtemp())
+            key = ec.generate_private_key(ec.SECP256R1())
+            now = datetime.datetime.now(datetime.timezone.utc)
+            subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, 'localhost')])
+            cert = (x509.CertificateBuilder().subject_name(subject).issuer_name(subject)
+                .public_key(key.public_key()).serial_number(x509.random_serial_number())
+                .not_valid_before(now - datetime.timedelta(days=1)).not_valid_after(now + datetime.timedelta(days=1))
+                .add_extension(x509.SubjectAlternativeName([x509.DNSName('localhost'), x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]), critical=False)
+                .sign(key, hashes.SHA256()))
+            cert_path, key_path = tmp / 'cert.pem', tmp / 'key.pem'
+            cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+            key_path.write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL, serialization.NoEncryption()))
+            listener=socket.socket(); listener.bind(('127.0.0.1',0)); listener.listen(1)
+            print(str(listener.getsockname()[1])+'|'+str(cert_path), flush=True)
+            context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); context.load_cert_chain(cert_path, key_path)
+            raw,_=listener.accept(); c=context.wrap_socket(raw, server_side=True)
+            request=b''
+            while b'\\r\\n\\r\\n' not in request: request += c.recv(4096)
+            key=[x.split(b':',1)[1].strip() for x in request.split(b'\\r\\n') if x.lower().startswith(b'sec-websocket-key:')][0]
+            accept=base64.b64encode(hashlib.sha1(key+b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest())
+            c.sendall(b'HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\nSec-WebSocket-Accept: '+accept+b'\\r\\n\\r\\n')
+            def nread(n):
+                out=b''
+                while len(out)<n:
+                    chunk=c.recv(n-len(out))
+                    if not chunk: raise RuntimeError('eof')
+                    out+=chunk
+                return out
+            first,second=nread(2); assert first == 130 and second & 128
+            size=second & 127
+            if size == 126: size=int.from_bytes(nread(2),'big')
+            elif size == 127: size=int.from_bytes(nread(8),'big')
+            mask=nread(4); payload=bytes(value ^ mask[index % 4] for index,value in enumerate(nread(size)))
+            assert payload[:1] == b'\\0'
+            c.sendall(bytes([130, len(payload)]) + payload)
+            c.close(); listener.close()
+            """
+        }
         if mode == "quic" {
             return """
             import asyncio, datetime, ipaddress, signal, tempfile

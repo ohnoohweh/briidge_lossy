@@ -2,11 +2,12 @@ import Foundation
 import NIOCore
 import NIOPosix
 import NIOSSL
+import NIOTLS
 
 /// Synchronous adapter facade over one verified NIO SSL client channel.  It is
 /// kept below the existing WebSocket framing boundary so TLS never changes
 /// overlay, SecureLink, or ChannelMux byte ownership.
-final class ObstacleBridgeLinuxTLSWebSocketConnection: @unchecked Sendable {
+final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSocketByteConnection, @unchecked Sendable {
     private final class InboundBytes: ChannelInboundHandler, @unchecked Sendable {
         typealias InboundIn = ByteBuffer
         private let condition = NSCondition()
@@ -37,7 +38,12 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: @unchecked Sendable {
             }
             if let failure { throw failure }
             guard bytes.count >= count else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
-            let result = bytes.prefix(count); bytes.removeFirst(count); return result
+            // `Data.prefix` preserves the source indices.  Callers decode
+            // WebSocket headers with zero-based subscripts, so detach the
+            // consumed slice before advancing the shared buffer.
+            let result = Data(bytes.prefix(count))
+            bytes.removeFirst(count)
+            return result
         }
     }
 
@@ -73,14 +79,18 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: @unchecked Sendable {
 
     private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private let inbound = InboundBytes()
+    private let timeoutMilliseconds: Int
     private let lock = NSLock()
     private var channel: (any Channel)?
     private var closed = false
 
     init(host: String, port: Int, trustRootsPath: String?, timeoutMilliseconds: Int) throws {
+        self.timeoutMilliseconds = max(1, timeoutMilliseconds)
         var configuration = TLSConfiguration.makeClientConfiguration()
         configuration.certificateVerification = .fullVerification
-        if let trustRootsPath { configuration.trustRoots = .file(trustRootsPath) }
+        // Keep the platform roots active and add an operator bundle for
+        // private deployments; neither path disables verification.
+        if let trustRootsPath { configuration.additionalTrustRoots = [.file(trustRootsPath)] }
         let context = try NIOSSLContext(configuration: configuration)
         let handshake = HandshakeObserver()
         do {
@@ -92,7 +102,7 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: @unchecked Sendable {
                 } catch { return channel.eventLoop.makeFailedFuture(error) }
             }.connect(host: host, port: port).wait()
             lock.lock(); channel = connected; lock.unlock()
-            try handshake.wait(timeoutMilliseconds: timeoutMilliseconds)
+            try handshake.wait(timeoutMilliseconds: self.timeoutMilliseconds)
         } catch {
             close(); throw error
         }
@@ -106,13 +116,13 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: @unchecked Sendable {
         var buffer = channel.allocator.buffer(capacity: bytes.count); buffer.writeBytes(bytes)
         try channel.writeAndFlush(buffer).wait()
     }
-    func readExactly(_ count: Int, timeoutMilliseconds: Int) throws -> Data {
+    func readExactly(_ count: Int) throws -> Data {
         try inbound.readExactly(count, timeoutMilliseconds: timeoutMilliseconds)
     }
-    func readUntil(_ delimiter: Data, maximum: Int, timeoutMilliseconds: Int) throws -> Data {
+    func readUntil(_ delimiter: Data, maximum: Int) throws -> Data {
         var result = Data()
         while result.count < maximum {
-            result.append(try readExactly(1, timeoutMilliseconds: timeoutMilliseconds))
+            result.append(try readExactly(1))
             if result.suffix(delimiter.count) == delimiter { return result }
         }
         throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed

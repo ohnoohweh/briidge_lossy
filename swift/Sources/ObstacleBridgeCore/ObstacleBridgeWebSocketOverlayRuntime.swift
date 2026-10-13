@@ -1,4 +1,7 @@
 import Foundation
+#if os(Linux)
+import FoundationNetworking
+#endif
 
 enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
     case httpPreflightFailed(String)

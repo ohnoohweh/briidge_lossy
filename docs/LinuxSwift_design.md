@@ -326,8 +326,8 @@ memory, scheduler behavior, and termination policy differ by platform.
 - Linux lacks privileged `/dev/net/tun` data-plane qualification. The
   foreground executable rejects TUN configuration until that adapter and its
   evidence exist.
-- Linux does not provide TLS WebSocket, proxy, or package/service-manager
-  support.
+- Linux has no TLS WebSocket listener, HTTP proxy, or package/service-manager
+  support. Outbound WSS is limited to the qualified client boundary below.
 - The foreground myudp listener rejects `own_servers` and `remote_servers`.
   This is intentional parity with listener-mode service policy: a listener
   does not infer a target peer for a locally accepted connection, and binding
@@ -359,7 +359,6 @@ Only unfinished packages are listed here.
 | --- | --- |
 | `LSW-005` | Provide and qualify the Linux `/dev/net/tun` adapter, including bidirectional packets, bounded queues, cleanup, and operator-controlled privilege. |
 | `LSW-005B.2` | Qualify Linux QUIC listener ownership, configured trust anchors, and full ChannelMux service traffic. |
-| `LSW-005C` | Select and qualify a maintained Linux TLS WebSocket backend with fail-closed trust handling. |
 | `LSW-006` | Qualify hook, route, DNS, underlay-preservation, and teardown integration without reproducing hook policy in Swift. |
 | `LSW-007` | Complete operator documentation, diagnostics, Admin, signal, and capability guidance for the admitted product surface. |
 | `LSW-008` | Run the Linux product parity gate, including clean build, mixed-runtime suites, and privileged TUN/route/DNS/hook qualification. |
@@ -463,9 +462,35 @@ correction; the current source still rejects listener mode and retains only
 the bounded single-exchange client probe. Peer-family preference is also not
 mapped.
 
+## LSW-005C TLS WebSocket client boundary
+
+Outbound WSS uses the pinned `swift-nio-ssl` 2.37.5 provider and its NIO TLS
+event. The TLS channel completes a verified handshake before the existing HTTP
+upgrade and WebSocket framing receive plaintext bytes. That framing remains
+above a small common byte-stream boundary, so cleartext WS and WSS retain the
+same overlay, SecureLink, and ChannelMux ownership.
+
+Verification is always full: there is no WSS insecure switch. With no
+`ws_ca_cert`, NIO SSL uses the platform trust store. When configured, the PEM
+bundle is added to that store rather than replacing it. The configured peer
+name is supplied to NIO SSL for SNI and certificate-name verification; a
+numeric endpoint is rejected by that backend rather than silently weakening
+host verification.
+
+The focused Linux qualification creates a P-256 certificate with localhost
+and loopback identities, proves an upgrade and binary overlay round trip using
+its configured PEM root, and proves that the same peer is rejected without
+that root. This is intentionally an outbound client boundary; it does not
+make a Linux WSS listener or proxy an admitted mode.
+
+Known gaps after `LSW-005C`: WSS listener ownership, HTTP proxy negotiation,
+and package/service-manager integration remain unavailable. WSS does not add a
+trust bypass or a second WebSocket protocol implementation. Those capabilities
+need their own adapter and qualification packages rather than extending this
+client boundary.
+
 ## Platform decisions still required
 
 - Supported Linux distributions and deployment model.
 - DNS backend expectations for the existing hook contract.
-- Maintained Linux TLS WebSocket provider.
 - Windows socket, packet-device, route/DNS, service, and secret providers.

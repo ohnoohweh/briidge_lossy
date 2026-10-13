@@ -50,6 +50,18 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.secureLinkPSK == nil)
     }
 
+    @Test func parsesVerifiedTLSWebSocketConfigurationWithCustomTrustRoots() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "ws"],
+            "ws_session": [
+                "ws_peer": "peer.example", "ws_peer_port": 443,
+                "ws_tls": true, "ws_ca_cert": "/etc/obstaclebridge/wss-roots.pem",
+            ],
+        ]))
+        #expect(config.webSocketTLS)
+        #expect(config.webSocketTrustRootsPath == "/etc/obstaclebridge/wss-roots.pem")
+    }
+
     @Test func parsesWebSocketTextPayloadMode() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "ws"],
@@ -160,12 +172,6 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
                 "runner": ["overlay_transport": "quic", "listener_mode": true],
                 "quic_session": ["quic_own_port": 4242],
-            ]))
-        }
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedWebSocketTLS) {
-            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
-                "runner": ["overlay_transport": "ws"],
-                "ws_session": ["ws_peer": "peer.example", "ws_peer_port": 443, "ws_tls": true],
             ]))
         }
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK) {
