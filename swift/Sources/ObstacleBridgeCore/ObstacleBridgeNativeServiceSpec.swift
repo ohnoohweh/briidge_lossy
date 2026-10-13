@@ -1,16 +1,38 @@
 import Foundation
 
-struct ObstacleBridgeNativeServiceSpec {
-    let svcID: Int
-    let name: String?
-    let listenProtocol: String
-    let listenBind: String
-    let listenPort: Int
-    let targetProtocol: String
-    let targetHost: String
-    let targetPort: Int
+public struct ObstacleBridgeNativeServiceSpec {
+    public let svcID: Int
+    public let name: String?
+    public let listenProtocol: String
+    public let listenBind: String
+    public let listenPort: Int
+    public let targetProtocol: String
+    public let targetHost: String
+    public let targetPort: Int
     let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
     let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
+
+    public init(
+        svcID: Int,
+        name: String?,
+        listenProtocol: String,
+        listenBind: String,
+        listenPort: Int,
+        targetProtocol: String,
+        targetHost: String,
+        targetPort: Int
+    ) {
+        self.svcID = svcID
+        self.name = name
+        self.listenProtocol = listenProtocol
+        self.listenBind = listenBind
+        self.listenPort = listenPort
+        self.targetProtocol = targetProtocol
+        self.targetHost = targetHost
+        self.targetPort = targetPort
+        self.lifecycleHooks = nil
+        self.options = nil
+    }
 
     init(channelMuxSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {
         self.svcID = channelMuxSpec.svcID

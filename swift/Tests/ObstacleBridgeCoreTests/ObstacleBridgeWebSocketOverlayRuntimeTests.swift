@@ -3,6 +3,23 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeWebSocketOverlayRuntimeTests {
+    @Test func nativeServiceSpecRetainsPortableScalarConfiguration() {
+        let spec = ObstacleBridgeNativeServiceSpec(
+            svcID: 7,
+            name: "dns",
+            listenProtocol: "udp",
+            listenBind: "127.0.0.1",
+            listenPort: 53,
+            targetProtocol: "udp",
+            targetHost: "1.1.1.1",
+            targetPort: 53
+        )
+
+        #expect(spec.svcID == 7)
+        #expect(spec.listenProtocol == "udp")
+        #expect(spec.targetHost == "1.1.1.1")
+    }
+
     @Test func udpPeerRuntimeEmitsAndDeliversPortableRecordEffects() throws {
         let sender = ObstacleBridgeUdpOverlayPeerRuntime()
         try sender.enqueueApplicationPayload(Data("udp-core".utf8), nowNS: 10)

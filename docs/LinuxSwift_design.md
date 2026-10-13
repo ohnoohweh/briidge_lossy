@@ -232,7 +232,9 @@ Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
 `ObstacleBridgeTcpOverlayRuntime` and `ObstacleBridgeQuicOverlayRuntime` for
 their respective application-frame effects, plus
 `ObstacleBridgeWebSocketOverlayRuntime` for clear-WebSocket proxy CONNECT
-policy. Linux myUDP now delegates record batching, inbound delivery, and timer
+policy. Linux service configuration maps admitted scalar rows through
+`ObstacleBridgeNativeServiceSpec` before Linux protocol/socket admission.
+Linux myUDP now delegates record batching, inbound delivery, and timer
 effects to `ObstacleBridgeUdpOverlayPeerRuntime`; the adapter retains descriptor
 send/receive and its small delivered-record queue. POSIX/NIO retains only the
 connection and byte I/O below those Core effects.
@@ -240,7 +242,7 @@ The current macOS host can compile the portable Core target but does not expose
 SwiftPM's Linux adapter target; the focused Linux adapter suite remains
 required Linux-host evidence for this admission.
 There is no Linux caller yet for the moved Admin configuration/web and
-onboarding policy, native service specification, ChannelMux compatibility/TCP/
+onboarding policy, ChannelMux compatibility/TCP/
 UDP runtime, SecureLink transport adapter, overlay-layer adapter, or the
 remaining TCP/QUIC/WebSocket runtime lifecycle owners. The latter lifecycle
 owners need explicit effect-to-POSIX translations rather than wrapping the

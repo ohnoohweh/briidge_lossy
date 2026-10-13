@@ -30,6 +30,23 @@ public struct ObstacleBridgeLinuxServiceSpec: Equatable, Sendable {
     public let targetProtocol: ObstacleBridgeChannelMuxProtocol
     public let targetHost: String
     public let targetPort: Int
+
+    init(nativeSpec: ObstacleBridgeNativeServiceSpec) throws {
+        guard let serviceID = UInt16(exactly: nativeSpec.svcID),
+              let listenProtocol = ObstacleBridgeLinuxRuntimeConfiguration.channelProtocol(nativeSpec.listenProtocol),
+              let targetProtocol = ObstacleBridgeLinuxRuntimeConfiguration.channelProtocol(nativeSpec.targetProtocol)
+        else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has unsupported service protocol or identifier")
+        }
+        self.serviceID = serviceID
+        self.name = nativeSpec.name
+        self.listenProtocol = listenProtocol
+        self.listenHost = nativeSpec.listenBind
+        self.listenPort = nativeSpec.listenPort
+        self.targetProtocol = targetProtocol
+        self.targetHost = nativeSpec.targetHost
+        self.targetPort = nativeSpec.targetPort
+    }
 }
 
 /// The Linux admission view of the existing sectioned runtime configuration.
@@ -255,11 +272,21 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
                   (1...65535).contains(targetPort),
                   listenProtocol == targetProtocol
             else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has invalid \(key) service at index \(index)") }
-            return .init(serviceID: UInt16(index + 1), name: string(row["name"]), listenProtocol: listenProtocol, listenHost: listenHost, listenPort: listenPort, targetProtocol: targetProtocol, targetHost: targetHost, targetPort: targetPort)
+            let nativeSpec = ObstacleBridgeNativeServiceSpec(
+                svcID: index + 1,
+                name: string(row["name"]),
+                listenProtocol: listenName,
+                listenBind: listenHost,
+                listenPort: listenPort,
+                targetProtocol: targetName,
+                targetHost: targetHost,
+                targetPort: targetPort
+            )
+            return try .init(nativeSpec: nativeSpec)
         }
     }
 
-    private static func channelProtocol(_ value: String) -> ObstacleBridgeChannelMuxProtocol? {
+    fileprivate static func channelProtocol(_ value: String) -> ObstacleBridgeChannelMuxProtocol? {
         switch value.lowercased() {
         case "udp": return .udp
         case "tcp": return .tcp
