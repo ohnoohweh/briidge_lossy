@@ -168,8 +168,11 @@ enum ObstacleBridgeAdminWebSupport {
     }
 
     private static func value(for key: String, in payload: [String: Any]) -> Any? {
-        if let direct = payload[key] {
+        if let direct = payload[key], !(direct is [String: Any]) {
             return direct
+        }
+        if let section = payload[key] as? [String: Any], let nested = section[key] {
+            return nested
         }
         for value in payload.values {
             if let nested = value as? [String: Any], let match = self.value(for: key, in: nested) {
