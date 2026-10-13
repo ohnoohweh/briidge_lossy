@@ -166,6 +166,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigChallenge.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigChallengePolicy.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeConfigSecretPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeConfigSecretCodec.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),

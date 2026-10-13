@@ -194,7 +194,7 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
     static func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String) {
         var lastError = "target resolution failed"
         for family in candidateFamilies {
-            if let directFamily = ObstacleBridgeTunPing.ipFamily(target), directFamily == family {
+            if let directFamily = ObstacleBridgeTunPing.ipFamily(target), platformFamily(for: directFamily) == family {
                 return (target, family, "")
             }
             if let resolved = resolveHost(target, family: family) {
@@ -250,7 +250,7 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         }
         let nonce = payload.subdata(in: 5..<13)
         let key = ObstacleBridgeTunProbeWaiterKey(
-            family: parsed.family,
+            family: platformFamily(for: parsed.family),
             identifier: parsed.identifier,
             sequence: parsed.sequence,
             nonce: nonce
@@ -273,6 +273,15 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         )
         waiter.semaphore.signal()
         return true
+    }
+
+    private static func platformFamily(for family: ObstacleBridgeTunPing.Family) -> Int32 {
+        switch family {
+        case .ipv4:
+            return AF_INET
+        case .ipv6:
+            return AF_INET6
+        }
     }
 
     static func tunProbeRuntimeDiagSnapshot(

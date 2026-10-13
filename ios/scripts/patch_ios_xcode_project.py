@@ -78,6 +78,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000046", "71C500000000000000000146", "ObstacleBridgeAdminConfigChallengePolicy.swift"),
     ("71C500000000000000000019", "71C500000000000000000119", "ObstacleBridgeAdminConfigSupport.swift"),
     ("71C50000000000000000001C", "71C50000000000000000011C", "ObstacleBridgeConfigSecretCodec.swift"),
+    ("71C500000000000000000048", "71C500000000000000000148", "ObstacleBridgeConfigSecretPolicy.swift"),
     ("71C50000000000000000003E", "71C50000000000000000013E", "ObstacleBridgeAppleServiceCatalog.swift"),
     ("71C50000000000000000001B", "71C50000000000000000011B", "ObstacleBridgeAdminSnapshotSupport.swift"),
     ("71C500000000000000000018", "71C500000000000000000118", "ObstacleBridgeAdminWebSupport.swift"),
@@ -146,6 +147,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000046", "71C610000000000000000146", "ObstacleBridgeAdminConfigChallengePolicy.swift"),
     ("71C610000000000000000016", "71C610000000000000000116", "ObstacleBridgeAdminConfigSupport.swift"),
     ("71C610000000000000000019", "71C610000000000000000119", "ObstacleBridgeConfigSecretCodec.swift"),
+    ("71C610000000000000000048", "71C610000000000000000148", "ObstacleBridgeConfigSecretPolicy.swift"),
     ("71C61000000000000000003E", "71C61000000000000000013E", "ObstacleBridgeAppleServiceCatalog.swift"),
     ("71C610000000000000000018", "71C610000000000000000118", "ObstacleBridgeAdminSnapshotSupport.swift"),
     ("71C610000000000000000015", "71C610000000000000000115", "ObstacleBridgeAdminWebSupport.swift"),
@@ -232,6 +234,8 @@ def shared_swift_source_path(name: str) -> str:
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuthPolicy.swift"
     if name == "ObstacleBridgeTunPing.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeTunPing.swift"
+    if name == "ObstacleBridgeConfigSecretPolicy.swift":
+        return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeConfigSecretPolicy.swift"
     if name in {"ObstacleBridgeCore.swift", "ObstacleBridgeSecureLinkPSKTranscript.swift", "ObstacleBridgeWebSocketPayloadCodec.swift", "ObstacleBridgeOverlayCoordinator.swift", "ObstacleBridgeOverlayBackpressure.swift", "ObstacleBridgeOverlayEnvelope.swift", "ObstacleBridgeChannelMuxSession.swift", "ObstacleBridgeBinaryCodec.swift", "ObstacleBridgeChannelMuxFrameCodec.swift", "ObstacleBridgeCompression.swift", "ObstacleBridgeMyUDPCodec.swift", "ObstacleBridgeSecureLinkFrameCodec.swift", "ObstacleBridgeOverlayFrameCodec.swift", "ObstacleBridgeControlChunkCodec.swift", "ObstacleBridgeServiceCodec.swift", "ObstacleBridgeServiceCatalog.swift", "ObstacleBridgePacketModel.swift", "ObstacleBridgeRuntimeHealth.swift", "ObstacleBridgeTelemetry.swift", "ObstacleBridgeTelemetrySpool.swift", "ObstacleBridgeTelemetryUploadPolicy.swift", "ObstacleBridgeUdpOverlayCodec.swift", "ObstacleBridgeAdminSnapshotSupport.swift", "ObstacleBridgeOverlayStackPlanner.swift", "ObstacleBridgeQuicOverlayRuntime.swift", "ObstacleBridgeTcpOverlayRuntime.swift", "ObstacleBridgeWebSocketOverlayRuntime.swift", "ObstacleBridgeAdminAPI.swift", "ObstacleBridgeAdminConfigChallengePolicy.swift", "ObstacleBridgeChannelMuxTcpRuntime.swift", "ObstacleBridgeChannelMuxUdpRuntime.swift", "ObstacleBridgeUdpOverlayPeerRuntime.swift", "ObstacleBridgeSecureLinkPskCodec.swift", "ObstacleBridgeSecureLinkPskRuntime.swift", "ObstacleBridgeSecureLinkPskTransportAdapter.swift", "ObstacleBridgeCompressLayerRuntime.swift", "ObstacleBridgePeerAddressProtocolRuntime.swift", "ObstacleBridgeOverlayLayerTransportAdapter.swift", "ObstacleBridgeNativeServiceSpec.swift", "ObstacleBridgeAdminWebSupport.swift", "ObstacleBridgeOnboarding.swift", "ObstacleBridgeAdminConfigSupport.swift"}:
         return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     return f"../../../../native/ObstacleBridgeShared/{name}"

@@ -2267,6 +2267,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminConfigChallenge.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminConfigChallengePolicy.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminConfigSupport.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeConfigSecretPolicy.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeConfigSecretCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminSnapshotSupport.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminWebSupport.swift'),

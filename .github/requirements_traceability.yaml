@@ -1548,6 +1548,8 @@ REQ-ADM-009:
     # The persistence regression now pins the machine-derived fallback path
     # directly instead of relying on an environment-provided config-secret seed.
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeConfigSecretPolicyTests.swift::transformsOnlyNamedSecretFieldsRecursively
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeConfigSecretPolicyTests.swift::normalizesURLSafeBase64
     - tests/unit/test_admin_web_payloads.py::test_config_snapshot_hides_secure_link_psk_and_marks_it_read_only
     - tests/unit/test_admin_web_payloads.py::test_update_config_rejects_secure_link_psk
 

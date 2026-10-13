@@ -21,4 +21,27 @@ struct ObstacleBridgeTunPingTests {
         #expect(packet[20] == 8)
         #expect(packet.count == 20 + 8 + payload.count)
     }
+
+    @Test func buildsAndParsesIPv6ProbeWithoutPlatformSocketTypes() throws {
+        var packet = try #require(ObstacleBridgeTunPing.buildIPv6EchoRequest(
+            sourceIP: "2001:db8::1",
+            destinationIP: "::1",
+            identifier: 7,
+            sequence: 9,
+            payload: Data([1, 2, 3])
+        ))
+        packet[40] = 129
+        let reply = try #require(ObstacleBridgeTunPing.parseEchoReply(packet))
+        #expect(reply.sourceIP == "2001:db8::1")
+        #expect(reply.destinationIP == "::1")
+        #expect(reply.identifier == 7)
+        #expect(reply.sequence == 9)
+        #expect(reply.payload == Data([1, 2, 3]))
+        switch reply.family {
+        case .ipv6:
+            break
+        case .ipv4:
+            Issue.record("expected IPv6 reply family")
+        }
+    }
 }

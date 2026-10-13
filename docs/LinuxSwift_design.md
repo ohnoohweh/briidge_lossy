@@ -293,6 +293,12 @@ portable. Packet-device reads/writes remain in the Apple TUN adapter. Its
 Linux admission is deliberately deferred to `LSW-SC.2L-A`, where a Linux TUN
 owner can provide the packet I/O port and execute the same packet vectors.
 
+`ObstacleBridgeConfigSecretPolicy` now owns recursive selection of sensitive
+configuration fields and the versioned URL-safe envelope representation. The
+Apple codec remains responsible for hostname-derived key material, CryptoKit
+ChaChaPoly, and the native HKDF binding. `LSW-SC.2L-A` remains the separate
+Linux admission point for a Linux key-material and cryptographic provider.
+
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
 | `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |

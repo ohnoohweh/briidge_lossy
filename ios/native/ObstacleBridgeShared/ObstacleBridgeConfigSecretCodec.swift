@@ -3,43 +3,16 @@ import Darwin
 import Foundation
 
 enum ObstacleBridgeConfigSecretCodec {
-    private static let secretFields: Set<String> = ["admin_web_password", "secure_link_psk"]
-    private static let prefix = "enc:v1:"
     private static let salt = Data("ObstacleBridge config secret v1".utf8)
     private static let info = Data("ObstacleBridge config field encryption".utf8)
     private static let aad = Data("ObstacleBridge cfg secret".utf8)
 
     static func decryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
-        guard let decoded = try transformSecrets(in: payload, transform: decryptSecret) as? [String: Any] else {
-            return payload
-        }
-        return decoded
+        try ObstacleBridgeConfigSecretPolicy.decryptPayload(payload, decrypt: decryptSecret)
     }
 
     static func encryptPayload(_ payload: [String: Any]) throws -> [String: Any] {
-        guard let encoded = try transformSecrets(in: payload, transform: encryptSecret) as? [String: Any] else {
-            return payload
-        }
-        return encoded
-    }
-
-    private static func transformSecrets(in object: Any, transform: (String) throws -> String) throws -> Any {
-        if let dict = object as? [String: Any] {
-            var out: [String: Any] = [:]
-            out.reserveCapacity(dict.count)
-            for (key, value) in dict {
-                if secretFields.contains(key), let stringValue = value as? String {
-                    out[key] = stringValue.isEmpty ? "" : try transform(stringValue)
-                } else {
-                    out[key] = try transformSecrets(in: value, transform: transform)
-                }
-            }
-            return out
-        }
-        if let list = object as? [Any] {
-            return try list.map { try transformSecrets(in: $0, transform: transform) }
-        }
-        return object
+        try ObstacleBridgeConfigSecretPolicy.encryptPayload(payload, encrypt: encryptSecret)
     }
 
     private static func encryptSecret(_ value: String) throws -> String {
@@ -47,15 +20,15 @@ enum ObstacleBridgeConfigSecretCodec {
         let nonceData = Data((0..<12).map { _ in UInt8.random(in: 0...255) })
         let nonce = try ChaChaPoly.Nonce(data: nonceData)
         let sealed = try ChaChaPoly.seal(Data(value.utf8), using: key, nonce: nonce, authenticating: aad)
-        return prefix + urlSafeBase64Encode(sealed.combined)
+        return ObstacleBridgeConfigSecretPolicy.prefix + ObstacleBridgeConfigSecretPolicy.urlSafeBase64Encode(sealed.combined)
     }
 
     private static func decryptSecret(_ value: String) throws -> String {
-        guard value.hasPrefix(prefix) else {
+        guard value.hasPrefix(ObstacleBridgeConfigSecretPolicy.prefix) else {
             return value
         }
-        let encoded = String(value.dropFirst(prefix.count))
-        let combined = try urlSafeBase64Decode(encoded)
+        let encoded = String(value.dropFirst(ObstacleBridgeConfigSecretPolicy.prefix.count))
+        let combined = try ObstacleBridgeConfigSecretPolicy.urlSafeBase64Decode(encoded)
         let sealed = try ChaChaPoly.SealedBox(combined: combined)
         let plaintext = try ChaChaPoly.open(sealed, using: derivedKey(), authenticating: aad)
         guard let stringValue = String(data: plaintext, encoding: .utf8) else {
@@ -95,27 +68,4 @@ enum ObstacleBridgeConfigSecretCodec {
         return Data("obstacle-bridge".utf8)
     }
 
-    private static func urlSafeBase64Encode(_ data: Data) -> String {
-        data.base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-    }
-
-    private static func urlSafeBase64Decode(_ text: String) throws -> Data {
-        var normalized = text
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let remainder = normalized.count % 4
-        if remainder != 0 {
-            normalized += String(repeating: "=", count: 4 - remainder)
-        }
-        guard let data = Data(base64Encoded: normalized) else {
-            throw NSError(
-                domain: "ObstacleBridge.ConfigSecretCodec",
-                code: 2,
-                userInfo: [NSLocalizedDescriptionKey: "invalid base64 config secret"]
-            )
-        }
-        return data
-    }
 }

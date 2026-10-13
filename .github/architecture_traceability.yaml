@@ -461,6 +461,8 @@ ARC-CMP-004:
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
     - tests/unit/test_runner_config_persistence.py::test_cli_config_dump_discards_unregistered_effective_values
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_encrypts_secret_fields_and_loads_them_back
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeConfigSecretPolicyTests.swift::transformsOnlyNamedSecretFieldsRecursively
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeConfigSecretPolicyTests.swift::normalizesURLSafeBase64
     - tests/unit/test_runner_events.py::test_linux_tun_elevation_exec_argv_preserves_runtime_env_names
     - tests/unit/test_runner_events.py::test_main_reexecs_with_linux_tun_privileges_when_local_tun_requires_root
     - tests/unit/test_runner_events.py::test_linux_helper_mode_skips_whole_process_tun_reexec
