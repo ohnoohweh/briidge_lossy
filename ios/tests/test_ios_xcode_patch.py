@@ -244,7 +244,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
     assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
     assert 'repositoryURL = "https://github.com/apple/swift-crypto.git";' in patched

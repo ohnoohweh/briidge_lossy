@@ -2282,7 +2282,7 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunPing.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunProbeDiagnosticsSupport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeRuntimeConfig.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOnboarding.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOnboarding.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebAdminServer.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxUdpRuntime.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxTcpRuntime.swift'),

@@ -47,7 +47,7 @@
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigSupport.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift",

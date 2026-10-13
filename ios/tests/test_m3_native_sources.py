@@ -997,7 +997,7 @@ def test_websocket_overlay_transport_owner_source_exists() -> None:
 
 
 def test_onboarding_invites_keep_all_client_transport_options() -> None:
-    onboarding = (SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift").read_text(encoding="utf-8")
+    onboarding = (CORE_SWIFT_DIR / "ObstacleBridgeOnboarding.swift").read_text(encoding="utf-8")
 
     for key in [
         "udp_bind",

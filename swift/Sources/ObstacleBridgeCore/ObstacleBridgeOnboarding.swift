@@ -1,6 +1,59 @@
 import Foundation
 
 enum ObstacleBridgeOnboarding {
+    /// The invite format accepts both flat and grouped configuration. Keep the
+    /// scalar conversion and the two portable grouped views here so onboarding
+    /// does not depend on the mixed runtime configuration implementation.
+    private enum ObstacleBridgeRuntimeConfig {
+        static func intValue(from value: Any?) -> Int? {
+            if let number = value as? NSNumber { return number.intValue }
+            if let value = value as? Int { return value }
+            if let value = value as? String { return Int(value) }
+            return nil
+        }
+
+        static func boolValue(from value: Any?) -> Bool? {
+            if let value = value as? Bool { return value }
+            if let number = value as? NSNumber { return number.boolValue }
+            guard let value = value as? String else { return nil }
+            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "1", "true", "yes", "on": return true
+            case "0", "false", "no", "off": return false
+            default: return nil
+            }
+        }
+
+        static func stringValue(from value: Any?) -> String? {
+            guard let value else { return nil }
+            if let value = value as? String {
+                let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            if let value = value as? NSNumber { return value.stringValue }
+            return nil
+        }
+
+        static func groupedSectionPayload(_ section: String, runtimeConfig: [String: Any]) -> [String: Any] {
+            if let grouped = runtimeConfig[section] as? [String: Any] {
+                return grouped
+            }
+            let prefixes: [String]
+            switch section {
+            case "TUN_routing":
+                prefixes = ["tunnel_", "included_routes", "excluded_routes", "dns_servers", "mtu", "enabled_on_startup", "enable_tcpmss", "enable_tun_tcpdump", "tun_tcpdump_pcap_path", "shared_tun_"]
+            case "proxy_provider":
+                prefixes = ["proxy_provider", "log_proxy_provider"]
+            default:
+                return [:]
+            }
+            return runtimeConfig.reduce(into: [:]) { result, item in
+                if prefixes.contains(where: { item.key.hasPrefix($0) }) {
+                    result[item.key] = item.value
+                }
+            }
+        }
+    }
+
     // An invite configures an outbound peer. Existing client profiles retain
     // their local bind/port; local static asset paths and server key material
     // are deliberately not portable.

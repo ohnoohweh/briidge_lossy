@@ -182,6 +182,12 @@ content-type selection, Admin UI state, and security-advisor policy now read
 only portable Foundation values and the configuration dictionary; Apple hosts
 remain responsible for HTTP serving the returned response.
 
+`ObstacleBridgeOnboarding.swift` is Core-owned. Invite profile projection,
+service and proxy sanitization, token encoding/decoding, and suggested-update
+construction use its portable configuration view; that view accepts the same
+flat and grouped invite inputs without depending on runtime socket or file
+configuration code.
+
 `ObstacleBridgePeerAddressProtocolRuntime.swift` now performs bounded
 IPv4/IPv6 parsing and canonical formatting in Core without Darwin or Glibc
 socket conversion. `ObstacleBridgeOverlayLayerTransportAdapter.swift` is
@@ -189,8 +195,7 @@ therefore Core-owned as well, preserving the mapped-IPv4 and malformed-frame
 admission rules while composing the portable compression and SecureLink
 effects.
 
-The open `LSW-SC.1` gaps are the remaining 2 files:
-`ObstacleBridgeAdminConfigSupport.swift` and `ObstacleBridgeOnboarding.swift`.
+The open `LSW-SC.1` gap is `ObstacleBridgeAdminConfigSupport.swift`.
 They cannot be moved as a single file-system operation because their present
 Apple callers compile a flat source list and several depend on the `LSW-SC.2`
 configuration, packet-device, and connection contracts. The next extraction
