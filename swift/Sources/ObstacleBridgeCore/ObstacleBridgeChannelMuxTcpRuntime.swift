@@ -1,6 +1,6 @@
 import Foundation
 
-final class ObstacleBridgeChannelMuxTcpRuntime {
+public final class ObstacleBridgeChannelMuxTcpRuntime {
     struct LocalServerAcceptSnapshot {
         var chanID: Int
         var frames: [Data]
@@ -117,7 +117,7 @@ final class ObstacleBridgeChannelMuxTcpRuntime {
     private var clientTransports: [Int: ClientTransportState]
     private var serverActiveChannels: Set<Int>
 
-    init(
+    public init(
         instanceID: UInt64 = 0,
         connectionSeq: UInt32 = 0,
         nextTcpID: Int = 1,

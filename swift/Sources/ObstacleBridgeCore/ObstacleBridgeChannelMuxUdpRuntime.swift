@@ -1,6 +1,6 @@
 import Foundation
 
-final class ObstacleBridgeChannelMuxUdpRuntime {
+public final class ObstacleBridgeChannelMuxUdpRuntime {
     private static let udpFragmentHeaderSize = 8
 
     struct LocalServerDatagramSnapshot {
@@ -144,7 +144,7 @@ final class ObstacleBridgeChannelMuxUdpRuntime {
     private let serverPacketReassembler: ObstacleBridgePacketReassembler
     private let clientPacketReassembler: ObstacleBridgePacketReassembler
 
-    init(
+    public init(
         instanceID: UInt64,
         connectionSeq: UInt32,
         chanIDStart: Int = 1,
