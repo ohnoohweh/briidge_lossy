@@ -1,3 +1,5 @@
+// Packet construction and parsing are portable; packet-device I/O stays in
+// the platform adapter that invokes this Core policy.
 import Foundation
 #if canImport(Darwin)
 import Darwin

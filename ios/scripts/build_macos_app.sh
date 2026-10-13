@@ -149,7 +149,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
@@ -244,7 +244,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \

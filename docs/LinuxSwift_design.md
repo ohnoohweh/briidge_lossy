@@ -98,7 +98,7 @@ may start only after its predecessor's definition of done has evidence.
 | Package | Scope | Definition of done |
 | --- | --- | --- |
 | `LSW-SC.1` | Extract the 17 directly portable files below into `ObstacleBridgeCore`. | Every named implementation is removed from `ios/native/ObstacleBridgeShared`; its replacement is compiled by the Core target on macOS and Linux; Apple callers import/use the Core replacement rather than a compatibility copy; direct Python/Swift vectors cover each affected protocol or policy; and the iOS/macOS source-compilation probes still pass. |
-| `LSW-SC.2` | Split the remaining mixed files below at explicit Core ports. | The Core side contains all portable types, state transitions, parsing, validation, and policy; its public API contains no Apple framework or ABI type; each remaining Apple adapter is limited to translating Core effects to platform I/O or credentials; Linux uses the Core side for the same behavior; and contract tests exercise each injected port and failure path. |
+| `LSW-SC.2` | Split the remaining mixed files below at explicit Core ports. | The Core side contains all portable types, state transitions, parsing, validation, and policy; its public API contains no Apple framework or ABI type; each remaining Apple adapter is limited to translating Core effects to platform I/O or credentials; and contract tests exercise each injected port and failure path. Linux production adoption and Linux-host evidence are separately required by `LSW-SC.2L-A` and `LSW-SC.2L-B`. |
 | `LSW-SC.3` | Reduce the 13 retained Apple files to adapters and enforce the boundary. | Each retained file has a documented Apple-only dependency and imports `ObstacleBridgeCore` for shared behavior; no retained file recreates a protocol codec, state machine, configuration parser, or Admin policy; a repository guard rejects a portable implementation or an Apple-framework-free new `.swift` file under `ObstacleBridgeShared`; Core has no Apple imports; and macOS/iOS build and parity probes pass. |
 | `LSW-SC.4` | Retire transitional shims and make the ownership map current. | Obsolete duplicate files and Xcode flat-source references are removed; `LinuxSwift_r001_inventory.json`, `LinuxSwift_source_map.md`, Xcode patch tests, traceability, and this design describe only the delivered owner; Linux, macOS, and iOS compile from that owner; and the clean-up leaves no pending file in this section. |
 
@@ -286,6 +286,12 @@ and session state, expiry, cookie parsing, cookie-header formatting, and proof
 decisions. The Apple adapter retains its serialized queue, UUID/time sources,
 CryptoKit digest binding, and HTTP response conversion. Linux has no Admin
 authentication route today, so its separate `LSW-SC.2L-A` admission is open.
+
+`ObstacleBridgeTunPing` is now Core-owned: ICMP probe payload, IPv4/IPv6 echo
+packet construction, checksum, address parsing, and reply decoding are
+portable. Packet-device reads/writes remain in the Apple TUN adapter. Its
+Linux admission is deliberately deferred to `LSW-SC.2L-A`, where a Linux TUN
+owner can provide the packet I/O port and execute the same packet vectors.
 
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
