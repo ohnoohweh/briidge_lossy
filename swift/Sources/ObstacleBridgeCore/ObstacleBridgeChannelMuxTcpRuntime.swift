@@ -82,10 +82,10 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
     /// The common portable state owner for locally accepted TCP services.
     /// Native dictionaries below retain only NWConnection bookkeeping and
     /// client-dial metadata.
-    private let serverSession: ObstacleBridgeChannelMuxSession
+    private var serverSession: ObstacleBridgeChannelMuxSession
     /// Common state for remotely opened TCP services. Native state below is
     /// limited to the destination connection and its pending OS writes.
-    private let clientSession: ObstacleBridgeChannelMuxSession
+    private var clientSession: ObstacleBridgeChannelMuxSession
     private var counters: [Int: Int]
     private var nextTcpID: Int
     private var clientServiceIDByChannel: [Int: Int]
@@ -119,6 +119,29 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         self.clientPending = [:]
         self.clientTransports = [:]
         self.serverActiveChannels = []
+    }
+
+    public struct EpochResetSnapshot {
+        public let withdrawnServerChannels: [Int]
+        public let withdrawnClientChannels: [Int]
+    }
+
+    public func resetTransportEpoch(instanceID: UInt64, connectionSeq: UInt32) -> EpochResetSnapshot {
+        let withdrawnServerChannels = serverActiveChannels.sorted()
+        let withdrawnClientChannels = Set(clientOpenKeyByChannel.keys)
+            .union(clientTransports.keys)
+            .union(clientPending.keys)
+            .sorted()
+        serverSession = ObstacleBridgeChannelMuxSession(
+            maximumApplicationPayload: sessionMaxAppPayload,
+            instanceID: instanceID,
+            connectionSequence: connectionSeq,
+            initialChannelID: UInt16(clamping: nextTcpID)
+        )
+        clientSession = ObstacleBridgeChannelMuxSession(maximumApplicationPayload: sessionMaxAppPayload)
+        counters.removeAll(); serverActiveChannels.removeAll(); clientServiceIDByChannel.removeAll()
+        clientOpenKeyByChannel.removeAll(); clientChannelByOpenKey.removeAll(); clientPending.removeAll(); clientTransports.removeAll()
+        return EpochResetSnapshot(withdrawnServerChannels: withdrawnServerChannels, withdrawnClientChannels: withdrawnClientChannels)
     }
 
     func handleAcceptedServerConnection(
