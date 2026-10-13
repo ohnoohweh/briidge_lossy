@@ -16,7 +16,7 @@ from obstacle_bridge.bridge_proxy_server import (
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SWIFT_PROXY_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeProxyServer.swift"
+SWIFT_PROXY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeProxyProtocolPolicy.swift"
 SWIFT_PROXY_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "proxy_protocol_runner.swift"
 
 

@@ -50,7 +50,7 @@ private func run(_ request: [String: Any]) throws -> [String: Any] {
             "rewritten_hex": hexFromData(rewritten),
             "authorized": ObstacleBridgeProxyProtocolCodec.authorized(
                 headers: parsed.headers,
-                credentials: ObstacleBridgeProxyServer.Credentials(username: "obproxy", password: "secret")
+                credentials: ObstacleBridgeProxyCredentials(username: "obproxy", password: "secret")
             ),
             "authority_host": authority?.host ?? NSNull(),
             "authority_port": authority?.port ?? NSNull(),

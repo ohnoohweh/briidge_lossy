@@ -33,6 +33,8 @@ ARC-CMP-001:
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeProxyProtocolPolicyTests.swift::parsesAndRewritesAbsoluteHTTPRequest
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeProxyProtocolPolicyTests.swift::validatesBasicCredentialsAndParsesSocks5Domain
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
     - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_egress_mode_is_system

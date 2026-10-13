@@ -299,6 +299,12 @@ Apple codec remains responsible for hostname-derived key material, CryptoKit
 ChaChaPoly, and the native HKDF binding. `LSW-SC.2L-A` remains the separate
 Linux admission point for a Linux key-material and cryptographic provider.
 
+`ObstacleBridgeProxyProtocolCodec` is Core-owned for HTTP/SOCKS request
+parsing, authority normalization, proxy-header rewriting, and credential
+validation. The Apple adapter retains Network.framework listener/connection
+ownership. Linux admission remains separately scoped to `LSW-SC.2L-A`, where
+its listener owner must execute the Core decisions rather than reproduce them.
+
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
 | `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |

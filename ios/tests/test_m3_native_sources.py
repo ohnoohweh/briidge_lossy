@@ -550,19 +550,20 @@ def test_webadmin_server_source_exists() -> None:
 
 def test_proxy_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgeProxyProtocolPolicy.swift").read_text(encoding="utf-8")
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
-    assert "enum ObstacleBridgeProxyProtocolCodec" in runtime
+    assert "enum ObstacleBridgeProxyProtocolCodec" in policy
     assert "final class ObstacleBridgeProxyServer" in runtime
     assert "NWListener" in runtime
     assert "NWConnection" in runtime
     assert "CONNECT" in runtime
-    assert "parseHTTPRequestHead" in runtime
-    assert "rewriteHTTPRequestForOriginServer" in runtime
-    assert "parseSOCKS5ConnectRequest" in runtime
-    assert "basicAuthorizationHeader" in runtime
+    assert "parseHTTPRequestHead" in policy
+    assert "rewriteHTTPRequestForOriginServer" in policy
+    assert "parseSOCKS5ConnectRequest" in policy
+    assert "basicAuthorizationHeader" in policy
     assert "Proxy-Authenticate" in runtime
     assert "UDP ASSOCIATE" not in runtime
     assert "private var proxyServers: [String: ObstacleBridgeProxyServer]" in provider

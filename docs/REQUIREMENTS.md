@@ -84,6 +84,12 @@ keeping credentials out of endpoint diagnostics and persisted status.
 
 - `REQ-PRX-001`: On iOS packet-tunnel providers, ObstacleBridge may run a first-party Swift local proxy provider for explicit proxy clients without embedding a Python proxy runtime in the Network Extension. The same proxy protocol behavior shall have a Python runtime equivalent for parity validation and non-extension use. The initial proxy provider shall support HTTP absolute-form requests, HTTP `CONNECT`, optional HTTP Basic proxy authentication, SOCKS5 method negotiation, SOCKS5 username/password authentication, SOCKS5 TCP `CONNECT`, IPv4/IPv6/domain SOCKS5 destination forms, bidirectional byte tunneling after connect, lifecycle start/stop ownership by the active runtime, and operator-visible listener/counter/error snapshots. On Python runtimes, the proxy-provider egress policy defaults to system proxy resolution for outbound provider traffic, reusing the same CONNECT tunnel path as the WebSocket peer-client proxy bootstrap; system mode uses WinHTTP/PAC/manual endpoint resolution on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment resolution on Linux/POSIX. When that resolver returns no proxy endpoint, provider egress falls back to direct connection for that destination. SOCKS4, SOCKS5 `UDP ASSOCIATE`, transparent TCP interception, PAC serving, HTTP caching, content rewriting, and HTTP/2 or HTTP/3 proxy semantics are outside the first provider slice.
 
+Implementation note: shared Swift Core owns HTTP/SOCKS request parsing,
+authority normalization, proxy-header rewriting, and credential validation.
+The Apple adapter retains Network.framework listener and connection effects.
+Linux listener adoption remains separately required by `LSW-SC.2L-A` and must
+execute this policy rather than copy it.
+
 Current payload-form note:
 
 - `binary`: the overlay wire bytes are sent directly as websocket binary frames with no text envelope.

@@ -73,6 +73,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressProtocolRuntime.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuthPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift",
