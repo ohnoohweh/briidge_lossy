@@ -1,0 +1,129 @@
+import Foundation
+import NIOCore
+import NIOPosix
+import NIOSSL
+
+/// Synchronous adapter facade over one verified NIO SSL client channel.  It is
+/// kept below the existing WebSocket framing boundary so TLS never changes
+/// overlay, SecureLink, or ChannelMux byte ownership.
+final class ObstacleBridgeLinuxTLSWebSocketConnection: @unchecked Sendable {
+    private final class InboundBytes: ChannelInboundHandler, @unchecked Sendable {
+        typealias InboundIn = ByteBuffer
+        private let condition = NSCondition()
+        private var bytes = Data()
+        private var inactive = false
+        private var failure: Error?
+
+        func channelRead(context: ChannelHandlerContext, data: NIOAny) {
+            var buffer = unwrapInboundIn(data)
+            if let received = buffer.readBytes(length: buffer.readableBytes), !received.isEmpty {
+                condition.lock(); bytes.append(contentsOf: received); condition.broadcast(); condition.unlock()
+            }
+        }
+        func errorCaught(context: ChannelHandlerContext, error: Error) {
+            condition.lock(); failure = error; inactive = true; condition.broadcast(); condition.unlock()
+            context.close(promise: nil)
+        }
+        func channelInactive(context: ChannelHandlerContext) {
+            condition.lock(); inactive = true; condition.broadcast(); condition.unlock()
+            context.fireChannelInactive()
+        }
+        func close() { condition.lock(); inactive = true; condition.broadcast(); condition.unlock() }
+        func readExactly(_ count: Int, timeoutMilliseconds: Int) throws -> Data {
+            let deadline = Date().addingTimeInterval(Double(max(1, timeoutMilliseconds)) / 1_000)
+            condition.lock(); defer { condition.unlock() }
+            while bytes.count < count && !inactive {
+                guard condition.wait(until: deadline) else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(ETIMEDOUT) }
+            }
+            if let failure { throw failure }
+            guard bytes.count >= count else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+            let result = bytes.prefix(count); bytes.removeFirst(count); return result
+        }
+    }
+
+    private final class HandshakeObserver: ChannelInboundHandler, @unchecked Sendable {
+        typealias InboundIn = ByteBuffer
+        private let condition = NSCondition()
+        private var complete = false
+        private var failure: Error?
+
+        func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+            if case TLSUserEvent.handshakeCompleted = event {
+                condition.lock(); complete = true; condition.broadcast(); condition.unlock()
+            }
+            context.fireUserInboundEventTriggered(event)
+        }
+        func errorCaught(context: ChannelHandlerContext, error: Error) {
+            condition.lock(); failure = error; condition.broadcast(); condition.unlock()
+            context.close(promise: nil)
+        }
+        func channelInactive(context: ChannelHandlerContext) {
+            condition.lock(); condition.broadcast(); condition.unlock()
+            context.fireChannelInactive()
+        }
+        func wait(timeoutMilliseconds: Int) throws {
+            let deadline = Date().addingTimeInterval(Double(max(1, timeoutMilliseconds)) / 1_000)
+            condition.lock(); defer { condition.unlock() }
+            while !complete && failure == nil {
+                guard condition.wait(until: deadline) else { throw ObstacleBridgeLinuxOverlayTransportError.ioFailure(ETIMEDOUT) }
+            }
+            if let failure { throw failure }
+        }
+    }
+
+    private let eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+    private let inbound = InboundBytes()
+    private let lock = NSLock()
+    private var channel: (any Channel)?
+    private var closed = false
+
+    init(host: String, port: Int, trustRootsPath: String?, timeoutMilliseconds: Int) throws {
+        var configuration = TLSConfiguration.makeClientConfiguration()
+        configuration.certificateVerification = .fullVerification
+        if let trustRootsPath { configuration.trustRoots = .file(trustRootsPath) }
+        let context = try NIOSSLContext(configuration: configuration)
+        let handshake = HandshakeObserver()
+        do {
+            let connected = try ClientBootstrap(group: eventLoopGroup).channelInitializer { channel in
+                do {
+                    return channel.pipeline.addHandlers([
+                        try NIOSSLClientHandler(context: context, serverHostname: host), handshake, self.inbound,
+                    ])
+                } catch { return channel.eventLoop.makeFailedFuture(error) }
+            }.connect(host: host, port: port).wait()
+            lock.lock(); channel = connected; lock.unlock()
+            try handshake.wait(timeoutMilliseconds: timeoutMilliseconds)
+        } catch {
+            close(); throw error
+        }
+    }
+
+    deinit { close() }
+
+    func write(_ bytes: Data) throws {
+        lock.lock(); let channel = channel; let isClosed = closed; lock.unlock()
+        guard !isClosed, let channel else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
+        var buffer = channel.allocator.buffer(capacity: bytes.count); buffer.writeBytes(bytes)
+        try channel.writeAndFlush(buffer).wait()
+    }
+    func readExactly(_ count: Int, timeoutMilliseconds: Int) throws -> Data {
+        try inbound.readExactly(count, timeoutMilliseconds: timeoutMilliseconds)
+    }
+    func readUntil(_ delimiter: Data, maximum: Int, timeoutMilliseconds: Int) throws -> Data {
+        var result = Data()
+        while result.count < maximum {
+            result.append(try readExactly(1, timeoutMilliseconds: timeoutMilliseconds))
+            if result.suffix(delimiter.count) == delimiter { return result }
+        }
+        throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed
+    }
+    func close() {
+        lock.lock(); guard !closed else { lock.unlock(); return }; closed = true
+        let channel = channel; self.channel = nil; lock.unlock()
+        inbound.close()
+        if let channel {
+            channel.closeFuture.whenComplete { [eventLoopGroup] _ in eventLoopGroup.shutdownGracefully { _ in } }
+            channel.close(promise: nil)
+        } else { eventLoopGroup.shutdownGracefully { _ in } }
+    }
+}

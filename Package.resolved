@@ -1,5 +1,5 @@
 {
-  "originHash" : "8ef24d30fdd384a20146d73515d9dbbf455eff78a6c306e4f3f52dfff58da10b",
+  "originHash" : "fc5a80d2783cd96ff13eb00685759f872aaf4a612d7c10de1194ab6a61195040",
   "pins" : [
     {
       "identity" : "swift-asn1",
@@ -58,7 +58,7 @@
     {
       "identity" : "swift-network-evolution",
       "kind" : "remoteSourceControl",
-      "location" : "https://github.com/apple/swift-network-evolution",
+      "location" : "https://github.com/apple/swift-network-evolution.git",
       "state" : {
         "revision" : "ea74abb2beced205f5eb0379e4fa8cd66de2e66e",
         "version" : "0.4.0"
@@ -89,6 +89,15 @@
       "state" : {
         "revision" : "9f02d3052753ddfd6ad0ced39c2fc2ec275817ce",
         "version" : "0.1.1"
+      }
+    },
+    {
+      "identity" : "swift-nio-ssl",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-nio-ssl.git",
+      "state" : {
+        "revision" : "322f3c2a4a21df31c84ca416bf65ee5e9059e440",
+        "version" : "2.37.5"
       }
     },
     {

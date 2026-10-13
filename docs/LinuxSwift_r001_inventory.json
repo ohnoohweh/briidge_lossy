@@ -117,7 +117,8 @@
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceSocketOwner.swift",
-        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTCPListener.swift"
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTCPListener.swift",
+        "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxTLSWebSocketConnection.swift"
       ]
     },
     {

@@ -71,13 +71,15 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let transport: ObstacleBridgeLinuxTransport
     private let wsPath: String
     private let wsPayloadMode: ObstacleBridgeWebSocketPayloadMode
+    private let wsTLS: Bool
+    private let wsTrustRootsPath: String?
     private let quicALPN: String
     private let quicInsecure: Bool
     private let quicTrustRootsPath: String?
     private let receiveTimeoutMilliseconds: Int
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -89,6 +91,9 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         self.transport = transport
         self.wsPath = wsPath.hasPrefix("/") ? wsPath : "/\(wsPath)"
         self.wsPayloadMode = try ObstacleBridgeWebSocketPayloadCodec.mode(wsPayloadMode)
+        self.wsTLS = wsTLS
+        let normalizedWebSocketTrustRoots = wsTrustRootsPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.wsTrustRootsPath = normalizedWebSocketTrustRoots?.isEmpty == false ? normalizedWebSocketTrustRoots : nil
         let normalizedALPN = quicALPN.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalizedALPN.isEmpty else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
         self.quicALPN = normalizedALPN
@@ -115,11 +120,19 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     try connection.write(tcpWire(payload))
                     result = try readTCPApplicationFrame(connection)
                 case .ws:
-                    let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
-                    defer { connection.close() }
-                    try performWebSocketUpgrade(connection)
-                    let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
-                    result = try readWebSocketApplicationPayload(connection)
+                    if wsTLS {
+                        let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                        defer { connection.close() }
+                        try performWebSocketUpgrade(connection)
+                        let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
+                        result = try readWebSocketApplicationPayload(connection)
+                    } else {
+                        let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                        defer { connection.close() }
+                        try performWebSocketUpgrade(connection)
+                        let message = try webSocketMessage(payload); try connection.write(webSocketClientFrame(opcode: message.0, payload: message.1))
+                        result = try readWebSocketApplicationPayload(connection)
+                    }
                 case .myudp:
                     let connection = try ObstacleBridgeLinuxMyUDPTransportSession(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
@@ -167,6 +180,21 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
                     quic.close()
                 })
+            }
+            if transport == .ws, wsTLS {
+                let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, timeoutMilliseconds: receiveTimeoutMilliseconds)
+                try performWebSocketUpgrade(connection)
+                snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+                let send: (Data) throws -> Void = { [weak self] payload in
+                    guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                    let message = try self.webSocketMessage(payload)
+                    try connection.write(self.webSocketClientFrame(opcode: message.0, payload: message.1))
+                }
+                let receive: () throws -> Data = { [weak self] in
+                    guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                    return try self.readWebSocketApplicationPayload(connection)
+                }
+                return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: { connection.close() })
             }
             let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
             if transport == .ws { try performWebSocketUpgrade(connection) }

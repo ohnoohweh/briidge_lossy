@@ -10,7 +10,6 @@ public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, Loca
     case unsupportedSecureLinkMode(String)
     case unsupportedCompressionAlgorithm(String)
     case missingPSK
-    case unsupportedWebSocketTLS
     case invalidService(String)
 
     public var errorDescription: String? {
@@ -18,7 +17,6 @@ public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, Loca
         case .unreadableFile(let message), .missingValue(let message), .invalidValue(let message), .unavailableTransport(let message), .unsupportedSecureLinkMode(let message), .unsupportedCompressionAlgorithm(let message), .invalidService(let message): return message
         case .malformedJSON: return "runtime config must be a JSON object"
         case .missingPSK: return "secure_link_mode=psk requires a non-empty secure_link_psk"
-        case .unsupportedWebSocketTLS: return "Linux wss is unavailable until a TLS backend is qualified"
         }
     }
 }
@@ -46,6 +44,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let port: Int
     public let webSocketPath: String
     public let webSocketPayloadMode: String
+    public let webSocketTLS: Bool
+    /// Optional PEM roots for a verified outbound WSS client.  A missing value
+    /// selects the backend's system trust store rather than disabling checks.
+    public let webSocketTrustRootsPath: String?
     public let quicALPN: String
     public let quicInsecure: Bool
     /// Optional PEM trust-root bundle for an outbound QUIC client. `nil`
@@ -59,7 +61,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -67,6 +69,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.port = port
         self.webSocketPath = webSocketPath
         self.webSocketPayloadMode = webSocketPayloadMode
+        self.webSocketTLS = webSocketTLS
+        self.webSocketTrustRootsPath = webSocketTrustRootsPath
         self.quicALPN = quicALPN
         self.quicInsecure = quicInsecure
         self.quicTrustRootsPath = quicTrustRootsPath
@@ -138,9 +142,6 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         guard let port = configuredPort, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires \(sessionName).\(portKey) between 1 and 65535")
         }
-        if transport == .ws, boolean(session["ws_tls"]) == true {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedWebSocketTLS
-        }
         if transport == .ws { _ = try ObstacleBridgeWebSocketPayloadCodec.mode(string(session["ws_payload_mode"]) ?? "binary") }
         let secure = root["secure_link"] as? [String: Any] ?? [:]
         let secureMode = (string(secure["secure_link_mode"]) ?? "off").lowercased()
@@ -174,6 +175,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             listenerMode: listenerMode,
             webSocketPath: string(session["ws_path"]) ?? "/",
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
+            webSocketTLS: boolean(session["ws_tls"]) ?? false,
+            webSocketTrustRootsPath: string(session["ws_ca_cert"]),
             quicALPN: string(session["quic_alpn"]) ?? "hq-29",
             quicInsecure: boolean(session["quic_insecure"]) ?? false,
             quicTrustRootsPath: string(session["quic_ca_cert"]),
