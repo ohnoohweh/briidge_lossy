@@ -126,6 +126,27 @@ public final class ObstacleBridgeQuicOverlayRuntime {
         )
     }
 
+    /// Records a concrete QUIC stream connection and returns application
+    /// records buffered before its writer became available.
+    public func connectionOpened(host: String, port: Int, socketPresent: Bool) -> [Data] {
+        connect(host: host, port: port, socketPresent: socketPresent).flushedBuffers
+    }
+
+    /// Admits complete QUIC stream bytes through the portable framing state.
+    public func receiveApplicationBytes(_ buffer: Data) -> [Data] {
+        handleInboundBytes(buffer).completedPayloads
+    }
+
+    /// Records a failed QUIC stream and returns whether the adapter should
+    /// schedule a fresh lower connection.
+    public func connectionLost(runFlag: Bool, peerConfigured: Bool, writerPresent: Bool, initiallyConnected: Bool) -> Bool {
+        requestReconnect(runFlag: runFlag, peerConfigured: peerConfigured, writerPresent: writerPresent, initiallyConnected: initiallyConnected).requested
+    }
+
+    public func isBackpressured(writeBufferSize: Int, threshold: Int? = nil) -> Bool {
+        backpressureSnapshot(writeBufferSize: writeBufferSize, threshold: threshold).signaled
+    }
+
     func connect(host: String, port: Int, socketPresent: Bool) -> ConnectSnapshot {
         peerHost = host
         peerPort = port

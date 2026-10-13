@@ -135,6 +135,30 @@ public final class ObstacleBridgeTcpOverlayRuntime {
         )
     }
 
+    /// Records a concrete lower connection and returns application records
+    /// which were buffered before that connection existed. Adapters execute
+    /// the returned writes; Core remains the lifecycle and buffering owner.
+    public func connectionOpened(host: String, port: Int, socketPresent: Bool) -> [Data] {
+        connect(host: host, port: port, socketPresent: socketPresent).flushedBuffers
+    }
+
+    /// Admits completed lower-stream bytes and returns only complete
+    /// application payloads. Framing and partial-record state remain Core
+    /// owned, so descriptor adapters need not recreate a receive state machine.
+    public func receiveApplicationBytes(_ buffer: Data) -> [Data] {
+        handleInboundBytes(buffer).completedPayloads
+    }
+
+    /// Records a failed lower connection and tells the adapter whether it
+    /// should schedule another concrete connection attempt.
+    public func connectionLost(runFlag: Bool, peerConfigured: Bool, writerPresent: Bool, initiallyConnected: Bool) -> Bool {
+        requestReconnect(runFlag: runFlag, peerConfigured: peerConfigured, writerPresent: writerPresent, initiallyConnected: initiallyConnected).requested
+    }
+
+    public func isBackpressured(writeBufferSize: Int, threshold: Int? = nil) -> Bool {
+        backpressureSnapshot(writeBufferSize: writeBufferSize, threshold: threshold).signaled
+    }
+
     func connect(host: String, port: Int, socketPresent: Bool) -> ConnectSnapshot {
         peerHost = host
         peerPort = port

@@ -135,6 +135,9 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .tcp:
                     let connection = try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
+                    for pending in tcpOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
+                        try connection.write(pending)
+                    }
                     try connection.write(tcpWire(payload))
                     result = try readTCPApplicationFrame(connection)
                 case .ws:
@@ -158,12 +161,23 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 case .quic:
                     let connection = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
+                    for pending in quicOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
+                        try connection.write(pending)
+                    }
                     try connection.write(try quicWire(payload))
                     result = try readTCPApplicationFrame(connection)
                 }
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: attempt, failureReason: nil)
                 return result
             } catch {
+                switch transport {
+                case .tcp:
+                    _ = tcpOverlayRuntime.connectionLost(runFlag: true, peerConfigured: true, writerPresent: false, initiallyConnected: snapshot.state == "connected")
+                case .quic:
+                    _ = quicOverlayRuntime.connectionLost(runFlag: true, peerConfigured: true, writerPresent: false, initiallyConnected: snapshot.state == "connected")
+                case .ws, .myudp:
+                    break
+                }
                 lastError = error
                 snapshot = .init(transport: transport.rawValue, state: "failed", attempts: attempt, failureReason: error.localizedDescription)
             }
@@ -186,6 +200,9 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             }
             if transport == .quic {
                 let quic = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
+                for pending in quicOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
+                    try quic.write(pending)
+                }
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
                 let send: (Data) throws -> Void = { [weak self] payload in
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
@@ -215,6 +232,11 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: { connection.close() })
             }
             let connection = transport == .ws ? try openWebSocketConnection() : try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
+            if transport == .tcp {
+                for pending in tcpOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
+                    try connection.write(pending)
+                }
+            }
             if transport == .ws { try performWebSocketUpgrade(connection) }
             snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
             let send: (Data) throws -> Void = { [weak self] payload in
@@ -301,8 +323,11 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
             let body = try connection.readExactly(Int(length))
             switch try ObstacleBridgeOverlayEnvelope.decodeTCP(header + body) {
-            case .application(let payload):
-                return payload
+            case .application:
+                guard let admitted = tcpOverlayRuntime.receiveApplicationBytes(header + body).first else {
+                    throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                }
+                return admitted
             case .reply(let frame):
                 try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(frame))
             case .ignore:
@@ -321,8 +346,11 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
             let body = try connection.readExactly(Int(length))
             switch try ObstacleBridgeOverlayEnvelope.decodeTCP(header + body) {
-            case .application(let payload):
-                return payload
+            case .application:
+                guard let admitted = quicOverlayRuntime.receiveApplicationBytes(header + body).first else {
+                    throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                }
+                return admitted
             case .reply(let frame):
                 try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(frame))
             case .ignore:
