@@ -86,6 +86,9 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let quicInsecure: Bool
     private let quicTrustRootsPath: String?
     private let receiveTimeoutMilliseconds: Int
+    /// Core owns application-frame construction and early-send state. Linux
+    /// owns the concrete POSIX/NIO connection below this boundary.
+    private let tcpOverlayRuntime = ObstacleBridgeTcpOverlayRuntime()
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
     public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, wsProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
@@ -240,7 +243,15 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     }
 
     private func tcpWire(_ payload: Data) throws -> Data {
-        try ObstacleBridgeOverlayEnvelope.encodeTCP(.init(kind: .application, payload: payload))
+        let effect = tcpOverlayRuntime.sendApp(
+            payload: payload,
+            writerPresent: true,
+            peerConfigured: true
+        )
+        guard let wire = effect.writtenBuffers.first else {
+            throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+        }
+        return wire
     }
 
     private func openWebSocketConnection() throws -> POSIXStreamConnection {
