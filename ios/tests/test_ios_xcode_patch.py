@@ -214,15 +214,15 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift" in patched
@@ -234,11 +234,12 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayStackPlanner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" in patched

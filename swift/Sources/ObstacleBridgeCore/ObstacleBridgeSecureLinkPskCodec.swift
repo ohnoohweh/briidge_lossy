@@ -64,3 +64,10 @@ struct ObstacleBridgeSecureLinkPskCodec {
     }
 
 }
+
+private extension Data {
+    mutating func appendUInt64(_ value: UInt64) {
+        let bigEndian = value.bigEndian
+        Swift.withUnsafeBytes(of: bigEndian) { append(contentsOf: $0) }
+    }
+}

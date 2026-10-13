@@ -1,55 +1,74 @@
 import Foundation
 
-enum ObstacleBridgeUdpOverlayCodecError: Error {
+public enum ObstacleBridgeUdpOverlayCodecError: Error {
     case payloadTooLarge
     case invalidField
 }
 
-struct ObstacleBridgeUdpOverlayCodec {
+public struct ObstacleBridgeUdpOverlayCodec {
     // Compatibility names for the Apple peer runtime. Values remain owned by
     // Core so queue budgeting cannot drift from the shared wire codec.
-    static let protocolHeaderSize = ObstacleBridgeMyUDPCodec.protocolHeaderSize
-    static let streamRecordHeaderSize = ObstacleBridgeMyUDPCodec.streamRecordHeaderSize
-    static let maxStreamRecordBytes = ObstacleBridgeMyUDPCodec.maximumStreamRecordSize
-    static let batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize
-    static let batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize
-    static let chunkHeaderSize = ObstacleBridgeMyUDPCodec.chunkHeaderSize
-    static let maxBatchRecords = ObstacleBridgeMyUDPCodec.maximumBatchRecords
-    static let maxBatchPayloadBytes = ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize
-    static let maxChunkBytes = ObstacleBridgeMyUDPCodec.maximumPayloadSize
-    static let ptypeIdle = Int(ObstacleBridgeMyUDPCodec.idleType)
-    static let ptypeData = Int(ObstacleBridgeMyUDPCodec.dataType)
-    static let ptypeControl = Int(ObstacleBridgeMyUDPCodec.controlType)
+    public static let protocolHeaderSize = ObstacleBridgeMyUDPCodec.protocolHeaderSize
+    public static let streamRecordHeaderSize = ObstacleBridgeMyUDPCodec.streamRecordHeaderSize
+    public static let maxStreamRecordBytes = ObstacleBridgeMyUDPCodec.maximumStreamRecordSize
+    public static let batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize
+    public static let batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize
+    public static let chunkHeaderSize = ObstacleBridgeMyUDPCodec.chunkHeaderSize
+    public static let maxBatchRecords = ObstacleBridgeMyUDPCodec.maximumBatchRecords
+    public static let maxBatchPayloadBytes = ObstacleBridgeMyUDPCodec.maximumBatchPayloadSize
+    public static let maxChunkBytes = ObstacleBridgeMyUDPCodec.maximumPayloadSize
+    public static let ptypeIdle = Int(ObstacleBridgeMyUDPCodec.idleType)
+    public static let ptypeData = Int(ObstacleBridgeMyUDPCodec.dataType)
+    public static let ptypeControl = Int(ObstacleBridgeMyUDPCodec.controlType)
 
-    struct ParsedProtocolFrame: Equatable {
-        var ptype: Int
-        var payload: Data
-        var txNS: UInt64
-        var echoNS: UInt64
+    public struct ParsedProtocolFrame: Equatable {
+        public let ptype: Int
+        public let payload: Data
+        public let txNS: UInt64
+        public let echoNS: UInt64
+
+        public init(ptype: Int, payload: Data, txNS: UInt64, echoNS: UInt64) {
+            self.ptype = ptype
+            self.payload = payload
+            self.txNS = txNS
+            self.echoNS = echoNS
+        }
     }
 
-    struct StreamChunk: Equatable {
-        var counter: Int
-        var data: Data
+    public struct StreamChunk: Equatable {
+        public let counter: Int
+        public let data: Data
+
+        public init(counter: Int, data: Data) {
+            self.counter = counter
+            self.data = data
+        }
     }
 
-    struct ControlPacket: Equatable {
-        var lastInOrderRX: Int
-        var highestRX: Int
-        var missed: [Int]
-        var raw: Data
+    public struct ControlPacket: Equatable {
+        public let lastInOrderRX: Int
+        public let highestRX: Int
+        public let missed: [Int]
+        public let raw: Data
+
+        public init(lastInOrderRX: Int, highestRX: Int, missed: [Int], raw: Data) {
+            self.lastInOrderRX = lastInOrderRX
+            self.highestRX = highestRX
+            self.missed = missed
+            self.raw = raw
+        }
     }
 
-    static func maxPayloadLength() -> Int {
+    public static func maxPayloadLength() -> Int {
         maxBatchPayloadBytes
     }
 
-    static func encodeStreamRecord(_ payload: Data) throws -> Data {
+    public static func encodeStreamRecord(_ payload: Data) throws -> Data {
         do { return try ObstacleBridgeMyUDPCodec.encodeStreamRecord(payload) }
         catch { throw ObstacleBridgeUdpOverlayCodecError.payloadTooLarge }
     }
 
-    static func encodeDataBatch(_ chunks: [StreamChunk]) throws -> Data {
+    public static func encodeDataBatch(_ chunks: [StreamChunk]) throws -> Data {
         guard !chunks.isEmpty, chunks.count <= maxBatchRecords else {
             throw ObstacleBridgeUdpOverlayCodecError.invalidField
         }
@@ -67,12 +86,12 @@ struct ObstacleBridgeUdpOverlayCodec {
         }
     }
 
-    static func decodeDataBatch(_ payload: Data) -> [StreamChunk]? {
+    public static func decodeDataBatch(_ payload: Data) -> [StreamChunk]? {
         guard let decoded = try? ObstacleBridgeMyUDPCodec.decodeDataBatchPayload(payload) else { return nil }
         return decoded.map { .init(counter: Int($0.counter), data: $0.payload) }
     }
 
-    static func buildDataBatchFrame(
+    public static func buildDataBatchFrame(
         chunks: [StreamChunk],
         txNS: UInt64,
         echoNS: UInt64
@@ -89,11 +108,11 @@ struct ObstacleBridgeUdpOverlayCodec {
         }
     }
 
-    static func controlMaxMissed() -> Int {
+    public static func controlMaxMissed() -> Int {
         ObstacleBridgeMyUDPCodec.maximumControlMissingCount
     }
 
-    static func buildProtocolFrame(
+    public static func buildProtocolFrame(
         ptype: Int,
         payload: Data,
         txNS: UInt64,
@@ -114,7 +133,7 @@ struct ObstacleBridgeUdpOverlayCodec {
         }
     }
 
-    static func parseProtocolFrame(_ data: Data) -> ParsedProtocolFrame? {
+    public static func parseProtocolFrame(_ data: Data) -> ParsedProtocolFrame? {
         guard let frame = try? ObstacleBridgeMyUDPCodec.decodeWire(data) else { return nil }
         return ParsedProtocolFrame(
             ptype: Int(frame.type), payload: frame.payload,
@@ -122,7 +141,7 @@ struct ObstacleBridgeUdpOverlayCodec {
         )
     }
 
-    static func buildControlFrame(
+    public static func buildControlFrame(
         lastInOrderRX: Int,
         highestRX: Int,
         missed: [Int],
@@ -141,7 +160,7 @@ struct ObstacleBridgeUdpOverlayCodec {
         )
     }
 
-    static func parseControlFrame(_ raw: Data) -> ControlPacket? {
+    public static func parseControlFrame(_ raw: Data) -> ControlPacket? {
         guard let frame = try? ObstacleBridgeMyUDPCodec.decodeControl(raw) else {
             return nil
         }

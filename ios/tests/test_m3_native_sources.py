@@ -6,6 +6,7 @@ import tomllib
 
 ROOT = Path(__file__).resolve().parents[2]
 SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 IPSERVER_DIR = ROOT / "ios" / "build" / "obstacle_bridge_ios" / "ios" / "xcode" / "IPServer"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
@@ -87,7 +88,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
+    snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
     assert "ObstacleBridgeAdminAPI" in provider
@@ -303,9 +304,9 @@ def test_native_crypto_bridge_source_exists() -> None:
 
 
 def test_channel_mux_codec_source_exists() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift").read_text(encoding="utf-8")
 
-    assert "struct ObstacleBridgeChannelMuxCodec" in codec
+    assert "extension ObstacleBridgeChannelMuxCodec" in codec
     assert "enum Proto: Int" in codec
     assert "enum MType: Int" in codec
     assert "packMux(" in codec
@@ -403,7 +404,7 @@ def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
 
 
 def test_channel_mux_udp_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeChannelMuxUdpRuntime" in runtime
     assert "struct LocalServerDatagramSnapshot" in runtime
@@ -429,7 +430,7 @@ def test_channel_mux_udp_runtime_source_exists() -> None:
 
 
 def test_channel_mux_tcp_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeChannelMuxTcpRuntime" in runtime
     assert "struct LocalServerAcceptSnapshot" in runtime
@@ -457,7 +458,7 @@ def test_channel_mux_tcp_runtime_source_exists() -> None:
 
 
 def test_compress_layer_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeCompressLayerRuntime" in runtime
     assert "struct StatusSnapshot" in runtime
@@ -486,7 +487,7 @@ def test_core_import_guard_allows_only_the_common_compression_binding() -> None:
 
 
 def test_overlay_stack_planner_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayStackPlanner.swift").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeOverlayStackPlannerError" in runtime
     assert "final class ObstacleBridgeOverlayStackPlanner" in runtime
@@ -596,7 +597,7 @@ def test_proxy_server_source_exists() -> None:
 
 
 def test_admin_api_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
 
     assert "protocol ObstacleBridgeAdminAPIStateProvider" in runtime
     assert "struct ObstacleBridgeAdminAPIRequest" in runtime
@@ -827,7 +828,7 @@ def test_macos_swift_host_runner_source_exists() -> None:
 
 
 def test_shared_admin_api_exposes_status_and_bootstrap_routes() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
 
     assert 'case ("GET", "/api/status")' in runtime
     assert 'provider.adminStatusSnapshot()' in runtime
@@ -919,7 +920,7 @@ def test_websocket_payload_codec_has_one_core_owner() -> None:
 
 
 def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeWebSocketPayloadCodec.decode(" in runtime
     assert "ObstacleBridgeWebSocketPayloadCodec.encode(" in runtime
     assert "ObstacleBridgeOverlayEnvelope.encodeWebSocket(" in runtime
@@ -931,7 +932,7 @@ def test_shared_websocket_runtime_uses_core_payload_codec() -> None:
 
 
 def test_shared_overlay_lifecycle_reports_to_core_coordinator() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     assert "private let coreCoordinator: ObstacleBridgeOverlayCoordinator" in runtime
     assert "applyCore(.start)" in runtime
     assert "applyCore(.transportConnected" in runtime
@@ -942,7 +943,7 @@ def test_shared_overlay_lifecycle_reports_to_core_coordinator() -> None:
 
 
 def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeControlChunkCodec.chunk(" in codec
     assert "ObstacleBridgeControlChunkCodec.nextTransactionID(" in codec
     assert "ObstacleBridgeControlChunkReassembler" in codec
@@ -950,7 +951,7 @@ def test_shared_channelmux_codec_uses_core_control_chunk_owner() -> None:
 
 
 def test_shared_channelmux_codec_uses_core_service_catalog_owner() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeServiceCodec.encodeRemoteServices(" in codec
     assert "ObstacleBridgeServiceCodec.encodeOpen(" in codec
     assert "ObstacleBridgeServiceCodec.decodeRemoteServices(" in codec
@@ -960,7 +961,7 @@ def test_shared_channelmux_codec_uses_core_service_catalog_owner() -> None:
 
 
 def test_websocket_overlay_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebSocketOverlayRuntime" in runtime
     assert "struct ConnectPlan" in runtime
@@ -1036,7 +1037,7 @@ def test_onboarding_invites_keep_all_client_transport_options() -> None:
 
 
 def test_tcp_overlay_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeTcpOverlayRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeTcpOverlayRuntime" in runtime
     assert "struct SendSnapshot" in runtime
@@ -1096,7 +1097,7 @@ def test_channel_mux_tcp_transport_owner_source_exists() -> None:
 
 
 def test_secure_link_psk_codec_source_exists() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeSecureLinkPskCodec" in codec
     assert "ObstacleBridgeSecureLinkPSKCrypto" not in codec
@@ -1110,7 +1111,7 @@ def test_secure_link_psk_codec_source_exists() -> None:
 
 
 def test_secure_link_psk_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeSecureLinkPskRuntime" in runtime
     assert "beginClientHandshake(" in runtime
@@ -1183,7 +1184,7 @@ def test_secure_link_psk_runtime_source_exists() -> None:
 
 
 def test_secure_link_psk_transport_adapter_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
     assert "handleOutboundPayload(" in runtime
@@ -1221,7 +1222,7 @@ def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None
 
 
 def test_overlay_layer_transport_adapter_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeOverlayLayerTransportAdapter" in runtime
     assert "handleOutboundPayload(" in runtime
@@ -1241,23 +1242,25 @@ def test_overlay_layer_transport_adapter_source_exists() -> None:
 
 
 def test_peer_address_protocol_source_exists_and_is_below_secure_link() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
-    adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
+    adapter = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgePeerAddressProtocolRuntime" in runtime
     assert "handleTransportConnected()" in runtime
     assert "observedPeerPort: Int? = nil" in runtime
     assert "private(set) var observedPublicPort: Int?" in runtime
     assert "private static func encodePort(_ port: Int) -> Data" in runtime
-    assert "inet_pton" in runtime
-    assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
-    assert "return (4, Data(bytes.suffix(4)))" in runtime
+    assert "private static func ipv4Bytes(_ host: String) -> Data?" in runtime
+    assert "private static func ipv6Bytes(_ host: String) -> Data?" in runtime
+    assert "private static func ipv6Text(_ bytes: Data) -> String?" in runtime
+    assert "ipv6.prefix(10).allSatisfy({ $0 == 0 })" in runtime
+    assert "return (4, Data(ipv6.suffix(4)))" in runtime
     assert "peerAddressRuntime?.handleTransportConnected()" in adapter
     assert "peerAddressRuntime.handleInboundFrame(" in adapter
 
 
 def test_udp_overlay_codec_source_exists() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeUdpOverlayCodec" in codec
     assert "buildProtocolFrame(" in codec
@@ -1284,7 +1287,7 @@ def test_udp_overlay_codec_source_exists() -> None:
 
 
 def test_secure_link_frame_codec_source_delegates_to_core() -> None:
-    secure_link = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
+    secure_link = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskCodec.swift").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeSecureLinkFrameCodec.header(" in secure_link
     assert "ObstacleBridgeSecureLinkFrameCodec.encode(" in secure_link
@@ -1331,7 +1334,7 @@ def test_udp_overlay_session_codec_has_no_compatibility_fixture() -> None:
 
 
 def test_udp_overlay_peer_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeUdpOverlayPeerRuntime" in runtime
     assert "private let peerEngine: ObstacleBridgeMyUDPPeerEngine" in runtime

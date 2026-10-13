@@ -69,6 +69,188 @@ ingress-shedding state. Apple adapters supply configured address bytes,
 transport measurements, and packet-device I/O, then render typed results for
 native diagnostics.
 
+## Apple shared-source cleanup
+
+`ios/native/ObstacleBridgeShared` is an Apple-adapter source set, not a
+second portable Core. Its end state contains only implementation that is
+shared by iOS and macOS *because it requires an Apple-only API or ABI*:
+`Network`, `NetworkExtension`, `Security`, `ServiceManagement`, XPC, Darwin
+TUN plumbing, or the Objective-C host bridge. Platform-neutral data models,
+wire codecs, state machines, configuration parsing, planning, Admin request
+semantics, and policy belong in `swift/Sources/ObstacleBridgeCore`, which must
+compile for Linux and Windows Swift consumers without importing Apple
+frameworks.
+
+The baseline review covered all 47 files currently in the directory. The
+machine-readable source inventory remains authoritative for the file set and
+is checked with:
+
+```bash
+./.venv/bin/python scripts/check_linux_swift_r001_inventory.py
+```
+
+The following work packages are consecutive. They intentionally move behavior
+rather than mechanically relocating source: public Core records/effects and
+explicit ports replace dependencies on `NWConnection`, `SecIdentity`, TUN
+descriptors, XPC objects, Objective-C selectors, and HTTP listeners. A package
+may start only after its predecessor's definition of done has evidence.
+
+| Package | Scope | Definition of done |
+| --- | --- | --- |
+| `LSW-SC.1` | Extract the 17 directly portable files below into `ObstacleBridgeCore`. | Every named implementation is removed from `ios/native/ObstacleBridgeShared`; its replacement is compiled by the Core target on macOS and Linux; Apple callers import/use the Core replacement rather than a compatibility copy; direct Python/Swift vectors cover each affected protocol or policy; and the iOS/macOS source-compilation probes still pass. |
+| `LSW-SC.2` | Split the remaining mixed files below at explicit Core ports. | The Core side contains all portable types, state transitions, parsing, validation, and policy; its public API contains no Apple framework or ABI type; each remaining Apple adapter is limited to translating Core effects to platform I/O or credentials; Linux uses the Core side for the same behavior; and contract tests exercise each injected port and failure path. |
+| `LSW-SC.3` | Reduce the 13 retained Apple files to adapters and enforce the boundary. | Each retained file has a documented Apple-only dependency and imports `ObstacleBridgeCore` for shared behavior; no retained file recreates a protocol codec, state machine, configuration parser, or Admin policy; a repository guard rejects a portable implementation or an Apple-framework-free new `.swift` file under `ObstacleBridgeShared`; Core has no Apple imports; and macOS/iOS build and parity probes pass. |
+| `LSW-SC.4` | Retire transitional shims and make the ownership map current. | Obsolete duplicate files and Xcode flat-source references are removed; `LinuxSwift_r001_inventory.json`, `LinuxSwift_source_map.md`, Xcode patch tests, traceability, and this design describe only the delivered owner; Linux, macOS, and iOS compile from that owner; and the clean-up leaves no pending file in this section. |
+
+### Linux adoption packages
+
+Extraction is not Linux delivery. The following packages make each Core
+extraction an exercised Linux dependency without duplicating protocol or
+product requirements: they prove that the Linux owner uses the one Core
+implementation already governed by the requirements inventory.
+
+| Package | Scope | Definition of done |
+| --- | --- | --- |
+| `LSW-SC.1L-A` | Adopt the direct `LSW-SC.1` extractions already in Core in Linux. | The relevant Linux adapter/runtime imports `ObstacleBridgeCore` and calls each applicable API in production code, without recreating its codec, snapshot shaping, planner, or lifecycle state machine. Focused Linux adapter tests execute the Core path for UDP frame/batch/control handling, Admin snapshot selection, overlay planning, and each admitted transport lifecycle. Python/Swift vectors remain byte- and state-equivalent where an existing parity fixture covers that behavior. `swift test --filter ObstacleBridgeLinuxAdapterTests` and the applicable mixed-runtime probes pass on Linux. |
+| `LSW-SC.1L-B` | Adopt every later `LSW-SC.1` extraction as it lands. | Each extraction adds or updates the corresponding Linux caller and focused Linux adapter evidence in the same change. The caller uses the moved Core API rather than a Linux-local equivalent; its failure/backpressure/lifecycle edge is exercised; and the source inventory names the Core owner. No `LSW-SC.1` file is counted complete solely because Apple callers compile. |
+| `LSW-SC.1L-C` | Qualify the complete `LSW-SC.1` Core surface in the Linux product. | Every one of the 17 source rows has a linked Linux production caller or an explicit product-scoped non-admission reason in the source inventory. The Linux runtime executes all admitted callers in its clean build and focused adapter suite, and mixed-runtime evidence covers the protocol-bearing rows. No Apple flat-source compile result is used as Linux execution evidence. |
+
+### `LSW-SC.1` — direct Core extraction
+
+| Source file | Core destination/responsibility |
+| --- | --- |
+| `ObstacleBridgeAdminAPI.swift` | Portable Admin request/response routing vocabulary and state-provider contract. |
+| `ObstacleBridgeAdminConfigSupport.swift` | Admin JSON validation and configuration/onboarding request policy. |
+| `ObstacleBridgeAdminSnapshotSupport.swift` | Redacted Admin snapshot shaping. |
+| `ObstacleBridgeAdminWebSupport.swift` | Static-path admission, content-type mapping, and Admin UI/security-advisor payload policy. |
+| `ObstacleBridgeChannelMuxCodec.swift` | Remaining ChannelMux compatibility codec facade; merge with Core codecs without changing wire bytes. |
+| `ObstacleBridgeChannelMuxTcpRuntime.swift` | TCP ChannelMux lifecycle/state transitions and effects. |
+| `ObstacleBridgeChannelMuxUdpRuntime.swift` | UDP ChannelMux lifecycle, fragmentation, and effects. |
+| `ObstacleBridgeNativeServiceSpec.swift` | Platform-neutral service-spec model and validation. |
+| `ObstacleBridgeOnboarding.swift` | Invite/onboarding configuration projection and validation. |
+| `ObstacleBridgeOverlayLayerTransportAdapter.swift` | Portable overlay lifecycle adaptation and effect sequencing. |
+| `ObstacleBridgeOverlayStackPlanner.swift` | Overlay selection/planning policy. |
+| `ObstacleBridgeQuicOverlayRuntime.swift` | QUIC-independent overlay lifecycle state machine. |
+| `ObstacleBridgeSecureLinkPskTransportAdapter.swift` | SecureLink transport-independent effect adapter. |
+| `ObstacleBridgeTcpOverlayRuntime.swift` | TCP-independent overlay lifecycle state machine. |
+| `ObstacleBridgeUdpOverlayCodec.swift` | UDP overlay record codec. |
+| `ObstacleBridgeUdpOverlayPeerRuntime.swift` | UDP peer state machine and effects. |
+| `ObstacleBridgeWebSocketOverlayRuntime.swift` | WebSocket-independent overlay lifecycle state machine. |
+
+### `LSW-SC.1` implementation state
+
+`ObstacleBridgeUdpOverlayCodec.swift`,
+`ObstacleBridgeAdminSnapshotSupport.swift`,
+`ObstacleBridgeAdminAPI.swift`,
+`ObstacleBridgeChannelMuxCodec.swift`,
+`ObstacleBridgeChannelMuxTcpRuntime.swift`,
+`ObstacleBridgeChannelMuxUdpRuntime.swift`,
+`ObstacleBridgeOverlayStackPlanner.swift`,
+`ObstacleBridgeQuicOverlayRuntime.swift`,
+`ObstacleBridgeTcpOverlayRuntime.swift`, and
+`ObstacleBridgeUdpOverlayPeerRuntime.swift`, and
+`ObstacleBridgeWebSocketOverlayRuntime.swift` are in `ObstacleBridgeCore` and
+are built from those sources by the Apple flat-source projects. The UDP codec
+remains a compatibility facade over the Core myUDP codec; its stream, batch,
+control, and wire-frame vectors continue to exercise the same Core-owned
+layout constants. The snapshot helper retains the redacted Admin envelope and
+selection policy without an Apple-framework dependency. The overlay planner
+and transport-independent runtime state machines depend only on Foundation and
+existing Core framing/payload codecs.
+
+`ObstacleBridgeAdminAPI` retains the platform-neutral request/response and
+state-provider vocabulary; platform HTTP listeners remain outside this package.
+The ChannelMux compatibility facade is an extension of Core's public codec,
+so the Apple flat builds retain their source-compatible helpers without
+creating a second Core type. Its TCP/UDP lifecycle and myUDP peer runtimes now
+use that one Core codec and the existing portable session/effect types.
+The SecureLink PSK compatibility codec, runtime, and transport adapter are
+also Core-owned, so their handshake and protected-payload lifecycle has no
+Apple framework dependency.
+The compression configuration, accounting, and policy wrapper is also
+Core-owned; Apple owners only supply transport measurements and render its
+snapshot.
+
+`ObstacleBridgePeerAddressProtocolRuntime.swift` now performs bounded
+IPv4/IPv6 parsing and canonical formatting in Core without Darwin or Glibc
+socket conversion. `ObstacleBridgeOverlayLayerTransportAdapter.swift` is
+therefore Core-owned as well, preserving the mapped-IPv4 and malformed-frame
+admission rules while composing the portable compression and SecureLink
+effects.
+
+The open `LSW-SC.1` gaps are the remaining 4 files in the preceding table:
+`ObstacleBridgeAdminConfigSupport.swift`,
+`ObstacleBridgeAdminWebSupport.swift`, `ObstacleBridgeNativeServiceSpec.swift`,
+and `ObstacleBridgeOnboarding.swift`.
+They cannot be moved as a single file-system operation because their present
+Apple callers compile a flat source list and several depend on the `LSW-SC.2`
+configuration, packet-device, and connection contracts. The next extraction
+must migrate a dependency-closed portable slice, update those callers and
+their flat-source lists, and remove its source from this directory; it must
+not leave a forwarding duplicate behind.
+
+`LSW-SC.1L-A` is open: Linux does not yet execute the moved APIs as a complete
+group. The existing Linux runtime uses Core codecs and selected
+transport policy, but this package must replace any overlapping Linux-local
+planner, lifecycle, snapshot, or myUDP facade with the moved Core type and add
+direct Linux adapter evidence before those extractions count as Linux-adopted.
+
+`ObstacleBridgeNativeServiceSpec` remains open because its portable service
+projection is currently coupled to `ObstacleBridgeRuntimeServiceSpec` in the
+unextracted configuration layer. Its next slice must extract that neutral
+record or introduce a Core service-spec input, then update both configuration
+and native socket callers without retaining a duplicate model.
+
+The Admin-component parity fixture also needs its flat `swiftc` inventory to
+include the Core ChannelMux dependencies that its compatibility facade
+references. That fixture is not proof of an Apple-only dependency in either
+extracted file; until its inventory is closed, it is excluded from
+`LSW-SC.1` completion evidence.
+
+### `LSW-SC.2` — Core contracts with Apple implementations below them
+
+| Source file | Required Core extraction; Apple remainder |
+| --- | --- |
+| `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |
+| `ObstacleBridgeAdminConfigChallenge.swift` | Configuration-change challenge state and canonical digest/proof policy; inject clock/random/digest. |
+| `ObstacleBridgeChannelMuxTunRuntime.swift` | ChannelMux TUN session, packet policy, and effects; retain only packet-device calls. |
+| `ObstacleBridgeConfigSecretCodec.swift` | Secret envelope policy and serialization; inject key-storage/crypto provider. |
+| `ObstacleBridgeOverlayChannelCore.swift` | Overlay channel policy and effect model; retain only `Network` connection binding. |
+| `ObstacleBridgeOverlayConnectionSupport.swift` | Connection state and send/receive policy; retain only Apple connection-driver implementation. |
+| `ObstacleBridgePeerAddressResolver.swift` | Address selection and normalization policy; inject resolver. |
+| `ObstacleBridgeProxyServer.swift` | Proxy protocol parsing/session policy; retain only listener/connection I/O. |
+| `ObstacleBridgeRuntimeConfig.swift` | Configuration schema, parsing, defaults, and derived portable settings; inject filesystem/environment access. |
+| `ObstacleBridgeTunHelperContract.swift` | Helper commands, envelopes, and validation; retain only macOS helper execution and transport binding. |
+| `ObstacleBridgeTunPing.swift` | Ping packet construction/parsing and diagnostics policy; inject packet I/O. |
+| `ObstacleBridgeTunProbeDiagnosticsSupport.swift` | Probe correlation/history/timeout policy; inject clock and packet I/O. |
+| `ObstacleBridgeWebAdminServer.swift` | HTTP request interpretation and Admin policy; retain only `NWListener`/HTTP transport. |
+
+### `LSW-SC.3` — retained Apple adapters
+
+These files may remain in `ios/native/ObstacleBridgeShared` only as the thin
+Apple bindings described here. Their portable decisions are owned by the
+packages above.
+
+| Source file | Apple-only reason and allowed responsibility |
+| --- | --- |
+| `ObstacleBridgeAppleServiceCatalog.swift` | Applies Core catalog installs to Apple listener owners. |
+| `ObstacleBridgeChannelMuxTCPTransportOwner.swift` | Owns `Network.framework` TCP resources. |
+| `ObstacleBridgeMacOSTunAdapter.swift` | macOS `utun`/Darwin TUN device integration. |
+| `ObstacleBridgeMacOSTunHelperService.swift` | macOS ServiceManagement helper lifecycle. |
+| `ObstacleBridgeNativeCrypto.swift` | Objective-C selector facade for Core crypto; it must add no cryptographic behavior. |
+| `ObstacleBridgeNativeProxyConnections.swift` | Apple `Network.framework` proxy connection ownership. |
+| `ObstacleBridgePacketTunnelConfiguration.swift` | `NetworkExtension` settings projection; portable route/default derivation moves to Core. |
+| `ObstacleBridgeQuicOverlayTransportOwner.swift` | Apple QUIC `Network.framework` resource ownership. |
+| `ObstacleBridgeTcpOverlayTransportOwner.swift` | Apple TCP `Network.framework` resource ownership. |
+| `ObstacleBridgeTelemetryMTLSUploader.swift` | Apple `Security` identity and URL-session mTLS binding; Core retains upload policy/spool. |
+| `ObstacleBridgeTunHelperXPCTransport.swift` | macOS NSXPC helper transport. |
+| `ObstacleBridgeUdpOverlayTransportOwner.swift` | Apple UDP `Network.framework`/Darwin resource ownership. |
+| `ObstacleBridgeWebSocketOverlayTransportOwner.swift` | Apple URLSession/Security WebSocket resource ownership. |
+
+The review classifies no other file in this directory as Apple-only. In
+particular, Foundation-only source is not a reason to retain portable behavior
+there; Core may use Foundation and the package's cross-platform dependencies.
+
 Server-owned shared TUN readers route a return packet through the peer-specific
 binding established by that peer's authenticated TUN OPEN. A listener has no
 single global overlay readiness state, so return admission is authorized only

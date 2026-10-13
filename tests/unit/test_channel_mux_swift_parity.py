@@ -23,16 +23,16 @@ from tests.unit import test_ws_payload_mode as ws_test_fixtures
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SWIFT_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxCodec.swift"
-SWIFT_SECURELINK_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeSecureLinkPskCodec.swift"
-SWIFT_UDP_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayCodec.swift"
-SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
+SWIFT_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"
+SWIFT_SECURELINK_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPskCodec.swift"
+SWIFT_UDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayCodec.swift"
+SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
 SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTunRuntime.swift"
 SWIFT_PACKET_MODEL_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketModel.swift"
-SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxUdpRuntime.swift"
-SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTcpRuntime.swift"
-SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeCompressLayerRuntime.swift"
-SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeOverlayStackPlanner.swift"
+SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxUdpRuntime.swift"
+SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxTcpRuntime.swift"
+SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift"
+SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"
 SWIFT_WS_PAYLOAD_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"
 SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
 SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
@@ -46,8 +46,8 @@ SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeC
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
 SWIFT_CORE_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"
 SWIFT_COMPRESSION_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"
-SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
-SWIFT_TCP_OVERLAY_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeTcpOverlayRuntime.swift"
+SWIFT_WS_OVERLAY_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketOverlayRuntime.swift"
+SWIFT_TCP_OVERLAY_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeTcpOverlayRuntime.swift"
 SWIFT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "channelmux_codec_runner.swift"
 
 

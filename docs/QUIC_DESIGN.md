@@ -53,7 +53,7 @@ The shared QUIC session framing is stream-oriented:
 This is the same broad model used by the Python QUIC transport and the Swift QUIC runtime:
 
 - [bridge_transport_quic.py](../src/obstacle_bridge/bridge_transport_quic.py)
-- [ObstacleBridgeQuicOverlayRuntime.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift)
+- [ObstacleBridgeQuicOverlayRuntime.swift](../swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift)
 
 At the `ChannelMux` layer, the transport carries already-packed mux frames:
 

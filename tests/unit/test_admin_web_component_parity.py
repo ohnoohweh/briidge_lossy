@@ -14,12 +14,12 @@ from obstacle_bridge.bridge import AdminWebUI
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SWIFT_CHANNELMUX_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxCodec.swift"
-SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeOverlayStackPlanner.swift"
+SWIFT_CHANNELMUX_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"
+SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"
 SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeRuntimeConfig.swift"
 SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminWebSupport.swift"
-SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminSnapshotSupport.swift"
-SWIFT_ADMIN_API_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminAPI.swift"
+SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminSnapshotSupport.swift"
+SWIFT_ADMIN_API_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminAPI.swift"
 SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebAdminServer.swift"
 SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_component_runner.swift"
 

@@ -1,7 +1,7 @@
 import CoreFoundation
 import Foundation
 
-enum ObstacleBridgeChannelMuxCodecError: Error {
+enum ObstacleBridgeChannelMuxCompatibilityCodecError: Error {
     case invalidChannelID
     case payloadTooLarge
     case stringTooLarge
@@ -9,7 +9,7 @@ enum ObstacleBridgeChannelMuxCodecError: Error {
     case invalidPayload
 }
 
-struct ObstacleBridgeChannelMuxCodec {
+extension ObstacleBridgeChannelMuxCodec {
     static let muxHeaderSize = 8
     static let controlChunkMaxInflight = 512
     static let controlChunkReassemblyTTLS = 20.0
@@ -127,7 +127,7 @@ struct ObstacleBridgeChannelMuxCodec {
         body: Data
     ) throws -> Data {
         guard let channelID = UInt16(exactly: chanID) else {
-            throw ObstacleBridgeChannelMuxCodecError.invalidChannelID
+            throw ObstacleBridgeChannelMuxCompatibilityCodecError.invalidChannelID
         }
         do {
             return try ObstacleBridgeChannelMuxFrameCodec.encode(
@@ -135,7 +135,7 @@ struct ObstacleBridgeChannelMuxCodec {
                 counter: UInt16(counter & 0xFFFF), messageType: UInt8(mtype.rawValue), body: body
             )
         } catch {
-            throw ObstacleBridgeChannelMuxCodecError.payloadTooLarge
+            throw ObstacleBridgeChannelMuxCompatibilityCodecError.payloadTooLarge
         }
     }
 
@@ -165,7 +165,7 @@ struct ObstacleBridgeChannelMuxCodec {
                 service: coreServiceSpec(spec)
             )
         } catch {
-            throw ObstacleBridgeChannelMuxCodecError.invalidPayload
+            throw ObstacleBridgeChannelMuxCompatibilityCodecError.invalidPayload
         }
     }
 
@@ -252,10 +252,10 @@ struct ObstacleBridgeChannelMuxCodec {
             (0...Int(UInt16.max)).contains(value.svcID),
             (0...Int(UInt16.max)).contains(value.lPort),
             (0...Int(UInt16.max)).contains(value.rPort)
-        else { throw ObstacleBridgeChannelMuxCodecError.invalidPayload }
+        else { throw ObstacleBridgeChannelMuxCompatibilityCodecError.invalidPayload }
         let listenProtocol = protoCode(for: value.lProto)
         let targetProtocol = protoCode(for: value.rProto)
-        guard listenProtocol != UInt8.max, targetProtocol != UInt8.max else { throw ObstacleBridgeChannelMuxCodecError.invalidPayload }
+        guard listenProtocol != UInt8.max, targetProtocol != UInt8.max else { throw ObstacleBridgeChannelMuxCompatibilityCodecError.invalidPayload }
         return .init(
             serviceID: UInt16(value.svcID), name: value.name,
             listenProtocol: listenProtocol, listenHost: value.lBind, listenPort: UInt16(value.lPort),
@@ -423,33 +423,6 @@ struct ObstacleBridgeChannelMuxCodec {
         }
     }
 
-}
-
-extension Data {
-    mutating func appendUInt8(_ value: UInt8) {
-        append(contentsOf: [value])
-    }
-
-    mutating func appendUInt16(_ value: UInt16) {
-        let bigEndian = value.bigEndian
-        Swift.withUnsafeBytes(of: bigEndian) { bytes in
-            append(contentsOf: bytes)
-        }
-    }
-
-    mutating func appendUInt32(_ value: UInt32) {
-        let bigEndian = value.bigEndian
-        Swift.withUnsafeBytes(of: bigEndian) { bytes in
-            append(contentsOf: bytes)
-        }
-    }
-
-    mutating func appendUInt64(_ value: UInt64) {
-        let bigEndian = value.bigEndian
-        Swift.withUnsafeBytes(of: bigEndian) { bytes in
-            append(contentsOf: bytes)
-        }
-    }
 }
 
 private extension ObstacleBridgeChannelMuxCodec.JSONValue {
