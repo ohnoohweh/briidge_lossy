@@ -101,6 +101,51 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(received.all[1].body == payload)
     }
 
+    @Test func tcpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {
+        let target = try listeningTCP()
+        defer { _ = close(target.fd) }
+        let received = LockedData()
+        let connected = DispatchSemaphore(value: 0)
+        let delivered = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            let accepted = accept(target.fd, nil, nil)
+            guard accepted >= 0 else { return }
+            defer { _ = close(accepted) }
+            connected.signal()
+            var bytes = [UInt8](repeating: 0, count: 64)
+            let count = read(accepted, &bytes, bytes.count)
+            if count > 0 { received.set(Data(bytes.prefix(Int(count)))); delivered.signal() }
+        }
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 3, name: "owner", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
+        try owner.start(); defer { owner.stop() }
+        let service = ObstacleBridgeServiceSpec(serviceID: 3, name: "target", listenProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: ObstacleBridgeChannelMuxProtocol.tcp.rawValue, targetHost: "127.0.0.1", targetPort: UInt16(target.port))
+        let open = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: 1, connectionSequence: 1, service: service)
+        owner.handleInbound(.init(channelID: 9, protocolType: .tcp, counter: 0, messageType: .open, body: open))
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+        owner.handleInbound(.init(channelID: 9, protocolType: .tcp, counter: 1, messageType: .data, body: Data("remote-open".utf8)))
+        #expect(delivered.wait(timeout: .now() + 3) == .success)
+        #expect(received.value == Data("remote-open".utf8))
+    }
+
+    @Test func udpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {
+        let target = try boundUDP()
+        defer { _ = close(target.fd) }
+        let received = LockedData(); let delivered = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            var bytes = [UInt8](repeating: 0, count: 64)
+            let count = recv(target.fd, &bytes, bytes.count, 0)
+            if count > 0 { received.set(Data(bytes.prefix(Int(count)))); delivered.signal() }
+        }
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(serviceID: 4, name: "owner", listenProtocol: .udp, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: .udp, targetHost: "127.0.0.1", targetPort: target.port)) { _, _ in }
+        try owner.start(); defer { owner.stop() }
+        let service = ObstacleBridgeServiceSpec(serviceID: 4, name: "target", listenProtocol: ObstacleBridgeChannelMuxProtocol.udp.rawValue, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: ObstacleBridgeChannelMuxProtocol.udp.rawValue, targetHost: "127.0.0.1", targetPort: UInt16(target.port))
+        let open = try ObstacleBridgeServiceCodec.encodeOpen(instanceID: 1, connectionSequence: 1, service: service)
+        owner.handleInbound(.init(channelID: 10, protocolType: .udp, counter: 0, messageType: .open, body: open))
+        owner.handleInbound(.init(channelID: 10, protocolType: .udp, counter: 1, messageType: .data, body: Data("remote-udp".utf8)))
+        #expect(delivered.wait(timeout: .now() + 3) == .success)
+        #expect(received.value == Data("remote-udp".utf8))
+    }
+
     private func service(protocolType: ObstacleBridgeChannelMuxProtocol) -> ObstacleBridgeLinuxServiceSpec {
         .init(serviceID: 1, name: "test", listenProtocol: protocolType, listenHost: "127.0.0.1", listenPort: 0, targetProtocol: protocolType, targetHost: "127.0.0.1", targetPort: 7)
     }
@@ -115,6 +160,26 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         return fd
     }
 
+    private func listeningTCP() throws -> (fd: Int32, port: Int) {
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+        guard fd >= 0 else { throw Errno.failure }
+        var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_addr = in_addr(s_addr: INADDR_LOOPBACK.bigEndian)
+        guard withUnsafePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }) == 0, listen(fd, 1) == 0 else { _ = close(fd); throw Errno.failure }
+        var bound = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        guard withUnsafeMutablePointer(to: &bound, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }) == 0 else { _ = close(fd); throw Errno.failure }
+        return (fd, Int(UInt16(bigEndian: bound.sin_port)))
+    }
+
+    private func boundUDP() throws -> (fd: Int32, port: Int) {
+        let fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), 0)
+        guard fd >= 0 else { throw Errno.failure }
+        var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_addr = in_addr(s_addr: INADDR_LOOPBACK.bigEndian)
+        guard withUnsafePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }) == 0 else { _ = close(fd); throw Errno.failure }
+        var bound = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        guard withUnsafeMutablePointer(to: &bound, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }) == 0 else { _ = close(fd); throw Errno.failure }
+        return (fd, Int(UInt16(bigEndian: bound.sin_port)))
+    }
+
     private enum Errno: Error { case failure }
 }
 
@@ -123,4 +188,10 @@ private final class LockedFrames: @unchecked Sendable {
     private var value: [ObstacleBridgeChannelMuxFrame] = []
     var all: [ObstacleBridgeChannelMuxFrame] { lock.lock(); defer { lock.unlock() }; return value }
     func append(_ frames: [ObstacleBridgeChannelMuxFrame]) { lock.lock(); value.append(contentsOf: frames); lock.unlock() }
+}
+
+private final class LockedData: @unchecked Sendable {
+    private let lock = NSLock(); private var stored = Data()
+    var value: Data { lock.lock(); defer { lock.unlock() }; return stored }
+    func set(_ data: Data) { lock.lock(); stored = data; lock.unlock() }
 }

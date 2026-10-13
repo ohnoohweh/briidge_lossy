@@ -268,9 +268,10 @@ The Linux TCP and UDP listener owners execute their Core server accept,
 local-data/EOF or datagram, inbound-data/fragment, and remote-close effects on
 their descriptor queues. Remote TCP and UDP OPEN/dial ownership use the
 Core-admitted native service record, and descriptor reads/writes/fragments/
-close flow through the corresponding Core client runtime. F.2 still needs a
-Linux owner-level remote-service integration test that proves both dial paths
-end to end rather than only their focused listener regressions.
+close flow through the corresponding Core client runtime. Linux owner-level
+tests prove both remote dial paths against real loopback targets. F.2 still
+needs owner-level close, epoch-reset, and malformed/stale-frame evidence for
+both protocols before the generic session facade can be removed.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
