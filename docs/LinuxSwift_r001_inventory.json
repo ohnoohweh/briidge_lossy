@@ -131,6 +131,25 @@
       ]
     }
   ],
+  "lsw_sc1_linux_admission": [
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift"},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift", "status": "not-admitted", "reason": "The Linux Admin product intentionally exposes read-only status and peer routes; it has no configuration-mutation route."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminSnapshotSupport.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift"},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift", "status": "not-admitted", "reason": "The Linux foreground product does not expose the Apple Admin UI or security-advisor payload route."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift", "status": "not-admitted", "reason": "Linux uses the typed ChannelMux codec surface and does not expose the legacy compatibility-control format."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift", "status": "deferred", "gap": "Linux still owns TCP ChannelMux lifecycle translation through its existing session/data-plane owners."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift", "status": "deferred", "gap": "Linux still owns UDP ChannelMux lifecycle translation through its existing session/data-plane owners."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxRuntimeConfiguration.swift"},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift", "status": "not-admitted", "reason": "The Linux foreground product has no invite/onboarding API surface."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift", "status": "partial", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift", "gap": "Linux uses the Core readiness decision but not the full lifecycle/effect executor."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayStackPlanner.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxRuntimeConfiguration.swift"},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift", "status": "partial", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "gap": "Linux executes application-frame effects but not the full lifecycle owner."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskTransportAdapter.swift", "status": "partial", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift", "gap": "Linux client sessions use the adapter; listener-side and full retry qualification remain open."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTcpOverlayRuntime.swift", "status": "partial", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "gap": "Linux executes application-frame effects but not the full lifecycle owner."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift", "status": "partial", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift", "gap": "Linux-host loss, timer, and rollover qualification remains required."},
+    {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift", "status": "partial", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "gap": "Linux uses proxy CONNECT policy but not the full lifecycle owner."}
+  ],
   "feature_groups": [
     {
       "id": "runtime-packaging",

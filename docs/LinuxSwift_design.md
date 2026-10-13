@@ -243,6 +243,9 @@ the adapter's full lifecycle/effect executor is not yet adopted.
 The current macOS host can compile the portable Core target but does not expose
 SwiftPM's Linux adapter target; the focused Linux adapter suite remains
 required Linux-host evidence for this admission.
+`LinuxSwift_r001_inventory.json` now records one machine-checked admission row
+per direct `LSW-SC.1` source, including linked Linux callers, product-scoped
+non-admission reasons, and the remaining deferred/partial gaps.
 There is no Linux caller yet for the moved Admin configuration/web and
 onboarding policy, ChannelMux compatibility/TCP/
 UDP runtime, overlay-layer adapter, or the

@@ -20,6 +20,25 @@ R005_PSK_REQUIREMENTS = {
     *(f"REQ-AUT-{value:03}" for value in range(1, 11)),
     "REQ-AUT-020",
 }
+LSW_SC1_SOURCES = {
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminSnapshotSupport.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayStackPlanner.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskTransportAdapter.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTcpOverlayRuntime.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift",
+    "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift",
+}
 TEST_DEF_RE = re.compile(
     r"^\s*(?:(?:async\s+)?def|(?:@Test\s+)?func)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.MULTILINE,
@@ -149,6 +168,39 @@ def validate(inventory: dict[str, object]) -> list[str]:
         errors.append(f"unmapped Swift source: {file}")
     for file in sorted(mapped_sources - actual_sources):
         errors.append(f"inventory names missing Swift source: {file}")
+
+    admissions = inventory.get("lsw_sc1_linux_admission")
+    if not isinstance(admissions, list):
+        errors.append("LSW-SC.1 Linux admission matrix is missing")
+    else:
+        seen_admissions: Counter[str] = Counter()
+        for row in admissions:
+            if not isinstance(row, dict):
+                errors.append("LSW-SC.1 Linux admission rows must be objects")
+                continue
+            source = row.get("source")
+            status = row.get("status")
+            if not isinstance(source, str):
+                errors.append("LSW-SC.1 Linux admission row lacks source")
+                continue
+            seen_admissions[source] += 1
+            if status not in {"adopted", "partial", "deferred", "not-admitted"}:
+                errors.append(f"{source}: invalid LSW-SC.1 Linux admission status {status!r}")
+            if status in {"adopted", "partial"}:
+                caller = row.get("caller")
+                if not isinstance(caller, str) or implementation_exists(caller):
+                    errors.append(f"{source}: adopted/partial LSW-SC.1 row needs an existing Linux caller")
+            if status in {"partial", "deferred"} and not row.get("gap"):
+                errors.append(f"{source}: partial/deferred LSW-SC.1 row needs an explicit gap")
+            if status == "not-admitted" and not row.get("reason"):
+                errors.append(f"{source}: not-admitted LSW-SC.1 row needs a product-scope reason")
+        for source, count in sorted(seen_admissions.items()):
+            if count != 1:
+                errors.append(f"LSW-SC.1 Linux admission must be unique: {source} appears {count} times")
+        for source in sorted(LSW_SC1_SOURCES - set(seen_admissions)):
+            errors.append(f"LSW-SC.1 Linux admission missing source: {source}")
+        for source in sorted(set(seen_admissions) - LSW_SC1_SOURCES):
+            errors.append(f"LSW-SC.1 Linux admission has out-of-scope source: {source}")
 
     expected_requirements = requirement_ids()
     mapped_requirements: list[str] = []
