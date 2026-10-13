@@ -34,6 +34,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var coreTCPChannels: Set<UInt16> = []
     private var coreUDPChannels: Set<UInt16> = []
     private var coreTCPClientChannels: Set<UInt16> = []
+    private var coreUDPClientChannels: Set<UInt16> = []
     private var stopped = false
 
     public var specification: ObstacleBridgeLinuxServiceSpec { spec }
@@ -153,6 +154,8 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 emitCoreWires(snapshot.frames)
             } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
+            } else if coreUDPClientChannels.contains(channelID), let snapshot = try? udpRuntime.handleLocalClientDatagram(chanID: Int(channelID), payload: payload) {
+                emitCoreWires(snapshot.frames)
             } else {
                 _ = try? plane.localData(channelID: channelID, payload: payload)
                 flushFrames()
@@ -182,6 +185,19 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 return
             }
         }
+        if frame.messageType == .open, frame.protocolType == .udp {
+            let effect = udpRuntime.handleInboundClientOpen(chanID: Int(frame.channelID), payload: frame.body, counter: Int(frame.counter))
+            if effect.accepted, effect.connectRequested,
+               let service = udpRuntime.admittedClientService(chanID: Int(frame.channelID)),
+               let target = try? ObstacleBridgeLinuxServiceSpec(nativeSpec: service) {
+                do {
+                    try connectTarget(channelID: frame.channelID, spec: target)
+                    coreUDPClientChannels.insert(frame.channelID)
+                    _ = udpRuntime.handleClientConnected(chanID: Int(frame.channelID))
+                } catch { _ = udpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter) + 1) }
+                return
+            }
+        }
         if coreTCPClientChannels.contains(frame.channelID) {
             if frame.messageType == .data {
                 let effect = tcpRuntime.handleInboundClientData(chanID: Int(frame.channelID), body: frame.body, counter: Int(frame.counter))
@@ -190,6 +206,23 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
             }
             if frame.messageType == .close {
                 let effect = tcpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter))
+                if effect.closed { closeChannel(frame.channelID) }
+                return
+            }
+        }
+        if coreUDPClientChannels.contains(frame.channelID) {
+            if frame.messageType == .data {
+                let effect = udpRuntime.handleInboundClientData(chanID: Int(frame.channelID), body: frame.body, counter: Int(frame.counter))
+                for payload in effect.sentPackets { writeLocal(channelID: frame.channelID, payload: payload) }
+                return
+            }
+            if frame.messageType == .dataFragment {
+                let effect = udpRuntime.handleInboundClientFragment(chanID: Int(frame.channelID), payload: frame.body, counter: Int(frame.counter))
+                for payload in effect.sentPackets { writeLocal(channelID: frame.channelID, payload: payload) }
+                return
+            }
+            if frame.messageType == .close {
+                let effect = udpRuntime.handleInboundClientClose(chanID: Int(frame.channelID), counter: Int(frame.counter))
                 if effect.closed { closeChannel(frame.channelID) }
                 return
             }
@@ -264,6 +297,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         coreTCPChannels.remove(channelID)
         coreUDPChannels.remove(channelID)
         coreTCPClientChannels.remove(channelID)
+        coreUDPClientChannels.remove(channelID)
     }
 
     private func nativeSpec() -> ObstacleBridgeNativeServiceSpec {
