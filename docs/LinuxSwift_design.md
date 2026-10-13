@@ -120,6 +120,8 @@ implementation already governed by the requirements inventory.
 | `LSW-SC.1L-G` | Adopt SecureLink transport and overlay-layer effects at Linux transport boundaries. | Each Linux lower transport drives `ObstacleBridgeSecureLinkPskTransportAdapter` and `ObstacleBridgeOverlayLayerTransportAdapter` for connect, disconnect, inbound/outbound frames, retry, readiness, and liveness samples; Linux executes only the resulting I/O effects. Tests cover queued pre-auth payloads, authentication failure/retry, rekey, compression failure, readiness gating, and transport-delay rotation without Linux-local copies of these decisions. |
 | `LSW-SC.1L-H` | Adopt the moved UDP peer runtime behind the Linux myUDP descriptor owner. | `ObstacleBridgeLinuxMyUDPTransport` delegates data batching, control records, retransmit timers, in-order delivery, and epoch reset to `ObstacleBridgeUdpOverlayPeerRuntime`; the adapter retains datagram send/receive only. Focused tests and a Python interoperation vector cover loss, duplicate/out-of-order records, control acknowledgement, timer retransmit, and counter rollover. |
 | `LSW-SC.1L-I` | Adopt the moved TCP, QUIC, and WebSocket overlay runtimes with explicit Linux effect executors. | TCP, QUIC, and WebSocket Linux owners use `ObstacleBridgeTcpOverlayRuntime`, `ObstacleBridgeQuicOverlayRuntime`, and `ObstacleBridgeWebSocketOverlayRuntime` for frame admission, early buffering, connection/reconnect, peer lifecycle, and backpressure decisions; POSIX/NIO/TLS remains below those effects. Focused tests exercise send-before-connect, connect flush, inbound framing, reconnect, listener peer add/remove, and backpressure for each available transport. Mixed-runtime probes cover TCP and WebSocket; QUIC coverage is limited to qualified client behavior until the documented listener blocker is resolved. |
+| `LSW-SC.2L-A` | Admit each SC.2 Core contract to Linux only after its Apple extraction is stable. | For every SC.2 Core contract, Linux either calls the contract through an injected Linux port in production code or records a product-scoped non-admission reason in the inventory. Linux does not copy policy, parsing, state transitions, or validation from the Apple adapter. Focused Linux-host tests exercise each admitted port's success and failure effects. |
+| `LSW-SC.2L-B` | Qualify the SC.2 Linux contract surface. | The source inventory links every admitted SC.2 contract to Linux callers and Linux-host evidence; every non-admission has a product-scoped reason. Mixed-runtime tests cover protocol-bearing contracts, while Apple-only credential/device bindings remain below the Core port. |
 
 ### `LSW-SC.1` — direct Core extraction
 
@@ -268,6 +270,16 @@ the moved Admin Web policy, so those assertions are not used as `LSW-SC.1`
 completion evidence until their fixture expectations are reconciled.
 
 ### `LSW-SC.2` — Core contracts with Apple implementations below them
+
+The first SC.2 split is `ObstacleBridgeAdminConfigChallenge`. Core now owns
+the challenge record, expiry, canonical JSON update comparison, and proof
+decision in `ObstacleBridgeAdminConfigChallengePolicy`; its inputs are an
+adapter-supplied identifier, seed, clock value, and digest function. The Apple
+adapter retains only serialized challenge storage, UUID/time acquisition, and
+the CryptoKit SHA-256 binding. `LSW-SC.2L-A` remains open for this contract:
+Linux has not admitted a configuration-mutation surface and must either use
+this policy through a Linux digest/clock port or record its product-scoped
+non-admission in the source inventory.
 
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |

@@ -8,7 +8,7 @@ final class ObstacleBridgeAdminConfigChallenge {
     private let usernameProvider: () -> String
     private let passwordProvider: () -> String
     private let ttl: TimeInterval
-    private var challenges: [String: [String: Any]] = [:]
+    private var challenges: [String: ObstacleBridgeAdminConfigChallengePolicy.Challenge] = [:]
 
     init(
         queueLabel: String,
@@ -31,19 +31,23 @@ final class ObstacleBridgeAdminConfigChallenge {
     func issueChallenge(updates: [String: Any]) throws -> [String: Any] {
         let challengeID = UUID().uuidString.lowercased()
         let seed = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + challengeID
-        let updatesDigest = try Self.configUpdateDigest(updates)
+        let now = Date().timeIntervalSince1970
+        let challenge = try ObstacleBridgeAdminConfigChallengePolicy.issue(
+            identifier: challengeID,
+            seed: seed,
+            updates: updates,
+            now: now,
+            ttl: ttl,
+            digest: Self.sha256Hex
+        )
         queue.sync {
             pruneLocked()
-            challenges[challengeID] = [
-                "seed": seed,
-                "updates_digest": updatesDigest,
-                "expires_at": Date().timeIntervalSince1970 + ttl,
-            ]
+            challenges[challengeID] = challenge
         }
         return [
             "challenge_id": challengeID,
             "seed": seed,
-            "updates_digest": updatesDigest,
+            "updates_digest": challenge.updatesDigest,
         ]
     }
 
@@ -53,42 +57,40 @@ final class ObstacleBridgeAdminConfigChallenge {
             guard let challenge = challenges.removeValue(forKey: challengeID) else {
                 return "invalid or expired configuration change challenge"
             }
-            let updatesDigest: String
             do {
-                updatesDigest = try Self.configUpdateDigest(updates)
+                let result = try ObstacleBridgeAdminConfigChallengePolicy.validate(
+                    challenge,
+                    proof: proof,
+                    updates: updates,
+                    username: usernameProvider(),
+                    password: passwordProvider(),
+                    now: Date().timeIntervalSince1970,
+                    digest: Self.sha256Hex
+                )
+                switch result {
+                case .valid:
+                    return nil
+                case .updatesMismatch:
+                    return "configuration update payload mismatch"
+                case .expired:
+                    return "invalid or expired configuration change challenge"
+                case .proofMismatch:
+                    return "configuration change confirmation failed"
+                }
             } catch {
                 return "failed to digest configuration updates"
             }
-            guard updatesDigest == String(describing: challenge["updates_digest"] ?? "") else {
-                return "configuration update payload mismatch"
-            }
-            let expected = Self.buildProof(
-                seed: String(describing: challenge["seed"] ?? ""),
-                username: usernameProvider(),
-                password: passwordProvider(),
-                updatesDigest: updatesDigest
-            )
-            return proof == expected ? nil : "configuration change confirmation failed"
         }
     }
 
     private func pruneLocked() {
         let now = Date().timeIntervalSince1970
         challenges = challenges.filter { _, item in
-            (item["expires_at"] as? TimeInterval ?? 0) > now
+            item.expiresAt > now
         }
     }
 
-    private static func canonicalConfigUpdateData(_ updates: [String: Any]) throws -> Data {
-        try JSONSerialization.data(withJSONObject: updates, options: [.sortedKeys])
-    }
-
-    private static func configUpdateDigest(_ updates: [String: Any]) throws -> String {
-        let data = try canonicalConfigUpdateData(updates)
+    private static func sha256Hex(_ data: Data) -> String {
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private static func buildProof(seed: String, username: String, password: String, updatesDigest: String) -> String {
-        SHA256.hash(data: Data("\(seed):\(username):\(password):\(updatesDigest)".utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }
