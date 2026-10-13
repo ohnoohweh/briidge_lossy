@@ -18,6 +18,14 @@ enum ObstacleBridgeWebSocketOverlayRuntimeError: Error, LocalizedError {
 }
 
 public final class ObstacleBridgeWebSocketOverlayRuntime {
+    /// Platform-neutral receive effects for byte-stream WebSocket owners.
+    /// The adapter writes the requested PONG and delivers application bytes;
+    /// it does not reinterpret overlay control frames.
+    public enum ClientReceiveEffect: Equatable, Sendable {
+        case application(Data)
+        case pong(txNS: UInt64, echoNS: UInt64)
+        case ignore
+    }
     enum InboundFrame {
         case app(Data)
         case ping(txNS: UInt64, echoNS: UInt64)
@@ -96,6 +104,35 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
         self.sendTimeoutS = max(0.0, sendTimeoutS)
         self.tcpUserTimeoutMS = max(0, tcpUserTimeoutMS)
         self.reconnectGraceS = max(0.0, reconnectGraceS)
+    }
+
+    public func encodeClientPayload(_ wire: Data) throws -> ObstacleBridgeWebSocketPayload {
+        try ObstacleBridgeWebSocketPayloadCodec.encode(wire, mode: corePayloadMode)
+    }
+
+    public func receiveClientPayload(_ payload: ObstacleBridgeWebSocketPayload) throws -> ClientReceiveEffect {
+        let wire = try ObstacleBridgeWebSocketPayloadCodec.decode(payload, mode: corePayloadMode)
+        switch try decodeWireFrame(wire) {
+        case .app(let bytes):
+            overlayConnected = true
+            return .application(bytes)
+        case .ping(let txNS, let echoNS):
+            return .pong(txNS: txNS, echoNS: echoNS)
+        case .pong:
+            return .ignore
+        }
+    }
+
+    /// Marks a concrete client socket as ready and cancels a deferred
+    /// disconnect retained by the portable lifecycle state.
+    public func connectionOpened() {
+        _ = handleAcceptCancellingDisconnect()
+    }
+
+    /// Records a lower-client failure. The Boolean tells the adapter whether
+    /// its reconnect owner should retain/schedule a subsequent attempt.
+    public func connectionLost(runFlag: Bool, initiallyConnected: Bool) -> Bool {
+        scheduleOverlayDisconnect(runFlag: runFlag, initiallyConnected: initiallyConnected).disconnectScheduled
     }
 
     func buildConnectPlan(

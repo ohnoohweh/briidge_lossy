@@ -230,8 +230,8 @@ Known gaps after this `LSW-SC.1L-A` slice: the Linux production callers cover
 `ObstacleBridgeUdpOverlayCodec`, `ObstacleBridgeOverlayStackPlanner`, and
 `ObstacleBridgeTcpOverlayRuntime` and `ObstacleBridgeQuicOverlayRuntime` for
 client connection, buffered-flush, inbound-frame, and reconnect effects, plus
-`ObstacleBridgeWebSocketOverlayRuntime` for clear-WebSocket proxy CONNECT
-policy. Linux service configuration maps admitted scalar rows through
+`ObstacleBridgeWebSocketOverlayRuntime` for client payload, ping/pong,
+connection, disconnect, and proxy CONNECT effects. Linux service configuration maps admitted scalar rows through
 `ObstacleBridgeNativeServiceSpec` before Linux protocol/socket admission.
 Linux myUDP delegates record batching, inbound delivery, control acknowledgement,
 retransmit timers, and counter rollover to `ObstacleBridgeUdpOverlayPeerRuntime`;
@@ -251,10 +251,10 @@ The Linux Admin product deliberately remains read-only and has no Apple Admin
 UI/security-advisor or invite/onboarding route; the inventory records those
 product-scope exclusions. Linux has no legacy compatibility-control format.
 The remaining gaps are ChannelMux TCP/UDP runtime, overlay-layer lifecycle,
-and TCP/QUIC listener plus WebSocket lifecycle owners. TCP and QUIC client
-effect execution is Core-owned; their listener and backpressure paths still
-need explicit Core-effect to POSIX translations rather than wrapping the
-existing Linux reconnect owner.
+and TCP/QUIC/WebSocket listener plus backpressure owners. Client effect
+execution is Core-owned; listener and backpressure paths still need explicit
+Core-effect to POSIX translations rather than wrapping the existing Linux
+reconnect owner.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`
 for handshake, protected send/receive, and explicit rekey, using injected
 session-ID and nonce material to preserve deterministic tests. Listener-side
