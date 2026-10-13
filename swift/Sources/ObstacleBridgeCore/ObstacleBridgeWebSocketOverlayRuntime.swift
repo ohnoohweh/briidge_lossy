@@ -88,6 +88,8 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     private var txBytes = 0
     private var disconnectScheduled = false
     private var overlayConnected = false
+    private var nextListenerPeerID = 1
+    private var listenerPeerIDs: Set<Int> = []
 
     var configuredPayloadMode: String { payloadMode }
 
@@ -133,6 +135,24 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     /// its reconnect owner should retain/schedule a subsequent attempt.
     public func connectionLost(runFlag: Bool, initiallyConnected: Bool) -> Bool {
         scheduleOverlayDisconnect(runFlag: runFlag, initiallyConnected: initiallyConnected).disconnectScheduled
+    }
+
+    /// Allocates portable ownership for an accepted WebSocket peer. The
+    /// listener retains the TLS/NIO resource and closes this Core peer when
+    /// that resource is retired.
+    public func listenerPeerAccepted() -> Int {
+        let peerID = nextListenerPeerID
+        nextListenerPeerID += 1
+        listenerPeerIDs.insert(peerID)
+        overlayConnected = true
+        return peerID
+    }
+
+    @discardableResult
+    public func listenerPeerClosed(_ peerID: Int) -> Bool {
+        listenerPeerIDs.remove(peerID)
+        overlayConnected = !listenerPeerIDs.isEmpty
+        return overlayConnected
     }
 
     func buildConnectPlan(

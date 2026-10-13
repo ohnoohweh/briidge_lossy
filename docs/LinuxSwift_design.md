@@ -251,7 +251,7 @@ The Linux Admin product deliberately remains read-only and has no Apple Admin
 UI/security-advisor or invite/onboarding route; the inventory records those
 product-scope exclusions. Linux has no legacy compatibility-control format.
 The remaining gaps are ChannelMux TCP/UDP runtime, overlay-layer lifecycle,
-and QUIC/WebSocket listener plus backpressure owners. TCP listener peer
+and QUIC listener plus backpressure owners. TCP and WebSocket listener peer
 add/remove and client effect execution are Core-owned; the remaining listener
 and backpressure paths still need explicit Core-effect to POSIX translations.
 Linux client sessions now drive `ObstacleBridgeSecureLinkPskTransportAdapter`

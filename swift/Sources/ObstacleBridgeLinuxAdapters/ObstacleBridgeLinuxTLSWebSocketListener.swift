@@ -31,10 +31,12 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
         func handlerAdded(context: ChannelHandlerContext) { let inbound = Inbound(); context.pipeline.addHandler(inbound).whenSuccess { _ in self.owner.enqueue(Connection(context.channel, inbound, self.timeout)) } }
     }
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
+    private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private let condition = NSCondition(); private var pending: [Connection] = []; private var closed = false
     private var channel: (any Channel)?; public private(set) var port: Int = 0; private let webSocketPath: String; private let timeoutMilliseconds: Int
     public init(port: Int, certificatePath: String, privateKeyPath: String, webSocketPath: String = "/", timeoutMilliseconds: Int = 5_000) throws {
         guard (0...65535).contains(port) else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
+        self.overlayRuntime = try .init(payloadMode: "binary")
         self.webSocketPath = webSocketPath.hasPrefix("/") ? webSocketPath : "/\(webSocketPath)"; self.timeoutMilliseconds = max(1, timeoutMilliseconds)
         let tls = TLSConfiguration.makeServerConfiguration(certificateChain: [.file(certificatePath)], privateKey: .file(privateKeyPath))
         let context = try NIOSSLContext(configuration: tls)
@@ -54,7 +56,8 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
     public func serveOne(psk: Data, serverNonce: Data) throws { let session = try acceptConfiguredSession(psk: psk, serverNonce: serverNonce); defer { session.close() }; while true { do { _ = try session.send(try session.receiveInbound()) } catch ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF { return } } }
     private func configured(_ c: Connection, psk: Data, serverNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk); try writeWire(try server.handleClientHello(readFrame(c), serverNonce: serverNonce), c); try writeWire(try server.handleClientProof(readFrame(c)), c)
-        let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { value in try self.writeWire(value, c); return try self.readFrame(c) }, send: { try self.writeWire($0, c) }, receive: { try self.readFrame(c) }, close: { c.close() })
+        let peerID = overlayRuntime.listenerPeerAccepted()
+        let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { value in try self.writeWire(value, c); return try self.readFrame(c) }, send: { try self.writeWire($0, c) }, receive: { try self.readFrame(c) }, close: { [weak self] in self?.overlayRuntime.listenerPeerClosed(peerID); c.close() })
         return ObstacleBridgeLinuxConfiguredSession(lowerSession: raw, secureLink: nil, secureLinkServer: server, transport: .ws)
     }
     private func upgrade(_ c: Connection) throws -> Bool { let request = try c.readUntil(Data("\r\n\r\n".utf8), maximum: 16_384); guard let text = String(data: request, encoding: .utf8) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }; let lines = text.components(separatedBy: "\r\n"); guard let first = lines.first, first.hasPrefix("GET ") else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }; guard lines.contains(where: { $0.lowercased().hasPrefix("upgrade: websocket") }) else { try c.write(Data("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK".utf8)); return false }; guard first.split(separator: " ").dropFirst().first == Substring(webSocketPath), let keyLine = lines.first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") }) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }; let key = keyLine.split(separator: ":", maxSplits: 1)[1].trimmingCharacters(in: .whitespaces); let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString(); try c.write(Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)); return true }
