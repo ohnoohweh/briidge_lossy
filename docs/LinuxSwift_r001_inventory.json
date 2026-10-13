@@ -44,7 +44,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskTransportAdapter.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigSupport.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift",

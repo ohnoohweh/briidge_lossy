@@ -188,6 +188,12 @@ construction use its portable configuration view; that view accepts the same
 flat and grouped invite inputs without depending on runtime socket or file
 configuration code.
 
+`ObstacleBridgeAdminConfigSupport.swift` is Core-owned. Its request parsing,
+invite generation/preview, challenge response, value validation, and response
+policy are portable. The mixed runtime-configuration adapter supplies the
+single schema/normalization policy through `ConfigurationPolicy`; Core does
+not recreate that schema.
+
 `ObstacleBridgePeerAddressProtocolRuntime.swift` now performs bounded
 IPv4/IPv6 parsing and canonical formatting in Core without Darwin or Glibc
 socket conversion. `ObstacleBridgeOverlayLayerTransportAdapter.swift` is
@@ -195,13 +201,10 @@ therefore Core-owned as well, preserving the mapped-IPv4 and malformed-frame
 admission rules while composing the portable compression and SecureLink
 effects.
 
-The open `LSW-SC.1` gap is `ObstacleBridgeAdminConfigSupport.swift`.
-They cannot be moved as a single file-system operation because their present
-Apple callers compile a flat source list and several depend on the `LSW-SC.2`
-configuration, packet-device, and connection contracts. The next extraction
-must migrate a dependency-closed portable slice, update those callers and
-their flat-source lists, and remove its source from this directory; it must
-not leave a forwarding duplicate behind.
+All 17 direct `LSW-SC.1` source rows are now Core-owned, with no forwarding
+copy under `ObstacleBridgeShared`. The source-boundary portion still does not
+close the work package: Linux must execute each admitted moved API under the
+Linux adoption packages before the `LSW-SC.1` definition of done is met.
 
 `LSW-SC.1L-A` is open: Linux does not yet execute the moved APIs as a complete
 group. The existing Linux runtime uses Core codecs and selected

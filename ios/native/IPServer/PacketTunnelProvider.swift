@@ -2398,7 +2398,8 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         let result = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
             currentRawConfig: currentRawConfig,
             currentRuntimeConfig: currentRuntimeConfig,
-            updates: updates
+            updates: updates,
+            configurationPolicy: ObstacleBridgeRuntimeConfig.adminConfigPolicy()
         )
         let nextRawConfig = result.nextRawConfig
         try persistSharedRuntimeConfigJSON(nextRawConfig)

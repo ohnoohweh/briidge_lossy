@@ -2664,7 +2664,8 @@ final class ObstacleBridgeHostRunner {
         let result = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
             currentRawConfig: runtimeConfigRaw,
             currentRuntimeConfig: runtimeConfig,
-            updates: normalizedConfigUpdates(updates)
+            updates: normalizedConfigUpdates(updates),
+            configurationPolicy: ObstacleBridgeRuntimeConfig.adminConfigPolicy()
         )
         let nextRaw = result.nextRawConfig
         let persistedPayload = try ObstacleBridgeConfigSecretCodec.encryptPayload(nextRaw)

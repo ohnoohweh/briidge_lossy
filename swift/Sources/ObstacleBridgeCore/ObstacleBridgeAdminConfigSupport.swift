@@ -1,6 +1,13 @@
 import Foundation
 
 enum ObstacleBridgeAdminConfigSupport {
+    struct ConfigurationPolicy {
+        let normalizedUpdates: ([String: Any], [String: Any]) -> [String: Any]
+        let looksGrouped: ([String: Any]) -> Bool
+        let schemaRow: (String) -> [String: Any]?
+        let sectionName: (String) -> String?
+    }
+
     enum ParsedBody {
         case payload([String: Any])
         case response(ObstacleBridgeAdminAPIResponse)
@@ -153,17 +160,18 @@ enum ObstacleBridgeAdminConfigSupport {
     static func validatedNextRawConfig(
         currentRawConfig: [String: Any],
         currentRuntimeConfig: [String: Any],
-        updates: [String: Any]
+        updates: [String: Any],
+        configurationPolicy: ConfigurationPolicy
     ) throws -> (nextRawConfig: [String: Any], normalizedKeys: [String]) {
-        let normalized = ObstacleBridgeRuntimeConfig.normalizedConfigUpdates(updates, currentRuntimeConfig: currentRuntimeConfig)
-        let grouped = ObstacleBridgeRuntimeConfig.looksGrouped(currentRawConfig)
+        let normalized = configurationPolicy.normalizedUpdates(updates, currentRuntimeConfig)
+        let grouped = configurationPolicy.looksGrouped(currentRawConfig)
         var nextRawConfig = currentRawConfig
         for (key, rawValue) in normalized {
-            guard let schemaRow = ObstacleBridgeRuntimeConfig.schemaRow(forKey: key) else {
+            guard let schemaRow = configurationPolicy.schemaRow(key) else {
                 throw NSError(domain: "ObstacleBridgeAdminConfigSupport", code: 20, userInfo: [NSLocalizedDescriptionKey: "unknown config key: \(key)"])
             }
             let value = try validatedConfigValue(key: key, rawValue: rawValue, schemaRow: schemaRow)
-            if grouped, let section = ObstacleBridgeRuntimeConfig.sectionName(forKey: key) {
+            if grouped, let section = configurationPolicy.sectionName(key) {
                 var block = (nextRawConfig[section] as? [String: Any]) ?? [:]
                 block[key] = value
                 nextRawConfig[section] = block

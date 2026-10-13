@@ -1392,7 +1392,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
     shim = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_extension.py").read_text(encoding="utf-8")
     shim_runtime = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_runtime.py").read_text(encoding="utf-8")
-    config_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigSupport.swift").read_text(encoding="utf-8")
+    config_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
     assert "@objc(PacketTunnelProvider)" in provider

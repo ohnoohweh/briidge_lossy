@@ -163,7 +163,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAuth.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigChallenge.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeConfigSecretCodec.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),
@@ -2166,7 +2166,8 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                     let saved = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
                         currentRawConfig: freshRawConfig,
                         currentRuntimeConfig: ObstacleBridgeRuntimeConfig.flatten(freshRawConfig),
-                        updates: updates
+                        updates: updates,
+                        configurationPolicy: ObstacleBridgeRuntimeConfig.adminConfigPolicy()
                     )
                     let persisted = try ObstacleBridgeConfigSecretCodec.encryptPayload(saved.nextRawConfig)
                     let restored = try ObstacleBridgeConfigSecretCodec.decryptPayload(persisted)

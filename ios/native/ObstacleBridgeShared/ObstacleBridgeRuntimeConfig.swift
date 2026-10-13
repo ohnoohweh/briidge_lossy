@@ -1819,3 +1819,14 @@ enum ObstacleBridgeRuntimeConfig {
         return nil
     }
 }
+
+extension ObstacleBridgeRuntimeConfig {
+    static func adminConfigPolicy() -> ObstacleBridgeAdminConfigSupport.ConfigurationPolicy {
+        ObstacleBridgeAdminConfigSupport.ConfigurationPolicy(
+            normalizedUpdates: { normalizedConfigUpdates($0, currentRuntimeConfig: $1) },
+            looksGrouped: looksGrouped,
+            schemaRow: schemaRow(forKey:),
+            sectionName: sectionName(forKey:)
+        )
+    }
+}
