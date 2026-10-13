@@ -633,7 +633,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         }
         switch state {
         case .ready:
-            let endpoint = ObstacleBridgeOverlayConnectionSupport.endpointDescription(connection.endpoint)
+            let endpoint = ObstacleBridgeAppleOverlayConnectionEndpoint.endpointDescription(connection.endpoint)
             observedPeerHost = endpoint.host
             observedPeerPort = endpoint.port
             let snapshot = overlayRuntime.acceptServerPeer(peerHost: endpoint.host, peerPort: endpoint.port, socketPresent: true)

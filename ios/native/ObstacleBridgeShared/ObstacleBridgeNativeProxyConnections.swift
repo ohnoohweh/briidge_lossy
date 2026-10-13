@@ -1,45 +1,6 @@
 import Foundation
 import Network
 
-enum ObstacleBridgeNativeConnectionSnapshot {
-    static func endpoint(host: String?, port: Int?) -> Any {
-        guard let host, let port else {
-            return NSNull()
-        }
-        return ["host": host, "port": port]
-    }
-
-    static func make(
-        proto: String,
-        role: String,
-        state: String,
-        chanID: Int,
-        svcID: Int,
-        serviceName: String,
-        sourceHost: String?,
-        sourcePort: Int?,
-        localHost: String?,
-        localPort: Int?,
-        remoteHost: String,
-        remotePort: Int,
-        stats: [String: Int]
-    ) -> [String: Any] {
-        [
-            "protocol": proto,
-            "role": role,
-            "state": state,
-            "chan_id": chanID,
-            "svc_id": svcID,
-            "service_name": serviceName,
-            "source": endpoint(host: sourceHost, port: sourcePort),
-            "local": endpoint(host: localHost, port: localPort),
-            "local_port": localPort ?? NSNull(),
-            "remote_destination": endpoint(host: remoteHost, port: remotePort),
-            "stats": stats,
-        ]
-    }
-}
-
 final class ObstacleBridgeTCPProxyConnection {
     private let chanID: Int
     private let spec: ObstacleBridgeNativeServiceSpec

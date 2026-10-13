@@ -1,39 +1,7 @@
 import Foundation
 import Network
 
-struct ObstacleBridgeOverlayConnectionState {
-    let proto: String
-    let role: String
-    let chanID: Int
-    let svcID: Int
-    let serviceName: String
-    let remoteHost: String
-    let remotePort: Int
-    var state: String
-    var localHost: String?
-    var localPort: Int?
-    var stats: [String: Int]
-
-    func snapshot() -> [String: Any] {
-        ObstacleBridgeNativeConnectionSnapshot.make(
-            proto: proto,
-            role: role,
-            state: state,
-            chanID: chanID,
-            svcID: svcID,
-            serviceName: serviceName,
-            sourceHost: nil,
-            sourcePort: nil,
-            localHost: localHost,
-            localPort: localPort,
-            remoteHost: remoteHost,
-            remotePort: remotePort,
-            stats: stats
-        )
-    }
-}
-
-enum ObstacleBridgeOverlayConnectionSupport {
+enum ObstacleBridgeAppleOverlayConnectionEndpoint {
     static func endpointDescription(_ endpoint: NWEndpoint) -> (host: String, port: Int) {
         if case let .hostPort(host, port) = endpoint {
             return (host.debugDescription, Int(port.rawValue))
@@ -41,69 +9,6 @@ enum ObstacleBridgeOverlayConnectionSupport {
         return ("127.0.0.1", 0)
     }
 
-    static func connectionRows(from states: [Int: ObstacleBridgeOverlayConnectionState]) -> [[String: Any]] {
-        states.values.map { $0.snapshot() }.sorted { lhs, rhs in
-            (lhs["chan_id"] as? Int ?? -1) < (rhs["chan_id"] as? Int ?? -1)
-        }
-    }
-
-    static func makeState(
-        proto: String,
-        role: String,
-        chanID: Int,
-        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
-        serviceName: String,
-        state: String,
-        localHost: String?,
-        localPort: Int?
-    ) -> ObstacleBridgeOverlayConnectionState {
-        ObstacleBridgeOverlayConnectionState(
-            proto: proto,
-            role: role,
-            chanID: chanID,
-            svcID: spec.svcID,
-            serviceName: serviceName,
-            remoteHost: spec.rHost,
-            remotePort: spec.rPort,
-            state: state,
-            localHost: localHost,
-            localPort: localPort,
-            stats: ["rx_msgs": 0, "tx_msgs": 0, "rx_bytes": 0, "tx_bytes": 0]
-        )
-    }
-
-    static func updateConnectedState(
-        states: inout [Int: ObstacleBridgeOverlayConnectionState],
-        proto: String,
-        chanID: Int,
-        localHost: String?,
-        localPort: Int?
-    ) {
-        guard var state = states[chanID], state.proto == proto else { return }
-        state.state = "connected"
-        if let localHost {
-            state.localHost = localHost
-        }
-        if let localPort {
-            state.localPort = localPort
-        }
-        states[chanID] = state
-    }
-
-    static func recordTraffic(
-        states: inout [Int: ObstacleBridgeOverlayConnectionState],
-        proto: String,
-        chanID: Int,
-        direction: String,
-        bytes: Int
-    ) {
-        guard var state = states[chanID], state.proto == proto else { return }
-        let keyMessages = direction == "inbound" ? "rx_msgs" : "tx_msgs"
-        let keyBytes = direction == "inbound" ? "rx_bytes" : "tx_bytes"
-        state.stats[keyMessages, default: 0] += 1
-        state.stats[keyBytes, default: 0] += bytes
-        states[chanID] = state
-    }
 }
 
 final class ObstacleBridgeUDPServerConnectionDriver {
@@ -171,7 +76,7 @@ final class ObstacleBridgeUDPServerConnectionDriver {
             self?.queue.async {
                 guard let self, self.startedProvider() else { return }
                 if let data, !data.isEmpty {
-                    let endpoint = ObstacleBridgeOverlayConnectionSupport.endpointDescription(self.connection.endpoint)
+                    let endpoint = ObstacleBridgeAppleOverlayConnectionEndpoint.endpointDescription(self.connection.endpoint)
                     self.eventSink("\(self.eventPrefix)_udp_server_datagram_read", [
                         "bytes": data.count,
                         "source_host": endpoint.host,

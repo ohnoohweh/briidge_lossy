@@ -312,6 +312,11 @@ validation. The Apple adapter retains Network.framework listener/connection
 ownership. Linux admission remains separately scoped to `LSW-SC.2L-A`, where
 its listener owner must execute the Core decisions rather than reproduce them.
 
+`ObstacleBridgeOverlayConnectionPolicy` owns connection-row projection and
+connection state/traffic transitions. Apple retains only Network.framework
+endpoint projection and connection drivers; Linux admission remains separately
+owned by `LSW-SC.2L-A` through its connection owner.
+
 | Source file | Required Core extraction; Apple remainder |
 | --- | --- |
 | `ObstacleBridgeAdminAuth.swift` | Challenge/session state and proof policy; inject clock, random source, and cryptographic digest provider. |

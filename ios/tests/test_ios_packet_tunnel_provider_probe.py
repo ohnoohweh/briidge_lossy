@@ -184,6 +184,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayConnectionPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),

@@ -1688,6 +1688,7 @@ Important caveat:
 - `ObstacleBridgeNativeCrypto` is the required Objective-C selector boundary only: it delegates HKDF, PBKDF2, AEAD, Ed25519, and X25519 to Core and does not import CryptoKit or CommonCrypto.
 - Swift Core owns configuration-secret field selection and versioned URL-safe envelope serialization; Apple retains only machine-derived key material, CryptoKit ChaChaPoly, and the native HKDF binding. Linux adoption is a separate `LSW-SC.2L-A` provider integration rather than a policy fork.
 - Swift Core owns proxy HTTP/SOCKS parsing, authority normalization, proxy-header rewriting, and credential validation. Apple retains Network.framework listener/connection effects; Linux listener admission remains a separate `LSW-SC.2L-A` integration.
+- Swift Core owns overlay connection-row serialization plus state and traffic transitions; Apple retains Network.framework endpoint projection and connection drivers, with Linux connection-owner adoption separately tracked by `LSW-SC.2L-A`.
 - myUDP listener peers that continue control traffic without producing an application payload are removed after a bounded pre-auth grace period; Swift myUDP clients publish the remaining app-readiness recovery time and rebuild the sole peer socket before retrying SecureLink.
 - Admin status polling keeps a minimal live-session fallback when stats snapshotting fails before a cached status exists.
 
