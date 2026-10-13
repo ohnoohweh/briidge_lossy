@@ -73,10 +73,11 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let wsPayloadMode: ObstacleBridgeWebSocketPayloadMode
     private let quicALPN: String
     private let quicInsecure: Bool
+    private let quicTrustRootsPath: String?
     private let receiveTimeoutMilliseconds: Int
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
-    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, receiveTimeoutMilliseconds: Int = 5_000) throws {
+    public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
         }
@@ -92,6 +93,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         guard !normalizedALPN.isEmpty else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
         self.quicALPN = normalizedALPN
         self.quicInsecure = quicInsecure
+        let normalizedTrustRoots = quicTrustRootsPath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.quicTrustRootsPath = normalizedTrustRoots?.isEmpty == false ? normalizedTrustRoots : nil
         self.receiveTimeoutMilliseconds = max(1, receiveTimeoutMilliseconds)
         self.snapshot = .init(transport: transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
     }
@@ -122,7 +125,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     defer { connection.close() }
                     result = try connection.exchange(payload)
                 case .quic:
-                    let connection = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
+                    let connection = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
                     defer { connection.close() }
                     try connection.write(try tcpWire(payload))
                     result = try readTCPApplicationFrame(connection)
@@ -151,7 +154,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 )
             }
             if transport == .quic {
-                let quic = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
+                let quic = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
                 snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
                 let send: (Data) throws -> Void = { [weak self] payload in
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }

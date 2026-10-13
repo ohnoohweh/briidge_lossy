@@ -94,13 +94,14 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
     @Test func parsesSectionedQuicConfigurationWithExplicitTrustPosture() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "quic"],
-            "quic_session": ["quic_peer": "127.0.0.1", "quic_peer_port": 4242, "quic_alpn": "hq-29", "quic_insecure": true],
+            "quic_session": ["quic_peer": "127.0.0.1", "quic_peer_port": 4242, "quic_alpn": "hq-29", "quic_insecure": true, "quic_ca_cert": "/etc/obstaclebridge/roots.pem"],
         ]))
         #expect(config.transport == .quic)
         #expect(config.host == "127.0.0.1")
         #expect(config.port == 4242)
         #expect(config.quicALPN == "hq-29")
         #expect(config.quicInsecure)
+        #expect(config.quicTrustRootsPath == "/etc/obstaclebridge/roots.pem")
     }
 
     @Test func parsesAuthenticatedMyudpListenerConfigurationWithoutOutboundPeer() throws {
@@ -155,7 +156,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires quic_session.quic_peer")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(["runner": ["overlay_transport": "quic"]]))
         }
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC listener mode is unavailable until LSW-005B.2 owns certificate and peer admission")) {
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC listener mode is unavailable until LSW-005B.2 qualifies the backend's inbound-stream ownership")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
                 "runner": ["overlay_transport": "quic", "listener_mode": true],
                 "quic_session": ["quic_own_port": 4242],

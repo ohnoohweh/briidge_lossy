@@ -73,7 +73,7 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
     private var setupTask: Task<Void, Never>?
     private var closed = false
 
-    init(host: String, port: Int, alpn: String, insecure: Bool, receiveTimeoutMilliseconds: Int) throws {
+    init(host: String, port: Int, alpn: String, insecure: Bool, trustRootsPath: String?, receiveTimeoutMilliseconds: Int) throws {
         self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
         self.receiveTimeoutMilliseconds = max(1, receiveTimeoutMilliseconds)
         let setupFinished = DispatchSemaphore(value: 0)
@@ -83,7 +83,7 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
         self.setupTask = Task.detached { [weak self] in
             guard let self else { return }
             do {
-                try await self.open(host: host, port: port, alpn: alpn, insecure: insecure)
+                try await self.open(host: host, port: port, alpn: alpn, insecure: insecure, trustRootsPath: trustRootsPath)
                 self.recordSetup(.success(()))
             } catch {
                 self.recordSetup(.failure(error))
@@ -158,14 +158,14 @@ final class ObstacleBridgeLinuxQUICSession: @unchecked Sendable {
         lock.unlock()
     }
 
-    private func open(host: String, port: Int, alpn: String, insecure: Bool) async throws {
+    private func open(host: String, port: Int, alpn: String, insecure: Bool, trustRootsPath: String?) async throws {
         let remoteAddress = try SocketAddress.makeAddressResolvingHost(host, port: port)
         let logger = Logger(label: "obstaclebridge.linux.quic")
         let (datagram, multiplexer) = try await DatagramBootstrap(group: eventLoopGroup)
             .channelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .bind(host: remoteAddress.protocol == .inet6 ? "::" : "0.0.0.0", port: 0) { channel in
                 channel.eventLoop.makeCompletedFuture {
-                    let verification: VerificationConfiguration = .x509Certificates(trustRootsFilePath: nil)
+                    let verification: VerificationConfiguration = .x509Certificates(trustRootsFilePath: trustRootsPath)
                     let configuration = QUICConfiguration.client(
                         verificationConfiguration: verification,
                         applicationProtocols: [alpn],

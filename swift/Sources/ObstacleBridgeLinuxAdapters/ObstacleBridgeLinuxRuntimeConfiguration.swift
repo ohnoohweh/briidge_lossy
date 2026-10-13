@@ -48,6 +48,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let webSocketPayloadMode: String
     public let quicALPN: String
     public let quicInsecure: Bool
+    /// Optional PEM trust-root bundle for an outbound QUIC client. `nil`
+    /// selects the platform trust store unless the explicit test bypass is set.
+    public let quicTrustRootsPath: String?
     public let secureLinkPSK: Data?
     public let receiveIdleTimeoutMilliseconds: Int
     /// Outbound compression policy. Inbound compressed frames remain accepted
@@ -56,7 +59,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -66,6 +69,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.webSocketPayloadMode = webSocketPayloadMode
         self.quicALPN = quicALPN
         self.quicInsecure = quicInsecure
+        self.quicTrustRootsPath = quicTrustRootsPath
         self.secureLinkPSK = secureLinkPSK
         self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
         self.compressionPolicy = compressionPolicy
@@ -107,7 +111,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(transport.unavailableReason ?? "Linux transport unavailable")
         }
         if listenerMode, transport == .quic {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC listener mode is unavailable until LSW-005B.2 owns certificate and peer admission")
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux QUIC listener mode is unavailable until LSW-005B.2 qualifies the backend's inbound-stream ownership")
         }
         let sessionName: String
         let peerKey: String
@@ -172,6 +176,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             webSocketPayloadMode: string(session["ws_payload_mode"]) ?? "binary",
             quicALPN: string(session["quic_alpn"]) ?? "hq-29",
             quicInsecure: boolean(session["quic_insecure"]) ?? false,
+            quicTrustRootsPath: string(session["quic_ca_cert"]),
             secureLinkPSK: psk,
             receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
             compressionPolicy: compressionPolicy,

@@ -240,6 +240,37 @@ ChannelMux service-flow qualification over QUIC. Those are the explicit
 `LSW-005B.2` follow-up; configuration rejects QUIC listener mode until that
 owner exists. TLS WebSocket remains separate under `LSW-005C`.
 
+## LSW-005B.2.1 trust-material boundary
+
+The Linux configuration carries an optional PEM trust-root bundle for an
+outbound QUIC client. The lower client passes that bundle directly to the
+selected NIO QUIC verifier; when it is absent, verification remains rooted in
+the platform trust store. The existing `quic_insecure` setting remains the
+explicit test-only bypass.
+
+Known gaps after `LSW-005B.2.1`: Linux QUIC listener configuration remains
+fail-closed. An NIO 0.4.1 listener reached TLS handshake but aborted inside its
+upstream inbound-stream ownership before a stream could be admitted, so this
+package does not expose certificate/key configuration or a crash-prone server
+mode. Peer-family preference and mixed-runtime ChannelMux service-flow
+qualification remain in the following `LSW-005B.2` packages.
+
+## LSW-005B.2.2 reliable-stream qualification result
+
+The single reliable-stream request/reply probe remains the admitted Linux
+QUIC boundary. It proves TLS setup, ALPN negotiation, framing, and one
+application reply against an aioquic peer, but it does not imply that a
+long-lived protected session is qualified.
+
+Known gaps after `LSW-005B.2.2`: on the pinned `swift-nio-quic` 0.4.1 graph,
+the listener aborts when its first inbound stream is created, and a client
+aborts after TLS when a SecureLink multi-exchange stream is exercised. Neither
+failure is safe to expose as an admitted runtime mode. Linux QUIC listener
+ownership, custom-trust-root runtime interoperability, and ChannelMux service
+traffic therefore remain blocked on a released upstream backend correction;
+the current source still rejects listener mode and retains only the bounded
+single-exchange client probe. Peer-family preference is also not mapped.
+
 ## Platform decisions still required
 
 - Supported Linux distributions and deployment model.
