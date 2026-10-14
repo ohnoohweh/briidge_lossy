@@ -129,8 +129,8 @@ def test_macos_build_uses_shared_peer_address_resolver() -> None:
     resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
 
     assert "ObstacleBridgePeerAddressResolver.swift" in build_script
-    assert "#if canImport(Darwin)" in resolver
     assert "import Darwin" in resolver
+    assert "import Glibc" not in resolver
 
 
 def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> None:
@@ -1419,6 +1419,7 @@ def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxSession.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift"),

@@ -206,7 +206,7 @@ ARC-CMP-003:
     - ios/tests/test_m3_native_sources.py::test_swift_overlay_remote_service_catalog_uses_current_tun_epoch
     # The probe keeps RuntimeConfig's Core NativeService/Admin-config source closure explicit.
     - ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path
-    - ios/tests/test_m3_native_sources.py::test_shared_peer_address_resolver_selects_posix_module_per_host
+    - ios/tests/test_m3_native_sources.py::test_shared_peer_address_resolver_is_darwin_specific
     - ios/tests/test_macos_swift_host_runner.py::test_macos_build_uses_shared_peer_address_resolver
     - tests/unit/test_channel_mux_component_parity.py::test_swift_component_inbound_tun_fragment_sequence_matches_python
     - ios/tests/test_m3_native_sources.py::test_native_packet_flow_bridge_source_exists

@@ -536,14 +536,12 @@ def test_runtime_config_source_exists() -> None:
     assert "derivedRemoteTunnelSettings(" not in runtime
 
 
-def test_shared_peer_address_resolver_selects_posix_module_per_host() -> None:
+def test_shared_peer_address_resolver_is_darwin_specific() -> None:
     resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgePeerAddressPolicy.swift").read_text(encoding="utf-8")
 
-    assert "#if canImport(Darwin)" in resolver
     assert "import Darwin" in resolver
-    assert "#elseif canImport(Glibc)" in resolver
-    assert "import Glibc" in resolver
+    assert "import Glibc" not in resolver
     assert "var hints = addrinfo()" in resolver
     assert "ObstacleBridgePeerAddressPolicy.literalResolution" in resolver
     assert "orderedCandidateIndices" in policy
