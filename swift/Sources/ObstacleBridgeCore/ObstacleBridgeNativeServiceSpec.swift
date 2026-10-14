@@ -63,6 +63,120 @@ struct ObstacleBridgeSwiftUDPPeerConfig {
     let tunIfname: String
 }
 
+struct ObstacleBridgeRuntimeServiceSpec {
+    let svcID: Int
+    let name: String?
+    let listenProtocol: String
+    let listenBind: String
+    let listenPort: Int
+    let targetProtocol: String
+    let targetHost: String
+    let targetPort: Int
+    let lifecycleHooks: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
+    let options: [String: ObstacleBridgeChannelMuxCodec.JSONValue]?
+
+    func nativeServiceSpec() -> ObstacleBridgeNativeServiceSpec {
+        ObstacleBridgeNativeServiceSpec(
+            channelMuxSpec: .init(
+                svcID: svcID,
+                lProto: listenProtocol,
+                lBind: listenBind,
+                lPort: listenPort,
+                rProto: targetProtocol,
+                rHost: targetHost,
+                rPort: targetPort,
+                name: name,
+                lifecycleHooks: lifecycleHooks,
+                options: options
+            )
+        )
+    }
+
+    var listenIfname: String? { listenProtocol == "tun" ? listenBind : nil }
+    var targetIfname: String? { targetProtocol == "tun" ? targetHost : nil }
+
+    func mtu(fallback: Int) -> Int {
+        if listenProtocol == "tun" { return listenPort }
+        if targetProtocol == "tun" { return targetPort }
+        return fallback
+    }
+
+    func listenerHookEnvBlocks() -> [[String: Any]] {
+        guard let lifecycleHooks,
+              case .object(let listenerContainer)? = lifecycleHooks["listener"]
+        else { return [] }
+        var out: [[String: Any]] = []
+        for event in ["on_created", "on_channel_connected", "on_stopped"] {
+            guard case .object(let command)? = listenerContainer[event],
+                  case .object(let env)? = command["env"]
+            else { continue }
+            out.append(Self.foundationObject(env))
+        }
+        return out
+    }
+
+    func derivedLocalTunnelSettings(
+        defaultTunnelAddress6: String,
+        defaultTunnelPrefix6: Int,
+        defaultIncludedRoutes: [String],
+        defaultExcludedRoutes: [String],
+        defaultIncludedRoutes6: [String],
+        defaultExcludedRoutes6: [String],
+        defaultDNS: [String],
+        fallbackMTU: Int
+    ) -> ObstacleBridgeDerivedTunnelSettings? {
+        for env in listenerHookEnvBlocks() {
+            guard let tunAddr = env["TUN_ADDR"] as? String,
+                  let (addr, prefix) = Self.parseCIDR(tunAddr, maxPrefix: 32)
+            else { continue }
+            let tunnelAddr6 = (env["TUN_ADDR6"] as? String).flatMap { Self.parseCIDR($0, maxPrefix: 128) }
+            return ObstacleBridgeDerivedTunnelSettings(
+                tunnelAddress: addr,
+                tunnelPrefix: prefix,
+                includedRoutes: defaultIncludedRoutes,
+                excludedRoutes: defaultExcludedRoutes,
+                tunnelAddress6: tunnelAddr6?.0 ?? defaultTunnelAddress6,
+                tunnelPrefix6: tunnelAddr6?.1 ?? defaultTunnelPrefix6,
+                includedRoutes6: tunnelAddr6 == nil ? [] : defaultIncludedRoutes6,
+                excludedRoutes6: tunnelAddr6 == nil ? [] : defaultExcludedRoutes6,
+                dnsServers: defaultDNS,
+                mtu: mtu(fallback: fallbackMTU)
+            )
+        }
+        return nil
+    }
+
+    func toChannelMuxServiceSpec() -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
+        ObstacleBridgeChannelMuxCodec.ServiceSpec(
+            svcID: svcID, lProto: listenProtocol, lBind: listenBind, lPort: listenPort,
+            rProto: targetProtocol, rHost: targetHost, rPort: targetPort, name: name,
+            lifecycleHooks: lifecycleHooks, options: options
+        )
+    }
+
+    private static func foundationObject(_ object: [String: ObstacleBridgeChannelMuxCodec.JSONValue]) -> [String: Any] {
+        Dictionary(uniqueKeysWithValues: object.map { ($0.key, foundationValue($0.value)) })
+    }
+
+    private static func foundationValue(_ value: ObstacleBridgeChannelMuxCodec.JSONValue) -> Any {
+        switch value {
+        case .object(let object): return foundationObject(object)
+        case .array(let array): return array.map(foundationValue)
+        case .string(let string): return string
+        case .integer(let integer): return Int(integer)
+        case .double(let double): return double
+        case .bool(let bool): return bool
+        case .null: return NSNull()
+        }
+    }
+
+    private static func parseCIDR(_ text: String, maxPrefix: Int) -> (String, Int)? {
+        let parts = text.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= maxPrefix else { return nil }
+        return (parts[0], prefix)
+    }
+}
+
 public struct ObstacleBridgeNativeServiceSpec {
     public let svcID: Int
     public let name: String?

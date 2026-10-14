@@ -503,7 +503,7 @@ def test_runtime_config_source_exists() -> None:
     native_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeRuntimeConfig" in runtime
-    assert "struct ObstacleBridgeRuntimeServiceSpec" in runtime
+    assert "struct ObstacleBridgeRuntimeServiceSpec" in native_spec
     assert "struct ObstacleBridgeDerivedTunnelSettings" in native_spec
     assert "struct ObstacleBridgeTunnelRoutingOverride" in native_spec
     assert "struct ObstacleBridgeOverlayBootstrapSettings" in runtime
@@ -527,8 +527,8 @@ def test_runtime_config_source_exists() -> None:
     assert "optionalStringValueAllowEmpty" in runtime
     assert "log_TUN_routing" in runtime
     assert "included_routes6" in runtime
-    assert "listenerHookEnvBlocks()" in runtime
-    assert "derivedLocalTunnelSettings(" in runtime
+    assert "listenerHookEnvBlocks()" in native_spec
+    assert "derivedLocalTunnelSettings(" in native_spec
     assert "derivedRemoteTunnelSettings(" not in runtime
 
 
