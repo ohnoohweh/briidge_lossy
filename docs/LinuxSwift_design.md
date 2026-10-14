@@ -81,7 +81,6 @@ adjacent field is the known gap that keeps the package open.
 | `LSW-SC.2` | Mixed Apple sources are split through typed Core ports, leaving Apple framework and ABI handling in adapters. | Remaining mixed contracts beyond the extracted peer-address policy still need Core ports. |
 | `LSW-SC.3` | `ObstacleBridgeShared` is constrained to Apple-resource adapters; portable behavior belongs in Core. | The retained Apple-file set still needs per-file dependency classification and an enforced repository boundary. |
 | `LSW-SC.4` | The source inventory remains the ownership authority while transition work is active. | Transitional shims, flat Xcode references, and inventory/traceability cleanup depend on SC.2 and SC.3. |
-| `LSW-SC.1L-I` | TCP and WebSocket listener owners retire peer resources on close and apply one-write stream admission, with observable peer-removal and backpressure evidence. | QUIC listener ownership remains blocked by the pinned backend. |
 | `LSW-SC.2L-A` | Linux may consume an SC.2 contract only through its explicit Core port. | No complete admission map and Linux-host success/failure evidence exists for the unfinished SC.2 contracts. |
 | `LSW-SC.2L-B` | The inventory is the qualification map for admitted SC.2 contracts. | Contract-to-caller links, Linux-host evidence, and non-admission reasons are incomplete. |
 | `LSW-005` | The foreground runtime keeps packet-device work outside portable Core policy. | Privileged `/dev/net/tun` bidirectional data-plane qualification is unavailable. |
