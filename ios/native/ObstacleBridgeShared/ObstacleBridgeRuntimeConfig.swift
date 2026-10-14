@@ -38,11 +38,6 @@ extension ObstacleBridgeOverlayBootstrapSettings {
     }
 }
 
-struct ObstacleBridgeAdminUIBootstrapState {
-    let firstStartDetected: Bool
-    let configFileState: String
-}
-
 enum ObstacleBridgeRuntimeConfig {
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.
@@ -1286,10 +1281,10 @@ enum ObstacleBridgeRuntimeConfig {
         }
         let ownConfigured = !ownServerSpecs(from: payload).isEmpty
         let remoteConfigured = !remoteServerSpecs(from: payload).isEmpty
-        let firstStartDetected = !peerConfigured && !ownConfigured && !remoteConfigured
-        return ObstacleBridgeAdminUIBootstrapState(
-            firstStartDetected: firstStartDetected,
-            configFileState: firstStartDetected ? "empty" : "loaded"
+        return ObstacleBridgeAdminWebSupport.bootstrapState(
+            peerConfigured: peerConfigured,
+            ownServicesConfigured: ownConfigured,
+            remoteServicesConfigured: remoteConfigured
         )
     }
 

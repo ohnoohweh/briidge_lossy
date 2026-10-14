@@ -171,7 +171,7 @@ ARC-CMP-003:
   # aggregate boundaries, not as a per-peer TUN quota view.
   # Raw ChannelMux parity compiles the Core SecureLink transcript and
   # native-service specification with portable service, listener-hook,
-  # tunnel-routing, UDP-peer, and overlay-planning policy, plus the remote-service
+  # tunnel-routing, UDP-peer, overlay-planning, and first-start policy, plus the remote-service
   # catalog facade required by TCP and UDP owners alongside the Core crypto module, then runs
   # in a bounded, test-name-reporting CI lane.
   unit_tests:

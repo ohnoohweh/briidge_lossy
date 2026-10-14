@@ -1,6 +1,22 @@
 import Foundation
 
+struct ObstacleBridgeAdminUIBootstrapState {
+    let firstStartDetected: Bool
+    let configFileState: String
+}
+
 enum ObstacleBridgeAdminWebSupport {
+    static func bootstrapState(
+        peerConfigured: Bool,
+        ownServicesConfigured: Bool,
+        remoteServicesConfigured: Bool
+    ) -> ObstacleBridgeAdminUIBootstrapState {
+        let firstStartDetected = !peerConfigured && !ownServicesConfigured && !remoteServicesConfigured
+        return ObstacleBridgeAdminUIBootstrapState(
+            firstStartDetected: firstStartDetected,
+            configFileState: firstStartDetected ? "empty" : "loaded"
+        )
+    }
     static func staticFileResponse(baseDirectoryURL: URL, path: String) -> (contentType: String, body: Data)? {
         let cleanedPath = normalizeStaticPath(path)
         let fileURL = baseDirectoryURL.appendingPathComponent(cleanedPath, isDirectory: false)
@@ -210,7 +226,7 @@ enum ObstacleBridgeAdminWebSupport {
         return nil
     }
 
-    private static func adminUIBootstrapState(from runtimeConfig: [String: Any]) -> (firstStartDetected: Bool, configFileState: String) {
+    private static func adminUIBootstrapState(from runtimeConfig: [String: Any]) -> ObstacleBridgeAdminUIBootstrapState {
         let transportText = stringValue(value(for: "overlay_transport", in: runtimeConfig)) ?? "myudp"
         let transport = transportText.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.first(where: { !$0.isEmpty }) ?? "myudp"
         let prefix = transport == "myudp" ? "udp" : transport
@@ -218,7 +234,10 @@ enum ObstacleBridgeAdminWebSupport {
             && (intValue(value(for: "\(prefix)_peer_port", in: runtimeConfig)) ?? 0) > 0
         let ownConfigured = !(value(for: "own_servers", in: runtimeConfig) as? [Any] ?? []).isEmpty
         let remoteConfigured = !(value(for: "remote_servers", in: runtimeConfig) as? [Any] ?? []).isEmpty
-        let firstStartDetected = !peerConfigured && !ownConfigured && !remoteConfigured
-        return (firstStartDetected, firstStartDetected ? "empty" : "loaded")
+        return bootstrapState(
+            peerConfigured: peerConfigured,
+            ownServicesConfigured: ownConfigured,
+            remoteServicesConfigured: remoteConfigured
+        )
     }
 }

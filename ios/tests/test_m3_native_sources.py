@@ -501,12 +501,15 @@ def test_overlay_stack_planner_source_exists() -> None:
 def test_runtime_config_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     native_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
+    admin_web = (CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeRuntimeConfig" in runtime
     assert "struct ObstacleBridgeRuntimeServiceSpec" in native_spec
     assert "struct ObstacleBridgeDerivedTunnelSettings" in native_spec
     assert "struct ObstacleBridgeTunnelRoutingOverride" in native_spec
     assert "struct ObstacleBridgeOverlayBootstrapSettings" in native_spec
+    assert "struct ObstacleBridgeAdminUIBootstrapState" in admin_web
+    assert "ObstacleBridgeAdminWebSupport.bootstrapState(" in runtime
     assert "static func flatten(" in runtime
     assert "static func ownServerSpecs(" in runtime
     assert "static func remoteServerSpecs(" in runtime
