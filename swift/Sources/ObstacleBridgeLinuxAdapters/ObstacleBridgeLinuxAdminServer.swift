@@ -113,9 +113,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
-            let topic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
+            let requestedTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
                 .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
                 .dropFirst("topic=".count).description ?? ""
+            let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requestedTopic) ?? ""
             response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload())
                 .flatMap { ObstacleBridgeAdminAPI.linuxJSONResponse($0) } ?? .init(statusCode: 404, body: Data("{}".utf8))
         default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))

@@ -38,3 +38,11 @@ enum ObstacleBridgeWebAdminLiveTopicPolicy {
         })
     }
 }
+
+/// Public adapter port for validated Admin live-topic names. Platform owners
+/// retain their HTTP/WebSocket mechanics while Core owns topic normalization.
+public enum ObstacleBridgeAdminLiveTopicPolicyPort {
+    public static func normalizedTopic(_ value: String) -> String? {
+        ObstacleBridgeWebAdminLiveTopicPolicy.parseTopics(value).first
+    }
+}
