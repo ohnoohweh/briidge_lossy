@@ -487,6 +487,22 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.stop()
     }
 
+    @Test func protectedPythonPeerCatalogReplacementWithdrawsPriorListener() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-catalog-replace-duplex")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        runtime.start()
+        defer { runtime.stop() }
+        #expect(waitUntil { (runtime.remoteServicePorts()[7] ?? 0) > 0 })
+        #expect(waitUntil {
+            let ports = runtime.remoteServicePorts()
+            return ports[7] == nil && (ports[8] ?? 0) > 0
+        })
+    }
+
     @Test func liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop() throws {
         let peer = try PythonOverlayPeer(mode: "tcp-duplex")
         defer { peer.stop() }
