@@ -3,6 +3,16 @@ import Testing
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func corePeerAddressPortNormalizesLinuxCandidateLists() {
+        let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
+            transport: .tcp,
+            host: "  [::1] ; 127.0.0.1, example.invalid  ",
+            port: 443
+        )
+        #expect(configuration.peerCandidates == ["[::1]", "127.0.0.1", "example.invalid"])
+        #expect(configuration.host == "[::1]")
+    }
+
     @Test func configuredSessionReportsMeasuredLowerRequestReplyDelay() throws {
         let lower = ObstacleBridgeLinuxOverlayTransportSession(
             exchange: { payload in payload },

@@ -163,3 +163,12 @@ enum ObstacleBridgePeerAddressPolicy {
         candidates.indices.filter { candidates[$0].family == family }
     }
 }
+
+/// Public Linux/Apple adapter port for portable configured-peer normalization.
+/// Native owners still resolve and convert socket addresses, while Core owns
+/// delimiter, whitespace, and bracket policy so platforms cannot drift.
+public enum ObstacleBridgePeerAddressPort {
+    public static func configuredPeerCandidates(_ host: String) -> [String] {
+        ObstacleBridgePeerAddressPolicy.splitConfiguredPeerHosts(host)
+    }
+}
