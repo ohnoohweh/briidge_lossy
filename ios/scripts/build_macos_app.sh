@@ -153,7 +153,8 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift" \
@@ -256,7 +257,8 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift" \

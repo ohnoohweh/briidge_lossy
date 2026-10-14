@@ -842,7 +842,8 @@ def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -
 
 def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    shared_probe_support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    shared_probe_support = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    probe_resolver = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift").read_text(encoding="utf-8")
     core_probe_policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
 
     assert "private let adminSnapshotQueue = DispatchQueue(label: \"ObstacleBridgeHostRunner.AdminSnapshots\")" in source
@@ -902,6 +903,8 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(' in source
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceAddressForProbeFamily(' in source
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(' in source
+    assert 'resolver: ObstacleBridgeTunProbeAddressResolver.resolveHost' in source
+    assert 'getaddrinfo' in probe_resolver
     assert 'private func sourceProbeFamilies() -> [Int32]' not in source
     assert 'private func sourceAddressForProbeFamily(_ family: Int32) -> String' not in source
     assert 'private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' not in source

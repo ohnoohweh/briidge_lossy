@@ -85,13 +85,13 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallenge.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift"
       ]
     },
@@ -111,6 +111,7 @@
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"
       ]

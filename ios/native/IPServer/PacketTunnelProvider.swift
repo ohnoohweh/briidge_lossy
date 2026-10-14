@@ -3903,7 +3903,8 @@ private final class SwiftSimpleUDPPeerBridge {
             )
             let resolved = ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(
                 trimmedTarget,
-                candidateFamilies: candidateFamilies
+                candidateFamilies: candidateFamilies,
+                resolver: ObstacleBridgeTunProbeAddressResolver.resolveHost
             )
             guard let resolvedTarget = resolved.target else {
                 let history = tunProbeHistorySnapshot(cacheKey: cacheKey)

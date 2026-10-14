@@ -645,7 +645,7 @@ def test_admin_api_source_exists() -> None:
 
 
 def test_tun_probe_diagnostics_support_source_exists() -> None:
-    support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    support = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgeTunProbeWaiterKey: Hashable" in support
@@ -669,7 +669,8 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
     assert 'static func tunProbeResult(' in support
     assert 'static func sourceProbeFamilies(tunnelAddress: String, tunnelAddress6: String) -> [Int32]' in support
     assert 'static func sourceAddressForProbeFamily(_ family: Int32, tunnelAddress: String, tunnelAddress6: String) -> String' in support
-    assert 'static func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' in support
+    assert 'resolver: (String, Int32) -> String?' in support
+    assert 'import Darwin' not in support
     assert 'static func observeTunProbeReply(' in support
     assert 'static func tunProbeRuntimeDiagSnapshot(' in support
     assert "ObstacleBridgeTunProbeDiagnosticsPolicy.result(" in support
@@ -679,7 +680,8 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_ios_app.sh").read_text(encoding="utf-8")
-    support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    support = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    resolver = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
     packet_tunnel_probe_tests = (ROOT / "ios" / "tests" / "test_ios_packet_tunnel_provider_probe.py").read_text(encoding="utf-8")
 
@@ -781,6 +783,10 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(' in provider
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceAddressForProbeFamily(' in provider
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(' in provider
+    assert 'resolver: ObstacleBridgeTunProbeAddressResolver.resolveHost' in provider
+    assert 'getaddrinfo' in resolver
+    assert 'import Darwin' in resolver
+    assert 'import Glibc' not in resolver
     assert 'private func sourceProbeFamilies() -> [Int32]' not in provider
     assert 'private func sourceAddressForProbeFamily(_ family: Int32) -> String' not in provider
     assert 'private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' not in provider
@@ -804,7 +810,8 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in support
     assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
     assert "ObstacleBridgeTunPing.buildIPv6EchoRequest(" in provider
-    assert 'str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift")' in packet_tunnel_probe_tests
+    assert 'str(CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift")' in packet_tunnel_probe_tests
+    assert 'str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift")' in packet_tunnel_probe_tests
 
 
 def test_macos_swift_host_runner_source_exists() -> None:

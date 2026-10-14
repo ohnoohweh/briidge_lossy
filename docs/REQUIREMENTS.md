@@ -372,7 +372,7 @@ Current lifecycle implementation note:
 ## Mixed traffic and channel requirements
 
 - `REQ-MUX-001`: A connected peer shall be able to carry multiple simultaneous TCP channels over one overlay connection. Python per-channel TCP backpressure workers shall be created only while a local writer has buffered bytes and shall be detached and cancelled on local EOF, remote `CLOSE`, peer reset, and shutdown. Swift shall serialize Network.framework sends through a demand-driven per-channel drain and discard its pending drain state on the same lifecycle transitions.
-  Implementation note: common Swift ChannelMux service bytes use the Core bounded binary and typed JSON codecs for O4/O5 OPEN and RS2/RS3 catalogs. The Core native-service boundary owns portable service-to-ChannelMux conversion, listener-hook environment decoding, CIDR validation, tunnel-routing override/derived settings, UDP-peer records, overlay transport/layer planning, TUN-helper protocol/state/loopback semantics, and the ChannelMux TUN state/effect runtime; Core Admin policy owns first-start classification from typed peer/service presence plus authentication and configuration-change challenge orchestration. Platform adapters parse local configuration and apply resource effects. The Core remote-service catalog facade admits, atomically replaces, and withdraws RS3 catalog state before platform owners create or close listeners. Linux socket owners consume the Core values and do not serialize or replay-decide those records independently.
+  Implementation note: common Swift ChannelMux service bytes use the Core bounded binary and typed JSON codecs for O4/O5 OPEN and RS2/RS3 catalogs. The Core native-service boundary owns portable service-to-ChannelMux conversion, listener-hook environment decoding, CIDR validation, tunnel-routing override/derived settings, UDP-peer records, overlay transport/layer planning, TUN-helper protocol/state/loopback semantics, ChannelMux TUN state/effect runtime, and TUN-probe diagnostic state/reply accounting; Core Admin policy owns first-start classification from typed peer/service presence plus authentication and configuration-change challenge orchestration. Platform adapters parse local configuration and apply resource effects. The Core remote-service catalog facade admits, atomically replaces, and withdraws RS3 catalog state before platform owners create or close listeners. Linux socket owners consume the Core values and do not serialize or replay-decide those records independently.
   A Linux socket owner configured with an ephemeral listener port replaces port
   zero with the kernel-assigned `getsockname` port before emitting its Core O5
   OPEN record, so a peer never receives an invalid service endpoint.
@@ -520,10 +520,12 @@ and filtering. Apple retains POSIX numeric-address detection, name resolution,
 and sockaddr conversion. Linux resolver adoption remains separately owned by
 `LSW-SC.2L-A` and must use this policy rather than duplicate it.
 
-Implementation note: Swift Core owns TUN-probe counter construction and
-diagnostic projection with adapter-supplied timestamps. Apple retains POSIX
-target resolution and semaphore-backed waiter delivery. Linux adoption remains
-separately owned by `LSW-SC.2L-A`.
+Implementation note: Swift Core owns TUN-probe target-family policy,
+outstanding probe state, ICMP-reply accounting, counter construction, cache
+retention, and diagnostic projection with adapter-supplied time. Apple retains
+POSIX target resolution plus packet-device and waiter delivery. Linux adoption
+remains separately owned by `LSW-SC.2L-I` and must use this state authority
+rather than recreate it.
 
 Implementation note: the Peer-page Transport layout keeps Transport State, Reconnect, and Resolved Peer on its first line. Its second line uses one-quarter width each for Connection Uptime and Last Incoming, and one-half width for Own Public IP. Each peer identity cell shall span exactly its own rendered detail rows, so a peer such as `ws:0:-1` cannot visually extend into the following peer.
 
@@ -578,7 +580,7 @@ extension, so macOS parity evidence exercises the same source closure as the
 Core target rather than relying on an incidental compile order.
 The iOS TUN helper probe likewise compiles RuntimeConfig with its NativeService
 and Admin-config Core dependencies, preserving the product source closure while
-its shared resolver remains portable across Darwin and Glibc hosts.
+its Darwin resolver remains outside the portable Core state owner.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

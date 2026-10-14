@@ -58,8 +58,8 @@ The active testing focus on this branch is:
   acknowledgement, and retransmission transitions without Apple-only sender
   state; its retired SessionCodec companion is absent from all compile lists
 - the iOS TUN helper probe compiles RuntimeConfig with its Core NativeService
-  and Admin-config dependencies, and exercises the shared address resolver on
-  Darwin and Glibc hosts
+  and Admin-config dependencies, and exercises the Darwin-specific address
+  resolver separately from the portable TUN-probe state owner
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`
@@ -331,7 +331,7 @@ RS2/RS3 service-catalog encoding/decoding, catalog replacement/withdrawal
 admission, service-to-ChannelMux conversion, listener-hook/CIDR policy, overlay
 transport/layer planning, first-start classification, Admin authentication and
 configuration-change challenge orchestration, portable tunnel-routing/UDP-peer
-configuration record shapes, TUN-helper protocol/state/loopback semantics, and ChannelMux TUN state and effect runtime use the Core
+configuration record shapes, TUN-helper protocol/state/loopback semantics, ChannelMux TUN state and effect runtime, and TUN-probe diagnostic state/reply accounting use the Core
 type-neutral facade. The adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove
@@ -963,7 +963,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift` | `ARC-CMP-001` | `REQ-ADM-006`, `PROC-TST-002` | Portable overlay connection rows must preserve channel identity, local endpoint projection, connected-state transition, and directional traffic counters independently of a platform connection driver. | `swift test --filter ObstacleBridgeOverlayConnectionPolicyTests` |
 | `swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift` | `ARC-CMP-005` | `REQ-ADM-006`, `PROC-TST-002` | Portable Admin live-topic policy must reject unknown subscriptions, derive the tab-scoped topic set, and preserve polling cadence independently of the Apple WebSocket driver. | `swift test --filter ObstacleBridgeWebAdminLiveTopicPolicyTests` |
 | `swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgePeerAddressPolicyTests.swift` | `ARC-CMP-004` | `REQ-OVL-007`, `PROC-TST-002` | Portable peer-address policy must parse configured hosts, enforce address-family preference, normalize IPv4-to-IPv6 literals, and deterministically order/filter candidates without POSIX socket types. | `swift test --filter ObstacleBridgePeerAddressPolicyTests` |
-| `swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunProbeDiagnosticsPolicyTests.swift` | `ARC-CMP-004` | `PROC-TST-002` | Portable TUN-probe diagnostics must construct named counters and deterministic result projections with adapter-supplied time. | `swift test --filter ObstacleBridgeTunProbeDiagnosticsPolicyTests` |
+| `swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunProbeDiagnosticsPolicyTests.swift` | `ARC-CMP-004` | `PROC-TST-002` | Portable TUN-probe diagnostics must retain target-family policy, outstanding-probe/reply accounting, named counters, cache state, and deterministic result projections with adapter-supplied time. | `swift test --filter ObstacleBridgeTunProbeDiagnosticsPolicyTests` |
 | `tests/unit/test_proxy_server.py` | `ARC-CMP-001` | `REQ-PRX-001`, `PROC-TST-002` | The Python proxy server must mirror the Swift provider's HTTP rewrite/auth and SOCKS5 CONNECT handshake behavior while exposing listener/counter/auth snapshots for non-extension runtime use, and its optional system egress mode must resolve an upstream proxy through the shared WinHTTP/PAC-compatible helper before tunneling outbound traffic | `pytest -q tests/unit/test_proxy_server.py` |
 | `tests/integration/test_proxy_provider_e2e.py` | `ARC-CMP-001` | `REQ-PRX-001`, `PROC-TST-001` | The Python proxy provider must work unchanged against real local HTTP and TLS targets for concurrent HTTP, HTTPS-over-CONNECT, and SOCKS5 clients | `pytest -q tests/integration/test_proxy_provider_e2e.py` |
 | `tests/unit/test_requirements_unit_gaps.py` | `ARC-CMP-002`, `ARC-CMP-003`, `ARC-CMP-004`, `ARC-CMP-005` | `REQ-ADM-002`, `REQ-ADM-003`, `REQ-ADM-004`, `REQ-ADM-005`, `REQ-LIFE-001`, `REQ-LIFE-003`, `REQ-LIFE-004`, `REQ-LST-002`, `REQ-LST-003`, `REQ-LST-004`, `REQ-LST-005`, `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-003`, `REQ-MYU-004`, `REQ-MYU-005`, `REQ-MYU-006`, `REQ-OVL-001`, `REQ-OVL-002`, `REQ-OVL-006`, `PROC-TST-002` | Requirement-gap unit coverage must pin admin-auth gate behavior, accepted-peer reporting identity across listener transports, UDP IPv4/IPv6 peer labeling, and `myudp` reliability/session invariants that support the broader integration claims | `pytest -q tests/unit/test_requirements_unit_gaps.py` |

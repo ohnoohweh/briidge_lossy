@@ -1693,7 +1693,7 @@ Important caveat:
 - Swift Core owns overlay connection-row serialization plus state and traffic transitions; Apple retains Network.framework endpoint projection and connection drivers, with Linux connection-owner adoption separately tracked by `LSW-SC.2L-A`.
 - Swift Core owns Admin live-topic admission, tab-to-topic projection, and polling intervals; Apple retains the Network.framework listener and WebSocket session driver, with Linux Admin-Web adoption separately tracked by `LSW-SC.2L-A`.
 - Swift Core owns peer-address parsing, family preference, literal normalization, compatibility, and ordering; Apple retains POSIX resolution and sockaddr conversion, with Linux resolver adoption separately tracked by `LSW-SC.2L-A`.
-- Swift Core owns TUN-probe counters and diagnostics projection; Apple retains POSIX target lookup and waiter delivery, with Linux admission separately tracked by `LSW-SC.2L-A`.
+- Swift Core owns TUN-probe target-family policy, outstanding-probe state, ICMP-reply accounting, counters, cache retention, and diagnostic projection; Apple retains POSIX target lookup plus packet-device and waiter delivery, with Linux admission separately tracked by `LSW-SC.2L-I`.
 - myUDP listener peers that continue control traffic without producing an application payload are removed after a bounded pre-auth grace period; Swift myUDP clients publish the remaining app-readiness recovery time and rebuild the sole peer socket before retrying SecureLink.
 - Admin status polling keeps a minimal live-session fallback when stats snapshotting fails before a cached status exists.
 
