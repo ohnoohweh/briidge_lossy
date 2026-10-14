@@ -675,6 +675,7 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_ios_app.sh").read_text(encoding="utf-8")
     support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
     packet_tunnel_probe_tests = (ROOT / "ios" / "tests" / "test_ios_packet_tunnel_provider_probe.py").read_text(encoding="utf-8")
 
     assert 'private enum ObstacleBridgeGeneratedBuildStamp {' in provider
@@ -794,7 +795,7 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
     assert "const bracketedHost = hostText.includes(':') && !hostText.startsWith('[') ? `[${hostText}]` : hostText;" in app_js
     assert "if (Array.isArray(ep) && ep.length >= 2) return fmtHostPort(ep[0], ep[1]);" in app_js
     assert "if (dest.host != null && dest.port != null) return fmtHostPort(dest.host, dest.port);" in app_js
-    assert '"method": "internal_icmp_echo"' in support
+    assert '"method": "internal_icmp_echo"' in policy
     assert "ObstacleBridgeTunPing.parseEchoReply(packet)" in support
     assert "ObstacleBridgeTunPing.buildIPv4EchoRequest(" in provider
     assert "ObstacleBridgeTunPing.buildIPv6EchoRequest(" in provider

@@ -138,9 +138,10 @@ Representative anchors for those areas:
 - Linux myUDP SecureLink reference peers retain a completed reply until the post-reply Core CONTROL/IDLE acknowledgement, avoiding UDP connection refusal under parallel qualification; deliberate repeated-loss recovery uses a test-subprocess-bounded initial receive window, and owner-requested socket closure during drain is normal teardown rather than a false `Bad file descriptor` failure
 - Host-side raw-source probes reuse the existing SwiftPM Core/Crypto module build, so the routine pytest suite does not repeat the Core package build that its CI job already performed
 - The raw ChannelMux parity compile includes the Core SecureLink transcript and
-  native-service specification; its CI lanes use verbose test names, bounded
-  pytest timeouts, and 15-minute job limits so an idle compiler or probe reports
-  the owning test instead of silently consuming the default Actions allowance
+  native-service specification required by its TCP and UDP owners; its CI lanes
+  use verbose test names, bounded pytest timeouts, and 15-minute job limits so
+  an idle compiler or probe reports the owning test instead of silently
+  consuming the default Actions allowance
 - SecureLink runtime raw-probe compilation has its own 120-second subprocess timeout in addition to the CI suite watchdog
 - Apple raw-source host builds import the pinned `Crypto` module without linking a nonexistent `libCrypto` artifact; the module forwards to CryptoKit on that platform
 - Core Swift tests pin bounded monotonic SecureLink authentication retry backoff; Apple transport probes consume that Core retry state while presenting their platform wall-clock deadline
