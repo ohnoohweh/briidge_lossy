@@ -772,7 +772,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
     private func secureLinkSessionRejectsStaleReconnectFrame(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
-        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, webSocketPath: "/overlay", secureLinkPSK: Data("linux-swift-psk".utf8)))
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: transport, host: "127.0.0.1", port: peer.port, webSocketPath: "/overlay", webSocketProxy: .init(mode: .off), secureLinkPSK: Data("linux-swift-psk".utf8)))
         let first = try runtime.connect(sessionID: 94, clientNonce: Data(repeating: 13, count: 32))
         #expect(try first.send(Data("retired".utf8)) == Data("python:retired".utf8))
         let second = try runtime.reconnect(sessionID: 95, clientNonce: Data(repeating: 14, count: 32))
