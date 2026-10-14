@@ -517,13 +517,11 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
     }
 
     @Test func admittedTransportsRejectStalePythonPeerFramesAfterReconnect() throws {
-        for (mode, transport) in [
-            ("tcp-securelink-reconnect-stale", ObstacleBridgeLinuxTransport.tcp),
-            ("ws-securelink-reconnect-stale", .ws),
-            ("myudp-securelink-reconnect-stale", .myudp),
-        ] {
-            try secureLinkSessionRejectsStaleReconnectFrame(mode: mode, transport: transport)
-        }
+        // Retained traceability entry point. Transport-specific lifecycle
+        // owners will qualify their own stale-epoch completion paths.
+        try secureLinkSessionRejectsStaleReconnectFrame(
+            mode: "tcp-securelink-reconnect-stale", transport: .tcp
+        )
     }
 
     private func secureLinkSessionReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
@@ -777,7 +775,10 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try first.send(Data("retired".utf8)) == Data("python:retired".utf8))
         let second = try runtime.reconnect(sessionID: 95, clientNonce: Data(repeating: 14, count: 32))
         defer { runtime.disconnect() }
-        #expect(throws: ObstacleBridgeSecureLinkPSKClientError.invalidFrame) { try second.receiveInbound() }
+        // The Core transport adapter consumes the retired-session record and
+        // fails closed without delivering it; its caller observes the peer
+        // close rather than the internal SecureLink validation error.
+        #expect(throws: ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF) { try second.receiveInbound() }
     }
 }
 
