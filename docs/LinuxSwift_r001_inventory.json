@@ -165,6 +165,11 @@
     {"contract": "local-proxy-provider", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift", "status": "not-admitted", "reason": "Linux rejects proxy_provider mode before networking."},
     {"contract": "secret-envelope", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift", "status": "not-admitted", "reason": "Linux has no configuration-write or machine-key-material owner."},
     {"contract": "tun-diagnostics", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift", "status": "not-admitted", "reason": "Linux rejects TUN startup until LSW-005."}
+    ,{"contract": "admin-configuration-and-onboarding", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift", "status": "planned", "owner_package": "LSW-SC.2L-C", "reason": "Caller and Linux-host evidence are delivered with the Admin/onboarding adapter."}
+    ,{"contract": "admin-web-topics", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebAdminLiveTopicPolicy.swift", "status": "planned", "owner_package": "LSW-SC.2L-C", "reason": "WebSocket subscription admission belongs to the Admin adapter package."}
+    ,{"contract": "service-catalog-and-channelmux", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift", "status": "planned", "owner_package": "LSW-SC.2L-D", "reason": "POSIX service listener ownership and Python-peer evidence belong to the catalog adapter package."}
+    ,{"contract": "securelink-and-udp-effects", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskTransportAdapter.swift", "status": "planned", "owner_package": "LSW-SC.2L-E", "reason": "Linux Core-effect bindings and deterministic scheduler evidence belong to the transport-adapter package."}
+    ,{"contract": "stream-lifecycle-owners", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTcpOverlayRuntime.swift", "status": "planned", "owner_package": "LSW-SC.2L-F", "reason": "Independent TCP, QUIC, and WebSocket lifecycle owners and epoch fencing belong to the lifecycle package."}
   ],
   "feature_groups": [
     {
