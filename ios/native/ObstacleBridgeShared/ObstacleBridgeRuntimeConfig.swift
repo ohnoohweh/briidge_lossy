@@ -5,20 +5,7 @@ import Darwin
 import Glibc
 #endif
 
-struct ObstacleBridgeOverlayBootstrapSettings {
-    let overlayTransport: String
-    let transports: [String]
-    let transport: String
-    let layersTopDown: [String]
-    let compressWrapped: Bool
-    let compressConfiguredEnabled: Bool
-    let peerHost: String?
-    let secureLinkMode: String?
-    let secureLinkEnabled: Bool
-    let secureLinkPSK: String
-    let compressEnabled: Bool
-    let compressAlgo: String
-
+extension ObstacleBridgeOverlayBootstrapSettings {
     init(payload: [String: Any]) throws {
         let overlayTransport = ObstacleBridgeRuntimeConfig.stringValue(from: payload["overlay_transport"]) ?? "myudp"
         let configuredPeers: [String: Bool] = [
@@ -38,49 +25,16 @@ struct ObstacleBridgeOverlayBootstrapSettings {
         let secureLinkPSK = ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_psk"]) ?? ""
         let compressEnabled = ObstacleBridgeRuntimeConfig.boolValue(from: payload["compress_layer"]) ?? false
         let compressAlgo = ObstacleBridgeRuntimeConfig.stringValue(from: payload["compress_layer_algo"]) ?? "zlib"
-        let plan = try ObstacleBridgeOverlayStackPlanner.planTransport(
-            transport: selectedTransport,
+        try self.init(
+            overlayTransport: overlayTransport,
+            configuredPeers: configuredPeers,
             peerHost: peerHost,
             secureLinkEnabled: secureLinkEnabled,
             secureLinkModeRaw: secureLinkModeRaw,
             secureLinkPSK: secureLinkPSK,
-            compressLayerEnabled: compressEnabled,
-            compressLayerAlgoRaw: compressAlgo
+            compressEnabled: compressEnabled,
+            compressAlgo: compressAlgo
         )
-
-        self.overlayTransport = overlayTransport
-        self.transports = transports
-        self.transport = plan.transport
-        self.layersTopDown = plan.layersTopDown
-        self.compressWrapped = plan.compressWrapped
-        self.compressConfiguredEnabled = plan.compressConfiguredEnabled
-        self.peerHost = plan.peerHost
-        self.secureLinkMode = plan.secureLinkMode
-        self.secureLinkEnabled = secureLinkEnabled
-        self.secureLinkPSK = secureLinkPSK
-        self.compressEnabled = compressEnabled
-        self.compressAlgo = compressAlgo
-    }
-
-    func summary(runtimeConfigGrouped: Bool? = nil) -> [String: Any] {
-        var summary: [String: Any] = [
-            "status": "prepared",
-            "transport": transport,
-            "transports": transports,
-            "layers_top_down": layersTopDown,
-            "compress_wrapped": compressWrapped,
-            "compress_configured_enabled": compressConfiguredEnabled,
-        ]
-        if let peerHost {
-            summary["peer_host"] = peerHost
-        }
-        if let secureLinkMode {
-            summary["secure_link_mode"] = secureLinkMode
-        }
-        if let runtimeConfigGrouped {
-            summary["runtime_config_grouped"] = runtimeConfigGrouped
-        }
-        return summary
     }
 }
 

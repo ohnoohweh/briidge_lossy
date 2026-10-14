@@ -506,7 +506,7 @@ def test_runtime_config_source_exists() -> None:
     assert "struct ObstacleBridgeRuntimeServiceSpec" in native_spec
     assert "struct ObstacleBridgeDerivedTunnelSettings" in native_spec
     assert "struct ObstacleBridgeTunnelRoutingOverride" in native_spec
-    assert "struct ObstacleBridgeOverlayBootstrapSettings" in runtime
+    assert "struct ObstacleBridgeOverlayBootstrapSettings" in native_spec
     assert "static func flatten(" in runtime
     assert "static func ownServerSpecs(" in runtime
     assert "static func remoteServerSpecs(" in runtime

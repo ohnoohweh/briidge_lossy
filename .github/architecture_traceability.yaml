@@ -171,8 +171,8 @@ ARC-CMP-003:
   # aggregate boundaries, not as a per-peer TUN quota view.
   # Raw ChannelMux parity compiles the Core SecureLink transcript and
   # native-service specification with portable service, listener-hook,
-  # tunnel-routing, and UDP-peer policy, plus the remote-service catalog facade
-  # required by TCP and UDP owners alongside the Core crypto module, then runs
+  # tunnel-routing, UDP-peer, and overlay-planning policy, plus the remote-service
+  # catalog facade required by TCP and UDP owners alongside the Core crypto module, then runs
   # in a bounded, test-name-reporting CI lane.
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
