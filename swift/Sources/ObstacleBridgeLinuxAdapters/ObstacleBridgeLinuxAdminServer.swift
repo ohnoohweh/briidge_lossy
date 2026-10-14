@@ -178,9 +178,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
               let requested = target.split(separator: "?", maxSplits: 1).dropFirst().first?
                 .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
                 .dropFirst("topic=".count).description,
-              let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requested),
-              let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()),
-              let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+              let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requested)
         else {
             let wire = Data("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".utf8)
             _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
@@ -189,11 +187,17 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
         let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
         _ = handshake.withUnsafeBytes { write(client, $0.baseAddress, handshake.count) }
-        var frame = Data([0x81])
-        if body.count < 126 { frame.append(UInt8(body.count)) }
-        else { frame.append(126); var length = UInt16(body.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
-        frame.append(body)
-        _ = frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) }
+        while let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()),
+              let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
+            var frame = Data([0x81])
+            if body.count < 126 { frame.append(UInt8(body.count)) }
+            else if body.count <= Int(UInt16.max) { frame.append(126); var length = UInt16(body.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+            else { return }
+            frame.append(body)
+            let sent = frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) }
+            guard sent == frame.count else { return }
+            usleep(250_000)
+        }
     }
 
     private func statusPayload() -> [String: Any] {

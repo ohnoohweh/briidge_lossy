@@ -104,14 +104,16 @@ struct ObstacleBridgeLinuxAdminServerTests {
         for _ in 0..<2 {
             let socket = URLSession.shared.webSocketTask(with: try #require(URL(string: "ws://127.0.0.1:\(server.port)/api/live?topic=status")))
             socket.resume()
-            let message = try await socket.receive()
-            let data: Data
-            switch message {
-            case .data(let value): data = value
-            case .string(let value): data = Data(value.utf8)
-            @unknown default: throw URLError(.badServerResponse)
+            for _ in 0..<2 {
+                let message = try await socket.receive()
+                let data: Data
+                switch message {
+                case .data(let value): data = value
+                case .string(let value): data = Data(value.utf8)
+                @unknown default: throw URLError(.badServerResponse)
+                }
+                #expect((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["overlay_transport"] as? String == "tcp")
             }
-            #expect((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["overlay_transport"] as? String == "tcp")
             socket.cancel()
         }
         let config = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/config") as? [String: Any])
