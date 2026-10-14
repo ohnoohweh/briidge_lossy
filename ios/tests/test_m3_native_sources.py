@@ -534,6 +534,8 @@ def test_runtime_config_source_exists() -> None:
     assert "listenerHookEnvBlocks()" in native_spec
     assert "derivedLocalTunnelSettings(" in native_spec
     assert "derivedRemoteTunnelSettings(" not in runtime
+    assert "import Darwin" in runtime
+    assert "import Glibc" not in runtime
 
 
 def test_shared_peer_address_resolver_is_darwin_specific() -> None:

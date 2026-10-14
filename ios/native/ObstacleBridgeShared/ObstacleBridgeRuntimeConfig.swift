@@ -1,9 +1,5 @@
 import Foundation
-#if canImport(Darwin)
 import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 
 extension ObstacleBridgeOverlayBootstrapSettings {
     init(payload: [String: Any]) throws {
