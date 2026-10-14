@@ -325,7 +325,7 @@ def test_channel_mux_codec_source_exists() -> None:
 
 
 def test_channel_mux_tun_runtime_source_exists() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeChannelMuxTunRuntime" in runtime
     assert "struct LocalTunSendSnapshot" in runtime
@@ -368,7 +368,7 @@ def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() ->
 
 
 def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
-    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     overlay_core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
@@ -1341,7 +1341,7 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
 
 
 def test_shared_tun_counter_discontinuity_is_diagnostic_not_delivery_gate() -> None:
-    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     overlay_core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
 
     assert "catch ObstacleBridgeChannelMuxSessionError.invalidCounter" in tun_runtime

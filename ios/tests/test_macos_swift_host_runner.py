@@ -688,7 +688,7 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
 
 def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
     core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
-    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
 
     assert "bufferedFrames: Int = 0" in core

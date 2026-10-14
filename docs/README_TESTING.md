@@ -329,8 +329,9 @@ SecureLink, and service Core sources, while Apple myUDP peer-runtime budget
 tests require its layout constants to remain Core-backed. Apple CKV1 chunking uses the Core raw-value bridge; O4/O5 OPEN and
 RS2/RS3 service-catalog encoding/decoding, catalog replacement/withdrawal
 admission, service-to-ChannelMux conversion, listener-hook/CIDR policy, overlay
-transport/layer planning, first-start classification, and portable
-tunnel-routing/UDP-peer configuration record shapes use the Core
+transport/layer planning, first-start classification, portable
+tunnel-routing/UDP-peer configuration record shapes, and ChannelMux TUN state
+and effect runtime use the Core
 type-neutral facade. The adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove
