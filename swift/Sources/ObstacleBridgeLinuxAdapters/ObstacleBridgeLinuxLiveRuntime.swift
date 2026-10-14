@@ -450,6 +450,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                     // A rejected protected record cannot be discarded as if it
                     // were benign traffic: retire this epoch through the same
                     // Core retry effects as any other receive-path failure.
+                    guard session.isProtected else { return }
                     self.queue.async { [weak self] in
                         self?.receiveFailed(
                             workerEpoch: workerEpoch,

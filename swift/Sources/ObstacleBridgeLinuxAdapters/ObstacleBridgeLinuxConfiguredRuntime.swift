@@ -215,6 +215,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
 
     public var supportsLivenessProbes: Bool { lowerSession.supportsLivenessProbes }
 
+    /// Cleartext peers may carry diagnostics before a ChannelMux owner is
+    /// installed. Protected records are authenticated and therefore a decode
+    /// rejection must retire the epoch instead of being treated as noise.
+    public var isProtected: Bool { overlayAdapter != nil || secureLink != nil || secureLinkServer != nil }
+
     public func probeLiveness() throws { try lowerSession.probeLiveness() }
     public func cancelReceive() { lowerSession.close() }
 
