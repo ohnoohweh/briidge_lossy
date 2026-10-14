@@ -662,7 +662,8 @@ def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> N
 
 
 def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
-    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeAppleOverlayChannelAdapter.swift").read_text(encoding="utf-8")
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
@@ -677,7 +678,7 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
         assert "setCoreEffectSink" in owner
         assert "startCoreLifecycle" in owner
         assert "func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect])" in owner
-    assert "static func handleTCPTransportEvent(" in core
+    assert "static func handleTCPTransportEvent(" in adapter
 
     for source in (tcp_owner, udp_owner, ws_owner, quic_owner):
         assert "ObstacleBridgeOverlayChannelCore.tunRows(" in source
@@ -687,7 +688,7 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
 
 
 def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
-    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
 
@@ -766,7 +767,7 @@ def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation(
 
 
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
-    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     backpressure = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift").read_text(encoding="utf-8")
     snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")

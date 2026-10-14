@@ -215,7 +215,8 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" in patched
     assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" in patched
+    assert "native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTunRuntime.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" in patched

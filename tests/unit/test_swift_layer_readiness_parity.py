@@ -101,7 +101,7 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
 
 
 def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:
-    channel_core = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayChannelCore.swift")
+    channel_core = (CORE_ROOT / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     provider = _read("IPServer", "PacketTunnelProvider.swift")
 
     assert "guard overlayConnected else" in channel_core

@@ -331,7 +331,7 @@ RS2/RS3 service-catalog encoding/decoding, catalog replacement/withdrawal
 admission, service-to-ChannelMux conversion, listener-hook/CIDR policy, overlay
 transport/layer planning, first-start classification, Admin authentication and
 configuration-change challenge orchestration, portable tunnel-routing/UDP-peer
-configuration record shapes, TUN-helper protocol/state/loopback semantics, ChannelMux TUN state and effect runtime, and TUN-probe diagnostic state/reply accounting use the Core
+configuration record shapes, TUN-helper protocol/state/loopback semantics, ChannelMux TUN state and effect runtime, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting use the Core
 type-neutral facade. The adapter suite exercises
 the one-connection loopback TCP listener and Linux Core control-chunk delivery
 over real Linux framing. The Linux TCP and UDP service-socket tests also prove

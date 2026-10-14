@@ -87,7 +87,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift",
@@ -100,6 +100,7 @@
       "disposition": "retain-or-split",
       "files": [
         "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
+        "ios/native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift",
         "swift/Probes/ObstacleBridgeApplePackageProbe/ObstacleBridgeApplePackageProbe.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift",

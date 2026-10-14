@@ -1,5 +1,4 @@
 import Foundation
-import Network
 
 enum ObstacleBridgeOverlayChannelCore {
     // Local TUN reads must keep draining the OS packet queue. TUN DATA is
@@ -134,88 +133,6 @@ enum ObstacleBridgeOverlayChannelCore {
         }
     }
 
-    static func handleTCPTransportEvent(
-        _ event: ObstacleBridgeChannelMuxTCPTransportOwner.TransportEvent,
-        tcpConnectionStates: inout [Int: ObstacleBridgeOverlayConnectionState],
-        serviceNameByID: [Int: String]
-    ) {
-        switch event {
-        case .clientAccepted(let chanID, let spec, let connected):
-            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
-                proto: "tcp",
-                role: "client",
-                chanID: chanID,
-                spec: spec,
-                serviceName: serviceName(spec, serviceNameByID: serviceNameByID),
-                state: connected ? "connected" : "connecting",
-                localHost: nil,
-                localPort: nil
-            )
-        case .clientConnected(let chanID, let localHost, let localPort):
-            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(
-                states: &tcpConnectionStates,
-                proto: "tcp",
-                chanID: chanID,
-                localHost: localHost,
-                localPort: localPort
-            )
-        case .clientInbound(let chanID, let bytes), .serverInbound(let chanID, let bytes):
-            ObstacleBridgeOverlayConnectionSupport.recordTraffic(
-                states: &tcpConnectionStates,
-                proto: "tcp",
-                chanID: chanID,
-                direction: "inbound",
-                bytes: bytes
-            )
-        case .clientOutbound(let chanID, let bytes), .serverOutbound(let chanID, let bytes):
-            ObstacleBridgeOverlayConnectionSupport.recordTraffic(
-                states: &tcpConnectionStates,
-                proto: "tcp",
-                chanID: chanID,
-                direction: "outbound",
-                bytes: bytes
-            )
-        case .clientClosed(let chanID), .serverClosed(let chanID):
-            tcpConnectionStates.removeValue(forKey: chanID)
-        case .serverConnected(let chanID):
-            ObstacleBridgeOverlayConnectionSupport.updateConnectedState(
-                states: &tcpConnectionStates,
-                proto: "tcp",
-                chanID: chanID,
-                localHost: nil,
-                localPort: nil
-            )
-        }
-    }
-
-    @discardableResult
-    static func acceptLocalTCPConnection(
-        _ connection: NWConnection,
-        spec: ObstacleBridgeChannelMuxCodec.ServiceSpec,
-        listenerHost: String,
-        listenerPort: Int,
-        tcpTransportOwner: ObstacleBridgeChannelMuxTCPTransportOwner,
-        tcpConnectionStates: inout [Int: ObstacleBridgeOverlayConnectionState],
-        serviceNameByID: [Int: String],
-        cancelConnection: (NWConnection) -> Void
-    ) -> Bool {
-        if let chanID = tcpTransportOwner.acceptLocalConnection(connection, spec: spec) {
-            tcpConnectionStates[chanID] = ObstacleBridgeOverlayConnectionSupport.makeState(
-                proto: "tcp",
-                role: "server",
-                chanID: chanID,
-                spec: spec,
-                serviceName: serviceName(spec, serviceNameByID: serviceNameByID),
-                state: "connecting",
-                localHost: listenerHost,
-                localPort: listenerPort
-            )
-            return true
-        }
-        cancelConnection(connection)
-        return false
-    }
-
     static func tunRows(
         activeTunChanIDs: Set<Int>,
         tunStats: [String: Int],
@@ -235,7 +152,7 @@ enum ObstacleBridgeOverlayChannelCore {
         }
         let ifname = tunIfname ?? "tun"
         let mtu = tunMTU
-        let spec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: ifname, mtu: mtu)
+        let spec = tunServiceSpec ?? localTunServiceSpec(ifname: ifname, mtu: mtu)
         let configuredServiceName = serviceNameByID[spec.svcID]?.trimmingCharacters(in: .whitespacesAndNewlines)
         let nowNS = DispatchTime.now().uptimeNanoseconds
         let sharedOwnership = tunRuntime?.sharedTunRuntimeSnapshot()
@@ -325,7 +242,7 @@ enum ObstacleBridgeOverlayChannelCore {
         guard started, overlayConnected, let tunRuntime, let tunIfname, tunMTU > 0 else {
             return nil
         }
-        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(
+        let localTunSpec = tunServiceSpec ?? localTunServiceSpec(
             ifname: tunIfname,
             mtu: tunMTU
         )
@@ -357,7 +274,7 @@ enum ObstacleBridgeOverlayChannelCore {
         guard started, let tunRuntime, let tunIfname, tunMTU > 0 else {
             return
         }
-        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname, mtu: tunMTU)
+        let localTunSpec = tunServiceSpec ?? localTunServiceSpec(ifname: tunIfname, mtu: tunMTU)
         let nowNS = DispatchTime.now().uptimeNanoseconds
         // This is the shared admission boundary for all local TUN traffic. Do not
         // allocate ChannelMux state or emit frames until the lower stack is ready.
@@ -503,6 +420,21 @@ enum ObstacleBridgeOverlayChannelCore {
         sendMuxFrames(outbound.frames)
     }
 
+    static func localTunServiceSpec(ifname: String, mtu: Int, svcID: Int = 0, name: String? = nil) -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
+        ObstacleBridgeRuntimeServiceSpec(
+            svcID: svcID,
+            name: name,
+            listenProtocol: "tun",
+            listenBind: ifname,
+            listenPort: mtu,
+            targetProtocol: "tun",
+            targetHost: ifname,
+            targetPort: mtu,
+            lifecycleHooks: nil,
+            options: nil
+        ).toChannelMuxServiceSpec()
+    }
+
     static func handleInboundTunMuxFrame(
         _ frame: ObstacleBridgeChannelMuxCodec.MuxFrame,
         tunRuntime: ObstacleBridgeChannelMuxTunRuntime?,
@@ -526,7 +458,7 @@ enum ObstacleBridgeOverlayChannelCore {
         guard let tunRuntime, tunMTU > 0 else {
             return
         }
-        let localTunSpec = tunServiceSpec ?? ObstacleBridgeRuntimeConfig.localTunServiceSpec(ifname: tunIfname ?? "tun", mtu: tunMTU)
+        let localTunSpec = tunServiceSpec ?? localTunServiceSpec(ifname: tunIfname ?? "tun", mtu: tunMTU)
 
         func recordDrop(reason: String, chanID: Int, ipVersion: Int?, sourceIP: String?, destinationIP: String?, packetBytes: Int) {
             tunRuntime.recordSharedTunDrop(

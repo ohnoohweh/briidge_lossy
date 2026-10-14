@@ -370,7 +370,7 @@ def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() ->
 
 def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
-    overlay_core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    overlay_core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
@@ -1353,7 +1353,7 @@ def test_udp_overlay_peer_rotation_rebuilds_the_native_socket() -> None:
 
 def test_shared_tun_counter_discontinuity_is_diagnostic_not_delivery_gate() -> None:
     tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
-    overlay_core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    overlay_core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
 
     assert "catch ObstacleBridgeChannelMuxSessionError.invalidCounter" in tun_runtime
     assert "var counterDiscontinuity = false" in tun_runtime
@@ -1486,7 +1486,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
     assert "TUN verification waits for the connected overlay state." in provider
     assert "TUN verification is suspended while local TUN throttling is active." not in provider
-    assert "framesAdmittedBeforeSecureLink(" in (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    assert "framesAdmittedBeforeSecureLink(" in (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     assert "prepare_runtime()" in ios_app
     assert "Network extension active" in ios_app
     assert "Network tunneling active" not in ios_app
