@@ -19,13 +19,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
     static let defaultTransportDelayRotationThresholdMS: Double = 5_000.0
     static let defaultTransportDelayRotationGrace: TimeInterval = 30.0
 
-    struct OutboundSnapshot {
-        var emittedFrames: [Data]
+    public struct OutboundSnapshot {
+        public let emittedFrames: [Data]
     }
 
-    struct InboundSnapshot {
-        var emittedFrames: [Data]
-        var deliveredPayloads: [Data]
+    public struct InboundSnapshot {
+        public let emittedFrames: [Data]
+        public let deliveredPayloads: [Data]
     }
 
     private let compressRuntime: ObstacleBridgeCompressLayerRuntime?
@@ -75,6 +75,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         self.transportLifecycle = initial
         self.outerLifecycle = initial
         self.disconnectedSince = initial.changedAt
+    }
+
+    /// Public Linux/Apple transport boundary for a PSK-protected overlay.
+    /// The resource owner supplies only lower-transport I/O; this Core object
+    /// owns SecureLink framing, layered readiness, and failure gating.
+    public convenience init(clientPSK: String) {
+        self.init(secureLinkAdapter: .init(clientPSK: clientPSK))
     }
 
     func setCoreEffectSink(_ sink: @escaping ([ObstacleBridgeOverlayCoordinatorEffect]) -> Void) {
@@ -215,6 +222,12 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         secureLinkAdapter?.statusSnapshot()
     }
 
+    /// Redacted protocol state for an adapter-owned session. It carries no
+    /// secret material and is safe for the Linux Admin projection.
+    public func secureLinkProtocolState() -> ObstacleBridgeSecureLinkPSKState? {
+        secureLinkAdapter?.protocolState
+    }
+
     func observedPublicIPSnapshot() -> String {
         peerAddressRuntime?.observedPublicIP ?? ""
     }
@@ -223,15 +236,15 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         peerAddressRuntime?.observedPublicPort
     }
 
-    func requestSecureLinkRekey() throws -> OutboundSnapshot {
+    public func requestSecureLinkRekey(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
         }
-        let snapshot = try secureLinkAdapter.requestSecureLinkRekey()
+        let snapshot = try secureLinkAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce)
         return OutboundSnapshot(emittedFrames: snapshot.emittedFrames)
     }
 
-    func pollSecureLinkDueFrames() throws -> OutboundSnapshot {
+    public func pollSecureLinkDueFrames() throws -> OutboundSnapshot {
         guard let secureLinkAdapter else {
             return OutboundSnapshot(emittedFrames: [])
         }
@@ -288,7 +301,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         return layers
     }
 
-    func handleTransportDisconnected() {
+    public func handleTransportDisconnected() {
         peerAddressRuntime?.handleTransportDisconnected()
         secureLinkAdapter?.handleTransportDisconnected()
         observeTransportState(connected: false, reason: "transport_disconnected")
@@ -327,7 +340,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter?.statusSnapshot())
     }
 
-    func handleTransportConnected() throws -> OutboundSnapshot {
+    public func handleTransportConnected(sessionID: UInt64? = nil, clientNonce: Data? = nil) throws -> OutboundSnapshot {
         observeTransportState(connected: true, reason: "transport_connected")
         if let epoch = coreCoordinator.snapshot.epoch {
             applyCore(.transportConnected(epoch: epoch))
@@ -337,13 +350,13 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
             refreshOuterLifecycle(secureLinkStatus: nil)
             return OutboundSnapshot(emittedFrames: emittedFrames)
         }
-        let snapshot = try secureLinkAdapter.handleTransportConnected()
+        let snapshot = try secureLinkAdapter.handleTransportConnected(sessionID: sessionID, clientNonce: clientNonce)
         emittedFrames.append(contentsOf: snapshot.emittedFrames)
         refreshOuterLifecycle(secureLinkStatus: secureLinkAdapter.statusSnapshot())
         return OutboundSnapshot(emittedFrames: emittedFrames)
     }
 
-    func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
+    public func handleOutboundPayload(_ payload: Data) throws -> OutboundSnapshot {
         let outboundPayload = compressRuntime?.handleSendPayload(payload).wirePayload ?? payload
         if let secureLinkAdapter {
             let snapshot = try secureLinkAdapter.handleOutboundPayload(outboundPayload)
@@ -352,7 +365,7 @@ public final class ObstacleBridgeOverlayLayerTransportAdapter {
         return OutboundSnapshot(emittedFrames: [outboundPayload])
     }
 
-    func handleInboundFrame(
+    public func handleInboundFrame(
         _ payload: Data,
         observedPeerHost: String? = nil,
         observedPeerPort: Int? = nil
