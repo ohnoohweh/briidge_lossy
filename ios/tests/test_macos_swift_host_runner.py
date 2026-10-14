@@ -1429,6 +1429,7 @@ def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
         str(CORE_SWIFT_DIR / "ObstacleBridgeOnboarding.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgePeerAddressPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
         str(source_path),
     ]

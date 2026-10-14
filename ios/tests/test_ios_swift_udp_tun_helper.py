@@ -41,6 +41,7 @@ def _compile_swift_udp_tun_probe(source_path: Path, binary_path: Path) -> None:
         str(CORE_SWIFT_DIR / "ObstacleBridgePeerAddressPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),

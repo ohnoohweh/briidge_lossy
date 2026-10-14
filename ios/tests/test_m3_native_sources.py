@@ -503,6 +503,7 @@ def test_overlay_stack_planner_source_exists() -> None:
 
 def test_runtime_config_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     native_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
     admin_web = (CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift").read_text(encoding="utf-8")
 
@@ -538,6 +539,9 @@ def test_runtime_config_source_exists() -> None:
     assert "derivedRemoteTunnelSettings(" not in runtime
     assert "import Darwin" in runtime
     assert "import Glibc" not in runtime
+    assert "enum ObstacleBridgeRuntimeConfigPolicy" in policy
+    assert "static func overlaySessionMaxAppPayload" in policy
+    assert "ObstacleBridgeRuntimeConfigPolicy.overlaySessionMaxAppPayload" in runtime
 
 
 def test_shared_peer_address_resolver_is_darwin_specific() -> None:

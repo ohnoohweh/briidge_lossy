@@ -166,6 +166,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressPolicy.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeConfigPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebAdminLiveTopicPolicy.swift" \
@@ -271,6 +272,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressPolicy.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeConfigPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebAdminLiveTopicPolicy.swift" \

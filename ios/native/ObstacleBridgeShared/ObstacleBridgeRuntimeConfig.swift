@@ -58,8 +58,6 @@ enum ObstacleBridgeRuntimeConfig {
         "iOS_TUN_connector",
         "proxy_provider",
     ]
-    private static let secureLinkFrameHeaderSize = 20
-    private static let secureLinkAEADTagSize = 16
     private static let proxyProviderCompatibilityAliases = [
         "enabled": "proxy_provider_enabled",
         "bind": "proxy_provider_bind",
@@ -296,22 +294,11 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func overlaySessionMaxAppPayload(from payload: [String: Any]) -> Int {
-        let transport = (stringValue(from: payload["overlay_transport"]) ?? "myudp").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        var limit = 65535
-        if transport == "ws" {
-            limit = max(1, intValue(from: payload["ws_max_size"]) ?? 65535)
-        }
-        let secureLinkEnabled = boolValue(from: payload["secure_link"]) ?? false
-        let secureLinkMode = (stringValue(from: payload["secure_link_mode"]) ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if secureLinkEnabled, secureLinkMode != "off" {
-            limit = max(0, limit - secureLinkFrameHeaderSize - secureLinkAEADTagSize)
-        }
-        return max(0, limit)
+        ObstacleBridgeRuntimeConfigPolicy.overlaySessionMaxAppPayload(from: payload)
     }
 
     static func overlayMaxInflight(from payload: [String: Any]) -> Int {
-        let configured = intValue(from: payload["max_inflight"]) ?? 200
-        return min(32767, max(1, configured))
+        ObstacleBridgeRuntimeConfigPolicy.overlayMaxInflight(from: payload)
     }
 
     static func normalizedConfigUpdates(_ updates: [String: Any], currentRuntimeConfig: [String: Any]) -> [String: Any] {
@@ -943,66 +930,19 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func intValue(from value: Any?) -> Int? {
-        if let number = value as? NSNumber {
-            return number.intValue
-        }
-        if let value = value as? Int {
-            return value
-        }
-        if let value = value as? String {
-            return Int(value)
-        }
-        return nil
+        ObstacleBridgeRuntimeConfigPolicy.intValue(from: value)
     }
 
     static func doubleValue(from value: Any?) -> Double? {
-        if let number = value as? NSNumber {
-            return number.doubleValue
-        }
-        if let value = value as? Double {
-            return value
-        }
-        if let value = value as? Int {
-            return Double(value)
-        }
-        if let value = value as? String {
-            return Double(value)
-        }
-        return nil
+        ObstacleBridgeRuntimeConfigPolicy.doubleValue(from: value)
     }
 
     static func boolValue(from value: Any?) -> Bool? {
-        if let value = value as? Bool {
-            return value
-        }
-        if let number = value as? NSNumber {
-            return number.boolValue
-        }
-        if let value = value as? String {
-            switch value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
-            case "1", "true", "yes", "on":
-                return true
-            case "0", "false", "no", "off":
-                return false
-            default:
-                return nil
-            }
-        }
-        return nil
+        ObstacleBridgeRuntimeConfigPolicy.boolValue(from: value)
     }
 
     static func stringValue(from value: Any?) -> String? {
-        guard let value else {
-            return nil
-        }
-        if let string = value as? String {
-            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-            return trimmed.isEmpty ? nil : trimmed
-        }
-        if let number = value as? NSNumber {
-            return number.stringValue
-        }
-        return nil
+        ObstacleBridgeRuntimeConfigPolicy.stringValue(from: value)
     }
 
     private static func firstStringValue(from value: Any?) -> String? {
@@ -1019,15 +959,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func peerResolveFamilyValue(from value: Any?) -> String? {
-        guard let raw = stringValue(from: value)?.lowercased() else {
-            return nil
-        }
-        switch raw {
-        case "prefer-ipv6", "ipv4", "ipv6":
-            return raw
-        default:
-            return nil
-        }
+        ObstacleBridgeRuntimeConfigPolicy.peerResolveFamilyValue(from: value)
     }
 
     static func wsPeerAddresses(from value: Any?) -> [String] {

@@ -57,7 +57,7 @@ The active testing focus on this branch is:
   Core-backed peer runtime and covers heartbeat/control initialization, idle,
   acknowledgement, and retransmission transitions without Apple-only sender
   state; its retired SessionCodec companion is absent from all compile lists
-- the iOS TUN helper probe compiles RuntimeConfig with its Core NativeService
+- the iOS TUN helper probe compiles RuntimeConfig with its Core RuntimeConfig scalar policy and NativeService
   and Admin-config dependencies, and exercises the Darwin-specific address
   resolver separately from the portable TUN-probe state owner
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
