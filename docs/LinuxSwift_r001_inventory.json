@@ -159,6 +159,13 @@
     {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift", "linux_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpTransportReassemblesDuplicatedOutOfOrderPythonChunks"]},
     {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift", "linux_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketUpgradeAndBinaryFrameRoundTripAgainstPythonPeer"]}
   ],
+  "lsw_sc2_linux_qualification": [
+    {"contract": "peer-address", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressPolicy.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxRuntimeConfiguration.swift", "linux_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::corePeerAddressPortNormalizesLinuxCandidateLists"]},
+    {"contract": "admin-live-topics", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift", "linux_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState"]},
+    {"contract": "local-proxy-provider", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift", "status": "not-admitted", "reason": "Linux rejects proxy_provider mode before networking."},
+    {"contract": "secret-envelope", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift", "status": "not-admitted", "reason": "Linux has no configuration-write or machine-key-material owner."},
+    {"contract": "tun-diagnostics", "source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift", "status": "not-admitted", "reason": "Linux rejects TUN startup until LSW-005."}
+  ],
   "feature_groups": [
     {
       "id": "runtime-packaging",
