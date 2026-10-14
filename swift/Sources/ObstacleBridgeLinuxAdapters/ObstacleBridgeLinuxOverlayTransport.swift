@@ -39,6 +39,7 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
     case proxyNegotiationFailed(String)
     case webSocketProtocolError
     case cancelled
+    case backpressured
 
     public var errorDescription: String? {
         switch self {
@@ -51,6 +52,7 @@ public enum ObstacleBridgeLinuxOverlayTransportError: Error, Equatable, Localize
         case .proxyNegotiationFailed(let detail): return "HTTP proxy negotiation failed: \(detail)"
         case .webSocketProtocolError: return "invalid WebSocket frame"
         case .cancelled: return "overlay connection was cancelled"
+        case .backpressured: return "overlay peer write is backpressured"
         }
     }
 }

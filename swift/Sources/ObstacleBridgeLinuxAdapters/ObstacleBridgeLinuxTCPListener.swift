@@ -14,6 +14,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
     private let webSocketPath: String
     public let port: Int
     private let overlayRuntime = ObstacleBridgeTcpOverlayRuntime()
+    private let peers = ObstacleBridgeLinuxStreamListenerPeers()
 
     public init(port: Int, transport: ObstacleBridgeLinuxTransport = .tcp, webSocketPath: String = "/") throws {
         guard (0...65535).contains(port) else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
@@ -79,6 +80,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
         try writeFrame(try server.handleClientHello(readFrame(clientFD, observedPeerPort: peerPort), serverNonce: serverNonce), fd: clientFD)
         try writeFrame(try server.handleClientProof(readFrame(clientFD, observedPeerPort: peerPort)), fd: clientFD)
         let peerID = overlayRuntime.listenerPeerAccepted(host: "listener", port: peerPort, socketPresent: true)
+        peers.add(peerID)
         let lock = NSLock()
         var open = true
         let receive: () throws -> Data = { [weak self] in
@@ -87,12 +89,15 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
         }
         let send: (Data) throws -> Void = { [weak self] payload in
             guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+            guard self.peers.beginWrite(peerID) else { throw ObstacleBridgeLinuxOverlayTransportError.backpressured }
+            defer { self.peers.finishWrite(peerID) }
             try self.writeFrame(payload, fd: clientFD)
         }
         let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
             lock.lock(); let shouldClose = open; open = false; lock.unlock()
             if shouldClose {
                 _ = self.overlayRuntime.listenerPeerClosed(peerID)
+                self.peers.remove(peerID)
                 _ = Glibc.close(clientFD)
             }
         })
@@ -102,6 +107,7 @@ public final class ObstacleBridgeLinuxTCPPSKListener: @unchecked Sendable {
 
     public func close() { if descriptor >= 0 { _ = Glibc.close(descriptor); descriptor = -1 } }
     public var isOpen: Bool { descriptor >= 0 }
+    public var listenerSnapshot: ObstacleBridgeLinuxStreamListenerSnapshot { peers.snapshot }
     deinit { close() }
 
     private func readFrame(_ fd: Int32, observedPeerPort: Int? = nil) throws -> Data {

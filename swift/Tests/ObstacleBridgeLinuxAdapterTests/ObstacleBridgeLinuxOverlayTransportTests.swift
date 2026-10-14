@@ -7,6 +7,19 @@ import Glibc
 #endif
 
 struct ObstacleBridgeLinuxOverlayTransportTests {
+    @Test func streamListenerPeerRegistryRemovesPeersAndRejectsConcurrentWrites() {
+        let peers = ObstacleBridgeLinuxStreamListenerPeers()
+        peers.add(41)
+
+        #expect(peers.beginWrite(41))
+        #expect(!peers.beginWrite(41))
+        #expect(peers.snapshot == .init(activePeerCount: 1, writesInFlight: 1, backpressureRejections: 1))
+
+        peers.finishWrite(41)
+        peers.remove(41)
+        #expect(peers.snapshot == .init(activePeerCount: 0, writesInFlight: 0, backpressureRejections: 1))
+    }
+
     @Test func tcpPSKListenerAuthenticatesAndEchoesProtectedClientPayload() throws {
         let psk = Data("tcp-listener-psk".utf8)
         let listener = try ObstacleBridgeLinuxTCPPSKListener(port: 0)
@@ -25,6 +38,7 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try client.unprotect(session.exchange(client.protect(Data("python-client".utf8)))) == Data("python-client".utf8))
         session.close()
         #expect(served.wait(timeout: .now() + 2) == .success)
+        #expect(listener.listenerSnapshot.activePeerCount == 0)
     }
 
     @Test func tcpFramingRoundTripsAgainstPythonPeer() throws {

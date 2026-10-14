@@ -32,6 +32,7 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
     }
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
+    private let peers = ObstacleBridgeLinuxStreamListenerPeers()
     private let condition = NSCondition(); private var pending: [Connection] = []; private var closed = false
     private var channel: (any Channel)?; public private(set) var port: Int = 0; private let webSocketPath: String; private let timeoutMilliseconds: Int
     public init(port: Int, certificatePath: String, privateKeyPath: String, webSocketPath: String = "/", timeoutMilliseconds: Int = 5_000) throws {
@@ -47,6 +48,7 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
     }
     deinit { close() }
     public var isOpen: Bool { condition.lock(); defer { condition.unlock() }; return !closed }
+    public var listenerSnapshot: ObstacleBridgeLinuxStreamListenerSnapshot { peers.snapshot }
     public func close() { condition.lock(); guard !closed else { condition.unlock(); return }; closed = true; let server = channel; channel = nil; let pending = pending; self.pending = []; condition.broadcast(); condition.unlock(); pending.forEach { $0.close() }; server?.close(promise: nil); group.shutdownGracefully { _ in } }
     private func enqueue(_ connection: Connection) { condition.lock(); if closed { condition.unlock(); connection.close(); return }; pending.append(connection); condition.broadcast(); condition.unlock() }
     private func next() throws -> Connection { condition.lock(); defer { condition.unlock() }; while pending.isEmpty && !closed { condition.wait() }; guard !pending.isEmpty else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }; return pending.removeFirst() }
@@ -57,7 +59,14 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
     private func configured(_ c: Connection, psk: Data, serverNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
         let server = try ObstacleBridgeSecureLinkPSKServer(psk: psk); try writeWire(try server.handleClientHello(readFrame(c), serverNonce: serverNonce), c); try writeWire(try server.handleClientProof(readFrame(c)), c)
         let peerID = overlayRuntime.listenerPeerAccepted()
-        let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { value in try self.writeWire(value, c); return try self.readFrame(c) }, send: { try self.writeWire($0, c) }, receive: { try self.readFrame(c) }, close: { [weak self] in self?.overlayRuntime.listenerPeerClosed(peerID); c.close() })
+        peers.add(peerID)
+        let write: (Data) throws -> Void = { [weak self] value in
+            guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+            guard self.peers.beginWrite(peerID) else { throw ObstacleBridgeLinuxOverlayTransportError.backpressured }
+            defer { self.peers.finishWrite(peerID) }
+            try self.writeWire(value, c)
+        }
+        let raw = ObstacleBridgeLinuxOverlayTransportSession(exchange: { value in try write(value); return try self.readFrame(c) }, send: write, receive: { try self.readFrame(c) }, close: { [weak self] in self?.overlayRuntime.listenerPeerClosed(peerID); self?.peers.remove(peerID); c.close() })
         return ObstacleBridgeLinuxConfiguredSession(lowerSession: raw, secureLink: nil, secureLinkServer: server, transport: .ws)
     }
     private func upgrade(_ c: Connection) throws -> Bool { let request = try c.readUntil(Data("\r\n\r\n".utf8), maximum: 16_384); guard let text = String(data: request, encoding: .utf8) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }; let lines = text.components(separatedBy: "\r\n"); guard let first = lines.first, first.hasPrefix("GET ") else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }; guard lines.contains(where: { $0.lowercased().hasPrefix("upgrade: websocket") }) else { try c.write(Data("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK".utf8)); return false }; guard first.split(separator: " ").dropFirst().first == Substring(webSocketPath), let keyLine = lines.first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") }) else { throw ObstacleBridgeLinuxOverlayTransportError.webSocketHandshakeFailed }; let key = keyLine.split(separator: ":", maxSplits: 1)[1].trimmingCharacters(in: .whitespaces); let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString(); try c.write(Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)); return true }
