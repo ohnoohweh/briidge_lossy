@@ -22,6 +22,25 @@ the Linux socket owner performs only descriptor, peer-address, and byte-I/O
 work. Remaining product qualifications are recorded under their applicable
 work packages below rather than as an unadopted Core surface.
 
+## SC.2 Linux admission map
+
+Linux consumes portable policy only through explicit Core ports. The resource
+owner supplies POSIX/NIO mechanics and redacted snapshots; it does not recreate
+portable selection or topic policy.
+
+| Contract | Linux admission | Linux-host evidence |
+| --- | --- | --- |
+| Configured peer candidates | `ObstacleBridgePeerAddressPort` | `corePeerAddressPortNormalizesLinuxCandidateLists` |
+| Admin snapshot envelopes | `ObstacleBridgeAdminSnapshotSupport` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
+| Admin live topics | `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
+| Local proxy provider | Not admitted; configuration fails closed. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
+| TUN diagnostics | Not admitted; configuration fails closed under `LSW-005`. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
+| Persisted secret envelopes | Not admitted; the Linux foreground runtime has no configuration-write/key-material owner. | Read-only Admin routes and redaction coverage above. |
+
+The non-admitted rows are product capabilities, not Linux-local substitutes:
+their remaining delivery and qualification stay with `LSW-005`, `LSW-006`, and
+the Admin/product packages that own those resources.
+
 ## Resource ownership decisions
 
 - A Linux listener or dial owner exclusively owns its descriptor/channel and
@@ -81,7 +100,6 @@ adjacent field is the known gap that keeps the package open.
 | `LSW-SC.2` | Mixed Apple sources are split through typed Core ports, leaving Apple framework and ABI handling in adapters. | Remaining mixed contracts beyond the extracted peer-address policy still need Core ports. |
 | `LSW-SC.3` | `ObstacleBridgeShared` is constrained to Apple-resource adapters; portable behavior belongs in Core. | The retained Apple-file set still needs per-file dependency classification and an enforced repository boundary. |
 | `LSW-SC.4` | The source inventory remains the ownership authority while transition work is active. | Transitional shims, flat Xcode references, and inventory/traceability cleanup depend on SC.2 and SC.3. |
-| `LSW-SC.2L-A` | Linux consumes configured peer-candidate normalization and Admin live-topic admission through public Core ports; Linux supplies only POSIX I/O and redacted snapshots. | Admission and Linux-host evidence remain incomplete for connection-row, proxy-provider, secret-envelope, and TUN-diagnostics Core contracts. |
 | `LSW-SC.2L-B` | The inventory is the qualification map for admitted SC.2 contracts. | Contract-to-caller links, Linux-host evidence, and non-admission reasons are incomplete. |
 | `LSW-005` | The foreground runtime keeps packet-device work outside portable Core policy. | Privileged `/dev/net/tun` bidirectional data-plane qualification is unavailable. |
 | `LSW-005B.2` | QUIC remains a bounded outbound reliable-stream client boundary. | No safe Linux listener, custom-trust-root interoperability, peer-family mapping, or ChannelMux service-flow qualification exists on the pinned backend. |
