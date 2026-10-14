@@ -84,6 +84,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         self.overlayAdapter = nil
         self.secureLinkServer = secureLinkServer
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+        lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
+            self?.onTransportLivenessSample?(delayMilliseconds)
+        }
     }
 
     init(lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
@@ -93,6 +96,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         self.overlayAdapter = nil
         self.secureLinkServer = secureLinkServer
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+        lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
+            self?.onTransportLivenessSample?(delayMilliseconds)
+        }
     }
 
     init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, overlayAdapter: ObstacleBridgeOverlayLayerTransportAdapter, transport: ObstacleBridgeLinuxTransport) {
@@ -102,6 +108,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         self.overlayAdapter = overlayAdapter
         self.secureLinkServer = nil
         self.snapshot = .init(transport: transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+        lowerSession.onLivenessSample = { [weak self] delayMilliseconds in
+            self?.onTransportLivenessSample?(delayMilliseconds)
+        }
     }
 
     public func send(_ payload: Data) throws -> Data {
@@ -203,6 +212,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public func activateReceiveOwner() {
         requestLock.lock(); receiveOwnerActive = true; requestLock.unlock()
     }
+
+    public var supportsLivenessProbes: Bool { lowerSession.supportsLivenessProbes }
+
+    public func probeLiveness() throws { try lowerSession.probeLiveness() }
     public func cancelReceive() { lowerSession.close() }
 
     /// Redacted Core-owned SecureLink state for the current adapter epoch.

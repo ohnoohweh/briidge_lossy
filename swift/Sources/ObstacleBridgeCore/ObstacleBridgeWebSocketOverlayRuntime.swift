@@ -24,6 +24,7 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
     public enum ClientReceiveEffect: Equatable, Sendable {
         case application(Data)
         case pong(txNS: UInt64, echoNS: UInt64)
+        case livenessPong(echoTxNS: UInt64)
         case ignore
     }
     enum InboundFrame {
@@ -120,8 +121,8 @@ public final class ObstacleBridgeWebSocketOverlayRuntime {
             return .application(bytes)
         case .ping(let txNS, let echoNS):
             return .pong(txNS: txNS, echoNS: echoNS)
-        case .pong:
-            return .ignore
+        case .pong(let echoTxNS):
+            return .livenessPong(echoTxNS: echoTxNS)
         }
     }
 

@@ -21,6 +21,29 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(samples[0] >= 0)
     }
 
+    @Test func configuredSessionForwardsPeriodicLowerLivenessProbe() throws {
+        var probes = 0
+        let lower = ObstacleBridgeLinuxOverlayTransportSession(
+            exchange: { payload in payload },
+            probeLiveness: { probes += 1 },
+            close: {}
+        )
+        let session = ObstacleBridgeLinuxConfiguredSession(
+            lowerSession: lower,
+            secureLink: nil,
+            transport: .tcp
+        )
+        var samples: [Double] = []
+        session.onTransportLivenessSample = { samples.append($0) }
+
+        try session.probeLiveness()
+        lower.onLivenessSample?(12.5)
+
+        #expect(session.supportsLivenessProbes)
+        #expect(probes == 1)
+        #expect(samples == [12.5])
+    }
+
     @Test func parsesSectionedTcpPskConfiguration() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "tcp"],

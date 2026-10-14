@@ -48,6 +48,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var runtimeHealthSequence: UInt64 = 0
     private var previousRuntimeLifetimeEndedCleanly: Bool?
     private var runtimeHealthTimer: DispatchSourceTimer?
+    private var livenessProbeTimer: DispatchSourceTimer?
     private var activeCoordinatorEpoch: UInt64?
     /// Listener-owned child sessions are retired by their shared listener;
     /// they must never turn a peer close into an outbound reconnect attempt.
@@ -130,6 +131,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.stopped = false
             self.apply(self.coordinator.handle(.start))
             self.startRuntimeHealthHeartbeat()
+            self.startLivenessProbes()
         }
     }
 
@@ -539,10 +541,33 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         timer.resume()
     }
 
+    private func startLivenessProbes() {
+        stopLivenessProbes()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        timer.schedule(deadline: .now() + .seconds(15), repeating: .seconds(15))
+        timer.setEventHandler { [weak self] in
+            guard let self, !self.stopped, let session = self.session, session.supportsLivenessProbes else { return }
+            do { try session.probeLiveness() }
+            catch {
+                guard let epoch = self.activeCoordinatorEpoch else { return }
+                self.apply(self.coordinator.handle(.transportFailed(epoch: epoch, reason: "liveness probe failed: \(error.localizedDescription)")))
+            }
+        }
+        livenessProbeTimer = timer
+        timer.resume()
+    }
+
+    private func stopLivenessProbes() {
+        livenessProbeTimer?.setEventHandler {}
+        livenessProbeTimer?.cancel()
+        livenessProbeTimer = nil
+    }
+
     private func stopRuntimeHealthHeartbeat() {
         runtimeHealthTimer?.setEventHandler {}
         runtimeHealthTimer?.cancel()
         runtimeHealthTimer = nil
+        stopLivenessProbes()
     }
 
     private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
@@ -577,6 +602,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     deinit {
         runtimeHealthTimer?.cancel()
+        livenessProbeTimer?.cancel()
         retryTimer?.cancel()
         stopServiceOwners()
         stopRemoteServiceOwners()

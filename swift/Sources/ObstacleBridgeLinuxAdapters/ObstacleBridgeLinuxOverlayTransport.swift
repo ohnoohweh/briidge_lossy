@@ -95,6 +95,34 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
     private let webSocketOverlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
+    private final class LivenessProbeTracker {
+        private let lock = NSLock()
+        private var outstandingSince: (timestampNS: UInt64, uptime: TimeInterval)?
+        var onSample: ((Double) -> Void)?
+
+        func beginProbe() -> UInt64? {
+            lock.lock()
+            defer { lock.unlock() }
+            let now = ProcessInfo.processInfo.systemUptime
+            if let outstandingSince {
+                onSample?((now - outstandingSince.uptime) * 1_000)
+                return nil
+            }
+            let timestampNS = UInt64(now * 1_000_000_000)
+            outstandingSince = (timestampNS, now)
+            return timestampNS
+        }
+
+        func receivePong(echoTimestampNS: UInt64) {
+            lock.lock()
+            guard let outstandingSince, outstandingSince.timestampNS == echoTimestampNS else { lock.unlock(); return }
+            self.outstandingSince = nil
+            let delay = max(0, (ProcessInfo.processInfo.systemUptime - outstandingSince.uptime) * 1_000)
+            lock.unlock()
+            onSample?(delay)
+        }
+    }
+
     public init(host: String, port: Int, transport: ObstacleBridgeLinuxTransport, wsPath: String = "/", wsPayloadMode: String = "binary", wsTLS: Bool = false, wsTrustRootsPath: String? = nil, wsProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, receiveTimeoutMilliseconds: Int = 5_000) throws {
         guard !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, (1...65535).contains(port) else {
             throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
@@ -200,10 +228,12 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     exchange: { payload in try datagram.exchange(payload) },
                     send: { payload in _ = try datagram.send(payload) },
                     receive: { try datagram.receive().payload },
+                    probeLiveness: { try datagram.serviceTimers() },
                     close: { datagram.close() }
                 )
             }
             if transport == .quic {
+                let liveness = LivenessProbeTracker()
                 let quic = try ObstacleBridgeLinuxQUICSession(host: host, port: port, alpn: quicALPN, insecure: quicInsecure, trustRootsPath: quicTrustRootsPath, receiveTimeoutMilliseconds: receiveTimeoutMilliseconds)
                 for pending in quicOverlayRuntime.connectionOpened(host: host, port: port, socketPresent: true) {
                     try quic.write(pending)
@@ -215,13 +245,19 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 }
                 let receive: () throws -> Data = { [weak self] in
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
-                    return try self.readTCPApplicationFrame(quic)
+                    return try self.readTCPApplicationFrame(quic, onPong: liveness.receivePong)
                 }
-                return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
+                let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, probeLiveness: {
+                    guard let timestampNS = liveness.beginProbe() else { return }
+                    try quic.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(.init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0))))
+                }, close: {
                     quic.close()
                 })
+                liveness.onSample = { [weak result] delay in result?.reportLivenessSample(delay) }
+                return result
             }
             if transport == .ws, wsTLS {
+                let liveness = LivenessProbeTracker()
                 let connection = try ObstacleBridgeLinuxTLSWebSocketConnection(host: host, port: port, trustRootsPath: wsTrustRootsPath, proxy: try wsProxy.endpoint(targetHost: host, secure: true), proxyAuthorization: wsProxy.basicAuthorization(targetHost: host, secure: true), timeoutMilliseconds: receiveTimeoutMilliseconds)
                 try performWebSocketUpgrade(connection)
                 webSocketOverlayRuntime.connectionOpened()
@@ -233,9 +269,18 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 }
                 let receive: () throws -> Data = { [weak self] in
                     guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
-                    return try self.readWebSocketApplicationPayload(connection)
+                    return try self.readWebSocketApplicationPayload(connection, onPong: liveness.receivePong)
                 }
-                return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: { connection.close() })
+                let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, probeLiveness: {
+                    guard let timestampNS = liveness.beginProbe() else { return }
+                    let wire = try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0)))
+                    switch try self.webSocketOverlayRuntime.encodeClientPayload(wire) {
+                    case .binary(let data): try connection.write(self.webSocketClientFrame(opcode: 0x2, payload: data))
+                    case .text(let text): try connection.write(self.webSocketClientFrame(opcode: 0x1, payload: Data(text.utf8)))
+                    }
+                }, close: { connection.close() })
+                liveness.onSample = { [weak result] delay in result?.reportLivenessSample(delay) }
+                return result
             }
             let connection = transport == .ws ? try openWebSocketConnection() : try POSIXStreamConnection(host: host, port: port, timeoutMilliseconds: receiveTimeoutMilliseconds)
             if transport == .tcp {
@@ -261,17 +306,33 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 }
             }
+            let liveness = LivenessProbeTracker()
             let receive: () throws -> Data = { [weak self] in
                 guard let self else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
                 switch self.transport {
-                case .tcp: return try self.readTCPApplicationFrame(connection)
-                case .ws: return try self.readWebSocketApplicationPayload(connection)
+                case .tcp: return try self.readTCPApplicationFrame(connection, onPong: liveness.receivePong)
+                case .ws: return try self.readWebSocketApplicationPayload(connection, onPong: liveness.receivePong)
                 case .myudp, .quic: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
                 }
             }
-            return ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, close: {
+            let result = ObstacleBridgeLinuxOverlayTransportSession(exchange: { payload in try send(payload); return try receive() }, send: send, receive: receive, probeLiveness: { [weak self] in
+                guard let self, let timestampNS = liveness.beginProbe() else { return }
+                let frame = ObstacleBridgeOverlayFrame(kind: .ping, payload: ObstacleBridgeOverlayFrameCodec.pingPayload(txNS: timestampNS, echoNS: 0))
+                switch self.transport {
+                case .tcp: try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(frame))
+                case .ws:
+                    let wire = try ObstacleBridgeOverlayFrameCodec.encodeBody(frame)
+                    switch try self.webSocketOverlayRuntime.encodeClientPayload(wire) {
+                    case .binary(let data): try connection.write(self.webSocketClientFrame(opcode: 0x2, payload: data))
+                    case .text(let text): try connection.write(self.webSocketClientFrame(opcode: 0x1, payload: Data(text.utf8)))
+                    }
+                case .myudp, .quic: throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+                }
+            }, close: {
                 connection.close()
             })
+            liveness.onSample = { [weak result] delay in result?.reportLivenessSample(delay) }
+            return result
         } catch {
             snapshot = .init(transport: transport.rawValue, state: "failed", attempts: 1, failureReason: error.localizedDescription)
             throw error
@@ -320,7 +381,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         } catch { connection.close(); throw error }
     }
 
-    private func readTCPApplicationFrame(_ connection: POSIXStreamConnection) throws -> Data {
+    private func readTCPApplicationFrame(_ connection: POSIXStreamConnection, onPong: (UInt64) -> Void = { _ in }) throws -> Data {
         // Python's TCP lower transport multiplexes RTT controls with APP
         // frames. Those controls may arrive before the SecureLink server hello,
         // so consume PINGs here and immediately return a compatible PONG rather
@@ -331,7 +392,8 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             let length = try headerReader.readUInt32()
             guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
             let body = try connection.readExactly(Int(length))
-            switch try ObstacleBridgeOverlayEnvelope.decodeTCP(header + body) {
+            let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(header + body)
+            switch try ObstacleBridgeOverlayEnvelope.consume(frame) {
             case .application:
                 guard let admitted = tcpOverlayRuntime.receiveApplicationBytes(header + body).first else {
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
@@ -342,19 +404,20 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             case .ignore:
                 // A PONG completes a lower-layer liveness exchange and carries
                 // no application payload for this client.
-                break
+                if frame.kind == .pong { onPong(try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame)) }
             }
         }
     }
 
-    private func readTCPApplicationFrame(_ connection: ObstacleBridgeLinuxQUICSession) throws -> Data {
+    private func readTCPApplicationFrame(_ connection: ObstacleBridgeLinuxQUICSession, onPong: (UInt64) -> Void = { _ in }) throws -> Data {
         while true {
             let header = try connection.readExactly(4)
             var headerReader = ObstacleBridgeBinaryReader(header)
             let length = try headerReader.readUInt32()
             guard length > 0, length <= ObstacleBridgeOverlayFrameCodec.maximumBodyLength else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
             let body = try connection.readExactly(Int(length))
-            switch try ObstacleBridgeOverlayEnvelope.decodeTCP(header + body) {
+            let frame = try ObstacleBridgeOverlayFrameCodec.decodeTCP(header + body)
+            switch try ObstacleBridgeOverlayEnvelope.consume(frame) {
             case .application:
                 guard let admitted = quicOverlayRuntime.receiveApplicationBytes(header + body).first else {
                     throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame
@@ -363,7 +426,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
             case .reply(let frame):
                 try connection.write(try ObstacleBridgeOverlayEnvelope.encodeTCP(frame))
             case .ignore:
-                break
+                if frame.kind == .pong { onPong(try ObstacleBridgeOverlayFrameCodec.pongEchoTimestamp(frame)) }
             }
         }
     }
@@ -414,7 +477,7 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
         try ObstacleBridgeOverlayFrameCodec.encodeBody(.init(kind: .application, payload: payload))
     }
 
-    private func readWebSocketApplicationPayload(_ connection: some ObstacleBridgeLinuxWebSocketByteConnection) throws -> Data {
+    private func readWebSocketApplicationPayload(_ connection: some ObstacleBridgeLinuxWebSocketByteConnection, onPong: (UInt64) -> Void = { _ in }) throws -> Data {
         while true {
             switch try webSocketOverlayRuntime.receiveClientPayload(readWebSocketApplicationFrame(connection)) {
             case .application(let payload):
@@ -427,6 +490,9 @@ public final class ObstacleBridgeLinuxOverlayTransportClient {
                 }
                 _ = echoNS
             case .ignore:
+                continue
+            case .livenessPong(let echoTxNS):
+                onPong(echoTxNS)
                 continue
             }
         }
@@ -465,14 +531,18 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
     private let exchangeImpl: (Data) throws -> Data
     private let sendImpl: ((Data) throws -> Void)?
     private let receiveImpl: (() throws -> Data)?
+    private let probeLivenessImpl: (() throws -> Void)?
     private let closeImpl: () -> Void
     private let lock = NSLock()
     private var closed = false
 
-    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, close: @escaping () -> Void) {
+    public var onLivenessSample: ((Double) -> Void)?
+
+    init(exchange: @escaping (Data) throws -> Data, send: ((Data) throws -> Void)? = nil, receive: (() throws -> Data)? = nil, probeLiveness: (() throws -> Void)? = nil, close: @escaping () -> Void) {
         self.exchangeImpl = exchange
         self.sendImpl = send
         self.receiveImpl = receive
+        self.probeLivenessImpl = probeLiveness
         self.closeImpl = close
     }
 
@@ -494,6 +564,18 @@ public final class ObstacleBridgeLinuxOverlayTransportSession {
         lock.lock(); let isClosed = closed; lock.unlock()
         guard !isClosed, let receiveImpl else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
         return try receiveImpl()
+    }
+
+    public var supportsLivenessProbes: Bool { probeLivenessImpl != nil }
+
+    public func probeLiveness() throws {
+        lock.lock(); let isClosed = closed; lock.unlock()
+        guard !isClosed, let probeLivenessImpl else { return }
+        try probeLivenessImpl()
+    }
+
+    fileprivate func reportLivenessSample(_ delayMilliseconds: Double) {
+        onLivenessSample?(delayMilliseconds)
     }
 
     public func close() {
