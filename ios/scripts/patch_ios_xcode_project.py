@@ -242,6 +242,10 @@ def shared_swift_source_path(name: str) -> str:
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeChannelMuxCompatibilityCodec.swift"
     if name == "ObstacleBridgeAdminAuthPolicy.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuthPolicy.swift"
+    if name == "ObstacleBridgeAdminAuth.swift":
+        return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuth.swift"
+    if name == "ObstacleBridgeAdminConfigChallenge.swift":
+        return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminConfigChallenge.swift"
     if name == "ObstacleBridgeTunPing.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeTunPing.swift"
     if name == "ObstacleBridgeConfigSecretPolicy.swift":

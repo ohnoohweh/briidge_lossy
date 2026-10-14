@@ -30,8 +30,8 @@ behavior is in parity.
 
 | Target owner | Disposition | Files | Meaning |
 | --- | --- | ---: | --- |
-| `ObstacleBridgeCore` | `extract` | 48 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
-| `ObstacleBridgeCore` | `split-contract` | 27 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
+| `ObstacleBridgeCore` | `extract` | 50 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
+| `ObstacleBridgeCore` | `split-contract` | 25 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
 | `ObstacleBridgeAppleAdapters` | `retain-or-split` | 13 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, Objective-C bridge mechanisms, and the package import probe Apple-specific. |
 | `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 12 | Keep POSIX descriptors, listener/server I/O, timers, and Linux HTTP serving; remove common protocol policy as its core owner lands. |
 | `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |

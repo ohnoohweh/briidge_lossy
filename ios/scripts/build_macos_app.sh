@@ -128,9 +128,9 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
   -o "${BINARY_PATH}" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuth.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuthPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallenge.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift" \
@@ -229,9 +229,9 @@ echo "[build_macos_app] compiling macOS app executable"
   -o "${APP_EXECUTABLE}" \
   "${GENERATED_BUILD_STAMP_SWIFT}" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminAuth.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuth.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuthPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAdminConfigChallenge.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallenge.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift" \

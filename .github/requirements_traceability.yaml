@@ -1064,7 +1064,8 @@ REQ-LIFE-012:
 REQ-LST-001:
   # The ChannelMux parity runner compiles the Core SecureLink transcript and
   # native-service specification with portable service, listener-hook,
-  # tunnel-routing, UDP-peer, overlay-planning, first-start, and TUN state/effect policy, plus the remote-service
+  # tunnel-routing, UDP-peer, overlay-planning, first-start, Admin authentication/configuration-change challenge,
+  # and TUN state/effect policy, plus the remote-service
   # catalog facade required by its TCP and UDP owners with the Core crypto module; its CI
   # invocation is timeout-bounded and reports the active test so a stalled raw
   # probe remains diagnosable.
