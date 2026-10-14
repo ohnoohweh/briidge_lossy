@@ -145,13 +145,21 @@ enum ObstacleBridgeAdminConfigSupport {
             )
             let own = ObstacleBridgeOnboarding.sanitizeServices(payload["own_servers"] ?? effectiveRuntimeConfig["own_servers"])
             let remote = ObstacleBridgeOnboarding.sanitizeServices(payload["remote_servers"] ?? effectiveRuntimeConfig["remote_servers"])
-            let preview = ObstacleBridgeOnboarding.tokenPayload(
+            let preview: [String: Any]
+            do {
+                preview = try ObstacleBridgeOnboarding.tokenPayload(
                 runtimeConfig: effectiveRuntimeConfig,
                 connection: selectedConnection ?? [:],
                 ownServices: own,
                 remoteServices: remote,
                 encryptSecrets: encryptSecrets
-            )
+                )
+            } catch {
+                return ObstacleBridgeAdminAPI.jsonResponse([
+                    "ok": false,
+                    "error": error.localizedDescription,
+                ], statusLine: "HTTP/1.1 400 Bad Request")
+            }
             do {
                 let token = try ObstacleBridgeOnboarding.encodeToken(preview)
                 return ObstacleBridgeAdminAPI.jsonResponse([

@@ -41,6 +41,29 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
     }
 
+    @Test func onboardingHTTPUsesCoreTokenPolicyAndFailsClosedForSecrets() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+        ])
+        try server.start(); defer { server.stop() }
+        let generated = try #require(try await requestJSON(
+            "http://127.0.0.1:\(server.port)/api/onboarding/invite", method: "POST", body: [:]
+        ).body as? [String: Any])
+        let token = try #require(generated["invite_token"] as? String)
+        let preview = try #require(try await requestJSON(
+            "http://127.0.0.1:\(server.port)/api/onboarding/preview", method: "POST", body: ["invite_token": token]
+        ).body as? [String: Any])
+        #expect(preview["ok"] as? Bool == true)
+
+        let secretServer = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: ["secure_link_psk": "no-linux-key-owner"])
+        try secretServer.start(); defer { secretServer.stop() }
+        let rejected = try await requestJSON("http://127.0.0.1:\(secretServer.port)/api/onboarding/invite", method: "POST", body: [:])
+        #expect(rejected.status == 400)
+        #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
+    }
+
     @Test func statusAndPeersAreRedactedAndDescribeLayeredState() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp,

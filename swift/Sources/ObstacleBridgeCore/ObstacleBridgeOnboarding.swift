@@ -329,7 +329,7 @@ enum ObstacleBridgeOnboarding {
         ownServices: [[String: Any]],
         remoteServices: [[String: Any]],
         encryptSecrets: ([String: Any]) throws -> [String: Any]
-    ) -> [String: Any] {
+    ) throws -> [String: Any] {
         let secureMode = (ObstacleBridgeRuntimeConfig.stringValue(from: runtimeConfig["secure_link_mode"]) ?? "off")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
@@ -340,7 +340,7 @@ enum ObstacleBridgeOnboarding {
         let proxyProvider = sanitizeProxyProvider(
             ObstacleBridgeRuntimeConfig.groupedSectionPayload("proxy_provider", runtimeConfig: runtimeConfig)
         ) ?? [:]
-        return [
+        var payload: [String: Any] = [
             "version": 1,
             "generated_unix_ts": Int(Date().timeIntervalSince1970),
             "generated_by": adminWebName,
@@ -366,6 +366,10 @@ enum ObstacleBridgeOnboarding {
             "own_servers": ownServices,
             "remote_servers": remoteServices,
         ]
+        if !plainPSK.isEmpty {
+            payload = try encryptSecrets(payload)
+        }
+        return payload
     }
 
     static func encodeToken(_ payload: [String: Any]) throws -> String {
