@@ -348,7 +348,10 @@ jobs:
 
       - name: Run macOS host-runner qualification suite
         env:
-          PYTHONPATH: src:ios/src
+          # ios/tests imports shared test fixtures from the repository-level
+          # tests namespace; retain the checkout root when pytest imports this
+          # standalone qualification module.
+          PYTHONPATH: .:src:ios/src
         run: pytest -vv --timeout=120 -m "not slow" ios/tests/test_macos_swift_host_runner.py
 
   bridge-py-integration-macos-swift-elevated:
