@@ -206,7 +206,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         }
     }
 
-    @Test func rejectsUnqualifiedOrUnsafeRuntimeChoicesBeforeNetworking() {
+    @Test func rejectsUnsafeRuntimeChoicesBeforeNetworking() throws {
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires quic_session.quic_peer")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(["runner": ["overlay_transport": "quic"]]))
         }
@@ -230,19 +230,18 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
                 "TUN_routing": ["enabled_on_startup": true],
             ]))
         }
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift proxy mode is unavailable; run a supported Python deployment explicitly instead of expecting fallback")) {
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift local proxy_provider mode is unavailable; outbound WebSocket proxy configuration remains supported")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
                 "runner": ["overlay_transport": "tcp"],
                 "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
                 "proxy_provider": ["enabled": true],
             ]))
         }
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift package/service-manager mode is unavailable; run the foreground executable under an operator-owned supervisor")) {
-            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
-                "runner": ["overlay_transport": "tcp", "service_mode": true],
-                "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
-            ]))
-        }
+        let operatorSupervised = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp", "service_mode": true],
+            "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
+        ]))
+        #expect(operatorSupervised.transport == .tcp)
     }
 
     @Test func runtimeStatusReportsAdmissionStateWithoutLeakingPsk() throws {

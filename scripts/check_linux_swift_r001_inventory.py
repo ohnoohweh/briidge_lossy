@@ -190,6 +190,15 @@ def validate(inventory: dict[str, object]) -> list[str]:
                 caller = row.get("caller")
                 if not isinstance(caller, str) or implementation_exists(caller):
                     errors.append(f"{source}: adopted/partial LSW-SC.1 row needs an existing Linux caller")
+            if status == "adopted":
+                linux_tests = row.get("linux_tests")
+                if not isinstance(linux_tests, list) or not linux_tests:
+                    errors.append(f"{source}: adopted LSW-SC.1 row needs focused Linux test evidence")
+                else:
+                    for reference in linux_tests:
+                        issue = test_exists(reference)
+                        if issue:
+                            errors.append(f"{source}: linux_tests: {issue}")
             if status in {"partial", "deferred"} and not row.get("gap"):
                 errors.append(f"{source}: partial/deferred LSW-SC.1 row needs an explicit gap")
             if status == "not-admitted" and not row.get("reason"):
