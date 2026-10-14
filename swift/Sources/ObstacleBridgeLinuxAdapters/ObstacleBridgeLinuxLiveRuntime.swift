@@ -27,12 +27,17 @@ public enum ObstacleBridgeLinuxLiveRuntimeError: Error, Equatable, LocalizedErro
 private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
     private let runtime: ObstacleBridgeLinuxConfiguredRuntime
     private let expectedTransport: ObstacleBridgeLinuxTransport
+    /// Candidate rotation, in-flight cancellation, authenticated-session
+    /// publication, and connection epoch are per concrete owner. The
+    /// configured runtime only reads this admission for its redacted status.
+    private let admission: ObstacleBridgeLinuxConnectionAdmission
     private let lock = NSLock()
     private var activeEpoch: UInt64?
 
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime, expectedTransport: ObstacleBridgeLinuxTransport) {
         self.runtime = runtime
         self.expectedTransport = expectedTransport
+        self.admission = runtime.makeConnectionAdmission()
     }
 
     func open(epoch: UInt64, sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
@@ -47,7 +52,7 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
         activeEpoch = epoch
         lock.unlock()
         do {
-            let session = try runtime.connect(sessionID: sessionID, clientNonce: clientNonce) { [expectedTransport, runtime] host in
+            let session = try runtime.connect(sessionID: sessionID, clientNonce: clientNonce, admission: admission) { [expectedTransport, runtime] host in
                 let configuration = runtime.configuration
                 let lower = try ObstacleBridgeLinuxOverlayTransportClient(
                     host: host, port: configuration.port, transport: expectedTransport,

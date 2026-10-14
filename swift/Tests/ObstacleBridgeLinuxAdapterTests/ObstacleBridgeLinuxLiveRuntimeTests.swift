@@ -474,9 +474,13 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
             if runtime.configuredRuntime.connectionEpoch >= 2 { reconnected.signal() }
         }
         runtime.start()
-        #expect(firstConnection.wait(timeout: .now() + 5) == .success)
+        // The package suite schedules several Python-backed peers at once.
+        // QUIC's TLS setup can wait behind those workers on a shared Linux
+        // runner, so retain a deterministic but non-contentious qualification
+        // window rather than treating scheduler pressure as an owner failure.
+        #expect(firstConnection.wait(timeout: .now() + 15) == .success)
         runtime.reconnect()
-        #expect(reconnected.wait(timeout: .now() + 5) == .success)
+        #expect(reconnected.wait(timeout: .now() + 15) == .success)
         runtime.stop()
     }
 

@@ -413,7 +413,10 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
     @Test func myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first")
         defer { peer.stop() }
-        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .myudp, host: "127.0.0.1,127.0.0.1", port: peer.port))
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
+            transport: .myudp, host: "127.0.0.1,127.0.0.1", port: peer.port,
+            receiveIdleTimeoutMilliseconds: 25
+        ))
         let supervisor = ObstacleBridgeLinuxReconnectSupervisor(runtime: runtime, policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2))
         let connected = DispatchSemaphore(value: 0)
         supervisor.onSnapshot = { if $0.state == "connected" { connected.signal() } }
@@ -783,10 +786,11 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
 }
 
 final class PythonOverlayPeer {
-    // One test keeps two peers alive while it exercises transport routing;
-    // restricting all test fixtures to that maximum avoids Foundation pipe
-    // resource exhaustion when Swift Testing schedules the suite concurrently.
-    private static let launchSlots = DispatchSemaphore(value: 2)
+    // Swift Testing schedules this suite concurrently. Eight peer processes
+    // stay below Foundation's pipe pressure while allowing short-lived
+    // transport tests to start within their lifecycle deadlines instead of
+    // waiting behind unrelated Python peers.
+    private static let launchSlots = DispatchSemaphore(value: 8)
     let process: Process
     let port: Int
     let trustRootsPath: String?
@@ -805,8 +809,14 @@ final class PythonOverlayPeer {
             workingDirectory.appendingPathComponent(".venv/bin/python").path,
             workingDirectory.deletingLastPathComponent().appendingPathComponent(".venv/bin/python").path,
         ].first(where: FileManager.default.isExecutableFile(atPath:))
+        let environment = ProcessInfo.processInfo.environment
+        let configuredPython = environment["PYTHON"]
+            ?? environment["pythonLocation"].map { "\($0)/bin/python" }
+        let projectPython = [virtualEnvironmentPython, configuredPython]
+            .compactMap { $0 }
+            .first(where: FileManager.default.isExecutableFile(atPath:))
         let needsProjectPython = mode == "quic" || mode == "wss" || mode == "wss-proxy"
-        process.executableURL = URL(fileURLWithPath: needsProjectPython ? virtualEnvironmentPython ?? "/usr/bin/python3" : "/usr/bin/python3")
+        process.executableURL = URL(fileURLWithPath: needsProjectPython ? projectPython ?? "/usr/bin/python3" : "/usr/bin/python3")
         process.arguments = ["-u", "-c", script]
         process.standardOutput = stdout
         process.standardError = Pipe()

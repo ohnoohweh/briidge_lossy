@@ -297,17 +297,18 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     }
 }
 
-/// Config-driven connection admission. ChannelMux, TUN, automatic reconnect,
-/// and Admin ownership remain intentionally outside this LSW-004 slice.
-public final class ObstacleBridgeLinuxConfiguredRuntime {
-    public let configuration: ObstacleBridgeLinuxRuntimeConfiguration
-    private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
-    private var activeSession: ObstacleBridgeLinuxConfiguredSession?
-    private var activeHost: String?
-    private var secureLinkState: String
-    let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
-    private(set) public var connectionEpoch: UInt64 = 0
-    private var candidateStartIndex = 0
+/// Mutable admission state belongs to one concrete transport lifecycle owner.
+/// `ObstacleBridgeLinuxConfiguredRuntime` only publishes the active state's
+/// redacted projection for Admin and ChannelMux consumers; it does not retain
+/// candidate rotation or a SecureLink handshake across transport owners.
+final class ObstacleBridgeLinuxConnectionAdmission: @unchecked Sendable {
+    let configuration: ObstacleBridgeLinuxRuntimeConfiguration
+    var snapshot: ObstacleBridgeLinuxOverlaySnapshot
+    var activeSession: ObstacleBridgeLinuxConfiguredSession?
+    var activeHost: String?
+    var secureLinkState: String
+    var connectionEpoch: UInt64 = 0
+    var candidateStartIndex = 0
     // `connect` runs on the live runtime's serialized queue, but `stop` must
     // be able to interrupt an authenticated-handshake read from another
     // caller.  This slot is deliberately separate from `activeSession`: an
@@ -316,15 +317,76 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     private var inFlightConnection: ObstacleBridgeLinuxConfiguredSession?
     private var inFlightConnectionCancelled = false
 
-    public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration) {
+    init(configuration: ObstacleBridgeLinuxRuntimeConfiguration) {
         self.configuration = configuration
         self.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: 0, failureReason: nil)
         self.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
+    }
+
+    func cancelInFlightConnection() {
+        inFlightConnectionLock.lock()
+        inFlightConnectionCancelled = true
+        let pending = inFlightConnection
+        inFlightConnectionLock.unlock()
+        pending?.close()
+    }
+
+    func beginInFlightConnection() {
+        inFlightConnectionLock.lock()
+        inFlightConnectionCancelled = false
+        inFlightConnection = nil
+        inFlightConnectionLock.unlock()
+    }
+
+    var isInFlightConnectionCancelled: Bool {
+        inFlightConnectionLock.lock()
+        let cancelled = inFlightConnectionCancelled
+        inFlightConnectionLock.unlock()
+        return cancelled
+    }
+
+    func installInFlightConnection(_ pending: ObstacleBridgeLinuxConfiguredSession) -> Bool {
+        inFlightConnectionLock.lock()
+        inFlightConnection = pending
+        let cancelled = inFlightConnectionCancelled
+        inFlightConnectionLock.unlock()
+        if cancelled { pending.close() }
+        return !cancelled
+    }
+
+    func clearInFlightConnection(_ pending: ObstacleBridgeLinuxConfiguredSession? = nil) {
+        inFlightConnectionLock.lock()
+        if pending == nil || inFlightConnection === pending { inFlightConnection = nil }
+        inFlightConnectionLock.unlock()
+    }
+}
+
+/// Config-driven session construction and redacted projection. Candidate
+/// admission, SecureLink handshake state, cancellation, and epoch rotation are
+/// held by the concrete lifecycle owner's `ObstacleBridgeLinuxConnectionAdmission`.
+public final class ObstacleBridgeLinuxConfiguredRuntime {
+    public let configuration: ObstacleBridgeLinuxRuntimeConfiguration
+    private let defaultAdmission: ObstacleBridgeLinuxConnectionAdmission
+    private var publishedAdmission: ObstacleBridgeLinuxConnectionAdmission
+    let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
+
+    public var snapshot: ObstacleBridgeLinuxOverlaySnapshot { publishedAdmission.snapshot }
+    public var connectionEpoch: UInt64 { publishedAdmission.connectionEpoch }
+
+    public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration) {
+        self.configuration = configuration
+        let admission = ObstacleBridgeLinuxConnectionAdmission(configuration: configuration)
+        self.defaultAdmission = admission
+        self.publishedAdmission = admission
         self.compressionTelemetry = .init(policy: configuration.compressionPolicy)
     }
 
+    func makeConnectionAdmission() -> ObstacleBridgeLinuxConnectionAdmission {
+        ObstacleBridgeLinuxConnectionAdmission(configuration: configuration)
+    }
+
     public func connect(sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
-        try connect(sessionID: sessionID, clientNonce: clientNonce) { [configuration] host in
+        try connect(sessionID: sessionID, clientNonce: clientNonce, admission: defaultAdmission) { [configuration] host in
             let lower = try ObstacleBridgeLinuxOverlayTransportClient(
                 host: host, port: configuration.port, transport: configuration.transport,
                 wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode,
@@ -343,14 +405,16 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     func connect(
         sessionID: UInt64,
         clientNonce: Data,
+        admission: ObstacleBridgeLinuxConnectionAdmission,
         openLowerSession: (String) throws -> (ObstacleBridgeLinuxOverlayTransportClient, ObstacleBridgeLinuxOverlayTransportSession)
     ) throws -> ObstacleBridgeLinuxConfiguredSession {
-        beginInFlightConnection()
-        activeSession?.close()
-        activeSession = nil
+        publishedAdmission = admission
+        admission.beginInFlightConnection()
+        admission.activeSession?.close()
+        admission.activeSession = nil
         var lastError: Error?
         for offset in configuration.peerCandidates.indices {
-            let index = (candidateStartIndex + offset) % configuration.peerCandidates.count
+            let index = (admission.candidateStartIndex + offset) % configuration.peerCandidates.count
             let host = configuration.peerCandidates[index]
             do {
                 let (lower, lowerSession) = try openLowerSession(host)
@@ -358,31 +422,31 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 if let psk = configuration.secureLinkPSK {
                     let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
                     session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
-                    guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
+                    guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
-                    secureLinkState = "authenticated"
-                    clearInFlightConnection(session)
+                    admission.secureLinkState = "authenticated"
+                    admission.clearInFlightConnection(session)
                 } else {
                     session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, secureLink: nil, transport: configuration.transport)
-                    guard installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
-                    secureLinkState = "off"
-                    clearInFlightConnection(session)
+                    guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
+                    admission.secureLinkState = "off"
+                    admission.clearInFlightConnection(session)
                 }
-                snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
-                connectionEpoch &+= 1
-                activeHost = host
-                candidateStartIndex = index
-                activeSession = session
+                admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: index + 1, failureReason: nil)
+                admission.connectionEpoch &+= 1
+                admission.activeHost = host
+                admission.candidateStartIndex = index
+                admission.activeSession = session
                 return session
             } catch {
-                if isInFlightConnectionCancelled {
-                    clearInFlightConnection()
+                if admission.isInFlightConnectionCancelled {
+                    admission.clearInFlightConnection()
                     throw ObstacleBridgeLinuxOverlayTransportError.cancelled
                 }
                 lastError = error
-                activeHost = nil
-                secureLinkState = configuration.secureLinkPSK == nil ? "off" : "failed"
-                snapshot = .init(transport: configuration.transport.rawValue, state: "failed", attempts: index + 1, failureReason: error.localizedDescription)
+                admission.activeHost = nil
+                admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "failed"
+                admission.snapshot = .init(transport: configuration.transport.rawValue, state: "failed", attempts: index + 1, failureReason: error.localizedDescription)
             }
         }
         throw lastError ?? ObstacleBridgeLinuxOverlayTransportError.invalidFrame
@@ -392,40 +456,7 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// without waiting for the live-runtime queue.  The next explicit
     /// connection attempt resets this cancellation state.
     public func cancelInFlightConnection() {
-        inFlightConnectionLock.lock()
-        inFlightConnectionCancelled = true
-        let pending = inFlightConnection
-        inFlightConnectionLock.unlock()
-        pending?.close()
-    }
-
-    private func beginInFlightConnection() {
-        inFlightConnectionLock.lock()
-        inFlightConnectionCancelled = false
-        inFlightConnection = nil
-        inFlightConnectionLock.unlock()
-    }
-
-    private var isInFlightConnectionCancelled: Bool {
-        inFlightConnectionLock.lock()
-        let cancelled = inFlightConnectionCancelled
-        inFlightConnectionLock.unlock()
-        return cancelled
-    }
-
-    private func installInFlightConnection(_ pending: ObstacleBridgeLinuxConfiguredSession) -> Bool {
-        inFlightConnectionLock.lock()
-        inFlightConnection = pending
-        let cancelled = inFlightConnectionCancelled
-        inFlightConnectionLock.unlock()
-        if cancelled { pending.close() }
-        return !cancelled
-    }
-
-    private func clearInFlightConnection(_ pending: ObstacleBridgeLinuxConfiguredSession? = nil) {
-        inFlightConnectionLock.lock()
-        if pending == nil || inFlightConnection === pending { inFlightConnection = nil }
-        inFlightConnectionLock.unlock()
+        publishedAdmission.cancelInFlightConnection()
     }
 
     /// Ends the current transport epoch and establishes a fresh one. A caller
@@ -440,51 +471,54 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// admission/handshake; subsequent ChannelMux, receive-worker, and close
     /// behavior shares the ordinary configured-session contract.
     func adoptInbound(_ session: ObstacleBridgeLinuxConfiguredSession, host: String = "listener") {
-        activeSession?.close()
-        activeSession = session
-        connectionEpoch &+= 1
-        activeHost = host
-        secureLinkState = configuration.secureLinkPSK == nil ? "off" : "authenticated"
-        snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
+        let admission = publishedAdmission
+        admission.activeSession?.close()
+        admission.activeSession = session
+        admission.connectionEpoch &+= 1
+        admission.activeHost = host
+        admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "authenticated"
+        admission.snapshot = .init(transport: configuration.transport.rawValue, state: "connected", attempts: 1, failureReason: nil)
     }
 
     /// Advances the configured peer order after a connected epoch proves
     /// unusable (for example, a myudp receive timeout).
     public func advanceCandidate() {
         guard !configuration.peerCandidates.isEmpty else { return }
-        candidateStartIndex = (candidateStartIndex + 1) % configuration.peerCandidates.count
+        publishedAdmission.candidateStartIndex = (publishedAdmission.candidateStartIndex + 1) % configuration.peerCandidates.count
     }
 
     public func disconnect() {
-        activeSession?.close()
-        activeSession = nil
-        activeHost = nil
-        secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
-        if snapshot.state != "failed" {
-            snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: snapshot.attempts, failureReason: nil)
+        let admission = publishedAdmission
+        admission.activeSession?.close()
+        admission.activeSession = nil
+        admission.activeHost = nil
+        admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "disconnected"
+        if admission.snapshot.state != "failed" {
+            admission.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: admission.snapshot.attempts, failureReason: nil)
         }
     }
 
     /// Redacted state suitable for an Admin/API adapter. It deliberately
     /// identifies only the configured secure-link mode, never its secret.
     public func status() -> ObstacleBridgeLinuxRuntimeStatus {
-        let coreState = activeSession?.secureLinkProtocolState
+        let admission = publishedAdmission
+        let coreState = admission.activeSession?.secureLinkProtocolState
         let appReady = ObstacleBridgeOverlayLayerTransportAdapter.applicationReady(
-            transportConnected: snapshot.state == "connected",
+            transportConnected: admission.snapshot.state == "connected",
             secureLinkRequired: configuration.secureLinkPSK != nil,
-            secureLinkAuthenticated: secureLinkState == "authenticated",
+            secureLinkAuthenticated: admission.secureLinkState == "authenticated",
             compressionHealthy: true
         )
         return .init(
             transport: configuration.transport.rawValue,
-            state: snapshot.state,
-            attempts: snapshot.attempts,
-            failureReason: snapshot.failureReason,
+            state: admission.snapshot.state,
+            attempts: admission.snapshot.attempts,
+            failureReason: admission.snapshot.failureReason,
             configuredCandidates: configuration.peerCandidates,
-            activeHost: activeHost,
+            activeHost: admission.activeHost,
             port: configuration.port,
             secureLinkMode: configuration.secureLinkPSK == nil ? "off" : "psk",
-            secureLinkState: secureLinkState,
+            secureLinkState: admission.secureLinkState,
             appReady: appReady,
             activeTCPChannels: 0,
             activeUDPChannels: 0,
@@ -495,22 +529,22 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             openedTCPChannels: 0,
             openedUDPChannels: 0,
             receiveLoopState: "stopped",
-            receiveEpoch: connectionEpoch,
+            receiveEpoch: admission.connectionEpoch,
             receivedFrames: 0,
             droppedReceiveFrames: 0,
             receiveQueueDepth: 0,
             receiveFailureReason: nil,
             peer: .init(
                 transport: configuration.transport.rawValue,
-                lifecycleState: snapshot.state,
-                secureLinkState: secureLinkState,
-                connectionEpoch: connectionEpoch,
+                lifecycleState: admission.snapshot.state,
+                secureLinkState: admission.secureLinkState,
+                connectionEpoch: admission.connectionEpoch,
                 sessionID: coreState.map { $0.sessionID == 0 ? nil : $0.sessionID } ?? nil,
                 pendingRekeySessionID: coreState.map { $0.pendingRekeySessionID == 0 ? nil : $0.pendingRekeySessionID } ?? nil,
                 ready: appReady,
                 authenticated: coreState?.authenticated ?? false,
                 applicationSendingBlocked: coreState?.applicationSendingBlocked ?? false,
-                attempts: snapshot.attempts,
+                attempts: admission.snapshot.attempts,
                 nextRetryMilliseconds: nil,
                 protectedTxCounter: coreState?.txCounter ?? 0,
                 protectedRxCounter: coreState?.rxCounter ?? 0,
@@ -540,14 +574,14 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 let session = try connect(sessionID: effectiveSessionID, clientNonce: retryNonce)
                 let reply = try session.send(payload)
                 disconnect()
-                snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: attempt + 1, failureReason: nil)
+                defaultAdmission.snapshot = .init(transport: configuration.transport.rawValue, state: "disconnected", attempts: attempt + 1, failureReason: nil)
                 return reply
             } catch {
                 lastError = error
                 disconnect()
             }
         }
-        snapshot = .init(transport: configuration.transport.rawValue, state: "failed", attempts: totalAttempts, failureReason: lastError?.localizedDescription)
+        defaultAdmission.snapshot = .init(transport: configuration.transport.rawValue, state: "failed", attempts: totalAttempts, failureReason: lastError?.localizedDescription)
         throw lastError ?? ObstacleBridgeLinuxOverlayTransportError.invalidFrame
     }
 
