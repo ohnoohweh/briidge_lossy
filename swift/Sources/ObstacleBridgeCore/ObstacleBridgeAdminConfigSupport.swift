@@ -25,6 +25,32 @@ public enum ObstacleBridgeAdminConfigUpdatePort {
     }
 }
 
+/// Public onboarding HTTP-effect port. Linux owns routing; Core owns token
+/// shape, validation, and preview redaction.
+public enum ObstacleBridgeAdminOnboardingPort {
+    public static func generate(body: Data?, runtimeConfig: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
+        linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
+            method: "POST", body: body, runtimeConfig: runtimeConfig, profiles: [],
+            encryptSecrets: { payload in
+                guard !containsSecret(payload) else { throw NSError(domain: "ObstacleBridgeLinux", code: 1, userInfo: [NSLocalizedDescriptionKey: "Linux onboarding secrets are unavailable"]) }
+                return payload
+            }
+        ))
+    }
+    public static func preview(body: Data?) -> ObstacleBridgeAdminLinuxResponse {
+        linuxResponse(ObstacleBridgeAdminConfigSupport.invitePreviewResponse(method: "POST", body: body, decryptSecrets: { $0 }))
+    }
+    private static func linuxResponse(_ response: ObstacleBridgeAdminAPIResponse) -> ObstacleBridgeAdminLinuxResponse {
+        let code = Int(response.statusLine.split(separator: " ").dropFirst().first ?? "500") ?? 500
+        return .init(statusCode: code, body: response.body)
+    }
+    private static func containsSecret(_ value: Any) -> Bool {
+        if let object = value as? [String: Any] { return object.contains { $0.key.lowercased().contains("psk") || $0.key.lowercased().contains("password") || containsSecret($0.value) } }
+        if let values = value as? [Any] { return values.contains(where: containsSecret) }
+        return false
+    }
+}
+
 enum ObstacleBridgeAdminConfigSupport {
     struct ConfigurationPolicy {
         let normalizedUpdates: ([String: Any], [String: Any]) -> [String: Any]
