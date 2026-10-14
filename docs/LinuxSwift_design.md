@@ -16,6 +16,12 @@ the same contracts to its URLSession, Security, Network, and packet-tunnel
 resources. This is the cross-platform seam: a resource owner may change, but
 the protocol and lifecycle owner does not.
 
+Linux calls each admitted SC.1 Core surface through a Linux adapter. The
+ChannelMux TCP/UDP runtimes own service-channel admission and epoch withdrawal;
+the Linux socket owner performs only descriptor, peer-address, and byte-I/O
+work. Remaining product qualifications are recorded under their applicable
+work packages below rather than as an unadopted Core surface.
+
 ## Resource ownership decisions
 
 - A Linux listener or dial owner exclusively owns its descriptor/channel and
@@ -75,9 +81,7 @@ adjacent field is the known gap that keeps the package open.
 | `LSW-SC.2` | Mixed Apple sources are split through typed Core ports, leaving Apple framework and ABI handling in adapters. | Remaining mixed contracts beyond the extracted peer-address policy still need Core ports. |
 | `LSW-SC.3` | `ObstacleBridgeShared` is constrained to Apple-resource adapters; portable behavior belongs in Core. | The retained Apple-file set still needs per-file dependency classification and an enforced repository boundary. |
 | `LSW-SC.4` | The source inventory remains the ownership authority while transition work is active. | Transitional shims, flat Xcode references, and inventory/traceability cleanup depend on SC.2 and SC.3. |
-| `LSW-SC.1L-A` | Linux already executes Core ChannelMux TCP/UDP effects for local listeners and admitted remote dials. | Linux adoption evidence is still missing for the remaining direct Core surfaces, including UDP control/batch handling, Admin selection, and overlay planning. |
 | `LSW-SC.1L-B` | New direct extractions are adopted through a Linux caller in the same ownership model. | Not every later extraction has a Linux caller and focused lifecycle/backpressure evidence. |
-| `LSW-SC.1L-C` | The inventory links Core ownership to Linux callers where adoption exists. | The complete 17-row Core surface has not yet been linked to Linux execution evidence or a product-scoped non-admission decision for every row. |
 | `LSW-SC.1L-G` | SecureLink and overlay effects remain portable contracts above Linux transport resource owners. | Linux transport owners do not yet execute the full SecureLink/overlay effect path for retry, rekey, readiness, liveness, and compression failure. |
 | `LSW-SC.1L-I` | TCP and WebSocket transport ownership follows the Core-effect/resource-owner seam. | Listener peer removal and backpressure evidence remain incomplete; QUIC listener ownership remains blocked by the pinned backend. |
 | `LSW-SC.2L-A` | Linux may consume an SC.2 contract only through its explicit Core port. | No complete admission map and Linux-host success/failure evidence exists for the unfinished SC.2 contracts. |
