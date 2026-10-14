@@ -30,6 +30,7 @@ SWIFT_UDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "Ob
 SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
 SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxTunRuntime.swift"
 SWIFT_PACKET_MODEL_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketModel.swift"
+SWIFT_NATIVE_SERVICE_SPEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeNativeServiceSpec.swift"
 SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxUdpRuntime.swift"
 SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxTcpRuntime.swift"
 SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift"
@@ -158,6 +159,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_UDP_PEER_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE),
         str(SWIFT_PACKET_MODEL_SOURCE),
+        str(SWIFT_NATIVE_SERVICE_SPEC_SOURCE),
         str(SWIFT_CHANNELMUX_UDP_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TCP_RUNTIME_SOURCE),
         str(SWIFT_COMPRESS_LAYER_RUNTIME_SOURCE),
