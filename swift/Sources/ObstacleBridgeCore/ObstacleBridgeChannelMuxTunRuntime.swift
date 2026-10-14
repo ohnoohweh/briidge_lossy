@@ -1,9 +1,4 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 
 // Rebuild ChannelMux control-plane frames whenever an overlay starts a new epoch.
 typealias ObstacleBridgeChannelMuxStartupFramesProvider = (UInt64, UInt32) -> [Data]
@@ -192,8 +187,8 @@ final class ObstacleBridgeChannelMuxTunRuntime {
         self.chanIDStride = max(1, chanIDStride)
         self.sessionMaxAppPayload = sessionMaxAppPayload
         self.localSpec = localSpec
-        self.localTunnelAddress = Self.normalizedIPAddress(localTunnelAddress, family: AF_INET)
-        self.localTunnelAddress6 = Self.normalizedIPAddress(localTunnelAddress6, family: AF_INET6)
+        self.localTunnelAddress = Self.normalizedIPv4Address(localTunnelAddress)
+        self.localTunnelAddress6 = Self.normalizedIPv6Address(localTunnelAddress6)
         self.sharedTunDisableOutgoingNormalization = sharedTunDisableOutgoingNormalization
         self.sharedTunDisableInflowFilter = sharedTunDisableInflowFilter
         self.sharedTunDisableOutflowFilter = sharedTunDisableOutflowFilter
@@ -1479,7 +1474,7 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private static func channelID(from effects: [ObstacleBridgeChannelMuxSessionEffect]) -> Int? {
-        effects.compactMap { effect in
+        return effects.compactMap { effect -> Int? in
             guard case .outbound(let frame) = effect else { return nil }
             return Int(frame.channelID)
         }.first
@@ -1535,38 +1530,50 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private static func ipv6String(from data: Data) -> String {
-        var bytes = [UInt8](data)
-        var buffer = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
-        let rendered = bytes.withUnsafeMutableBytes { srcPtr in
-            buffer.withUnsafeMutableBufferPointer { dstPtr in
-                inet_ntop(AF_INET6, srcPtr.baseAddress, dstPtr.baseAddress, socklen_t(INET6_ADDRSTRLEN))
+        guard data.count == 16 else { return "" }
+        let bytes = [UInt8](data)
+        let groups = stride(from: 0, to: bytes.count, by: 2).map {
+            (UInt16(bytes[$0]) << 8) | UInt16(bytes[$0 + 1])
+        }
+        var bestStart: Int?
+        var bestLength = 0
+        var index = 0
+        while index < groups.count {
+            guard groups[index] == 0 else {
+                index += 1
+                continue
+            }
+            let start = index
+            while index < groups.count, groups[index] == 0 {
+                index += 1
+            }
+            let length = index - start
+            if length >= 2, length > bestLength {
+                bestStart = start
+                bestLength = length
             }
         }
-        if rendered != nil {
-            return String(cString: buffer)
+        guard let bestStart else {
+            return groups.map { String($0, radix: 16) }.joined(separator: ":")
         }
-        let groups = stride(from: 0, to: bytes.count, by: 2).map { idx in
-            String(format: "%x", Int((UInt16(bytes[idx]) << 8) | UInt16(bytes[idx + 1])))
-        }
-        return groups.joined(separator: ":")
+        let left = groups[..<bestStart].map { String($0, radix: 16) }.joined(separator: ":")
+        let right = groups[(bestStart + bestLength)...].map { String($0, radix: 16) }.joined(separator: ":")
+        return left + "::" + right
     }
 
-    private static func normalizedIPAddress(_ value: String?, family: Int32) -> String? {
+    private static func normalizedIPv4Address(_ value: String?) -> String? {
         guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
             return nil
         }
-        switch family {
-        case AF_INET:
-            var addr = in_addr()
-            guard inet_pton(AF_INET, trimmed, &addr) == 1 else { return nil }
-            return trimmed
-        case AF_INET6:
-            var addr6 = in6_addr()
-            guard inet_pton(AF_INET6, trimmed, &addr6) == 1 else { return nil }
-            return trimmed
-        default:
+        return ipv4Bytes(trimmed) == nil ? nil : trimmed
+    }
+
+    private static func normalizedIPv6Address(_ value: String?) -> String? {
+        guard let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              let bytes = ipv6Bytes(trimmed) else {
             return nil
         }
+        return ipv6String(from: Data(bytes))
     }
 
     private static func normalizeLocalPacketSource(_ packet: Data, ipv4Source: String?, ipv6Source: String?) -> Data? {
@@ -1592,17 +1599,53 @@ final class ObstacleBridgeChannelMuxTunRuntime {
     }
 
     private static func ipv4Bytes(_ address: String) -> [UInt8]? {
-        var storage = in_addr()
-        guard inet_pton(AF_INET, address, &storage) == 1 else { return nil }
-        return withUnsafeBytes(of: &storage) { rawBytes in
-            Array(rawBytes.prefix(4))
+        let components = address.split(separator: ".", omittingEmptySubsequences: false)
+        guard components.count == 4 else { return nil }
+        var bytes: [UInt8] = []
+        bytes.reserveCapacity(4)
+        for component in components {
+            guard !component.isEmpty, let byte = UInt8(component) else { return nil }
+            bytes.append(byte)
         }
+        return bytes
     }
 
     private static func ipv6Bytes(_ address: String) -> [UInt8]? {
-        var storage = in6_addr()
-        guard inet_pton(AF_INET6, address, &storage) == 1 else { return nil }
-        return withUnsafeBytes(of: &storage) { Array($0) }
+        guard !address.isEmpty, !address.contains("%") else { return nil }
+        let halves = address.components(separatedBy: "::")
+        guard halves.count <= 2 else { return nil }
+        let hasCompression = halves.count == 2
+        guard let leading = ipv6Groups(halves[0], permitsIPv4Tail: !hasCompression),
+              let trailing = hasCompression ? ipv6Groups(halves[1], permitsIPv4Tail: true) : [] else {
+            return nil
+        }
+        let groupCount = leading.count + trailing.count
+        guard (hasCompression && groupCount < 8) || (!hasCompression && groupCount == 8) else {
+            return nil
+        }
+        let groups = leading + Array(repeating: 0, count: 8 - groupCount) + trailing
+        return groups.flatMap { [UInt8($0 >> 8), UInt8($0 & 0xFF)] }
+    }
+
+    private static func ipv6Groups(_ text: String, permitsIPv4Tail: Bool) -> [UInt16]? {
+        guard !text.isEmpty else { return [] }
+        let tokens = text.split(separator: ":", omittingEmptySubsequences: false)
+        guard !tokens.contains(where: { $0.isEmpty }) else { return nil }
+        var groups: [UInt16] = []
+        for (index, token) in tokens.enumerated() {
+            if token.contains(".") {
+                guard permitsIPv4Tail, index == tokens.count - 1,
+                      let ipv4 = ipv4Bytes(String(token)) else {
+                    return nil
+                }
+                groups.append((UInt16(ipv4[0]) << 8) | UInt16(ipv4[1]))
+                groups.append((UInt16(ipv4[2]) << 8) | UInt16(ipv4[3]))
+            } else {
+                guard token.count <= 4, let group = UInt16(token, radix: 16) else { return nil }
+                groups.append(group)
+            }
+        }
+        return groups
     }
 
 }
