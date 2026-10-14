@@ -19,6 +19,8 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
     assert "struct ObstacleBridgePacketTunnelConfiguration" in shared
     assert "func makeNetworkSettings(includeRoutes: Bool = true) -> NEPacketTunnelNetworkSettings" in shared
     assert "let enabledOnStartup: Bool" in shared
+    assert "import Darwin" in shared
+    assert "import Glibc" not in shared
     assert "routingOverride?.enabledOnStartup ?? true" in shared
     assert "NEIPv6Settings" in shared
     assert "includedRoutes6" in shared
