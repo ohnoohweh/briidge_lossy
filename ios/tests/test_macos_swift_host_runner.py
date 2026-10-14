@@ -1419,6 +1419,7 @@ def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeOnboarding.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgePeerAddressPolicy.swift"),

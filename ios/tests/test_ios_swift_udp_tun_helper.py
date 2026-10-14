@@ -29,6 +29,7 @@ def _compile_swift_udp_tun_probe(source_path: Path, binary_path: Path) -> None:
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeOnboarding.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxSession.swift"),

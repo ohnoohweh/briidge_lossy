@@ -186,7 +186,8 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"budget_bytes", "used_bytes", "remaining_bytes"' in snapshot_support
 
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
-    assert "struct ObstacleBridgeAdminUIBootstrapState" in runtime_config
+    admin_web = (CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift").read_text(encoding="utf-8")
+    assert "struct ObstacleBridgeAdminUIBootstrapState" in admin_web
     assert "static func adminUIBootstrapState" in runtime_config
     assert 'schemaItem(key: "ws_bind"' in runtime_config
     assert 'schemaItem(key: "ws_own_port"' in runtime_config
