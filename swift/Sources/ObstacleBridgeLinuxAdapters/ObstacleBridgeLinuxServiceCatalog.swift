@@ -20,7 +20,7 @@ public struct ObstacleBridgeLinuxServiceCatalogInstall: Equatable, Sendable {
 /// activates the new rows. Replays of an equal or older sequence from the
 /// same instance are ignored while that transport epoch remains active.
 public final class ObstacleBridgeLinuxServiceCatalogStore {
-    private let core = ObstacleBridgeServiceCatalogStore()
+    private let core = ObstacleBridgeAppleServiceCatalog()
 
     public init() {}
 
@@ -29,7 +29,7 @@ public final class ObstacleBridgeLinuxServiceCatalogStore {
             let installed = try core.install(
                 instanceID: proposedInstanceID,
                 connectionSequence: proposedConnectionSequence,
-                services: try proposedServices.map(ObstacleBridgeLinuxServiceCatalog.coreSpec)
+                services: try proposedServices.map(ObstacleBridgeLinuxServiceCatalog.nativeSpec)
             )
             return .init(
                 accepted: installed.accepted,
@@ -46,7 +46,7 @@ public final class ObstacleBridgeLinuxServiceCatalogStore {
     }
 
     public func withdraw() -> ObstacleBridgeLinuxServiceCatalogInstall {
-        let installed = core.withdraw()
+        let installed = core.withdrawNativeServices()
         return .init(
             accepted: installed.accepted,
             removed: (try? installed.removed.map(ObstacleBridgeLinuxServiceCatalog.linuxSpec)) ?? [],
@@ -105,6 +105,37 @@ public enum ObstacleBridgeLinuxServiceCatalog {
             targetProtocol: value.targetProtocol.rawValue,
             targetHost: value.targetHost,
             targetPort: UInt16(value.targetPort)
+        )
+    }
+
+    static func nativeSpec(_ value: ObstacleBridgeLinuxServiceSpec) throws -> ObstacleBridgeNativeServiceSpec {
+        guard (1...Int(UInt16.max)).contains(value.listenPort),
+              (1...Int(UInt16.max)).contains(value.targetPort) else {
+            throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload
+        }
+        return .init(
+            svcID: Int(value.serviceID),
+            name: value.name,
+            listenProtocol: value.listenProtocol == .tcp ? "tcp" : "udp",
+            listenBind: value.listenHost,
+            listenPort: value.listenPort,
+            targetProtocol: value.targetProtocol == .tcp ? "tcp" : "udp",
+            targetHost: value.targetHost,
+            targetPort: value.targetPort
+        )
+    }
+
+    static func linuxSpec(_ value: ObstacleBridgeNativeServiceSpec) throws -> ObstacleBridgeLinuxServiceSpec {
+        guard let listenProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.listenProtocol == "tcp" ? 1 : value.listenProtocol == "udp" ? 0 : UInt8.max),
+              let targetProtocol = ObstacleBridgeChannelMuxProtocol(rawValue: value.targetProtocol == "tcp" ? 1 : value.targetProtocol == "udp" ? 0 : UInt8.max),
+              (1...Int(UInt16.max)).contains(value.listenPort),
+              (1...Int(UInt16.max)).contains(value.targetPort) else {
+            throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload
+        }
+        return .init(
+            serviceID: UInt16(clamping: value.svcID), name: value.name,
+            listenProtocol: listenProtocol, listenHost: value.listenBind, listenPort: value.listenPort,
+            targetProtocol: targetProtocol, targetHost: value.targetHost, targetPort: value.targetPort
         )
     }
 }
