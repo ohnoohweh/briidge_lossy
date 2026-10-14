@@ -1,5 +1,68 @@
 import Foundation
 
+struct ObstacleBridgeDerivedTunnelSettings {
+    let tunnelAddress: String
+    let tunnelPrefix: Int
+    let includedRoutes: [String]
+    let excludedRoutes: [String]
+    let tunnelAddress6: String
+    let tunnelPrefix6: Int
+    let includedRoutes6: [String]
+    let excludedRoutes6: [String]
+    let dnsServers: [String]
+    let mtu: Int
+
+    func applying(_ override: ObstacleBridgeTunnelRoutingOverride) -> ObstacleBridgeDerivedTunnelSettings {
+        ObstacleBridgeDerivedTunnelSettings(
+            tunnelAddress: override.tunnelAddress ?? tunnelAddress,
+            tunnelPrefix: override.tunnelPrefix ?? tunnelPrefix,
+            includedRoutes: override.includedRoutes ?? includedRoutes,
+            excludedRoutes: override.excludedRoutes ?? excludedRoutes,
+            tunnelAddress6: override.tunnelAddress6 ?? tunnelAddress6,
+            tunnelPrefix6: override.tunnelPrefix6 ?? tunnelPrefix6,
+            includedRoutes6: override.includedRoutes6 ?? includedRoutes6,
+            excludedRoutes6: override.excludedRoutes6 ?? excludedRoutes6,
+            dnsServers: override.dnsServers ?? dnsServers,
+            mtu: override.mtu ?? mtu
+        )
+    }
+}
+
+struct ObstacleBridgeTunnelRoutingOverride {
+    let tunnelAddress: String?
+    let tunnelPrefix: Int?
+    let tunnelGateway: String?
+    let includedRoutes: [String]?
+    let excludedRoutes: [String]?
+    let tunnelAddress6: String?
+    let tunnelPrefix6: Int?
+    let tunnelGateway6: String?
+    let includedRoutes6: [String]?
+    let excludedRoutes6: [String]?
+    let dnsServers: [String]?
+    let mtu: Int?
+    let enabledOnStartup: Bool?
+    let enableTCPMSS: Bool?
+    let enableTunTcpdump: Bool?
+    let tunTcpdumpPcapPath: String?
+    let sharedTunDisableOutgoingNormalization: Bool?
+    let sharedTunDisableInflowFilter: Bool?
+    let sharedTunDisableOutflowFilter: Bool?
+    let sharedTunDisableScopedThrottle: Bool?
+}
+
+struct ObstacleBridgeSwiftUDPPeerConfig {
+    let runtimeMode: String
+    let bindHost: String
+    let overlayBindHost: String
+    let bindPort: Int
+    let peerHost: String
+    let peerPort: Int
+    let peerResolveFamily: String
+    let mtu: Int
+    let tunIfname: String
+}
+
 public struct ObstacleBridgeNativeServiceSpec {
     public let svcID: Int
     public let name: String?

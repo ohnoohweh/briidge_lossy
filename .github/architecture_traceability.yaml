@@ -170,8 +170,9 @@ ARC-CMP-003:
   # The admin UI exposes throttle state at the ChannelMux and physical-TUN
   # aggregate boundaries, not as a per-peer TUN quota view.
   # Raw ChannelMux parity compiles the Core SecureLink transcript and
-  # native-service specification and remote-service catalog facade required by
-  # TCP and UDP owners alongside the Core crypto module, then runs in a bounded,
+  # native-service specification with portable tunnel-routing and UDP-peer
+  # records, plus the remote-service catalog facade required by TCP and UDP
+  # owners alongside the Core crypto module, then runs in a bounded,
   # test-name-reporting CI lane.
   unit_tests:
     - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
