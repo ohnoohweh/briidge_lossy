@@ -1,5 +1,6 @@
 import Dispatch
 import Foundation
+import Crypto
 import ObstacleBridgeCore
 #if os(Linux)
 import Glibc
@@ -128,6 +129,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let method = parts.first.map(String.init) ?? ""
         let target = parts.dropFirst().first.map(String.init) ?? ""
         let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
+        if path == "/api/live", method == "GET", headerText.lowercased().contains("upgrade: websocket") {
+            serveLiveWebSocket(client, target: target, headerText: headerText)
+            return
+        }
         let response: ObstacleBridgeAdminLinuxResponse
         if method != "GET" && !(method == "POST" && ["/api/config", "/api/onboarding/invite", "/api/onboarding/preview"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
@@ -162,6 +167,33 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let header = "HTTP/1.1 \(statusText)\r\nContent-Type: application/json\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
         var wire = Data(header.utf8); wire.append(response.body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
+    }
+
+    /// A reconnectable, snapshot-first WebSocket subscription. The Linux
+    /// socket owner intentionally keeps protocol framing local while Core
+    /// decides topic admission and payload shape.
+    private func serveLiveWebSocket(_ client: Int32, target: String, headerText: String) {
+        guard let key = headerText.split(separator: "\r\n").first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
+            .split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces),
+              let requested = target.split(separator: "?", maxSplits: 1).dropFirst().first?
+                .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
+                .dropFirst("topic=".count).description,
+              let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requested),
+              let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()),
+              let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        else {
+            let wire = Data("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".utf8)
+            _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
+            return
+        }
+        let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
+        let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
+        _ = handshake.withUnsafeBytes { write(client, $0.baseAddress, handshake.count) }
+        var frame = Data([0x81])
+        if body.count < 126 { frame.append(UInt8(body.count)) }
+        else { frame.append(126); var length = UInt16(body.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+        frame.append(body)
+        _ = frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) }
     }
 
     private func statusPayload() -> [String: Any] {
