@@ -7776,27 +7776,32 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
         else:
             raise AssertionError(f'Linux Swift client did not authenticate against Python runtime: {last_status}')
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
-        with socket.socket(socket.AF_INET, socket_type) as client:
+        # App readiness confirms the protected overlay.  The accepted catalog
+        # is applied asynchronously, so a TCP listener may bind shortly
+        # afterwards.  Linux can also report ECONNABORTED while that listener
+        # is transitioning.  A failed connect leaves its socket unusable, so
+        # every readiness attempt needs a fresh client socket.
+        listener_deadline = time.time() + 8.0
+        while True:
+            client = socket.socket(socket.AF_INET, socket_type)
             client.settimeout(4.0)
-            # App readiness confirms the protected overlay.  The accepted
-            # catalog is applied asynchronously, so a TCP listener may bind
-            # shortly afterwards.  Do not mistake that bounded publication
-            # window for a failed data plane, and never retry after sending.
-            listener_deadline = time.time() + 8.0
-            while True:
-                try:
-                    client.connect(('127.0.0.1', service_port))
-                    break
-                except ConnectionRefusedError:
-                    if time.time() >= listener_deadline:
-                        raise
-                    time.sleep(0.1)
+            try:
+                client.connect(('127.0.0.1', service_port))
+                break
+            except (ConnectionRefusedError, ConnectionAbortedError):
+                client.close()
+                if time.time() >= listener_deadline:
+                    raise
+                time.sleep(0.1)
+        try:
             payload = b'linux-swift-to-python-runtime'
             if service_protocol == 'tcp':
                 client.sendall(payload)
             else:
                 client.send(payload)
             assert client.recv(len(payload)) == response_payload(payload)
+        finally:
+            client.close()
 
         # The real Python listener publishes an opt-in remote catalog. Swift
         # installs its listener and drives the reverse-direction service OPEN

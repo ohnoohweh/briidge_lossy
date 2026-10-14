@@ -1601,7 +1601,9 @@ CLOSE counters for server and client paths to preserve the portable Core replay
 contract in parity tests.
 
 Cross-runtime service qualification separately observes protected-overlay
-readiness and asynchronous local TCP-listener publication before sending data.
+readiness and asynchronous local TCP-listener publication before sending data,
+recreating the pre-send client socket while bounded transient refusal or
+connection-abort results clear.
 
 ### Current coverage snapshot
 Current snapshot from `python3 scripts/report_product_traceability.py`:
