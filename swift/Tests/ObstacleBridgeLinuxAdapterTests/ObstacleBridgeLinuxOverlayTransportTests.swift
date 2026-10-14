@@ -1346,6 +1346,8 @@ final class PythonOverlayPeer {
                     catalog=b'RS3'+(1).to_bytes(8,'big')+(2).to_bytes(4,'big')+len(body).to_bytes(4,'big')+body
                     replacement=b'\\0\\0\\0\\0\\0\\x04'+len(catalog).to_bytes(2,'big')+catalog
                     second=header(4,sid,3); write_payload(second+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(3).to_bytes(8,'big'),replacement,second))
+                    time.sleep(0.15)
+                    stale=header(4,sid,4); write_payload(stale+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(4).to_bytes(8,'big'),first_plain,stale))
             elif MODE.endswith('rekey'):
                 app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response))
                 rekey=read_payload(); assert rekey[:2]==b'\\x01\\x05'; sid=int.from_bytes(rekey[4:12],'big'); cn=rekey[20:52]; sn=bytes(range(31,-1,-1)); proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write_payload(header(6,sid,0)+sn+b'\\x01'+proof)

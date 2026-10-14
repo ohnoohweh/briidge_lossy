@@ -501,6 +501,8 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
             let ports = runtime.remoteServicePorts()
             return ports[7] == nil && (ports[8] ?? 0) > 0
         })
+        Thread.sleep(forTimeInterval: 0.25)
+        #expect(runtime.remoteServicePorts().keys.sorted() == [8])
     }
 
     @Test func liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop() throws {
