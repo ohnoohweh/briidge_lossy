@@ -1,5 +1,30 @@
 import Foundation
 
+/// Public adapter port for a platform-owned configuration store. The platform
+/// declares its supported schema; Core retains grouped-field and type checks.
+public enum ObstacleBridgeAdminConfigUpdatePort {
+    public static func validatedNextConfiguration(
+        currentRawConfig: [String: Any],
+        currentRuntimeConfig: [String: Any],
+        updates: [String: Any],
+        schema: [String: [String: Any]],
+        sections: [String: String]
+    ) throws -> (configuration: [String: Any], normalizedKeys: [String]) {
+        let result = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
+            currentRawConfig: currentRawConfig,
+            currentRuntimeConfig: currentRuntimeConfig,
+            updates: updates,
+            configurationPolicy: .init(
+                normalizedUpdates: { updates, _ in updates },
+                looksGrouped: { raw in raw.values.contains { $0 is [String: Any] } },
+                schemaRow: { schema[$0] },
+                sectionName: { sections[$0] }
+            )
+        )
+        return (result.nextRawConfig, result.normalizedKeys)
+    }
+}
+
 enum ObstacleBridgeAdminConfigSupport {
     struct ConfigurationPolicy {
         let normalizedUpdates: ([String: Any], [String: Any]) -> [String: Any]

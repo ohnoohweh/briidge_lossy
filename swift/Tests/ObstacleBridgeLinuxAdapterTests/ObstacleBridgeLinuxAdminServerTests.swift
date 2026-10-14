@@ -7,6 +7,19 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxAdminServerTests {
+    @Test func configurationStoreUsesCoreValidationAndPersistsOnlyAcceptedUpdates() throws {
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "admin_web": ["admin_web_auth_disable": false, "admin_web_first_tab": "home"],
+        ])
+        let saved = try store.apply(updates: ["admin_web_auth_disable": true, "admin_web_first_tab": "status"])
+        let admin = try #require(saved.configuration["admin_web"] as? [String: Any])
+        #expect(admin["admin_web_auth_disable"] as? Bool == true)
+        #expect(admin["admin_web_first_tab"] as? String == "status")
+        #expect(throws: (any Error).self) { try store.apply(updates: ["admin_web_auth_disable": "true"]) }
+        #expect(throws: (any Error).self) { try store.apply(updates: ["unknown": true]) }
+        #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_auth_disable"] as? Bool == true)
+    }
+
     @Test func statusAndPeersAreRedactedAndDescribeLayeredState() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp,
