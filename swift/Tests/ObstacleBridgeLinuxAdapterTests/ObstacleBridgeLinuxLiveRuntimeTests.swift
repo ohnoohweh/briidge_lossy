@@ -609,12 +609,13 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.start()
         #expect(connected.wait(timeout: .now() + 3) == .success)
         let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))
-        defer { _ = close(fd) }
         let payload = Data("mux-through-python".utf8)
         #expect(payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) } == payload.count)
         var received = [UInt8](repeating: 0, count: payload.count)
         #expect(read(fd, &received, received.count) == payload.count)
         #expect(Data(received) == payload)
+        _ = close(fd)
+        #expect(waitUntil { runtime.status().activeTCPChannels == 0 })
         runtime.stop()
     }
 
