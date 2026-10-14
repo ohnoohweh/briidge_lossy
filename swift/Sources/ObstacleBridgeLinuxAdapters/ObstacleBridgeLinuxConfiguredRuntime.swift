@@ -324,6 +324,27 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     }
 
     public func connect(sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
+        try connect(sessionID: sessionID, clientNonce: clientNonce) { [configuration] host in
+            let lower = try ObstacleBridgeLinuxOverlayTransportClient(
+                host: host, port: configuration.port, transport: configuration.transport,
+                wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode,
+                wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
+                wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
+                quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,
+                receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
+            )
+            return (lower, try lower.openSession())
+        }
+    }
+
+    /// The lifecycle owner supplies the native lower-session construction for
+    /// a Core-assigned epoch. This runtime retains candidate admission and
+    /// SecureLink state, while it no longer chooses the transport mechanism.
+    func connect(
+        sessionID: UInt64,
+        clientNonce: Data,
+        openLowerSession: (String) throws -> (ObstacleBridgeLinuxOverlayTransportClient, ObstacleBridgeLinuxOverlayTransportSession)
+    ) throws -> ObstacleBridgeLinuxConfiguredSession {
         beginInFlightConnection()
         activeSession?.close()
         activeSession = nil
@@ -331,10 +352,8 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         for offset in configuration.peerCandidates.indices {
             let index = (candidateStartIndex + offset) % configuration.peerCandidates.count
             let host = configuration.peerCandidates[index]
-            let lower: ObstacleBridgeLinuxOverlayTransportClient
             do {
-                lower = try ObstacleBridgeLinuxOverlayTransportClient(host: host, port: configuration.port, transport: configuration.transport, wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode, wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath, wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN, quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath, receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds)
-                let lowerSession = try lower.openSession()
+                let (lower, lowerSession) = try openLowerSession(host)
                 let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
                     let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))

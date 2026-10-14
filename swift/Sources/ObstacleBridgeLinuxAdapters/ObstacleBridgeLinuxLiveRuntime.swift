@@ -47,7 +47,18 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
         activeEpoch = epoch
         lock.unlock()
         do {
-            let session = try runtime.connect(sessionID: sessionID, clientNonce: clientNonce)
+            let session = try runtime.connect(sessionID: sessionID, clientNonce: clientNonce) { [expectedTransport, runtime] host in
+                let configuration = runtime.configuration
+                let lower = try ObstacleBridgeLinuxOverlayTransportClient(
+                    host: host, port: configuration.port, transport: expectedTransport,
+                    wsPath: configuration.webSocketPath, wsPayloadMode: configuration.webSocketPayloadMode,
+                    wsTLS: configuration.webSocketTLS, wsTrustRootsPath: configuration.webSocketTrustRootsPath,
+                    wsProxy: configuration.webSocketProxy, quicALPN: configuration.quicALPN,
+                    quicInsecure: configuration.quicInsecure, quicTrustRootsPath: configuration.quicTrustRootsPath,
+                    receiveTimeoutMilliseconds: configuration.receiveIdleTimeoutMilliseconds
+                )
+                return (lower, try lower.openSession())
+            }
             lock.lock()
             let admitted = activeEpoch == epoch
             lock.unlock()
