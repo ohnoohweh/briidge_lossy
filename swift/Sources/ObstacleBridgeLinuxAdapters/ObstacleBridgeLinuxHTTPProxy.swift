@@ -49,6 +49,10 @@ public struct ObstacleBridgeLinuxHTTPProxy: Equatable, Sendable {
 
     private func bypasses(_ target: String, noProxy: String) -> Bool {
         let host = target.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        // A local overlay peer is never an environment-proxy destination.
+        // Manual proxy mode remains an explicit opt-in for test/deployment
+        // topologies that deliberately tunnel loopback traffic.
+        if host == "localhost" || host == "127.0.0.1" || host == "::1" { return true }
         return noProxy.split(separator: ",").contains { raw in
             let value = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             if value == "*" { return true }

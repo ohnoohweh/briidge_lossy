@@ -153,6 +153,8 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(try policy.endpoint(targetHost: "peer.example", secure: true, environment: ["HTTPS_PROXY": "http://proxy.example:8443"])?.0 == "proxy.example")
         #expect(try policy.endpoint(targetHost: "peer.example", secure: true, environment: ["HTTPS_PROXY": "http://proxy.example:8443"])?.1 == 8443)
         #expect(try policy.endpoint(targetHost: "api.internal", secure: false, environment: ["HTTP_PROXY": "proxy.example:8080", "NO_PROXY": ".internal"]) == nil)
+        #expect(try policy.endpoint(targetHost: "127.0.0.1", secure: false, environment: ["HTTP_PROXY": "proxy.example:8080"]) == nil)
+        #expect(try policy.endpoint(targetHost: "[::1]", secure: true, environment: ["HTTPS_PROXY": "proxy.example:8443"]) == nil)
     }
 
     @Test func proxyURLCredentialsProduceBasicAuthorizationWithoutChangingEndpoint() throws {
