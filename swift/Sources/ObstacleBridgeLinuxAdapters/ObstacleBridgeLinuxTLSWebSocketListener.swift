@@ -28,7 +28,15 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
         unowned let owner: ObstacleBridgeLinuxTLSWebSocketPSKListener
         let timeout: Int
         init(owner: ObstacleBridgeLinuxTLSWebSocketPSKListener, timeout: Int) { self.owner = owner; self.timeout = timeout }
-        func handlerAdded(context: ChannelHandlerContext) { let inbound = Inbound(); context.pipeline.addHandler(inbound).whenSuccess { _ in self.owner.enqueue(Connection(context.channel, inbound, self.timeout)) } }
+        func handlerAdded(context: ChannelHandlerContext) {
+            let inbound = Inbound()
+            do {
+                try context.pipeline.syncOperations.addHandler(inbound)
+                owner.enqueue(Connection(context.channel, inbound, timeout))
+            } catch {
+                context.close(promise: nil)
+            }
+        }
     }
     private let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
     private let overlayRuntime: ObstacleBridgeWebSocketOverlayRuntime
@@ -39,10 +47,23 @@ public final class ObstacleBridgeLinuxTLSWebSocketPSKListener: @unchecked Sendab
         guard (0...65535).contains(port) else { throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint }
         self.overlayRuntime = try .init(payloadMode: "binary")
         self.webSocketPath = webSocketPath.hasPrefix("/") ? webSocketPath : "/\(webSocketPath)"; self.timeoutMilliseconds = max(1, timeoutMilliseconds)
-        let tls = TLSConfiguration.makeServerConfiguration(certificateChain: [.file(certificatePath)], privateKey: .file(privateKeyPath))
+        let certificates = try NIOSSLCertificate.fromPEMFile(certificatePath)
+        let privateKey = try NIOSSLPrivateKey(file: privateKeyPath, format: .pem)
+        let tls = TLSConfiguration.makeServerConfiguration(
+            certificateChain: certificates.map(NIOSSLCertificateSource.certificate),
+            privateKey: .privateKey(privateKey)
+        )
         let context = try NIOSSLContext(configuration: tls)
         let server = try ServerBootstrap(group: group).childChannelInitializer { channel in
-            do { return channel.pipeline.addHandlers([try NIOSSLServerHandler(context: context), Acceptor(owner: self, timeout: self.timeoutMilliseconds)]) } catch { return channel.eventLoop.makeFailedFuture(error) }
+            do {
+                try channel.pipeline.syncOperations.addHandlers(
+                    NIOSSLServerHandler(context: context),
+                    Acceptor(owner: self, timeout: self.timeoutMilliseconds)
+                )
+                return channel.eventLoop.makeSucceededFuture(())
+            } catch {
+                return channel.eventLoop.makeFailedFuture(error)
+            }
         }.bind(host: "127.0.0.1", port: port).wait()
         self.channel = server; self.port = Int(server.localAddress?.port ?? 0)
     }

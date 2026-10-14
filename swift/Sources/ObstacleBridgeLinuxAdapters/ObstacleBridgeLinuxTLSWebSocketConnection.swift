@@ -8,6 +8,11 @@ import NIOTLS
 /// kept below the existing WebSocket framing boundary so TLS never changes
 /// overlay, SecureLink, or ChannelMux byte ownership.
 final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSocketByteConnection, @unchecked Sendable {
+    private final class TLSHandlerBox: @unchecked Sendable {
+        let handler: NIOSSLClientHandler
+        init(_ handler: NIOSSLClientHandler) { self.handler = handler }
+    }
+
     private final class InboundBytes: ChannelInboundHandler, @unchecked Sendable {
         typealias InboundIn = ByteBuffer
         private let condition = NSCondition()
@@ -111,7 +116,13 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
         do {
             let connected = try ClientBootstrap(group: eventLoopGroup).channelInitializer { channel in
                 if proxy == nil {
-                    do { return channel.pipeline.addHandlers([try NIOSSLClientHandler(context: context, serverHostname: host), self.inbound]) }
+                    do {
+                        try channel.pipeline.syncOperations.addHandlers(
+                            try NIOSSLClientHandler(context: context, serverHostname: host),
+                            self.inbound
+                        )
+                        return channel.eventLoop.makeSucceededFuture(())
+                    }
                     catch { return channel.eventLoop.makeFailedFuture(error) }
                 }
                 return channel.pipeline.addHandler(self.inbound)
@@ -123,7 +134,11 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
                 try write(Data("CONNECT \(authority) HTTP/1.1\r\nHost: \(authority)\r\nProxy-Connection: Keep-Alive\r\n\(authorization)\r\n".utf8))
                 let response = try readUntil(Data("\r\n\r\n".utf8), maximum: 16_384)
                 guard let status = String(data: response, encoding: .utf8)?.split(separator: "\r\n").first, status.hasPrefix("HTTP/1.1 200") else { throw ObstacleBridgeLinuxOverlayTransportError.proxyNegotiationFailed("CONNECT did not return HTTP 200") }
-                try connected.pipeline.addHandler(try NIOSSLClientHandler(context: context, serverHostname: host), position: .first).wait()
+                let handler = TLSHandlerBox(try NIOSSLClientHandler(context: context, serverHostname: host))
+                let pipeline = connected.pipeline
+                try connected.eventLoop.submit {
+                    try pipeline.syncOperations.addHandler(handler.handler, position: .first)
+                }.wait()
             }
             try inbound.waitForHandshake(timeoutMilliseconds: self.timeoutMilliseconds)
         } catch {
