@@ -1,5 +1,24 @@
 import Foundation
 
+/// Public projection port for platform-owned Admin HTTP surfaces. Core owns
+/// the payload shape and hardening advice; adapters own request I/O.
+public enum ObstacleBridgeAdminWebPort {
+    public static func uiPayload(runtimeConfig: [String: Any], platform: String) -> [String: Any] {
+        ObstacleBridgeAdminWebSupport.adminUIPayload(
+            runtimeConfig: runtimeConfig,
+            platform: platform,
+            runtimeDependencies: ObstacleBridgeAdminWebSupport.adminRuntimeDependenciesPayload()
+        )
+    }
+
+    public static func securityAdvisorPayload(runtimeConfig: [String: Any], bindHostFallback: String) -> [String: Any] {
+        ObstacleBridgeAdminWebSupport.securityAdvisorPayload(
+            runtimeConfig: runtimeConfig,
+            bindHostFallback: bindHostFallback
+        )
+    }
+}
+
 struct ObstacleBridgeAdminUIBootstrapState {
     let firstStartDetected: Bool
     let configFileState: String

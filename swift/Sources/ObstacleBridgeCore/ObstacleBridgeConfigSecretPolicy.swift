@@ -1,5 +1,35 @@
 import Foundation
 
+/// Public redaction boundary for platform-owned configuration exports.
+public enum ObstacleBridgeAdminConfigProjectionPort {
+    public static func redacted(_ payload: [String: Any]) -> [String: Any] {
+        redact(payload) as? [String: Any] ?? [:]
+    }
+
+    private static func redact(_ value: Any) -> Any {
+        if let object = value as? [String: Any] {
+            var output: [String: Any] = [:]
+            for (key, nested) in object {
+                if isSecret(key) {
+                    let present = (nested as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                    output[key] = "***hidden***"
+                    output["\(key)_present"] = present
+                } else {
+                    output[key] = redact(nested)
+                }
+            }
+            return output
+        }
+        if let values = value as? [Any] { return values.map(redact) }
+        return value
+    }
+
+    private static func isSecret(_ key: String) -> Bool {
+        let normalized = key.lowercased()
+        return normalized.contains("password") || normalized.contains("psk") || normalized.contains("private_key") || normalized.contains("cert_sig")
+    }
+}
+
 /// Portable configuration-secret envelope policy. Platform adapters provide
 /// the actual cryptographic sealing and opening operations.
 enum ObstacleBridgeConfigSecretPolicy {

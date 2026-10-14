@@ -130,6 +130,21 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         }
     }
 
+    /// Raw configuration is retained only for Core-owned, redacted Admin
+    /// projections. Runtime admission still uses `parse(data:)` above.
+    public static func rawConfiguration(path: String) throws -> [String: Any] {
+        do {
+            guard let root = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: path))) as? [String: Any] else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+            }
+            return root
+        } catch let error as ObstacleBridgeLinuxRuntimeConfigurationError {
+            throw error
+        } catch {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unreadableFile("cannot read runtime config: \(error.localizedDescription)")
+        }
+    }
+
     public static func parse(data: Data) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON

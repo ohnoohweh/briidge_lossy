@@ -14,7 +14,11 @@ struct ObstacleBridgeLinuxAdminServerTests {
             port: 4242,
             secureLinkPSK: Data("never-expose-this".utf8)
         ))
-        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime)
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "runner": ["overlay_transport": "tcp"],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "never-expose-this"],
+            "admin_web": ["admin_web": true, "admin_web_auth_disable": true],
+        ])
         try server.start()
         defer { server.stop() }
         let status = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/status") as? [String: Any])
@@ -40,6 +44,14 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(live["overlay_transport"] as? String == "tcp")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic("unknown") == nil)
+        let config = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/config") as? [String: Any])
+        let exported = try #require(config["config"] as? [String: Any])
+        let secure = try #require(exported["secure_link"] as? [String: Any])
+        #expect(secure["secure_link_psk"] as? String == "***hidden***")
+        #expect(secure["secure_link_psk_present"] as? Bool == true)
+        #expect(!String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self).contains("never-expose-this"))
+        let advisor = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/security-advisor") as? [String: Any])
+        #expect(advisor["highest_severity"] as? String == "recommended")
     }
 
     @Test func statusReflectsConnectAndDisconnectTransitions() async throws {
