@@ -531,7 +531,8 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: transport, host: "127.0.0.1", port: peer.port,
-            webSocketPath: "/overlay", secureLinkPSK: Data("linux-swift-psk".utf8)
+            webSocketPath: "/overlay", webSocketProxy: .init(mode: .off),
+            secureLinkPSK: Data("linux-swift-psk".utf8)
         ))
         let first = try runtime.connect(sessionID: 92, clientNonce: Data(repeating: 11, count: 32))
         #expect(try first.send(Data("first-epoch".utf8)) == Data("python:first-epoch".utf8))
@@ -758,7 +759,8 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         defer { peer.stop() }
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: transport, host: "127.0.0.1", port: peer.port,
-            webSocketPath: "/overlay", secureLinkPSK: Data("linux-swift-psk".utf8)
+            webSocketPath: "/overlay", webSocketProxy: .init(mode: .off),
+            secureLinkPSK: Data("linux-swift-psk".utf8)
         ))
         let session = try runtime.connect(sessionID: 90, clientNonce: Data(repeating: 9, count: 32))
         defer { runtime.disconnect() }
@@ -815,7 +817,7 @@ final class PythonOverlayPeer {
         self.process = process
         self.port = port
         self.trustRootsPath = fields.count == 2 ? fields[1] : nil
-        self.forceStop = mode == "quic" || mode == "wss" || mode == "wss-proxy"
+        self.forceStop = mode == "quic" || mode == "wss" || mode == "wss-proxy" || mode.hasPrefix("ws-")
         started = true
     }
 
