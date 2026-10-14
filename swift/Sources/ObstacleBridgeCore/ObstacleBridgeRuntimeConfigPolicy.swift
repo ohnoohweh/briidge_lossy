@@ -2,6 +2,14 @@ import Foundation
 
 /// Portable scalar and overlay-limit policy shared by platform configuration adapters.
 enum ObstacleBridgeRuntimeConfigPolicy {
+    static func defaultTelemetryConfig() -> [String: Any] {
+        [
+            "telemetry_enabled": false,
+            "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
+        ]
+    }
+
     static func intValue(from value: Any?) -> Int? {
         if let number = value as? NSNumber { return number.intValue }
         if let value = value as? Int { return value }

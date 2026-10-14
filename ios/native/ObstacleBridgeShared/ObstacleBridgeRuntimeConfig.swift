@@ -77,11 +77,7 @@ enum ObstacleBridgeRuntimeConfig {
     ]
 
     static func defaultTelemetryConfig() -> [String: Any] {
-        [
-            "telemetry_enabled": false,
-            "telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches",
-            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry-client",
-        ]
+        ObstacleBridgeRuntimeConfigPolicy.defaultTelemetryConfig()
     }
 
     static func configSchemaSnapshot() -> [String: Any] {
