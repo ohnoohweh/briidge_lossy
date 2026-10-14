@@ -40,6 +40,12 @@ The checked inventory currently contains 105 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 
+Every `ObstacleBridgeShared` source is additionally listed in the inventory's
+`shared_apple_adapter_audit`. The verifier requires one Apple-framework, ABI,
+process, or Darwin-POSIX reason per file and rejects `Glibc` imports or
+conditional branches there. Portable policy belongs in Core; a retained adapter
+with an outstanding portable split names its Linux/Core work package explicitly.
+
 ## Python-led feature matrix
 
 The inventory contains feature groups for every active

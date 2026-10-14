@@ -39,6 +39,8 @@ LSW_SC1_SOURCES = {
     "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift",
     "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift",
 }
+SHARED_APPLE_ROOT = "ios/native/ObstacleBridgeShared/"
+APPLE_ADAPTER_KINDS = {"apple-framework", "apple-abi", "apple-process", "darwin-posix"}
 TEST_DEF_RE = re.compile(
     r"^\s*(?:(?:async\s+)?def|(?:@Test\s+)?func)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",
     re.MULTILINE,
@@ -144,6 +146,44 @@ def validate_r005_psk_traceability(inventory: dict[str, object]) -> list[str]:
     return errors
 
 
+def validate_shared_apple_adapter_audit(inventory: dict[str, object]) -> list[str]:
+    """Keep Shared exclusively for audited Apple-specific adapters."""
+    errors: list[str] = []
+    rows = inventory.get("shared_apple_adapter_audit")
+    if not isinstance(rows, list):
+        return ["Shared Apple adapter audit is missing"]
+    expected = {
+        source for source in repository_source_files(inventory)
+        if source.startswith(SHARED_APPLE_ROOT)
+    }
+    seen: Counter[str] = Counter()
+    for row in rows:
+        if not isinstance(row, dict):
+            errors.append("Shared Apple adapter audit rows must be objects")
+            continue
+        source = row.get("source")
+        if not isinstance(source, str):
+            errors.append("Shared Apple adapter audit row lacks source")
+            continue
+        seen[source] += 1
+        if source not in expected:
+            errors.append(f"Shared Apple adapter audit names non-Shared source: {source}")
+        if row.get("kind") not in APPLE_ADAPTER_KINDS:
+            errors.append(f"{source}: invalid Shared Apple adapter kind {row.get('kind')!r}")
+        if not isinstance(row.get("reason"), str) or not row["reason"].strip():
+            errors.append(f"{source}: Shared Apple adapter audit requires a reason")
+    for source, count in sorted(seen.items()):
+        if count != 1:
+            errors.append(f"Shared Apple adapter audit must be unique: {source} appears {count} times")
+    for source in sorted(expected - set(seen)):
+        errors.append(f"Shared Swift source lacks Apple adapter audit: {source}")
+    for source in sorted(expected):
+        text = (ROOT / source).read_text(encoding="utf-8")
+        if "import Glibc" in text or "canImport(Glibc)" in text:
+            errors.append(f"{source}: Shared Apple adapter must not import or conditionalize Glibc")
+    return errors
+
+
 def validate(inventory: dict[str, object]) -> list[str]:
     errors: list[str] = []
     if inventory.get("schema_version") != 1:
@@ -168,6 +208,7 @@ def validate(inventory: dict[str, object]) -> list[str]:
         errors.append(f"unmapped Swift source: {file}")
     for file in sorted(mapped_sources - actual_sources):
         errors.append(f"inventory names missing Swift source: {file}")
+    errors.extend(validate_shared_apple_adapter_audit(inventory))
 
     admissions = inventory.get("lsw_sc1_linux_admission")
     if not isinstance(admissions, list):

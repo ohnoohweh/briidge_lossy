@@ -144,6 +144,29 @@
       ]
     }
   ],
+  "shared_apple_adapter_audit": [
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift", "kind": "apple-framework", "reason": "Network.framework local TCP admission adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP connection owner."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift", "kind": "apple-framework", "reason": "CryptoKit and Darwin machine-key adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift", "kind": "darwin-posix", "reason": "macOS utun device adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift", "kind": "apple-process", "reason": "macOS helper process client lifecycle."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift", "kind": "apple-framework", "reason": "ServiceManagement helper registration."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift", "kind": "apple-abi", "reason": "Objective-C selector bridge for Apple native crypto callers."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift", "kind": "apple-framework", "reason": "Network.framework proxy connection adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift", "kind": "apple-framework", "reason": "Network.framework UDP connection drivers."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift", "kind": "apple-framework", "reason": "NetworkExtension packet-tunnel settings adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin sockaddr and resolver adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift", "kind": "apple-framework", "reason": "Network.framework proxy listener adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework QUIC resource owner."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift", "kind": "darwin-posix", "reason": "Darwin route/CIDR normalization adapter; portable policy extraction is LSW-SC.2L-K."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP resource owner."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift", "kind": "apple-framework", "reason": "Security framework mTLS uploader."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift", "kind": "apple-abi", "reason": "macOS XPC helper transport ABI."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin ICMP target resolver."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework and Darwin UDP resource owner."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift", "kind": "apple-framework", "reason": "Network.framework and CryptoKit Admin server adapter."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework WebSocket resource owner."}
+  ],
   "lsw_sc1_linux_admission": [
     {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift", "linux_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState"]},
     {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift", "status": "not-admitted", "reason": "The Linux Admin product intentionally exposes read-only status and peer routes; it has no configuration-mutation route."},
