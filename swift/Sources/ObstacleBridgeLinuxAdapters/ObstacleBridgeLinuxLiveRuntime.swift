@@ -430,9 +430,22 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             },
             cancelReceive: { session.cancelReceive() },
             sink: { [weak self] workerEpoch, payload in
-                guard let self, self.configuredRuntime.connectionEpoch == workerEpoch,
-                      let frame = try? mux.decodeInbound(payload) else { return }
-                mux.receive(frame)
+                guard let self, self.configuredRuntime.connectionEpoch == workerEpoch else { return }
+                do {
+                    mux.receive(try mux.decodeInbound(payload))
+                } catch {
+                    // Compression and ChannelMux framing are Core decisions.
+                    // A rejected protected record cannot be discarded as if it
+                    // were benign traffic: retire this epoch through the same
+                    // Core retry effects as any other receive-path failure.
+                    self.queue.async { [weak self] in
+                        self?.receiveFailed(
+                            workerEpoch: workerEpoch,
+                            coordinatorEpoch: coordinatorEpoch,
+                            reason: "protected ChannelMux decode failed: \(error.localizedDescription)"
+                        )
+                    }
+                }
             },
             onFailure: { [weak self] workerEpoch, reason in
                 self?.queue.async { [weak self] in self?.receiveFailed(workerEpoch: workerEpoch, coordinatorEpoch: coordinatorEpoch, reason: reason) }
