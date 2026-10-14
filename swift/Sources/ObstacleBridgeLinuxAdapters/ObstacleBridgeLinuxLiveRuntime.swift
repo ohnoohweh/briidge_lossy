@@ -265,6 +265,16 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             // Admit the Core-owned receive effect before optional service
             // publication so the Linux socket never drops that notification.
             activeCoordinatorEpoch = epoch
+            connectedSession.onTransportLivenessSample = { [weak self] delayMilliseconds in
+                self?.queue.async { [weak self] in
+                    guard let self, self.activeCoordinatorEpoch == epoch else { return }
+                    self.apply(self.coordinator.handle(.transportLivenessSample(
+                        epoch: epoch,
+                        delayMilliseconds: delayMilliseconds,
+                        nowMilliseconds: UInt64(ProcessInfo.processInfo.systemUptime * 1_000)
+                    )))
+                }
+            }
             apply(coordinator.handle(.transportConnected(epoch: epoch)))
             apply(coordinator.handle(.authenticated(epoch: epoch)))
             try publishRemoteCatalog()

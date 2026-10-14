@@ -72,6 +72,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     private let requestLock = NSLock()
     private var receiveOwnerActive = false
     private var pendingCompatibilityReply: (signal: DispatchSemaphore, value: Data?)?
+    /// The resource owner supplies measured request/reply latency. The Core
+    /// lifecycle decides whether sustained delay retires the epoch.
+    public var onTransportLivenessSample: ((Double) -> Void)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
     init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
@@ -107,14 +110,18 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             let ownerActive = receiveOwnerActive
             requestLock.unlock()
             if ownerActive { return try sendThroughReceiveOwner(payload) }
+            let startedAt = ProcessInfo.processInfo.systemUptime
             if let overlayAdapter {
                 let delivered = try exchangeAdapterFrames(try overlayAdapter.handleOutboundPayload(payload).emittedFrames)
                 guard let reply = delivered.first else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+                recordTransportLiveness(since: startedAt)
                 return reply
             }
-            if let secureLink { return try secureLink.unprotect(lowerSession.exchange(secureLink.protect(payload))) }
-            if let secureLinkServer { return try secureLinkServer.unprotect(lowerSession.exchange(secureLinkServer.protect(payload))) }
-            return try lowerSession.exchange(payload)
+            if let secureLink { let reply = try secureLink.unprotect(lowerSession.exchange(secureLink.protect(payload))); recordTransportLiveness(since: startedAt); return reply }
+            if let secureLinkServer { let reply = try secureLinkServer.unprotect(lowerSession.exchange(secureLinkServer.protect(payload))); recordTransportLiveness(since: startedAt); return reply }
+            let reply = try lowerSession.exchange(payload)
+            recordTransportLiveness(since: startedAt)
+            return reply
         } catch {
             snapshot = .init(transport: snapshot.transport, state: "failed", attempts: snapshot.attempts, failureReason: error.localizedDescription)
             throw error
@@ -239,7 +246,12 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         return delivered
     }
 
+    private func recordTransportLiveness(since startedAt: TimeInterval) {
+        onTransportLivenessSample?(max(0, (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000))
+    }
+
     private func sendThroughReceiveOwner(_ payload: Data) throws -> Data {
+        let startedAt = ProcessInfo.processInfo.systemUptime
         let signal = DispatchSemaphore(value: 0)
         requestLock.lock()
         guard pendingCompatibilityReply == nil else {
@@ -262,6 +274,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         pendingCompatibilityReply = nil
         requestLock.unlock()
         guard let reply else { throw ObstacleBridgeLinuxOverlayTransportError.unexpectedEOF }
+        recordTransportLiveness(since: startedAt)
         return reply
     }
 }

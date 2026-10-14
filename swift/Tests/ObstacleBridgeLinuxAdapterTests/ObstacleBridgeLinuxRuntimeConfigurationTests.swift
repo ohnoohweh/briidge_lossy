@@ -3,6 +3,24 @@ import Testing
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func configuredSessionReportsMeasuredLowerRequestReplyDelay() throws {
+        let lower = ObstacleBridgeLinuxOverlayTransportSession(
+            exchange: { payload in payload },
+            close: {}
+        )
+        let session = ObstacleBridgeLinuxConfiguredSession(
+            lowerSession: lower,
+            secureLink: nil,
+            transport: .tcp
+        )
+        var samples: [Double] = []
+        session.onTransportLivenessSample = { samples.append($0) }
+
+        #expect(try session.send(Data("liveness".utf8)) == Data("liveness".utf8))
+        #expect(samples.count == 1)
+        #expect(samples[0] >= 0)
+    }
+
     @Test func parsesSectionedTcpPskConfiguration() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "tcp"],
