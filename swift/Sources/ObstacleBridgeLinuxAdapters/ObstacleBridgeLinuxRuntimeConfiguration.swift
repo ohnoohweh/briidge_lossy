@@ -94,10 +94,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// Outbound compression policy. Inbound compressed frames remain accepted
     /// so a listener can safely interoperate with a peer-selected policy.
     public let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
+    /// Bounded ChannelMux application payload used by service owners. The
+    /// default preserves wire compatibility; smaller values exercise Core's
+    /// typed control and UDP-fragment effects without changing socket policy.
+    public let channelMuxMaximumApplicationPayload: Int
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -116,6 +120,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.secureLinkPSK = secureLinkPSK
         self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
         self.compressionPolicy = compressionPolicy
+        self.channelMuxMaximumApplicationPayload = max(32, min(channelMuxMaximumApplicationPayload, 65_535))
         self.ownServices = ownServices
         self.remoteServices = remoteServices
     }

@@ -72,12 +72,12 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         }
     }
 
-    public init(spec: ObstacleBridgeLinuxServiceSpec, maximumQueuedFrames: Int = 128, instanceID: UInt64 = 0, connectionSequence: UInt32 = 0, frameSink: @escaping FrameSink) {
+    public init(spec: ObstacleBridgeLinuxServiceSpec, maximumQueuedFrames: Int = 128, maximumApplicationPayload: Int = 65_535, instanceID: UInt64 = 0, connectionSequence: UInt32 = 0, frameSink: @escaping FrameSink) {
         self.spec = spec
         self.frameSink = frameSink
         self.queue = DispatchQueue(label: "org.obstaclebridge.linux.service.\(spec.serviceID)")
-        self.tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(instanceID: instanceID, connectionSeq: connectionSequence)
-        self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: instanceID, connectionSeq: connectionSequence)
+        self.tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(instanceID: instanceID, connectionSeq: connectionSequence, sessionMaxAppPayload: maximumApplicationPayload)
+        self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: instanceID, connectionSeq: connectionSequence, sessionMaxAppPayload: maximumApplicationPayload)
     }
 
     public func start() throws {

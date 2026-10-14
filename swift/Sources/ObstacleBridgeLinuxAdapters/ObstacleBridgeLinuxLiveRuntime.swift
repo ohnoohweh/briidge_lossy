@@ -376,7 +376,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         stopServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         for spec in configuredRuntime.configuration.ownServices {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
@@ -394,7 +394,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         stopRemoteServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         for spec in specs {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }

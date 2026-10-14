@@ -621,6 +621,33 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.stop()
     }
 
+    @Test func liveRuntimeReassemblesForcedUdpFragmentsThroughAuthenticatedPythonPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-secure-mux-echo")
+        defer { peer.stop() }
+        let service = ObstacleBridgeLinuxServiceSpec(serviceID: 1, name: "fragmented-echo", listenProtocol: .udp, listenHost: "127.0.0.1", listenPort: availableUDPPort(), targetProtocol: .udp, targetHost: "127.0.0.1", targetPort: 7)
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            channelMuxMaximumApplicationPayload: 160,
+            ownServices: [service]
+        ))
+        let connected = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
+        runtime.start()
+        defer { runtime.stop() }
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+        let fd = try connectUDP(port: try #require(runtime.localServicePorts()[1]))
+        defer { _ = close(fd) }
+        let payload = Data((0..<240).map { UInt8($0 & 0xFF) })
+        #expect(payload.withUnsafeBytes { send(fd, $0.baseAddress, payload.count, 0) } == payload.count)
+        var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        #expect(poll(&descriptor, 1, 3_000) > 0)
+        guard descriptor.revents & Int16(POLLIN) != 0 else { return }
+        var received = [UInt8](repeating: 0, count: payload.count)
+        #expect(recv(fd, &received, received.count, 0) == payload.count)
+        #expect(Data(received) == payload)
+    }
+
     private func waitUntil(_ predicate: () -> Bool) -> Bool {
         let deadline = Date().addingTimeInterval(2)
         while Date() < deadline {
