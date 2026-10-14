@@ -800,10 +800,13 @@ final class PythonOverlayPeer {
         let script = Self.script(for: mode)
         let process = Process()
         let stdout = Pipe()
-        let virtualEnvironmentPython = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".venv/bin/python")
-            .path
-        process.executableURL = URL(fileURLWithPath: (mode == "quic" || mode == "wss" || mode == "wss-proxy") && FileManager.default.isExecutableFile(atPath: virtualEnvironmentPython) ? virtualEnvironmentPython : "/usr/bin/python3")
+        let workingDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let virtualEnvironmentPython = [
+            workingDirectory.appendingPathComponent(".venv/bin/python").path,
+            workingDirectory.deletingLastPathComponent().appendingPathComponent(".venv/bin/python").path,
+        ].first(where: FileManager.default.isExecutableFile(atPath:))
+        let needsProjectPython = mode == "quic" || mode == "wss" || mode == "wss-proxy"
+        process.executableURL = URL(fileURLWithPath: needsProjectPython ? virtualEnvironmentPython ?? "/usr/bin/python3" : "/usr/bin/python3")
         process.arguments = ["-u", "-c", script]
         process.standardOutput = stdout
         process.standardError = Pipe()
