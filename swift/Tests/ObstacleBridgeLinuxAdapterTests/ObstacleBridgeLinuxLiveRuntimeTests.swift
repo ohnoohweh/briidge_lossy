@@ -455,6 +455,31 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         }
     }
 
+    @Test func quicLifecycleOwnerReconnectsAgainstPythonAioquicPeer() throws {
+        let peer = try PythonOverlayPeer(mode: "quic")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .quic, host: "127.0.0.1", port: peer.port,
+                quicALPN: "hq-29", quicInsecure: true,
+                receiveIdleTimeoutMilliseconds: 5_000
+            ),
+            policy: .init(initialDelayMilliseconds: 10, maximumDelayMilliseconds: 10, maximumAttempts: 2)
+        )
+        let firstConnection = DispatchSemaphore(value: 0)
+        let reconnected = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { snapshot in
+            guard snapshot.state == "connected" else { return }
+            if runtime.configuredRuntime.connectionEpoch == 1 { firstConnection.signal() }
+            if runtime.configuredRuntime.connectionEpoch >= 2 { reconnected.signal() }
+        }
+        runtime.start()
+        #expect(firstConnection.wait(timeout: .now() + 5) == .success)
+        runtime.reconnect()
+        #expect(reconnected.wait(timeout: .now() + 5) == .success)
+        runtime.stop()
+    }
+
     private func assertProtectedReceiveFailureReconnects(mode: String, transport: ObstacleBridgeLinuxTransport) throws {
         let peer = try PythonOverlayPeer(mode: mode)
         defer { peer.stop() }
