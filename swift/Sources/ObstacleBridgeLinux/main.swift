@@ -140,9 +140,10 @@ enum ObstacleBridgeLinuxMain {
         do {
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configPath)
             let adminConfiguration = try ObstacleBridgeLinuxRuntimeConfiguration.rawConfiguration(path: options.configPath)
+            let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore)
                 try admin.start(port: options.adminPort)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
@@ -154,7 +155,7 @@ enum ObstacleBridgeLinuxMain {
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
-            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime, adminConfiguration: adminConfiguration)
+            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore)
             try admin.start(port: options.adminPort)
             var resources: [Any] = []
             if configuration.listenerMode {

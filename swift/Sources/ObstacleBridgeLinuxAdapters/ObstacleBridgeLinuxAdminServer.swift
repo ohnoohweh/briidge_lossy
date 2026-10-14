@@ -27,35 +27,36 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let adminConfigurationProvider: () -> [String: Any]
+    private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:]) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
-        self.adminConfigurationProvider = { adminConfiguration }
+        self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:]) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
-        self.adminConfigurationProvider = { adminConfiguration }
+        self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:]) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
         }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
-        self.adminConfigurationProvider = { adminConfiguration }
+        self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -109,13 +110,26 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             request.append(buffer, count: Int(received))
             if request.range(of: Data("\r\n\r\n".utf8)) != nil { break }
         }
-        let requestLine = String(data: request, encoding: .utf8)?.split(separator: "\r\n", maxSplits: 1).first ?? ""
+        guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)) else { return }
+        let headerData = request[..<headerEnd.lowerBound]
+        let headerText = String(data: headerData, encoding: .utf8) ?? ""
+        let contentLength = headerText.split(separator: "\r\n").dropFirst().compactMap { line -> Int? in
+            let parts = line.split(separator: ":", maxSplits: 1)
+            return parts.count == 2 && parts[0].lowercased() == "content-length" ? Int(parts[1].trimmingCharacters(in: .whitespaces)) : nil
+        }.first ?? 0
+        guard (0...65_536).contains(contentLength) else { return }
+        let bodyStart = headerEnd.upperBound
+        while request.count - bodyStart < contentLength {
+            let received = read(client, &buffer, buffer.count); guard received > 0 else { return }; request.append(buffer, count: Int(received))
+        }
+        let body = Data(request[bodyStart..<(bodyStart + contentLength)])
+        let requestLine = headerText.split(separator: "\r\n", maxSplits: 1).first ?? ""
         let parts = requestLine.split(separator: " ")
         let method = parts.first.map(String.init) ?? ""
         let target = parts.dropFirst().first.map(String.init) ?? ""
         let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
         let response: ObstacleBridgeAdminLinuxResponse
-        if method != "GET" {
+        if method != "GET" && !(method == "POST" && path == "/api/config") {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
@@ -128,14 +142,19 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload())
                 .flatMap { ObstacleBridgeAdminAPI.linuxJSONResponse($0) } ?? .init(statusCode: 404, body: Data("{}".utf8))
         case "/api/config":
-            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["config": ObstacleBridgeAdminConfigProjectionPort.redacted(adminConfigurationProvider())]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            if method == "GET" {
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["config": ObstacleBridgeAdminConfigProjectionPort.redacted(adminConfigurationProvider())]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            } else if let updates = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["updates"] as? [String: Any], let configurationStore {
+                do { let saved = try configurationStore.apply(updates: updates); response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "updated_keys": saved.normalizedKeys, "config": ObstacleBridgeAdminConfigProjectionPort.redacted(saved.configuration)]) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
+                catch { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": error.localizedDescription], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
+            } else { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "invalid JSON body or configuration writes unavailable"], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
         case "/api/admin-ui":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.uiPayload(runtimeConfig: adminConfigurationProvider(), platform: "linux-swift")) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/security-advisor":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.securityAdvisorPayload(runtimeConfig: adminConfigurationProvider(), bindHostFallback: "127.0.0.1")) ?? .init(statusCode: 500, body: Data("{}".utf8))
         default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))
         } }
-        let statusText = response.statusCode == 200 ? "200 OK" : response.statusCode == 404 ? "404 Not Found" : response.statusCode == 405 ? "405 Method Not Allowed" : "500 Internal Server Error"
+        let statusText = response.statusCode == 200 ? "200 OK" : response.statusCode == 400 ? "400 Bad Request" : response.statusCode == 404 ? "404 Not Found" : response.statusCode == 405 ? "405 Method Not Allowed" : "500 Internal Server Error"
         let header = "HTTP/1.1 \(statusText)\r\nContent-Type: application/json\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
         var wire = Data(header.utf8); wire.append(response.body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
