@@ -36,6 +36,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let rows = peers as? [[String: Any]]
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
+        let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
+        #expect(live["overlay_transport"] as? String == "tcp")
     }
 
     @Test func statusReflectsConnectAndDisconnectTransitions() async throws {

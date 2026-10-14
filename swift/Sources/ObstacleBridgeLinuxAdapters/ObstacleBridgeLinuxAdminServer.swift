@@ -106,11 +106,18 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             if request.range(of: Data("\r\n\r\n".utf8)) != nil { break }
         }
         let requestLine = String(data: request, encoding: .utf8)?.split(separator: "\r\n", maxSplits: 1).first ?? ""
-        let path = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? ""
+        let target = requestLine.split(separator: " ").dropFirst().first.map(String.init) ?? ""
+        let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
         let response: ObstacleBridgeAdminLinuxResponse
         switch path {
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/live":
+            let topic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
+                .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
+                .dropFirst("topic=".count).description ?? ""
+            response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload())
+                .flatMap { ObstacleBridgeAdminAPI.linuxJSONResponse($0) } ?? .init(statusCode: 404, body: Data("{}".utf8))
         default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))
         }
         let header = "HTTP/1.1 \(response.statusCode == 200 ? "200 OK" : response.statusCode == 404 ? "404 Not Found" : "500 Internal Server Error")\r\nContent-Type: application/json\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
