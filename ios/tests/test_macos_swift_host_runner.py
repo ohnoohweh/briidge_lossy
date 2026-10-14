@@ -178,7 +178,7 @@ def test_macos_swift_host_runner_passes_python_parity_hook_env() -> None:
 
 def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    helper_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+    helper_source = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
 
     assert "private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?" in source
     assert 'private var macOSTunHelperTransportKind = "none"' in source
@@ -1489,8 +1489,9 @@ def _compile_swift_tun_helper_contract_probe(source_path: Path, binary_path: Pat
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift"),
         str(source_path),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)

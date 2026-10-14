@@ -870,7 +870,8 @@ def test_macos_app_main_source_exists() -> None:
     control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
-    tun_helper_contract = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+    tun_helper_contract = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+    macos_helper_client = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
 
     assert "@main" in app_main
     assert "WKWebView" in app_main
@@ -905,6 +906,8 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
     assert "ObstacleBridgeTunHelperContract.swift" in build_script
+    assert "ObstacleBridgeMacOSTunHelperClient.swift" in build_script
+    assert "ObstacleBridgeMacOSTunAdapter" in macos_helper_client
     assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
     assert "ObstacleBridgeMacOSTunHelperService.swift" in build_script
     assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script

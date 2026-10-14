@@ -164,6 +164,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C61000000000000000002E", "71C61000000000000000012E", "ObstacleBridgePeerAddressProtocolRuntime.swift"),
     ("71C610000000000000000004", "71C610000000000000000104", "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
     ("71C61000000000000000002A", "71C61000000000000000012A", "ObstacleBridgeTunHelperContract.swift"),
+    ("71C61000000000000000004E", "71C61000000000000000014E", "ObstacleBridgeMacOSTunHelperClient.swift"),
     ("71C61000000000000000002B", "71C61000000000000000012B", "ObstacleBridgeTunHelperXPCTransport.swift"),
     ("71C610000000000000000022", "71C610000000000000000122", "ObstacleBridgeMacOSTunAdapter.swift"),
     ("71C61000000000000000002C", "71C61000000000000000012C", "ObstacleBridgeTunPing.swift"),
@@ -248,6 +249,8 @@ def shared_swift_source_path(name: str) -> str:
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminConfigChallenge.swift"
     if name == "ObstacleBridgeTunPing.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeTunPing.swift"
+    if name == "ObstacleBridgeTunHelperContract.swift":
+        return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeTunHelperContract.swift"
     if name == "ObstacleBridgeConfigSecretPolicy.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeConfigSecretPolicy.swift"
     if name == "ObstacleBridgeProxyProtocolPolicy.swift":

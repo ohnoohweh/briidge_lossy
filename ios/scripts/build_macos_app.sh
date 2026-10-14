@@ -147,9 +147,10 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressProtocolRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
@@ -211,9 +212,10 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
   "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
   -o "${HELPER_BINARY_PATH}" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgePrivilegedHelper/ObstacleBridgeTunPrivilegedHelperMain.swift"
 
 echo "[build_macos_app] preparing macOS app bundle"
@@ -248,9 +250,10 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressProtocolRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
