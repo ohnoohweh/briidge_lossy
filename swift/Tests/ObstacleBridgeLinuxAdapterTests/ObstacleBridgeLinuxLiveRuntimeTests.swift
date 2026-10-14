@@ -416,6 +416,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let runtime = ObstacleBridgeLinuxLiveRuntime(
             configuration: .init(
                 transport: transport, host: "127.0.0.1", port: peer.port,
+                webSocketProxy: .init(mode: .off),
                 secureLinkPSK: Data("linux-swift-psk".utf8),
                 receiveIdleTimeoutMilliseconds: 50
             ),

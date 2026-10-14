@@ -21,6 +21,77 @@ public enum ObstacleBridgeLinuxLiveRuntimeError: Error, Equatable, LocalizedErro
     }
 }
 
+/// Owns one configured lower transport epoch. Core assigns the epoch through
+/// an `openTransport` effect; this owner ensures that a late completion or a
+/// stale cancellation cannot replace or tear down a newer epoch.
+private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
+    private let runtime: ObstacleBridgeLinuxConfiguredRuntime
+    private let expectedTransport: ObstacleBridgeLinuxTransport
+    private let lock = NSLock()
+    private var activeEpoch: UInt64?
+
+    init(runtime: ObstacleBridgeLinuxConfiguredRuntime, expectedTransport: ObstacleBridgeLinuxTransport) {
+        self.runtime = runtime
+        self.expectedTransport = expectedTransport
+    }
+
+    func open(epoch: UInt64, sessionID: UInt64, clientNonce: Data) throws -> ObstacleBridgeLinuxConfiguredSession {
+        guard runtime.configuration.transport == expectedTransport else {
+            throw ObstacleBridgeLinuxOverlayTransportError.invalidEndpoint
+        }
+        lock.lock()
+        guard activeEpoch == nil || activeEpoch! < epoch else {
+            lock.unlock()
+            throw ObstacleBridgeLinuxOverlayTransportError.cancelled
+        }
+        activeEpoch = epoch
+        lock.unlock()
+        do {
+            let session = try runtime.connect(sessionID: sessionID, clientNonce: clientNonce)
+            lock.lock()
+            let admitted = activeEpoch == epoch
+            lock.unlock()
+            guard admitted else {
+                session.close()
+                throw ObstacleBridgeLinuxOverlayTransportError.cancelled
+            }
+            return session
+        } catch {
+            lock.lock()
+            if activeEpoch == epoch { activeEpoch = nil }
+            lock.unlock()
+            throw error
+        }
+    }
+
+    func cancel(epoch: UInt64) {
+        lock.lock()
+        // A connect failure clears `activeEpoch` before Core emits its
+        // matching cancellation effect. Accept that cleanup, but never let a
+        // retired epoch close a newer in-flight connection.
+        guard activeEpoch == nil || activeEpoch == epoch else { lock.unlock(); return }
+        activeEpoch = nil
+        lock.unlock()
+        runtime.disconnect()
+    }
+
+    func cancelInFlightConnection() {
+        runtime.cancelInFlightConnection()
+    }
+}
+
+private final class ObstacleBridgeLinuxTCPLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
+    init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .tcp) }
+}
+
+private final class ObstacleBridgeLinuxQUICLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
+    init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .quic) }
+}
+
+private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
+    init(runtime: ObstacleBridgeLinuxConfiguredRuntime) { super.init(runtime: runtime, expectedTransport: .ws) }
+}
+
 /// Foreground owner for one admitted overlay epoch. All session, retry, and
 /// shutdown work is serialized here so lower transport callbacks cannot revive
 /// a stopped runtime or retain a stale SecureLink epoch.
@@ -28,6 +99,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
+    private let transportLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner
     private let coordinator: ObstacleBridgeOverlayCoordinator
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.live-runtime")
     private let statusLock = NSLock()
@@ -59,6 +131,16 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init(), runtimeHealthURL: URL? = nil) {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
         self.configuredRuntime = runtime
+        switch configuration.transport {
+        case .tcp:
+            self.transportLifecycleOwner = ObstacleBridgeLinuxTCPLifecycleOwner(runtime: runtime)
+        case .quic:
+            self.transportLifecycleOwner = ObstacleBridgeLinuxQUICLifecycleOwner(runtime: runtime)
+        case .ws:
+            self.transportLifecycleOwner = ObstacleBridgeLinuxWebSocketLifecycleOwner(runtime: runtime)
+        case .myudp:
+            self.transportLifecycleOwner = ObstacleBridgeLinuxTransportLifecycleOwner(runtime: runtime, expectedTransport: .myudp)
+        }
         self.statusProjection = runtime.status()
         self.coordinator = .init(candidateCount: configuration.peerCandidates.count, policy: policy)
         self.runtimeHealthURL = runtimeHealthURL
@@ -170,7 +252,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         // A SecureLink handshake performs synchronous lower-transport I/O on
         // `queue`.  Cancel its published session before entering that queue so
         // shutdown cannot wait for the receive timeout.
-        configuredRuntime.cancelInFlightConnection()
+        transportLifecycleOwner.cancelInFlightConnection()
         queue.sync {
             stopped = true
             apply(coordinator.handle(.stop))
@@ -250,7 +332,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         do {
             let sessionID = freshSessionID()
             let nonce = freshNonce()
-            let connectedSession = try configuredRuntime.connect(sessionID: sessionID, clientNonce: nonce)
+            let connectedSession = try transportLifecycleOwner.open(epoch: epoch, sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
             let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
             mux.onUnsolicitedFrame = { [weak self] frame in
@@ -327,7 +409,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 stopServiceOwners()
                 stopRemoteServiceOwners()
                 _ = remoteCatalogStore.withdraw()
-                configuredRuntime.disconnect()
+                transportLifecycleOwner.cancel(epoch: epoch)
                 configuredRuntime.advanceCandidate()
                 refreshStatusProjection()
             case .startReceive(let epoch):
