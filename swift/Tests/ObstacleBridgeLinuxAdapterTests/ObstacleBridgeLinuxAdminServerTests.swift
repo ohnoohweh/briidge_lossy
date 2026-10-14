@@ -20,6 +20,27 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_auth_disable"] as? Bool == true)
     }
 
+    @Test func configHTTPUpdatePersistsValidatedFieldsAndRejectsInvalidInput() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: ["admin_web": ["admin_web_auth_disable": false]])
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, configurationStore: store)
+        try server.start(); defer { server.stop() }
+        let accepted = try #require(try await requestJSON(
+            "http://127.0.0.1:\(server.port)/api/config",
+            method: "POST",
+            body: ["updates": ["admin_web_auth_disable": true]]
+        ).body as? [String: Any])
+        #expect(accepted["ok"] as? Bool == true)
+        #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_auth_disable"] as? Bool == true)
+        let rejected = try await requestJSON(
+            "http://127.0.0.1:\(server.port)/api/config",
+            method: "POST",
+            body: ["updates": ["admin_web_auth_disable": "true"]]
+        )
+        #expect(rejected.status == 400)
+        #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
+    }
+
     @Test func statusAndPeersAreRedactedAndDescribeLayeredState() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp,
@@ -186,5 +207,14 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: text)))
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         return try JSONSerialization.jsonObject(with: data)
+    }
+
+    private func requestJSON(_ text: String, method: String, body: [String: Any]) async throws -> (status: Int, body: Any) {
+        var request = URLRequest(url: try #require(URL(string: text)))
+        request.httpMethod = method
+        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        return (try #require((response as? HTTPURLResponse)?.statusCode), try JSONSerialization.jsonObject(with: data))
     }
 }
