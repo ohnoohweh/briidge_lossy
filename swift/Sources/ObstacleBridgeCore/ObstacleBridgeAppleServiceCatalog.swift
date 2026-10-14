@@ -1,8 +1,8 @@
 import Foundation
 
-/// Apple adapter facade for a peer-published RS3 catalog. The Core store owns
-/// epoch/replay validation and atomic replacement; overlay owners only turn an
-/// accepted result into native listener start/stop operations.
+/// Portable facade for a peer-published RS3 catalog. The Core store owns
+/// epoch/replay validation and atomic replacement; resource owners only turn
+/// an accepted result into platform listener start/stop operations.
 final class ObstacleBridgeAppleServiceCatalog {
     struct Install {
         let accepted: Bool
@@ -14,6 +14,8 @@ final class ObstacleBridgeAppleServiceCatalog {
 
     private let store = ObstacleBridgeServiceCatalogStore()
     private let chunks = ObstacleBridgeControlChunkReassembler()
+
+    init() {}
 
     func receive(_ frame: ObstacleBridgeChannelMuxCodec.MuxFrame) -> Install? {
         let payload: Data

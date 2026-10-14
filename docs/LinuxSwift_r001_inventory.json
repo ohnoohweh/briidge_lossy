@@ -30,6 +30,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCatalog.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeServiceCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift",
@@ -98,7 +99,6 @@
       "owner": "ObstacleBridgeAppleAdapters",
       "disposition": "retain-or-split",
       "files": [
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeAppleServiceCatalog.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
         "swift/Probes/ObstacleBridgeApplePackageProbe/ObstacleBridgeApplePackageProbe.swift",
         "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift",
@@ -432,7 +432,7 @@
     },
     "apple": {
       "status": "in-progress",
-      "implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeAppleServiceCatalog.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"],
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"],
       "tests": ["ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths", "ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_epoch", "ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path", "tests/unit/test_channel_mux_component_parity.py::test_swift_component_inbound_tun_fragment_sequence_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_udp_server_fragmented_datagram_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_server_open_then_inbound_fragment_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_client_open_connect_then_inbound_fragment_matches_python", "ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_applies_core_catalog_listener_replacements", "ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_installs_and_replaces_inbound_remote_catalog", "ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_overlay_owner_forwards_inbound_tcp_and_udp_mux", "ios/scripts/build_ios_app.sh::generic-device unsigned Xcode build"],
       "qualification_evidence": {"date": "2026-09-18", "macos_build": "The local macOS app bundle passed strict deep code-sign verification.", "ios_device": "The physical iOS packet tunnel reports an active packet pump, app-ready myUDP runtime, one TUN channel, and nonzero bidirectional packet and byte counters through the live mapped WebAdmin endpoint.", "linux_peer": "The live Linux-native helper reports an opened network-applied TUN interface; peer 0:51 is connected with one TUN channel and nonzero ChannelMux traffic."},
       "gap": "TCP, UDP, and TUN ChannelMux lifecycle records execute Core session effects. The packet model provides bounded fragment framing/reassembly and TUN policy decisions; Apple adapters retain only local socket or packet-device ownership, transport measurements, and accepted I/O. The macOS host applies Core-backed catalog replacement and transport-epoch withdrawal to catalog-owned TCP/UDP listeners; connection-drain qualification across Apple owners remains open."
