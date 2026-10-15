@@ -545,7 +545,9 @@ def test_runtime_config_source_exists() -> None:
     assert "enableTunTcpdump" in runtime
     assert "tunTcpdumpPcapPath" in runtime
     assert "optionalStringValueAllowEmpty" in runtime
-    assert "log_TUN_routing" in runtime
+    assert "static func configSchemaSnapshot()" in runtime
+    assert "ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()" in runtime
+    assert '"admin_web": [' not in runtime
     assert "included_routes6" in runtime
     assert "listenerHookEnvBlocks()" in native_spec
     assert "derivedLocalTunnelSettings(" in native_spec
@@ -554,6 +556,9 @@ def test_runtime_config_source_exists() -> None:
     assert "import Glibc" not in runtime
     assert "enum ObstacleBridgeRuntimeConfigPolicy" in policy
     assert "static func overlaySessionMaxAppPayload" in policy
+    assert "static func configSchemaSnapshot()" in policy
+    assert '"admin_web": [' in policy
+    assert "log_TUN_routing" in policy
     assert "static func wsPeerAddresses(" in policy
     assert "static func overlayPeerExcludedRoutes(" in policy
     assert "static func enforceAdminAuthenticationUpdate(" in policy

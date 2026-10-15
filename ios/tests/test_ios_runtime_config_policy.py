@@ -56,6 +56,12 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                 ObstacleBridgeRuntimeConfigPolicy.enforceAdminAuthenticationUpdate(
                     &preservedDisable, currentAuthDisabled: true
                 )
+                let schema = ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
+                let adminRows = schema["admin_web"] as? [[String: Any]] ?? []
+                let routingRows = schema["TUN_routing"] as? [[String: Any]] ?? []
+                let proxyRows = schema["proxy_provider"] as? [[String: Any]] ?? []
+                let telemetryRows = schema["telemetry_client"] as? [[String: Any]] ?? []
+                let adminPassword = adminRows.first { ($0["key"] as? String) == "admin_web_password" }
                 let output: [String: Any] = [
                     "websocket4": websocket.ipv4,
                     "websocket6": websocket.ipv6,
@@ -71,6 +77,11 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                         "udp_session": ["udp_peer": "192.0.2.1"],
                     ]),
                     "flat": ObstacleBridgeRuntimeConfigPolicy.looksGrouped(["udp_peer": "192.0.2.1"]),
+                    "schema_sections": schema.keys.sorted(),
+                    "schema_admin_password_secret": adminPassword?["secret"] as? Bool ?? false,
+                    "schema_routing_has_tunnel_address": routingRows.contains { ($0["key"] as? String) == "tunnel_address" },
+                    "schema_proxy_has_policy": proxyRows.contains { ($0["key"] as? String) == "proxy_provider_policy" },
+                    "schema_telemetry_has_endpoint": telemetryRows.contains { ($0["key"] as? String) == "telemetry_endpoint" },
                 ]
                 FileHandle.standardOutput.write(
                     try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
@@ -106,4 +117,14 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
         "preserved_username": "",
         "grouped": True,
         "flat": False,
+        "schema_sections": [
+            "TUN_routing", "admin_web", "channel_mux", "compress_layer",
+            "debug_logging", "iOS_TUN_connector", "proxy_provider", "quic_session",
+            "runner", "secure_link", "tcp_session", "telemetry_client", "tun_execution",
+            "udp_session", "ws_session",
+        ],
+        "schema_admin_password_secret": True,
+        "schema_routing_has_tunnel_address": True,
+        "schema_proxy_has_policy": True,
+        "schema_telemetry_has_endpoint": True,
     }

@@ -170,12 +170,13 @@ ARC-CMP-003:
   # The admin UI exposes throttle state at the ChannelMux and physical-TUN
   # aggregate boundaries, not as a per-peer TUN quota view.
   # Raw ChannelMux parity compiles the Core SecureLink transcript and
-  # native-service specification with portable RuntimeConfig scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
+  # native-service specification with portable RuntimeConfig schema/scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
   # tunnel-routing, UDP-peer, overlay-planning, first-start, Admin authentication/configuration-change challenge,
   # TUN-helper protocol/state/loopback semantics, TUN state/effect policy, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting, plus the remote-service
   # catalog facade required by TCP and UDP owners alongside the Core crypto module, then runs
   # in a bounded, test-name-reporting CI lane.
   unit_tests:
+    - ios/tests/test_ios_runtime_config_policy.py::test_runtime_config_peer_exclusions_are_portable_and_dual_stack
     - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
     - tests/unit/test_secure_link_psk.py::test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect

@@ -669,6 +669,7 @@ REQ-WSP-013:
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
   unit_tests:
+    - ios/tests/test_ios_runtime_config_policy.py::test_runtime_config_peer_exclusions_are_portable_and_dual_stack
     - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
     - ios/tests/test_m3_native_sources.py::test_websocket_overlay_transport_owner_source_exists
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_preserves_ws_peer_address_list
@@ -1063,7 +1064,7 @@ REQ-LIFE-012:
 
 REQ-LST-001:
   # The ChannelMux parity runner compiles the Core SecureLink transcript and
-  # native-service specification with portable RuntimeConfig scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
+  # native-service specification with portable RuntimeConfig schema/scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
   # tunnel-routing, UDP-peer, overlay-planning, first-start, Admin authentication/configuration-change challenge,
   # TUN-helper protocol/state/loopback semantics, TUN state/effect policy, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting, plus the remote-service
   # catalog facade required by its TCP and UDP owners with the Core crypto module; its CI
