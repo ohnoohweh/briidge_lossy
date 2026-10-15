@@ -82,7 +82,7 @@ Relevant implementation points:
   - `quic_key`
   - `quic_insecure`
 - Swift:
-  - [ObstacleBridgeQuicOverlayTransportOwner.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
+  - [ObstacleBridgeQuicOverlayTransportOwner.swift](../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
   - `sec_protocol_options_set_verify_block(...)`
 
 What `quic_insecure` means on the Swift/native side:
@@ -126,7 +126,7 @@ That narrowed the issue to the Swift QUIC transport interface rather than:
 
 The current Swift workaround lives in:
 
-- [ObstacleBridgeQuicOverlayTransportOwner.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
+- [ObstacleBridgeQuicOverlayTransportOwner.swift](../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
 
 Two defensive measures are now in place on the outbound Swift QUIC path:
 

@@ -39,7 +39,7 @@ LSW_SC1_SOURCES = {
     "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift",
     "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift",
 }
-SHARED_APPLE_ROOT = "ios/native/ObstacleBridgeShared/"
+SHARED_APPLE_ROOT = "swift/Sources/ObstacleBridgeAppleShared/"
 APPLE_ADAPTER_KINDS = {"apple-framework", "apple-abi", "apple-process", "darwin-posix"}
 TEST_DEF_RE = re.compile(
     r"^\s*(?:(?:async\s+)?def|(?:@Test\s+)?func)\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(",

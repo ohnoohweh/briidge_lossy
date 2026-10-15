@@ -50,7 +50,7 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in build_script
-    assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
 def test_macos_build_includes_mtls_telemetry_transport() -> None:
@@ -119,7 +119,7 @@ def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id()
     codec = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift").read_text(encoding="utf-8")
 
     assert "(0...Int(UInt16.max)).contains(value.svcID)" in codec
-SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 

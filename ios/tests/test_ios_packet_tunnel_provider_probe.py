@@ -31,7 +31,7 @@ pytestmark = pytest.mark.slow
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
 

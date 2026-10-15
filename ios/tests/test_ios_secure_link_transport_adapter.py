@@ -17,7 +17,7 @@ from swift_test_support import require_swift_module, swift_core_crypto_compile_f
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 
 
 def _compile_swift_secure_link_transport_probe(source_path: Path, binary_path: Path) -> None:

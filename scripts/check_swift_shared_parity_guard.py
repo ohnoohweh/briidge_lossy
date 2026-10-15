@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SHARED_SWIFT_PREFIX = "ios/native/ObstacleBridgeShared/"
+SHARED_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeAppleShared/"
 IOS_SWIFT_PREFIX = "ios/native/IPServer/"
 MACOS_SWIFT_PREFIX = "ios/native/ObstacleBridgeApp/"
 SWIFT_SUFFIX = ".swift"

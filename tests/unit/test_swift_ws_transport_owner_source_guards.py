@@ -8,7 +8,7 @@ SWIFT_WS_OWNER = (
     ROOT
     / "ios"
     / "native"
-    / "ObstacleBridgeShared"
+    / "ObstacleBridgeAppleShared"
     / "ObstacleBridgeWebSocketOverlayTransportOwner.swift"
 )
 

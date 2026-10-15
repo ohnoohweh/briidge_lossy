@@ -134,11 +134,11 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeConfigSecretCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminSnapshotSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskCodec.swift" \
@@ -146,39 +146,39 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskTransportAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressProtocolRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperService.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunProbeAddressResolver.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePeerAddressResolver.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeConfigPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketTunnelRoutePolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebAdminLiveTopicPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTunRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompressLayerRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayStackPlanner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift" \
@@ -203,11 +203,11 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTcpOverlayRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift"
 
@@ -215,11 +215,11 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
 "${SWIFTC_CMD}" \
   "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
   -o "${HELPER_BINARY_PATH}" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperService.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgePrivilegedHelper/ObstacleBridgeTunPrivilegedHelperMain.swift"
 
 echo "[build_macos_app] preparing macOS app bundle"
@@ -241,11 +241,11 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeConfigSecretPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeConfigSecretCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminSnapshotSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskCodec.swift" \
@@ -253,39 +253,39 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkPskTransportAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressProtocolRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperService.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunProbeAddressResolver.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePeerAddressPolicy.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePeerAddressResolver.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeConfigPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketTunnelRoutePolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebAdminLiveTopicPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTunRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayPeerRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompressLayerRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayStackPlanner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeBinaryCodec.swift" \
@@ -310,11 +310,11 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxSession.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketOverlayRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTcpOverlayRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" \
-  "${REPO_ROOT}/ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift" \
   "${REPO_ROOT}/ios/native/ObstacleBridgeApp/ObstacleBridgeMacAppMain.swift"

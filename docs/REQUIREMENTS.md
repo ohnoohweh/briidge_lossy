@@ -580,7 +580,9 @@ extension, so macOS parity evidence exercises the same source closure as the
 Core target rather than relying on an incidental compile order.
 The iOS TUN helper probe likewise compiles RuntimeConfig with its NativeService
 and Admin-config Core dependencies, preserving the product source closure while
-its Darwin resolver remains outside the portable Core state owner.
+its Darwin resolver remains outside the portable Core state owner. Apple-only
+shared adapters reside in `swift/Sources/ObstacleBridgeAppleShared`; Core and
+all Apple product closures reference that single source location.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

@@ -10,7 +10,7 @@ every checked-in Swift file under these source roots exactly once:
 - `swift/Sources/ObstacleBridgeCore`;
 - `swift/Sources/ObstacleBridgeLinuxAdapters`;
 - `swift/Probes/ObstacleBridgeApplePackageProbe`; and
-- `ios/native/ObstacleBridgeShared`.
+- `swift/Sources/ObstacleBridgeAppleShared`.
 
 Run the verifier from the repository root:
 
@@ -40,7 +40,7 @@ The checked inventory currently contains 107 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 
-Every `ObstacleBridgeShared` source is additionally listed in the inventory's
+Every `ObstacleBridgeAppleShared` source is additionally listed in the inventory's
 `shared_apple_adapter_audit`. The verifier requires one Apple-framework, ABI,
 process, or Darwin-POSIX reason per file and rejects `Glibc` imports or
 conditional branches there. Portable policy belongs in Core; a retained adapter

@@ -21,9 +21,9 @@ SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / 
 SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
 SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
 SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"
-SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeRuntimeConfig.swift"
+SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeRuntimeConfig.swift"
 SWIFT_PEER_ADDRESS_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePeerAddressPolicy.swift"
-SWIFT_PEER_ADDRESS_RESOLVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgePeerAddressResolver.swift"
+SWIFT_PEER_ADDRESS_RESOLVER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgePeerAddressResolver.swift"
 SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminWebSupport.swift"
 SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminSnapshotSupport.swift"
 SWIFT_ADMIN_API_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminAPI.swift"
@@ -31,7 +31,7 @@ SWIFT_ADMIN_CONFIG_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridge
 SWIFT_NATIVE_SERVICE_SPEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeNativeServiceSpec.swift"
 SWIFT_ONBOARDING_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOnboarding.swift"
 SWIFT_ADMIN_LIVE_TOPIC_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebAdminLiveTopicPolicy.swift"
-SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebAdminServer.swift"
+SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeWebAdminServer.swift"
 SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_component_runner.swift"
 
 

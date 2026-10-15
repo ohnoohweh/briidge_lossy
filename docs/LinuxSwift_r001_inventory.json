@@ -5,7 +5,7 @@
     "swift/Sources/ObstacleBridgeCore",
     "swift/Sources/ObstacleBridgeLinuxAdapters",
     "swift/Probes/ObstacleBridgeApplePackageProbe",
-    "ios/native/ObstacleBridgeShared"
+    "swift/Sources/ObstacleBridgeAppleShared"
   ],
   "source_ownership": [
     {
@@ -88,35 +88,35 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallenge.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeConfigSecretCodec.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift"
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePeerAddressResolver.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift"
       ]
     },
     {
       "owner": "ObstacleBridgeAppleAdapters",
       "disposition": "retain-or-split",
       "files": [
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift",
         "swift/Probes/ObstacleBridgeApplePackageProbe/ObstacleBridgeApplePackageProbe.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
-        "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperService.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunProbeAddressResolver.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"
       ]
     },
     {
@@ -147,27 +147,27 @@
     }
   ],
   "shared_apple_adapter_audit": [
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeAppleOverlayChannelAdapter.swift", "kind": "apple-framework", "reason": "Network.framework local TCP admission adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP connection owner."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeConfigSecretCodec.swift", "kind": "apple-framework", "reason": "CryptoKit and Darwin machine-key adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift", "kind": "darwin-posix", "reason": "macOS utun device adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperClient.swift", "kind": "apple-process", "reason": "macOS helper process client lifecycle."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunHelperService.swift", "kind": "apple-framework", "reason": "ServiceManagement helper registration."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift", "kind": "apple-abi", "reason": "Objective-C selector bridge for Apple native crypto callers."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift", "kind": "apple-framework", "reason": "Network.framework proxy connection adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift", "kind": "apple-framework", "reason": "Network.framework UDP connection drivers."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift", "kind": "apple-framework", "reason": "NetworkExtension packet-tunnel settings adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin sockaddr and resolver adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift", "kind": "apple-framework", "reason": "Network.framework proxy listener adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework QUIC resource owner."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift", "kind": "darwin-posix", "reason": "Darwin route/CIDR normalization and Apple configuration adapter; remaining portable extraction is tracked by LSW-SC.2L-K."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP resource owner."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift", "kind": "apple-framework", "reason": "Security framework mTLS uploader."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift", "kind": "apple-abi", "reason": "macOS XPC helper transport ABI."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTunProbeAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin ICMP target resolver."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework and Darwin UDP resource owner."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift", "kind": "apple-framework", "reason": "Network.framework and CryptoKit Admin server adapter."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework WebSocket resource owner."}
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift", "kind": "apple-framework", "reason": "Network.framework local TCP admission adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP connection owner."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeConfigSecretCodec.swift", "kind": "apple-framework", "reason": "CryptoKit and Darwin machine-key adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift", "kind": "darwin-posix", "reason": "macOS utun device adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift", "kind": "apple-process", "reason": "macOS helper process client lifecycle."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperService.swift", "kind": "apple-framework", "reason": "ServiceManagement helper registration."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift", "kind": "apple-abi", "reason": "Objective-C selector bridge for Apple native crypto callers."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift", "kind": "apple-framework", "reason": "Network.framework proxy connection adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift", "kind": "apple-framework", "reason": "Network.framework UDP connection drivers."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift", "kind": "apple-framework", "reason": "NetworkExtension packet-tunnel settings adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePeerAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin sockaddr and resolver adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift", "kind": "apple-framework", "reason": "Network.framework proxy listener adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework QUIC resource owner."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift", "kind": "darwin-posix", "reason": "Darwin route/CIDR normalization and Apple configuration adapter; remaining portable extraction is tracked by LSW-SC.2L-K."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP resource owner."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTelemetryMTLSUploader.swift", "kind": "apple-framework", "reason": "Security framework mTLS uploader."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift", "kind": "apple-abi", "reason": "macOS XPC helper transport ABI."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunProbeAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin ICMP target resolver."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework and Darwin UDP resource owner."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift", "kind": "apple-framework", "reason": "Network.framework and CryptoKit Admin server adapter."},
+    {"source": "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework WebSocket resource owner."}
   ],
   "lsw_sc1_linux_admission": [
     {"source": "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift", "status": "adopted", "caller": "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxAdminServer.swift", "linux_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState"]},
@@ -255,7 +255,7 @@
       "id": "proxy-provider-ios",
       "requirements": ["REQ-PRX-001"],
       "python_implementations": ["src/obstacle_bridge/bridge_proxy_server.py"],
-      "swift_implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift"],
       "python_tests": ["tests/unit/test_proxy_server.py::test_python_proxy_server_default_egress_mode_is_system"],
       "swift_tests": [],
       "parity_tests": ["ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite"],
@@ -295,7 +295,7 @@
       "id": "channelmux-ios-packet-flow",
       "requirements": ["REQ-MUX-010"],
       "python_implementations": ["src/obstacle_bridge/bridge_tun_ios.py"],
-      "swift_implementations": ["ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift"],
       "python_tests": ["tests/unit/test_bridge_tun_ios.py::test_open_tun_device_uses_active_bridge"],
       "swift_tests": [],
       "parity_tests": [],
@@ -445,7 +445,7 @@
     },
     "macos": {
       "status": "complete",
-      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift"],
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift"],
       "tests": ["ios/tests/test_macos_swift_host_runner.py::test_swift_overlay_owners_share_channelmux_tun_core", "ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_reports_lifecycle_rotation_after_outer_disconnect"]
     },
     "ios": {
@@ -473,7 +473,7 @@
     },
     "apple": {
       "status": "in-progress",
-      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTunRuntime.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"],
+      "implementations": ["swift/Sources/ObstacleBridgeCore/ObstacleBridgeAppleServiceCatalog.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTcpRuntime.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeChannelMuxTCPTransportOwner.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTunRuntime.swift", "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift", "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift"],
       "tests": ["ios/tests/test_ios_shared_tcp_transport_owner.py::test_ios_shared_tcp_transport_owner_probe_covers_provider_accept_and_inbound_paths", "ios/tests/test_ios_packet_tunnel_provider_probe.py::test_ios_packet_tunnel_provider_probe_remote_service_catalog_uses_runtime_epoch", "ios/tests/test_ios_swift_udp_tun_helper.py::test_ios_swift_udp_tun_helper_probe_covers_provider_tun_path", "tests/unit/test_channel_mux_component_parity.py::test_swift_component_inbound_tun_fragment_sequence_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_local_udp_server_fragmented_datagram_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_server_open_then_inbound_fragment_matches_python", "tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_udp_client_open_connect_then_inbound_fragment_matches_python", "ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_applies_core_catalog_listener_replacements", "ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_installs_and_replaces_inbound_remote_catalog", "ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_overlay_owner_forwards_inbound_tcp_and_udp_mux", "ios/scripts/build_ios_app.sh::generic-device unsigned Xcode build"],
       "qualification_evidence": {"date": "2026-09-18", "macos_build": "The local macOS app bundle passed strict deep code-sign verification.", "ios_device": "The physical iOS packet tunnel reports an active packet pump, app-ready myUDP runtime, one TUN channel, and nonzero bidirectional packet and byte counters through the live mapped WebAdmin endpoint.", "linux_peer": "The live Linux-native helper reports an opened network-applied TUN interface; peer 0:51 is connected with one TUN channel and nonzero ChannelMux traffic."},
       "gap": "TCP, UDP, and TUN ChannelMux lifecycle records execute Core session effects. The packet model provides bounded fragment framing/reassembly and TUN policy decisions; Apple adapters retain only local socket or packet-device ownership, transport measurements, and accepted I/O. The macOS host applies Core-backed catalog replacement and transport-epoch withdrawal to catalog-owned TCP/UDP listeners; connection-drain qualification across Apple owners remains open."

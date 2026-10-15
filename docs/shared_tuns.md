@@ -907,7 +907,7 @@ the extension and has moved core iOS traffic handling toward pure Swift. The
 proxy provider should follow that same direction.
 
 The implementation target is therefore a first-party Swift proxy server in
-`ios/native/ObstacleBridgeShared`, built on `Network.framework`:
+`swift/Sources/ObstacleBridgeAppleShared`, built on `Network.framework`:
 
 - `NWListener` for local HTTP/SOCKS5 listener sockets
 - `NWConnection` for accepted client connections

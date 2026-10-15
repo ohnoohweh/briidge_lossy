@@ -37,7 +37,7 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
-SWIFT_SHARED_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeShared'
+SWIFT_SHARED_NATIVE_DIR = ROOT / 'swift' / 'Sources' / 'ObstacleBridgeAppleShared'
 SWIFT_APP_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeApp'
 SWIFT_HOST_RUNNER_MAIN_SOURCE = SWIFT_APP_NATIVE_DIR / 'ObstacleBridgeHostRunnerMain.swift'
 SWIFT_APP_MAC_RUNNER_SOURCE = SWIFT_APP_NATIVE_DIR / 'ObstacleBridgeHostRunner.swift'

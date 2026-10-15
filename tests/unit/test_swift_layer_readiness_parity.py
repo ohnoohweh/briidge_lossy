@@ -14,10 +14,10 @@ def _read(*parts: str) -> str:
 
 def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
     owner_paths = [
-        ("ObstacleBridgeShared", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
-        ("ObstacleBridgeShared", "ObstacleBridgeTcpOverlayTransportOwner.swift"),
-        ("ObstacleBridgeShared", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
-        ("ObstacleBridgeShared", "ObstacleBridgeQuicOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeTcpOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeQuicOverlayTransportOwner.swift"),
     ]
     for path in owner_paths:
         source = _read(*path)
@@ -70,7 +70,7 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
     adapter = (CORE_ROOT / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     python_mux = (ROOT / "src" / "obstacle_bridge" / "bridge_channelmux.py").read_text(encoding="utf-8")
     owners = [
-        _read("ObstacleBridgeShared", name)
+        _read("ObstacleBridgeAppleShared", name)
         for name in (
             "ObstacleBridgeUdpOverlayTransportOwner.swift",
             "ObstacleBridgeTcpOverlayTransportOwner.swift",

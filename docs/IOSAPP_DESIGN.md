@@ -490,7 +490,7 @@ real platform boundary forcing the logic to live in one product.
 
 Policy:
 
-- prefer `ios/native/ObstacleBridgeShared/` for shared runtime behavior,
+- prefer `swift/Sources/ObstacleBridgeAppleShared/` for shared runtime behavior,
   diagnostics vocabulary, snapshot field shape, counter names, helper types,
   and other operator-visible semantics
 - keep `ios/native/IPServer/` focused on iOS-specific Network Extension wiring,

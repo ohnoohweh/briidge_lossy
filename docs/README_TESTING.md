@@ -62,6 +62,9 @@ The active testing focus on this branch is:
   verifies portable canonical-schema sections/secret metadata, WebSocket literal-peer exclusions, IPv4-mapped IPv6 route
   derivation, and resolve-family suppression separately from Darwin resolution
   and the portable TUN-probe state owner
+- Apple raw-source probes resolve Apple-only adapters from
+  `swift/Sources/ObstacleBridgeAppleShared`, keeping the macOS/iOS source
+  closure distinct from portable `ObstacleBridgeCore` policy.
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`

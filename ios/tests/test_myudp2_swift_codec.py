@@ -9,7 +9,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SHARED = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+SHARED = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 
 
