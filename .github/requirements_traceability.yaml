@@ -1064,8 +1064,9 @@ REQ-LIFE-012:
 
 REQ-LST-001:
   # Apple-only adapters remain co-located under swift/Sources/ObstacleBridgeAppleShared.
-  # The ChannelMux parity runner compiles the Core SecureLink transcript and
-  # native-service specification with portable RuntimeConfig schema/scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
+  # The ChannelMux parity runner compiles the Core SecureLink transcript,
+  # native-service specification, and RuntimeConfig route policy with portable
+  # RuntimeConfig schema/scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
   # tunnel-routing, UDP-peer, overlay-planning, first-start, Admin authentication/configuration-change challenge,
   # TUN-helper protocol/state/loopback semantics, TUN state/effect policy, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting, plus the remote-service
   # catalog facade required by its TCP and UDP owners with the Core crypto module; its CI
