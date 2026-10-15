@@ -41,14 +41,24 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(peer.sequences == [1, 2, 3, 4, 5, 6])
         #expect(peer.packets == [Data([0x45, 0x00, 0x12, 0x34])])
     }
+
+    @Test func coreRejectsMismatchedUnixHelperSequence() throws {
+        let peer = try UnixHelperPeer(connectionCount: 1, corruptFirstSequence: true)
+        defer { peer.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path)
+        #expect(throws: (any Error).self) {
+            try adapter.send(command: .snapshot, payload: [:])
+        }
+        #expect(peer.sequences == [1])
+    }
 }
 
 private final class UnixHelperPeer: @unchecked Sendable {
     let path: String
     private let listener: Int32
     private let expectedConnections: Int
+    private let corruptFirstSequence: Bool
     private let lock = NSLock()
-    private var worker: Thread?
     private var capturedOperations: [String] = []
     private var capturedSequences: [Int] = []
     private var capturedPackets: [Data] = []
@@ -56,8 +66,9 @@ private final class UnixHelperPeer: @unchecked Sendable {
     var sequences: [Int] { lock.lock(); defer { lock.unlock() }; return capturedSequences }
     var packets: [Data] { lock.lock(); defer { lock.unlock() }; return capturedPackets }
 
-    init(connectionCount: Int) throws {
+    init(connectionCount: Int, corruptFirstSequence: Bool = false) throws {
         self.expectedConnections = connectionCount
+        self.corruptFirstSequence = corruptFirstSequence
         self.path = "/tmp/obstaclebridge-helper-\(UUID().uuidString).sock"
         self.listener = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
         guard listener >= 0 else { throw PeerError.socket }
@@ -71,13 +82,17 @@ private final class UnixHelperPeer: @unchecked Sendable {
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
         }
         guard result == 0, listen(listener, 8) == 0 else { _ = close(listener); throw PeerError.socket }
-        worker = Thread { [weak self] in self?.serve() }; worker?.start()
+        DispatchQueue.global().async { [weak self] in self?.serve() }
     }
 
-    func stop() { _ = close(listener); try? FileManager.default.removeItem(atPath: path) }
+    func stop() {
+        _ = shutdown(listener, Int32(SHUT_RDWR))
+        _ = close(listener)
+        try? FileManager.default.removeItem(atPath: path)
+    }
 
     private func serve() {
-        for _ in 0..<expectedConnections {
+        for index in 0..<expectedConnections {
             let fd = accept(listener, nil, nil); guard fd >= 0 else { return }
             defer { _ = close(fd) }
             guard let request = try? readFrame(fd),
@@ -92,7 +107,8 @@ private final class UnixHelperPeer: @unchecked Sendable {
                 lock.lock(); capturedPackets.append(packet); lock.unlock()
             }
             lock.lock(); capturedOperations.append(operation); capturedSequences.append(sequence); lock.unlock()
-            let response: [String: Any] = ["response": ["ok": true, "op": operation, "seq": sequence, "payload": ["opened": operation != "STOP"]]]
+            let responseSequence = corruptFirstSequence && index == 0 ? sequence + 1 : sequence
+            let response: [String: Any] = ["response": ["ok": true, "op": operation, "seq": responseSequence, "payload": ["opened": operation != "STOP"]]]
             guard let reply = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]) else { return }
             try? writeFrame(reply, fd)
         }
