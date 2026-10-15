@@ -10,21 +10,21 @@ from scripts.check_swift_shared_parity_guard import (
 def test_classify_swift_shared_parity_buckets_changed_files() -> None:
     classified = classify_swift_shared_parity([
         "swift/Sources/ObstacleBridgeAppleShared/SharedThing.swift",
-        "ios/native/IPServer/PacketTunnelProvider.swift",
-        "ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
         "ios/tests/test_m3_native_sources.py",
         "README.md",
     ])
 
     assert classified["shared_swift"] == ["swift/Sources/ObstacleBridgeAppleShared/SharedThing.swift"]
-    assert classified["ios_swift"] == ["ios/native/IPServer/PacketTunnelProvider.swift"]
-    assert classified["macos_swift"] == ["ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift"]
+    assert classified["ios_swift"] == ["swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift"]
+    assert classified["macos_swift"] == ["swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"]
     assert classified["parity_tests"] == ["ios/tests/test_m3_native_sources.py"]
 
 
 def test_ios_only_swift_change_requires_shared_or_macos_peer_update() -> None:
     errors = validate_swift_shared_parity([
-        "ios/native/IPServer/PacketTunnelProvider.swift",
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
         "ios/tests/test_m3_native_sources.py",
     ])
 
@@ -34,7 +34,7 @@ def test_ios_only_swift_change_requires_shared_or_macos_peer_update() -> None:
 
 def test_macos_only_swift_change_requires_shared_or_ios_peer_update() -> None:
     errors = validate_swift_shared_parity([
-        "ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
         "ios/tests/test_macos_swift_host_runner.py",
     ])
 
@@ -56,7 +56,7 @@ def test_shared_swift_change_requires_parity_source_tests() -> None:
 def test_shared_plus_ios_change_with_parity_tests_passes() -> None:
     errors = validate_swift_shared_parity([
         "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunProbeAddressResolver.swift",
-        "ios/native/IPServer/PacketTunnelProvider.swift",
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
         "ios/tests/test_m3_native_sources.py",
     ])
 
@@ -65,8 +65,8 @@ def test_shared_plus_ios_change_with_parity_tests_passes() -> None:
 
 def test_both_platform_specific_swift_changes_with_one_parity_test_pass() -> None:
     errors = validate_swift_shared_parity([
-        "ios/native/IPServer/PacketTunnelProvider.swift",
-        "ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
         "ios/tests/test_macos_swift_host_runner.py",
     ])
 

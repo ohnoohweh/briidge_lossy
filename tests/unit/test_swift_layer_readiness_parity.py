@@ -4,7 +4,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SWIFT_ROOT = ROOT / "ios" / "native"
+SWIFT_ROOT = ROOT / "swift" / "Sources"
 CORE_ROOT = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 
 

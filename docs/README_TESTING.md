@@ -65,6 +65,8 @@ The active testing focus on this branch is:
 - Apple raw-source probes resolve Apple-only adapters from
   `swift/Sources/ObstacleBridgeAppleShared`, keeping the macOS/iOS source
   closure distinct from portable `ObstacleBridgeCore` policy.
+- Source-layout probes also resolve iOS and macOS entrypoints from their
+  respective `swift/Sources/ObstacleBridgeiOS` and `ObstacleBridgeMacOS` roots.
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`

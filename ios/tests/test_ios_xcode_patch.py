@@ -268,7 +268,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeQuicOverlayTransportOwner.swift in Sources" in patched
     assert "ObstacleBridgeProxyServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
-    assert "native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" in patched
 
 
 def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:

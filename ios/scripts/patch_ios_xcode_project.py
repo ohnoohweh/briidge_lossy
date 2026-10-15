@@ -21,7 +21,7 @@ DEFAULT_PROJECT = (
 
 GENERATED_PACKET_TUNNEL_PROVIDER_RELATIVE = Path("GeneratedSources") / "IPServer" / "PacketTunnelProvider.swift"
 GENERATED_APP_BUILD_STAMP_RELATIVE = Path("..") / ".." / ".." / "generated" / "ObstacleBridgeGeneratedBuildStamp.swift"
-REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[1] / "native" / "IPServer" / "PacketTunnelProvider.swift"
+REPO_PACKET_TUNNEL_PROVIDER = Path(__file__).resolve().parents[2] / "swift" / "Sources" / "ObstacleBridgeiOS" / "PacketTunnelProvider.swift"
 IOS_DEFAULT_MARKETING_VERSION = "0.1.0"
 IOS_DEFAULT_BUILD_NUMBER = "1"
 
@@ -868,8 +868,8 @@ def patch_app_target(text: str) -> str:
     text = insert_before(
         text,
         "/* End PBXFileReference section */\n",
-        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeHostRunner.swift; path = \"../../../../native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n"
+        "\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeHostRunner.swift; path = \"../../../../swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
     text, count = re.subn(
         r"(\t\t\t\t609384A628B5B958005B2A5D /\* Process Python libraries \*/,\n"
@@ -1065,7 +1065,7 @@ def patch_ipserver_target(text: str) -> str:
         "\t\t71C200000000000000000032 /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = PacketTunnelProvider.swift; path = \"GeneratedSources/IPServer/PacketTunnelProvider.swift\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000036 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; name = Info.plist; path = \"../../../../native/IPServer/Info.plist\"; sourceTree = SOURCE_ROOT; };\n"
         "\t\t71C200000000000000000037 /* IPServer.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; name = IPServer.entitlements; path = \"../../../../native/IPServer/IPServer.entitlements\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgePacketFlowBridge.swift; path = \"../../../../native/IPServer/ObstacleBridgePacketFlowBridge.swift\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C200000000000000000038 /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgePacketFlowBridge.swift; path = \"../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
     if "\t\t71C200000000000000000040 /* Frameworks */ = {\n" not in text:
         text = insert_before(
@@ -1277,6 +1277,9 @@ def patch_pbxproj_text(text: str) -> str:
     # Diagnostic builds may inject these flags manually. They must never
     # persist into the normal generated project because they bypass Python
     # startup or WebAdmin startup inside the Network Extension.
+    text = text.replace('../../../../native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift', '../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift')
+    text = text.replace('../../../../swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift', '../../../../swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift')
+    text = text.replace('../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift', '../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift')
     text = text.replace(
         '../../../../native/ObstacleBridgeShared/',
         '../../../../swift/Sources/ObstacleBridgeAppleShared/',

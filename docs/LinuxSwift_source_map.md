@@ -8,7 +8,7 @@ the common Swift migration. The machine-readable authority is
 every checked-in Swift file under these source roots exactly once:
 
 - `swift/Sources/ObstacleBridgeCore`;
-- `swift/Sources/ObstacleBridgeLinuxAdapters`;
+- `swift/Sources/ObstacleBridgeLinux/Adapters`;
 - `swift/Probes/ObstacleBridgeApplePackageProbe`; and
 - `swift/Sources/ObstacleBridgeAppleShared`.
 

@@ -584,6 +584,9 @@ Admin-config, and packet-tunnel route-policy Core dependencies, preserving the p
 its Darwin resolver remains outside the portable Core state owner. Apple-only
 shared adapters reside in `swift/Sources/ObstacleBridgeAppleShared`; Core and
 all Apple product closures reference that single source location.
+Platform entrypoints are co-located in `swift/Sources/ObstacleBridgeiOS` and
+`swift/Sources/ObstacleBridgeMacOS`, while Linux adapter sources reside under
+`swift/Sources/ObstacleBridgeLinux/Adapters` beside the Linux executable.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

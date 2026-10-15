@@ -64,12 +64,13 @@ targets += [
             .product(name: "NIOSSL", package: "swift-nio-ssl"),
             .product(name: "NIOQUIC", package: "swift-nio-quic"),
         ],
-        path: "swift/Sources/ObstacleBridgeLinuxAdapters"
+        path: "swift/Sources/ObstacleBridgeLinux/Adapters"
     ),
     .executableTarget(
         name: "ObstacleBridgeLinux",
         dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
-        path: "swift/Sources/ObstacleBridgeLinux"
+        path: "swift/Sources/ObstacleBridgeLinux",
+        exclude: ["Adapters"]
     ),
     .testTarget(
         name: "ObstacleBridgeLinuxAdapterTests",

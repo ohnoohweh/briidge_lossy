@@ -9,11 +9,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER_FILES = (
-    "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceCatalog.swift",
-    "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift",
+    "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxServiceCatalog.swift",
+    "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxServiceDataPlane.swift",
 )
-OVERLAY_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift"
-MYUDP_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"
+OVERLAY_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxOverlayTransport.swift"
+MYUDP_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxMyUDPTransport.swift"
 FORBIDDEN_FRAGMENTS = (
     'Data("O5"',
     'Data("O4"',

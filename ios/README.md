@@ -182,7 +182,7 @@ installing and launching from Xcode or your normal device-deployment workflow.
 Source of truth:
 
 - `ios/src/obstacle_bridge_ios/m3_tunnel.py` builds the `NETunnelProviderProtocol.providerConfiguration` payload from an existing iOS profile.
-- `ios/native/IPServer/PacketTunnelProvider.swift` is the packet-tunnel extension entrypoint and applies `NEPacketTunnelNetworkSettings` before starting the Swift packet-flow runtime.
+- `swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift` is the packet-tunnel extension entrypoint and applies `NEPacketTunnelNetworkSettings` before starting the Swift packet-flow runtime.
 - The extension now runs only the Swift connector modes `swift_udp` and `swift_simple_udp`; the old Python fallback and extension-local Python packaging were removed from the `IPServer` target.
 
 The M3 bridge is intentionally a POC transport (`tcp-length-prefixed-packets`) so packet-flow behavior can be validated before M4 secure-link parity. Production secure-link, DNS/route hardening, and App Store entitlement/distribution validation remain M4+ work.

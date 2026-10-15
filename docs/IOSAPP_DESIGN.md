@@ -265,9 +265,9 @@ This checklist compares the two Apple-native Swift runtime surfaces that ship in
 this repository today:
 
 - macOS host-runner:
-  `ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift`
+  `swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift`
 - iOS packet-tunnel provider:
-  `ios/native/IPServer/PacketTunnelProvider.swift`
+  `swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift`
 
 The goal here is not to erase every platform difference. Some differences are
 required by Apple platform boundaries. The goal is to keep operator-visible
@@ -493,7 +493,7 @@ Policy:
 - prefer `swift/Sources/ObstacleBridgeAppleShared/` for shared runtime behavior,
   diagnostics vocabulary, snapshot field shape, counter names, helper types,
   and other operator-visible semantics
-- keep `ios/native/IPServer/` focused on iOS-specific Network Extension wiring,
+- keep `swift/Sources/ObstacleBridgeiOS/` focused on iOS-specific Network Extension wiring,
   packet-flow ownership, and Apple-platform APIs that cannot be shared
 - touch platform-specific Swift files as little as possible for behavior that
   also exists on the sibling Apple runtime
@@ -930,7 +930,7 @@ If the extension is implemented in Swift, the same abstraction should still exis
 
 ### PacketTunnelProvider Encapsulation Model
 
-The packet tunnel provider is the iOS execution engine. For the current ObstacleBridge target, this means `ios/native/IPServer/PacketTunnelProvider.swift` is not only a packet adapter; it is the root lifecycle owner for WebAdmin, ChannelMux, SecureLink, and the selected lower transport layers.
+The packet tunnel provider is the iOS execution engine. For the current ObstacleBridge target, this means `swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift` is not only a packet adapter; it is the root lifecycle owner for WebAdmin, ChannelMux, SecureLink, and the selected lower transport layers.
 
 Startup sequence:
 
