@@ -25,7 +25,10 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
     assert "enum ObstacleBridgePacketTunnelRoutePolicy" in policy
     assert "ObstacleBridgePacketTunnelRoutePolicy.routes(" in shared
     assert "static func ipv4RouteContains" in policy
+    assert "static func ipv6RouteContains" in policy
     assert "ObstacleBridgePacketTunnelRoutePolicy.ipv4RouteContains(" in shared
+    assert "ObstacleBridgePacketTunnelRoutePolicy.ipv6RouteContains(" in shared
+    assert "import Darwin" not in shared
     assert "routingOverride?.enabledOnStartup ?? true" in shared
     assert "NEIPv6Settings" in shared
     assert "includedRoutes6" in shared

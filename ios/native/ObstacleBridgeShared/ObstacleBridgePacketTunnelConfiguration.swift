@@ -1,5 +1,4 @@
 import Foundation
-import Darwin
 import NetworkExtension
 
 struct ObstacleBridgePacketTunnelDefaults {
@@ -241,37 +240,7 @@ struct ObstacleBridgePacketTunnelConfiguration {
         if version == 4 {
             return ObstacleBridgePacketTunnelRoutePolicy.ipv4RouteContains(host: host, network: parts[0], prefix: prefix)
         }
-        return ipv6RouteContains(host: host, network: parts[0], prefix: prefix)
-    }
-
-    private static func ipv6RouteContains(host: String, network: String, prefix: Int) -> Bool {
-        guard prefix >= 0, prefix <= 128,
-              let hostBytes = ipv6Bytes(host),
-              let networkBytes = ipv6Bytes(network) else {
-            return false
-        }
-        if prefix == 0 {
-            return true
-        }
-        let fullBytes = prefix / 8
-        let remainingBits = prefix % 8
-        if fullBytes > 0 && hostBytes[0..<fullBytes] != networkBytes[0..<fullBytes] {
-            return false
-        }
-        if remainingBits == 0 {
-            return true
-        }
-        let mask = UInt8(0xff << UInt8(8 - remainingBits))
-        return (hostBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask)
-    }
-
-    private static func ipv6Bytes(_ host: String) -> [UInt8]? {
-        var addr = in6_addr()
-        let rc = host.withCString { inet_pton(AF_INET6, $0, &addr) }
-        guard rc == 1 else {
-            return nil
-        }
-        return withUnsafeBytes(of: addr) { Array($0) }
+        return ObstacleBridgePacketTunnelRoutePolicy.ipv6RouteContains(host: host, network: parts[0], prefix: prefix)
     }
 
     private static func hostFromCIDR(_ cidr: String) -> String? {

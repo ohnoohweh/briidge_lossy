@@ -46,6 +46,19 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
         return (hostValue & mask) == (networkValue & mask)
     }
 
+    static func ipv6RouteContains(host: String, network: String, prefix: Int) -> Bool {
+        guard (0...128).contains(prefix), let hostBytes = ipv6Bytes(host), let networkBytes = ipv6Bytes(network) else {
+            return false
+        }
+        if prefix == 0 { return true }
+        let fullBytes = prefix / 8
+        let remainingBits = prefix % 8
+        if fullBytes > 0 && hostBytes[0..<fullBytes] != networkBytes[0..<fullBytes] { return false }
+        if remainingBits == 0 { return true }
+        let mask = UInt8(0xff << UInt8(8 - remainingBits))
+        return (hostBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask)
+    }
+
     private static func ipv4Value(_ host: String) -> UInt32? {
         let parts = host.split(separator: ".").map(String.init)
         guard parts.count == 4 else { return nil }
@@ -55,6 +68,41 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
             value = (value << 8) | UInt32(octet)
         }
         return value
+    }
+
+    private static func ipv6Bytes(_ host: String) -> [UInt8]? {
+        let text = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard !text.isEmpty else { return nil }
+        let halves = text.components(separatedBy: "::")
+        guard halves.count <= 2 else { return nil }
+        func groups(_ part: String) -> [String]? {
+            guard !part.isEmpty else { return [] }
+            var output = part.split(separator: ":", omittingEmptySubsequences: false).map(String.init)
+            guard !output.contains("") else { return nil }
+            if let last = output.last, last.contains(".") {
+                guard let ipv4 = ipv4Value(last) else { return nil }
+                output.removeLast()
+                output.append(String(format: "%x", (ipv4 >> 16) & 0xffff))
+                output.append(String(format: "%x", ipv4 & 0xffff))
+            }
+            return output
+        }
+        guard let left = groups(halves[0]), let right = groups(halves.count == 2 ? halves[1] : "") else { return nil }
+        let total = left.count + right.count
+        let values: [String]
+        if halves.count == 2 {
+            guard total < 8 else { return nil }
+            values = left + Array(repeating: "0", count: 8 - total) + right
+        } else {
+            guard total == 8 else { return nil }
+            values = left
+        }
+        var bytes: [UInt8] = []
+        for value in values {
+            guard let group = UInt16(value, radix: 16) else { return nil }
+            bytes.append(UInt8(group >> 8)); bytes.append(UInt8(group & 0xff))
+        }
+        return bytes
     }
 }
 
