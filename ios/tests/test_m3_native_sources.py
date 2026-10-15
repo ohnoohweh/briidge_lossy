@@ -14,6 +14,7 @@ IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
 
 def test_shared_packet_tunnel_configuration_source_exists() -> None:
     shared = (SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgePacketTunnelRoutePolicy.swift").read_text(encoding="utf-8")
 
     assert "struct ObstacleBridgePacketTunnelDefaults" in shared
     assert "struct ObstacleBridgePacketTunnelConfiguration" in shared
@@ -21,6 +22,8 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
     assert "let enabledOnStartup: Bool" in shared
     assert "import Darwin" in shared
     assert "import Glibc" not in shared
+    assert "enum ObstacleBridgePacketTunnelRoutePolicy" in policy
+    assert "ObstacleBridgePacketTunnelRoutePolicy.routes(" in shared
     assert "routingOverride?.enabledOnStartup ?? true" in shared
     assert "NEIPv6Settings" in shared
     assert "includedRoutes6" in shared

@@ -2,16 +2,6 @@ import Foundation
 import Darwin
 import NetworkExtension
 
-struct ObstacleBridgePacketTunnelIPv4RouteSpec {
-    let destinationAddress: String
-    let subnetMask: String
-}
-
-struct ObstacleBridgePacketTunnelIPv6RouteSpec {
-    let destinationAddress: String
-    let networkPrefixLength: Int
-}
-
 struct ObstacleBridgePacketTunnelDefaults {
     let tunnelAddress: String
     let tunnelPrefix: Int
@@ -22,7 +12,6 @@ struct ObstacleBridgePacketTunnelDefaults {
     let includedRoutes6: [String]
     let excludedRoutes6: [String]
 }
-
 struct ObstacleBridgePacketTunnelConfiguration {
     let peerHost: String
     let peerPort: UInt16?
@@ -92,11 +81,11 @@ struct ObstacleBridgePacketTunnelConfiguration {
         let resolvedIncludedRoutes6 = network["included_routes6"] as? [String]
             ?? routingOverride?.includedRoutes6
             ?? (resolvedTunnelAddress6.isEmpty ? [] : defaults.includedRoutes6)
-        tunnelSubnetMask = Self.subnetMask(prefix)
+        tunnelSubnetMask = ObstacleBridgePacketTunnelRoutePolicy.subnetMask(prefix)
         tunnelAddress = resolvedTunnelAddress
         tunnelAddress6 = resolvedTunnelAddress6
         tunnelPrefix6 = resolvedTunnelPrefix6
-        includedRoutes = try Self.routes(resolvedIncludedRoutes)
+        includedRoutes = try ObstacleBridgePacketTunnelRoutePolicy.routes(resolvedIncludedRoutes)
         let baseExcludedRoutes = network["excluded_routes"] as? [String]
             ?? routingOverride?.excludedRoutes
             ?? defaults.excludedRoutes
@@ -109,9 +98,9 @@ struct ObstacleBridgePacketTunnelConfiguration {
             baseIPv6: baseExcludedRoutes6
         )
         let autoExcluded = ObstacleBridgeRuntimeConfig.overlayPeerExcludedRoutes(from: runtimeConfig)
-        excludedRoutes = try Self.routes(effectiveExcluded.ipv4)
-        includedRoutes6 = try Self.routes6(resolvedIncludedRoutes6)
-        excludedRoutes6 = try Self.routes6(effectiveExcluded.ipv6)
+        excludedRoutes = try ObstacleBridgePacketTunnelRoutePolicy.routes(effectiveExcluded.ipv4)
+        includedRoutes6 = try ObstacleBridgePacketTunnelRoutePolicy.routes6(resolvedIncludedRoutes6)
+        excludedRoutes6 = try ObstacleBridgePacketTunnelRoutePolicy.routes6(effectiveExcluded.ipv6)
         dnsServers = (network["dns_servers"] as? [String]) ?? runtimeNetworkFallback.dnsServers
         mtu = ((network["mtu"] as? NSNumber)?.intValue ?? (network["mtu"] as? Int))
             ?? runtimeNetworkFallback.mtu
@@ -182,42 +171,6 @@ struct ObstacleBridgePacketTunnelConfiguration {
         let mtu = routingOverride?.mtu
             ?? ObstacleBridgeRuntimeConfig.intValue(from: payload["mtu"])
         return RuntimeNetworkFallback(dnsServers: dnsServers, mtu: mtu)
-    }
-
-    private static func routes(_ values: [String]) throws -> [ObstacleBridgePacketTunnelIPv4RouteSpec] {
-        try values.map { cidr in
-            let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
-            guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= 32 else {
-                throw ObstacleBridgePacketTunnelConfigurationError.invalidRoute(cidr)
-            }
-            return ObstacleBridgePacketTunnelIPv4RouteSpec(
-                destinationAddress: parts[0],
-                subnetMask: subnetMask(prefix)
-            )
-        }
-    }
-
-    private static func routes6(_ values: [String]) throws -> [ObstacleBridgePacketTunnelIPv6RouteSpec] {
-        try values.map { cidr in
-            let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
-            guard parts.count == 2, let prefix = Int(parts[1]), prefix >= 0, prefix <= 128 else {
-                throw ObstacleBridgePacketTunnelConfigurationError.invalidRoute(cidr)
-            }
-            return ObstacleBridgePacketTunnelIPv6RouteSpec(
-                destinationAddress: parts[0],
-                networkPrefixLength: prefix
-            )
-        }
-    }
-
-    private static func subnetMask(_ prefix: Int) -> String {
-        let mask = prefix == 0 ? 0 : UInt32.max << UInt32(32 - prefix)
-        return [
-            (mask >> 24) & 0xff,
-            (mask >> 16) & 0xff,
-            (mask >> 8) & 0xff,
-            mask & 0xff,
-        ].map(String.init).joined(separator: ".")
     }
 
     private static func uint16Value(from value: Any?) -> UInt16? {
@@ -363,19 +316,5 @@ struct ObstacleBridgePacketTunnelConfiguration {
             }
         }
         return out
-    }
-}
-
-enum ObstacleBridgePacketTunnelConfigurationError: LocalizedError {
-    case unsupportedSchema
-    case invalidRoute(String)
-
-    var errorDescription: String? {
-        switch self {
-        case .unsupportedSchema:
-            return "Unsupported ObstacleBridge packet tunnel provider configuration schema"
-        case .invalidRoute(let route):
-            return "Invalid ObstacleBridge packet tunnel route: \(route)"
-        }
     }
 }

@@ -170,7 +170,7 @@ ARC-CMP-003:
   # The admin UI exposes throttle state at the ChannelMux and physical-TUN
   # aggregate boundaries, not as a per-peer TUN quota view.
   # Raw ChannelMux parity compiles the Core SecureLink transcript and
-  # native-service specification with portable RuntimeConfig scalar parsing/overlay limits, service, listener-hook,
+  # native-service specification with portable RuntimeConfig scalar parsing/overlay limits, packet-tunnel route validation/subnet masks, service, listener-hook,
   # tunnel-routing, UDP-peer, overlay-planning, first-start, Admin authentication/configuration-change challenge,
   # TUN-helper protocol/state/loopback semantics, TUN state/effect policy, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting, plus the remote-service
   # catalog facade required by TCP and UDP owners alongside the Core crypto module, then runs

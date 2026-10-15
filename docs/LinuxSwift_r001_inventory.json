@@ -52,6 +52,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayLayerTransportAdapter.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeConfigPolicy.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketTunnelRoutePolicy.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxChannelMuxSession.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxConfiguredRuntime.swift",
         "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxLiveRuntime.swift",
