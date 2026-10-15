@@ -51,6 +51,15 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         }
         #expect(peer.sequences == [1])
     }
+
+    @Test func malformedUnixHelperReplyFailsClosed() throws {
+        let peer = try UnixHelperPeer(connectionCount: 1, omitFirstResponse: true)
+        defer { peer.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path)
+        #expect(throws: (any Error).self) {
+            try adapter.send(command: .snapshot, payload: [:])
+        }
+    }
 }
 
 private final class UnixHelperPeer: @unchecked Sendable {
@@ -58,6 +67,7 @@ private final class UnixHelperPeer: @unchecked Sendable {
     private let listener: Int32
     private let expectedConnections: Int
     private let corruptFirstSequence: Bool
+    private let omitFirstResponse: Bool
     private let lock = NSLock()
     private var capturedOperations: [String] = []
     private var capturedSequences: [Int] = []
@@ -66,9 +76,10 @@ private final class UnixHelperPeer: @unchecked Sendable {
     var sequences: [Int] { lock.lock(); defer { lock.unlock() }; return capturedSequences }
     var packets: [Data] { lock.lock(); defer { lock.unlock() }; return capturedPackets }
 
-    init(connectionCount: Int, corruptFirstSequence: Bool = false) throws {
+    init(connectionCount: Int, corruptFirstSequence: Bool = false, omitFirstResponse: Bool = false) throws {
         self.expectedConnections = connectionCount
         self.corruptFirstSequence = corruptFirstSequence
+        self.omitFirstResponse = omitFirstResponse
         self.path = "/tmp/obstaclebridge-helper-\(UUID().uuidString).sock"
         self.listener = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
         guard listener >= 0 else { throw PeerError.socket }
@@ -108,7 +119,7 @@ private final class UnixHelperPeer: @unchecked Sendable {
             }
             lock.lock(); capturedOperations.append(operation); capturedSequences.append(sequence); lock.unlock()
             let responseSequence = corruptFirstSequence && index == 0 ? sequence + 1 : sequence
-            let response: [String: Any] = ["response": ["ok": true, "op": operation, "seq": responseSequence, "payload": ["opened": operation != "STOP"]]]
+            let response: [String: Any] = omitFirstResponse && index == 0 ? [:] : ["response": ["ok": true, "op": operation, "seq": responseSequence, "payload": ["opened": operation != "STOP"]]]
             guard let reply = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]) else { return }
             try? writeFrame(reply, fd)
         }
