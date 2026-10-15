@@ -2,6 +2,13 @@ import Foundation
 
 /// Portable scalar and overlay-limit policy shared by platform configuration adapters.
 enum ObstacleBridgeRuntimeConfigPolicy {
+    static let knownGroupedSections = [
+        "runner", "udp_session", "tcp_session", "quic_session", "ws_session",
+        "secure_link", "compress_layer", "tun_execution", "TUN_routing",
+        "admin_web", "debug_logging", "telemetry_client", "channel_mux",
+        "iOS_TUN_connector", "proxy_provider",
+    ]
+
     static func defaultTelemetryConfig() -> [String: Any] {
         [
             "telemetry_enabled": false,

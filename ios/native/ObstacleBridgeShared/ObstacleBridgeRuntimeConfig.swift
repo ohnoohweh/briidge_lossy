@@ -8,23 +8,6 @@ enum ObstacleBridgeRuntimeConfig {
     // iOS deliberately has no process-environment override at runtime.
     static let appRuntimeConfigOverrideEnvironmentKey = "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG"
 
-    private static let knownGroupedSections = [
-        "runner",
-        "udp_session",
-        "tcp_session",
-        "quic_session",
-        "ws_session",
-        "secure_link",
-        "compress_layer",
-        "tun_execution",
-        "TUN_routing",
-        "admin_web",
-        "debug_logging",
-        "telemetry_client",
-        "channel_mux",
-        "iOS_TUN_connector",
-        "proxy_provider",
-    ]
     private static let proxyProviderCompatibilityAliases = [
         "enabled": "proxy_provider_enabled",
         "bind": "proxy_provider_bind",
@@ -266,7 +249,7 @@ enum ObstacleBridgeRuntimeConfig {
 
     static func normalizedConfigUpdates(_ updates: [String: Any], currentRuntimeConfig: [String: Any]) -> [String: Any] {
         var normalized = updates
-        for sectionName in knownGroupedSections + ["channel_mux", "iOS_TUN_connector"] {
+        for sectionName in ObstacleBridgeRuntimeConfigPolicy.knownGroupedSections + ["channel_mux", "iOS_TUN_connector"] {
             guard let payload = normalized[sectionName] as? [String: Any] else {
                 continue
             }
@@ -559,7 +542,7 @@ enum ObstacleBridgeRuntimeConfig {
 
     static func flatten(_ payload: [String: Any]) -> [String: Any] {
         var merged: [String: Any] = [:]
-        for section in knownGroupedSections {
+        for section in ObstacleBridgeRuntimeConfigPolicy.knownGroupedSections {
             let block = groupedSectionPayload(section, runtimeConfig: payload)
             for (key, value) in block {
                 merged[key] = value
