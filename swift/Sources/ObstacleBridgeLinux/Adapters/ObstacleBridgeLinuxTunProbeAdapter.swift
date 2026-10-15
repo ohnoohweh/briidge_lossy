@@ -11,8 +11,8 @@ public enum ObstacleBridgeLinuxTunProbeAdapter {
     /// Creates the Core-owned probe state used by a future admitted packet-device
     /// reader.  The adapter supplies POSIX inputs; it never owns matching or
     /// diagnostic counters.
-    public static func makeRuntime(identifier: UInt16 = 1) -> ObstacleBridgeTunProbeRuntime {
-        ObstacleBridgeTunProbeRuntime(identifier: identifier)
+    public static func makeRuntime(identifier: UInt16 = 1, historyRetentionSeconds: TimeInterval = 60) -> ObstacleBridgeTunProbeRuntime {
+        ObstacleBridgeTunProbeRuntime(identifier: identifier, historyRetentionSeconds: historyRetentionSeconds)
     }
 
     public static func resolve(target: String, tunnelAddress: String = "", tunnelAddress6: String = "") -> (target: String?, family: Int32, error: String) {
@@ -55,7 +55,10 @@ public enum ObstacleBridgeLinuxTunProbeAdapter {
         while let info = cursor {
             var storage = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             if getnameinfo(info.pointee.ai_addr, info.pointee.ai_addrlen, &storage, socklen_t(storage.count), nil, 0, NI_NUMERICHOST) == 0 {
-                return String(cString: storage)
+                return String(
+                    decoding: storage.prefix(while: { $0 != 0 }).map { UInt8(bitPattern: $0) },
+                    as: UTF8.self
+                )
             }
             cursor = info.pointee.ai_next
         }

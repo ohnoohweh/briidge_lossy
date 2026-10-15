@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
 @testable import ObstacleBridgeCore
@@ -16,6 +17,9 @@ struct ObstacleBridgeLinuxTunProbeAdapterTests {
         let localhost = ObstacleBridgeLinuxTunProbeAdapter.resolve(target: "localhost", tunnelAddress: "127.0.0.1")
         #expect(localhost.target == "127.0.0.1")
         #expect(localhost.family == ObstacleBridgeTunProbeDiagnosticsSupport.ipv4Family)
+        let localhostV6 = ObstacleBridgeLinuxTunProbeAdapter.resolve(target: "localhost", tunnelAddress6: "fd00::1")
+        #expect(localhostV6.target == "::1")
+        #expect(localhostV6.family == ObstacleBridgeTunProbeDiagnosticsSupport.ipv6Family)
         let failed = ObstacleBridgeLinuxTunProbeAdapter.resolve(target: "not-a-host.invalid", tunnelAddress: "127.0.0.1")
         #expect(failed.target == nil)
         #expect(failed.error.contains("unable to resolve"))
@@ -67,6 +71,29 @@ struct ObstacleBridgeLinuxTunProbeAdapterTests {
         #expect(failure["detail"] as? String == "packet device write failed")
         #expect(runtime.counterSnapshot()["probe_timeout"] == 1)
         #expect(runtime.counterSnapshot()["probe_exception"] == 1)
+    }
+
+    @Test func expiresCachedSuccessHistoryAtCoreRetentionBoundary() throws {
+        let runtime = ObstacleBridgeLinuxTunProbeAdapter.makeRuntime(identifier: 79, historyRetentionSeconds: 0.01)
+        let launch = try #require(runtime.begin(
+            probeKind: "peer", target: "198.51.100.10", resolvedTarget: "198.51.100.10",
+            family: ObstacleBridgeTunProbeDiagnosticsSupport.ipv4Family, sourceIP: "198.18.0.1",
+            ifname: "obtun0", sentMonotonicNS: 1_000_000, nonce: Data(repeating: 5, count: 8)
+        ))
+        var reply = launch.packet
+        reply[20] = 0
+        let source = reply.subdata(in: 12..<16)
+        reply.replaceSubrange(12..<16, with: reply.subdata(in: 16..<20))
+        reply.replaceSubrange(16..<20, with: source)
+        #expect(ObstacleBridgeLinuxTunProbeAdapter.receivedPacket(reply, at: 4_000_000, runtime: runtime).matched)
+        let later = try #require(runtime.begin(
+            probeKind: "peer", target: "198.51.100.10", resolvedTarget: "198.51.100.10",
+            family: ObstacleBridgeTunProbeDiagnosticsSupport.ipv4Family, sourceIP: "198.18.0.1",
+            ifname: "obtun0", sentMonotonicNS: 5_000_000, nonce: Data(repeating: 4, count: 8)
+        ))
+        let timeout = try #require(ObstacleBridgeLinuxTunProbeAdapter.timeout(later, at: 20_000_000, runtime: runtime))
+        #expect(timeout["last_success_ago_s"] is NSNull)
+        #expect(timeout["last_success_rtt_ms"] is NSNull)
     }
 
     @Test func packetDeviceRemainsFailClosed() {

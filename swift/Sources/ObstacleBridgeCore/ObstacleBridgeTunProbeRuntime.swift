@@ -7,6 +7,13 @@ import Foundation
 /// projection so those decisions do not leak into a platform packet-device
 /// owner.
 public final class ObstacleBridgeTunProbeRuntime {
+    private struct PendingKey: Hashable {
+        let family: Int32
+        let identifier: UInt16
+        let sequence: UInt16
+        let nonce: Data
+    }
+
     public struct Launch {
         public let token: UUID
         public let packet: Data
@@ -20,7 +27,7 @@ public final class ObstacleBridgeTunProbeRuntime {
     }
 
     private struct Pending {
-        let key: ObstacleBridgeTunProbeWaiterKey
+        let key: PendingKey
         let probeKind: String
         let target: String
         let resolvedTarget: String
@@ -31,16 +38,18 @@ public final class ObstacleBridgeTunProbeRuntime {
 
     private let lock = NSLock()
     private let identifier: UInt16
+    private let historyRetentionSeconds: TimeInterval
     private var sequence: UInt16 = 1
     private var pendingByToken: [UUID: Pending] = [:]
-    private var tokenByKey: [ObstacleBridgeTunProbeWaiterKey: UUID] = [:]
+    private var tokenByKey: [PendingKey: UUID] = [:]
     private var history: [String: ObstacleBridgeTunProbeHistory] = [:]
     private var tunICMPStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunICMPStageCounts()
     private var localReplyStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeLocalReplyStageCounts()
     private var boundaryCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunProbeBoundaryCounts()
 
-    public init(identifier: UInt16 = 1) {
+    public init(identifier: UInt16 = 1, historyRetentionSeconds: TimeInterval = 60) {
         self.identifier = identifier == 0 ? 1 : identifier
+        self.historyRetentionSeconds = max(0, historyRetentionSeconds)
     }
 
     /// Builds an ICMP request and registers the Core-owned reply matcher.
@@ -72,7 +81,7 @@ public final class ObstacleBridgeTunProbeRuntime {
             return nil
         }
         let token = UUID()
-        let key = ObstacleBridgeTunProbeWaiterKey(family: family, identifier: identifier, sequence: currentSequence, nonce: Data(payload.dropFirst(5).prefix(8)))
+        let key = PendingKey(family: family, identifier: identifier, sequence: currentSequence, nonce: Data(payload.dropFirst(5).prefix(8)))
         let pending = Pending(
             key: key, probeKind: probeKind, target: target, resolvedTarget: resolvedTarget,
             nameResolution: ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeNameResolution(status: "successful", resolvedIP: resolvedTarget, detail: "Resolved \(target) to \(resolvedTarget)."),
@@ -115,7 +124,7 @@ public final class ObstacleBridgeTunProbeRuntime {
         case .ipv6:
             family = ObstacleBridgeTunProbeDiagnosticsSupport.ipv6Family
         }
-        let key = ObstacleBridgeTunProbeWaiterKey(family: family, identifier: parsed.identifier, sequence: parsed.sequence, nonce: parsed.payload.subdata(in: 5..<13))
+        let key = PendingKey(family: family, identifier: parsed.identifier, sequence: parsed.sequence, nonce: parsed.payload.subdata(in: 5..<13))
         guard let token = tokenByKey.removeValue(forKey: key), let pending = pendingByToken.removeValue(forKey: token) else {
             recordBoundary("probe_reply_unmatched")
             return Observation(matched: false, result: nil)
@@ -157,7 +166,11 @@ public final class ObstacleBridgeTunProbeRuntime {
     }
 
     private func result(for pending: Pending, ok: Bool, state: String, detail: String, nowNS: UInt64, valueMS: Double? = nil) -> [String: Any] {
-        let snapshot = ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeHistorySnapshot(cacheKey: pending.cacheKey, tunProbeHistory: history, currentUptime: Double(nowNS) / 1_000_000_000)
+        let currentUptime = Double(nowNS) / 1_000_000_000
+        if let prior = history[pending.cacheKey], currentUptime - prior.lastSuccessMonotonic > historyRetentionSeconds {
+            history.removeValue(forKey: pending.cacheKey)
+        }
+        let snapshot = ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeHistorySnapshot(cacheKey: pending.cacheKey, tunProbeHistory: history, currentUptime: currentUptime)
         return ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeResult(probeKind: pending.probeKind, target: pending.target, ok: ok, state: state, summary: "\(ObstacleBridgeTunProbeDiagnosticsSupport.tunProbeLabel(pending.probeKind)): \(state)", detail: detail, resolvedTarget: pending.resolvedTarget, nameResolution: pending.nameResolution, valueMS: valueMS, lastSuccessAgoS: snapshot.lastSuccessAgoS, lastSuccessRTTMS: snapshot.lastSuccessRTTMS)
     }
 
