@@ -218,6 +218,14 @@ enum ObstacleBridgeRuntimeConfigPolicy {
 /// grouped/flat precedence, schema coercion, and compatibility spelling are
 /// shared protocol policy rather than Apple or Linux behavior.
 public enum ObstacleBridgeRuntimeConfigPort {
+    public struct OverlayBootstrapRecord: Equatable, Sendable {
+        public let transport: String
+        public let transports: [String]
+        public let layersTopDown: [String]
+        public let compressWrapped: Bool
+        public let secureLinkMode: String?
+    }
+
     public struct TunnelRoutingRecord: Equatable, Sendable {
         public let enabledOnStartup: Bool
         public let tunnelAddress: String?
@@ -250,6 +258,17 @@ public enum ObstacleBridgeRuntimeConfigPort {
     /// Applies the shared redaction policy to a platform-provided config tree.
     public static func redactedConfiguration(_ payload: [String: Any]) -> [String: Any] {
         ObstacleBridgeAdminConfigProjectionPort.redacted(payload)
+    }
+
+    /// Selects the overlay transport and layer stack from the shared config
+    /// spelling. Resource adapters retain only their connection implementation.
+    public static func overlayBootstrap(from payload: [String: Any]) throws -> OverlayBootstrapRecord {
+        let settings = try ObstacleBridgeOverlayBootstrapSettings(payload: flatten(payload))
+        return .init(
+            transport: settings.transport, transports: settings.transports,
+            layersTopDown: settings.layersTopDown, compressWrapped: settings.compressWrapped,
+            secureLinkMode: settings.secureLinkMode
+        )
     }
 
     public static func groupedSectionPayload(_ section: String, from payload: [String: Any]) -> [String: Any] {

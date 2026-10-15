@@ -253,18 +253,22 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             minimumBodyBytes: compressionMinimumBytes,
             allowedMessageTypes: compressionMessageTypes(string(flat["compress_layer_types"]))
         )
-        // Keep Linux admission on the portable layer-ordering policy. The
-        // adapter owns only configuration spelling and its POSIX transports.
+        // Client bootstrap selection is Core-owned; Linux supplies POSIX
+        // configuration input and checks that its selected transport agrees.
         do {
-            _ = try ObstacleBridgeOverlayStackPlanner.planTransport(
-                transport: transport.rawValue,
-                peerHost: listenerMode ? nil : host,
-                secureLinkEnabled: secureMode != "off",
-                secureLinkModeRaw: secureMode,
-                secureLinkPSK: psk.map { String(decoding: $0, as: UTF8.self) } ?? "",
-                compressLayerEnabled: compressionPolicy.enabled,
-                compressLayerAlgoRaw: compressionAlgorithm
-            )
+            if !listenerMode {
+                let bootstrap = try ObstacleBridgeRuntimeConfigPort.overlayBootstrap(from: root)
+                guard bootstrap.transport == transport.rawValue else {
+                    throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("Core bootstrap transport does not match Linux admission")
+                }
+            } else {
+                _ = try ObstacleBridgeOverlayStackPlanner.planTransport(
+                    transport: transport.rawValue, peerHost: nil,
+                    secureLinkEnabled: secureMode != "off", secureLinkModeRaw: secureMode,
+                    secureLinkPSK: psk.map { String(decoding: $0, as: UTF8.self) } ?? "",
+                    compressLayerEnabled: compressionPolicy.enabled, compressLayerAlgoRaw: compressionAlgorithm
+                )
+            }
         } catch {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
         }

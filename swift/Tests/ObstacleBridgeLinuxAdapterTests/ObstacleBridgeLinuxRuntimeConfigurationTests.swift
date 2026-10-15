@@ -389,6 +389,20 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(secure["secure_link_psk_present"] as? Bool == true)
     }
 
+    @Test func coreBootstrapSelectsLinuxClientTransportAndLayers() throws {
+        let bootstrap = try ObstacleBridgeRuntimeConfigPort.overlayBootstrap(from: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443],
+            "secure_link": ["secure_link": true, "secure_link_mode": "psk", "secure_link_psk": "secret"],
+            "compress_layer": ["compress_layer": true, "compress_layer_algo": "zlib"],
+        ])
+        #expect(bootstrap.transport == "tcp")
+        #expect(bootstrap.transports == ["tcp"])
+        #expect(bootstrap.layersTopDown == ["compress_layer", "secure_link_psk", "tcp"])
+        #expect(bootstrap.compressWrapped)
+        #expect(bootstrap.secureLinkMode == "psk")
+    }
+
     @Test func coreCatalogFramesEncodeConfiguredRemoteServices() throws {
         let frames = ObstacleBridgeRuntimeConfigPort.remoteServiceCatalogFrames(
             from: [
