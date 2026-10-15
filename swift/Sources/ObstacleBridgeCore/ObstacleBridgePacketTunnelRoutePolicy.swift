@@ -59,6 +59,16 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
         return (hostBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask)
     }
 
+    static func routeDiagnostics(
+        includedIPv4: [String], baseExcludedIPv4: [String], autoExcludedIPv4: [String], effectiveExcludedIPv4: [String],
+        includedIPv6: [String], baseExcludedIPv6: [String], autoExcludedIPv6: [String], effectiveExcludedIPv6: [String]
+    ) -> [String: Any] {
+        [
+            "ipv4": diagnosticFamily(included: includedIPv4, baseExcluded: baseExcludedIPv4, autoExcluded: autoExcludedIPv4, effectiveExcluded: effectiveExcludedIPv4, probeSeed: "127.0.0.1", version: 4),
+            "ipv6": diagnosticFamily(included: includedIPv6, baseExcluded: baseExcludedIPv6, autoExcluded: autoExcludedIPv6, effectiveExcluded: effectiveExcludedIPv6, probeSeed: "::1", version: 6),
+        ]
+    }
+
     private static func ipv4Value(_ host: String) -> UInt32? {
         let parts = host.split(separator: ".").map(String.init)
         guard parts.count == 4 else { return nil }
@@ -103,6 +113,32 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
             bytes.append(UInt8(group >> 8)); bytes.append(UInt8(group & 0xff))
         }
         return bytes
+    }
+
+    private static func diagnosticFamily(included: [String], baseExcluded: [String], autoExcluded: [String], effectiveExcluded: [String], probeSeed: String, version: Int) -> [String: Any] {
+        let probes = dedupe([probeSeed] + autoExcluded.compactMap(hostFromCIDR)).map { routeProbe($0, included: included, excluded: effectiveExcluded, version: version) }
+        return ["included_routes": included, "base_excluded_routes": baseExcluded, "auto_peer_excluded_routes": autoExcluded, "effective_excluded_routes": effectiveExcluded, "probes": probes]
+    }
+
+    private static func routeProbe(_ host: String, included: [String], excluded: [String], version: Int) -> [String: Any] {
+        let matchingIncluded = included.filter { routeContains(host: host, cidr: $0, version: version) }
+        let matchingExcluded = excluded.filter { routeContains(host: host, cidr: $0, version: version) }
+        return ["host": host, "included": !matchingIncluded.isEmpty, "excluded": !matchingExcluded.isEmpty, "routed_to_tunnel": !matchingIncluded.isEmpty && matchingExcluded.isEmpty, "matching_included_routes": matchingIncluded, "matching_excluded_routes": matchingExcluded]
+    }
+
+    private static func routeContains(host: String, cidr: String, version: Int) -> Bool {
+        let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let prefix = Int(parts[1]) else { return false }
+        return version == 4 ? ipv4RouteContains(host: host, network: parts[0], prefix: prefix) : ipv6RouteContains(host: host, network: parts[0], prefix: prefix)
+    }
+
+    private static func hostFromCIDR(_ cidr: String) -> String? {
+        let host = cidr.split(separator: "/", maxSplits: 1).first.map(String.init)
+        return host?.isEmpty == false ? host : nil
+    }
+
+    private static func dedupe(_ values: [String]) -> [String] {
+        var seen: Set<String> = []; return values.filter { seen.insert($0).inserted }
     }
 }
 

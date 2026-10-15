@@ -105,7 +105,7 @@ struct ObstacleBridgePacketTunnelConfiguration {
             ?? runtimeNetworkFallback.mtu
             ?? 1500
         enabledOnStartup = routingOverride?.enabledOnStartup ?? true
-        routeDiagnostics = Self.routeDiagnostics(
+        routeDiagnostics = ObstacleBridgePacketTunnelRoutePolicy.routeDiagnostics(
             includedIPv4: resolvedIncludedRoutes,
             baseExcludedIPv4: baseExcludedRoutes,
             autoExcludedIPv4: autoExcluded.ipv4,
@@ -185,77 +185,4 @@ struct ObstacleBridgePacketTunnelConfiguration {
         return nil
     }
 
-    private static func routeDiagnostics(
-        includedIPv4: [String],
-        baseExcludedIPv4: [String],
-        autoExcludedIPv4: [String],
-        effectiveExcludedIPv4: [String],
-        includedIPv6: [String],
-        baseExcludedIPv6: [String],
-        autoExcludedIPv6: [String],
-        effectiveExcludedIPv6: [String]
-    ) -> [String: Any] {
-        let ipv4Probes = dedupe(["127.0.0.1"] + autoExcludedIPv4.compactMap { hostFromCIDR($0) })
-        let ipv6Probes = dedupe(["::1"] + autoExcludedIPv6.compactMap { hostFromCIDR($0) })
-        return [
-            "ipv4": [
-                "included_routes": includedIPv4,
-                "base_excluded_routes": baseExcludedIPv4,
-                "auto_peer_excluded_routes": autoExcludedIPv4,
-                "effective_excluded_routes": effectiveExcludedIPv4,
-                "probes": ipv4Probes.map {
-                    routeProbe($0, includedRoutes: includedIPv4, excludedRoutes: effectiveExcludedIPv4, version: 4)
-                },
-            ],
-            "ipv6": [
-                "included_routes": includedIPv6,
-                "base_excluded_routes": baseExcludedIPv6,
-                "auto_peer_excluded_routes": autoExcludedIPv6,
-                "effective_excluded_routes": effectiveExcludedIPv6,
-                "probes": ipv6Probes.map {
-                    routeProbe($0, includedRoutes: includedIPv6, excludedRoutes: effectiveExcludedIPv6, version: 6)
-                },
-            ],
-        ]
-    }
-
-    private static func routeProbe(_ host: String, includedRoutes: [String], excludedRoutes: [String], version: Int) -> [String: Any] {
-        let matchingIncluded = includedRoutes.filter { routeContains(host: host, cidr: $0, version: version) }
-        let matchingExcluded = excludedRoutes.filter { routeContains(host: host, cidr: $0, version: version) }
-        return [
-            "host": host,
-            "included": !matchingIncluded.isEmpty,
-            "excluded": !matchingExcluded.isEmpty,
-            "routed_to_tunnel": !matchingIncluded.isEmpty && matchingExcluded.isEmpty,
-            "matching_included_routes": matchingIncluded,
-            "matching_excluded_routes": matchingExcluded,
-        ]
-    }
-
-    private static func routeContains(host: String, cidr: String, version: Int) -> Bool {
-        let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
-        guard parts.count == 2, let prefix = Int(parts[1]) else {
-            return false
-        }
-        if version == 4 {
-            return ObstacleBridgePacketTunnelRoutePolicy.ipv4RouteContains(host: host, network: parts[0], prefix: prefix)
-        }
-        return ObstacleBridgePacketTunnelRoutePolicy.ipv6RouteContains(host: host, network: parts[0], prefix: prefix)
-    }
-
-    private static func hostFromCIDR(_ cidr: String) -> String? {
-        let parts = cidr.split(separator: "/", maxSplits: 1).map(String.init)
-        return parts.first?.isEmpty == false ? parts.first : nil
-    }
-
-    private static func dedupe(_ values: [String]) -> [String] {
-        var seen: Set<String> = []
-        var out: [String] = []
-        for value in values {
-            if seen.insert(value).inserted {
-                out.append(value)
-            }
-        }
-        return out
-    }
 }
