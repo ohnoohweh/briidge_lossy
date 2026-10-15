@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
+@testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
     @Test func admitsExplicitHelperControlSocketWithoutAdmittingTunStartup() throws {
@@ -304,6 +305,24 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
         ]))
         #expect(operatorSupervised.transport == .tcp)
+    }
+
+    @Test func coreConfigurationPortKeepsGroupedPrecedenceForLinuxAdmission() throws {
+        let payload: [String: Any] = [
+            "overlay_transport": "myudp",
+            "tcp_peer": "flat.invalid",
+            "tcp_peer_port": "4444",
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "grouped.example", "tcp_peer_port": "4242"],
+        ]
+        let flat = ObstacleBridgeRuntimeConfigPort.flatten(payload)
+        #expect(flat["overlay_transport"] as? String == "tcp")
+        #expect(flat["tcp_peer"] as? String == "grouped.example")
+        #expect(flat["tcp_peer_port"] as? Int == 4242)
+        let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(payload))
+        #expect(configuration.transport == .tcp)
+        #expect(configuration.host == "grouped.example")
+        #expect(configuration.port == 4242)
     }
 
     @Test func runtimeStatusReportsAdmissionStateWithoutLeakingPsk() throws {

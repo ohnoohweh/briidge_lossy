@@ -163,22 +163,27 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
         }
-        let runner = root["runner"] as? [String: Any] ?? [:]
-        let tunExecution = root["tun_execution"] as? [String: Any] ?? [:]
+        // Core owns grouped-versus-flat precedence and schema scalar coercion.
+        // Linux contributes only JSON input and Linux-specific capability gates.
+        let flat = ObstacleBridgeRuntimeConfigPort.flatten(root)
+        let runner = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("runner", from: root)
+        let tunExecution = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("tun_execution", from: root)
         let tunMode = (string(tunExecution["tun_execution_mode"]) ?? "inline").lowercased()
         guard tunMode == "inline" || tunMode == "helper" else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("tun_execution.tun_execution_mode must be inline or helper")
         }
         let tunHelperSocket = tunMode == "helper" ? string(tunExecution["tun_helper_socket"]) : nil
-        if let tun = root["TUN_routing"] as? [String: Any],
+        let tun = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("TUN_routing", from: root)
+        if !tun.isEmpty,
            boolean(tun["enabled_on_startup"] ?? tun["enabled"]) == true {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
         }
-        if let proxy = root["proxy_provider"] as? [String: Any], boolean(proxy["enabled"]) == true {
+        let proxy = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("proxy_provider", from: root)
+        if !proxy.isEmpty, boolean(proxy["proxy_provider_enabled"] ?? proxy["enabled"]) == true {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift local proxy_provider mode is unavailable; outbound WebSocket proxy configuration remains supported")
         }
         let listenerMode = boolean(runner["listener_mode"]) == true
-        guard let transportText = string(runner["overlay_transport"] ?? root["overlay_transport"]),
+        guard let transportText = string(runner["overlay_transport"] ?? flat["overlay_transport"]),
               let transport = ObstacleBridgeLinuxTransport(rawValue: transportText.lowercased()) else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires runner.overlay_transport")
         }
@@ -197,7 +202,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         case .myudp: (sessionName, peerKey, portKey) = ("udp_session", "udp_peer", "udp_peer_port")
         case .quic: (sessionName, peerKey, portKey) = ("quic_session", "quic_peer", "quic_peer_port")
         }
-        let session = root[sessionName] as? [String: Any] ?? [:]
+        let session = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload(sessionName, from: root)
         let host = string(session[peerKey]) ?? (listenerMode ? "listener" : "")
         guard listenerMode || !host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("runtime config requires \(sessionName).\(peerKey)")
@@ -224,7 +229,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
            (wsCertificate?.isEmpty != false || wsPrivateKey?.isEmpty != false) {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.missingValue("WSS listener requires ws_session.ws_cert and ws_session.ws_key")
         }
-        let secure = root["secure_link"] as? [String: Any] ?? [:]
+        let secure = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("secure_link", from: root)
         let secureMode = (string(secure["secure_link_mode"]) ?? "off").lowercased()
         let psk: Data?
         switch secureMode {
@@ -234,17 +239,17 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             psk = Data(value.utf8)
         default: throw ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedSecureLinkMode("Linux secure_link_mode=\(secureMode) is unavailable")
         }
-        let compressionAlgorithm = (string(root["compress_layer_algo"]) ?? "zlib").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let compressionAlgorithm = (string(flat["compress_layer_algo"]) ?? "zlib").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard compressionAlgorithm == "zlib" else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unsupportedCompressionAlgorithm("Linux compress_layer_algo=\(compressionAlgorithm) is unavailable")
         }
-        let compressionLevel = min(9, max(0, integer(root["compress_layer_level"]) ?? 3))
-        let compressionMinimumBytes = max(0, integer(root["compress_layer_min_bytes"]) ?? 64)
+        let compressionLevel = min(9, max(0, integer(flat["compress_layer_level"]) ?? 3))
+        let compressionMinimumBytes = max(0, integer(flat["compress_layer_min_bytes"]) ?? 64)
         let compressionPolicy = ObstacleBridgeMuxCompressionPolicy(
-            enabled: boolean(root["compress_layer"]) ?? false,
+            enabled: boolean(flat["compress_layer"]) ?? false,
             level: compressionLevel,
             minimumBodyBytes: compressionMinimumBytes,
-            allowedMessageTypes: compressionMessageTypes(string(root["compress_layer_types"]))
+            allowedMessageTypes: compressionMessageTypes(string(flat["compress_layer_types"]))
         )
         // Keep Linux admission on the portable layer-ordering policy. The
         // adapter owns only configuration spelling and its POSIX transports.
@@ -261,7 +266,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         } catch {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
         }
-        let receiveIdleTimeoutMilliseconds = max(1, integer(root["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
+        let receiveIdleTimeoutMilliseconds = max(1, integer(flat["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
         return .init(

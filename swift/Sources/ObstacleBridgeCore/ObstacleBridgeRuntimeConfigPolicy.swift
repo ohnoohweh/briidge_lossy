@@ -213,3 +213,75 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         }
     }
 }
+
+/// Portable configuration-shape port. Platform adapters provide raw input, but
+/// grouped/flat precedence, schema coercion, and compatibility spelling are
+/// shared protocol policy rather than Apple or Linux behavior.
+public enum ObstacleBridgeRuntimeConfigPort {
+    public static func schemaSnapshot() -> [String: Any] {
+        ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
+    }
+
+    public static func groupedSectionPayload(_ section: String, from payload: [String: Any]) -> [String: Any] {
+        if let nested = payload[section] as? [String: Any] {
+            return normalizedSectionPayload(section, nested)
+        }
+        guard let rows = schemaSnapshot()[section] as? [[String: Any]] else { return [:] }
+        var result: [String: Any] = [:]
+        for row in rows {
+            let key = String(describing: row["key"] ?? "")
+            if !key.isEmpty, let value = payload[key] { result[key] = value }
+        }
+        return normalizedSectionPayload(section, result)
+    }
+
+    public static func flatten(_ payload: [String: Any]) -> [String: Any] {
+        var merged: [String: Any] = [:]
+        for section in ObstacleBridgeRuntimeConfigPolicy.knownGroupedSections {
+            for (key, value) in groupedSectionPayload(section, from: payload) { merged[key] = value }
+        }
+        for (key, value) in payload where !(value is [String: Any]) && merged[key] == nil {
+            merged[key] = value
+        }
+        ObstacleBridgeRuntimeConfigPolicy.applyCompatibilityAliases(to: &merged)
+        return merged
+    }
+
+    public static func normalizedUpdates(_ updates: [String: Any], current: [String: Any]) -> [String: Any] {
+        var normalized = updates
+        for section in ObstacleBridgeRuntimeConfigPolicy.knownGroupedSections {
+            guard let grouped = normalized.removeValue(forKey: section) as? [String: Any] else { continue }
+            for (key, value) in normalizedSectionPayload(section, grouped) { normalized[key] = value }
+        }
+        ObstacleBridgeRuntimeConfigPolicy.applyCompatibilityAliases(to: &normalized)
+        ObstacleBridgeRuntimeConfigPolicy.enforceAdminAuthenticationUpdate(
+            &normalized,
+            currentAuthDisabled: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: current["admin_web_auth_disable"]) ?? false
+        )
+        return normalized
+    }
+
+    private static func normalizedSectionPayload(_ section: String, _ payload: [String: Any]) -> [String: Any] {
+        guard let rows = schemaSnapshot()[section] as? [[String: Any]] else { return payload }
+        var result = payload
+        ObstacleBridgeRuntimeConfigPolicy.applyCompatibilityAliases(to: &result)
+        let aliases = section == "proxy_provider" ? ObstacleBridgeRuntimeConfigPolicy.proxyProviderCompatibilityAliasKeys : section == "tun_execution" ? ObstacleBridgeRuntimeConfigPolicy.tunExecutionCompatibilityAliasKeys : []
+        for alias in aliases { result.removeValue(forKey: alias) }
+        for row in rows {
+            let key = String(describing: row["key"] ?? "")
+            guard !key.isEmpty, let value = result[key] else { continue }
+            result[key] = normalize(value, defaultValue: row["default"])
+        }
+        return result
+    }
+
+    private static func normalize(_ value: Any, defaultValue: Any?) -> Any {
+        switch defaultValue {
+        case is String: return ObstacleBridgeRuntimeConfigPolicy.firstStringValue(from: value) ?? value
+        case is Int: return ObstacleBridgeRuntimeConfigPolicy.intValue(from: value) ?? value
+        case is Double: return ObstacleBridgeRuntimeConfigPolicy.doubleValue(from: value) ?? value
+        case is Bool: return ObstacleBridgeRuntimeConfigPolicy.boolValue(from: value) ?? value
+        default: return value
+        }
+    }
+}
