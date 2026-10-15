@@ -13,6 +13,7 @@ public enum ObstacleBridgeLinuxTunDeviceError: Error, Equatable, LocalizedError 
     case invalidMTU
     case openFailed(Int32)
     case configureFailed(Int32)
+    case activateFailed(Int32)
     case nonBlockingConfigurationFailed(Int32)
     case invalidPacketVersion(Int)
     case notRunning
@@ -26,6 +27,7 @@ public enum ObstacleBridgeLinuxTunDeviceError: Error, Equatable, LocalizedError 
         case .invalidMTU: return "Linux TUN MTU must be between 68 and 65535"
         case .openFailed(let code): return "unable to open /dev/net/tun errno=\(code)"
         case .configureFailed(let code): return "unable to configure /dev/net/tun errno=\(code)"
+        case .activateFailed(let code): return "unable to activate Linux TUN interface errno=\(code)"
         case .nonBlockingConfigurationFailed(let code): return "unable to configure non-blocking /dev/net/tun I/O errno=\(code)"
         case .invalidPacketVersion(let version): return "Linux TUN packets must be IPv4 or IPv6, got version \(version)"
         case .notRunning: return "Linux TUN packet device is not running"
@@ -44,8 +46,11 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
     public typealias DiagnosticSink = (String, [String: Any]) -> Void
 
     private static let tunSetIFF: UInt = 0x4004_54ca
+    private static let siocGetIFFlags: UInt = 0x8913
+    private static let siocSetIFFlags: UInt = 0x8914
     private static let iffTun: UInt16 = 0x0001
     private static let iffNoPacketInfo: UInt16 = 0x1000
+    private static let iffUp: UInt16 = 0x0001
     private static let interfaceNameCapacity = 16
 
     public let requestedInterfaceName: String
@@ -213,7 +218,26 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
         }
         guard result == 0 else { let code = errno; _ = close(descriptor); throw ObstacleBridgeLinuxTunDeviceError.configureFailed(code) }
         let actual = String(decoding: request.prefix(interfaceNameCapacity).prefix { $0 != 0 }, as: UTF8.self)
-        return (descriptor, actual.isEmpty ? interfaceName : actual)
+        let selectedName = actual.isEmpty ? interfaceName : actual
+        do { try activateInterface(named: selectedName) }
+        catch { _ = close(descriptor); throw error }
+        return (descriptor, selectedName)
+    }
+
+    private static func activateInterface(named interfaceName: String) throws {
+        let control = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), 0)
+        guard control >= 0 else { throw ObstacleBridgeLinuxTunDeviceError.activateFailed(errno) }
+        defer { _ = close(control) }
+        var request = [UInt8](repeating: 0, count: 40)
+        request.replaceSubrange(0..<interfaceName.utf8.count, with: interfaceName.utf8)
+        guard request.withUnsafeMutableBytes({ linuxTunIoctl(control, siocGetIFFlags, $0.baseAddress!) }) == 0 else {
+            throw ObstacleBridgeLinuxTunDeviceError.activateFailed(errno)
+        }
+        let flags = request[interfaceNameCapacity] | UInt8(truncatingIfNeeded: iffUp)
+        request[interfaceNameCapacity] = flags
+        guard request.withUnsafeMutableBytes({ linuxTunIoctl(control, siocSetIFFlags, $0.baseAddress!) }) == 0 else {
+            throw ObstacleBridgeLinuxTunDeviceError.activateFailed(errno)
+        }
     }
 #endif
 
