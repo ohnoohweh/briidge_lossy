@@ -115,6 +115,21 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         return (dedupeRoutes(baseIPv4 + peerRoutes.ipv4), dedupeRoutes(baseIPv6 + peerRoutes.ipv6))
     }
 
+    static func enforceAdminAuthenticationUpdate(
+        _ updates: inout [String: Any], currentAuthDisabled: Bool
+    ) {
+        if (updates["admin_web_auth_disable"] as? Bool) == true {
+            updates["admin_web_username"] = ""
+            updates["admin_web_password"] = ""
+        } else if let password = updates["admin_web_password"] as? String,
+                  password.isEmpty,
+                  currentAuthDisabled,
+                  updates["admin_web_auth_disable"] == nil {
+            updates["admin_web_username"] = ""
+            updates["admin_web_auth_disable"] = true
+        }
+    }
+
     private static func bindHost(for transport: String, payload: [String: Any]) -> String {
         let keys = ["myudp": "udp_bind", "tcp": "tcp_bind", "quic": "quic_bind", "ws": "ws_bind"]
         return keys[transport].flatMap { stringValue(from: payload[$0]) } ?? "::"

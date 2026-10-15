@@ -309,18 +309,10 @@ enum ObstacleBridgeRuntimeConfig {
             }
         }
         applyCompatibilityAliases(to: &normalized)
-        if (normalized["admin_web_auth_disable"] as? Bool) == true {
-            normalized["admin_web_username"] = ""
-            normalized["admin_web_password"] = ""
-        } else if
-            let password = normalized["admin_web_password"] as? String,
-            password.isEmpty,
-            (boolValue(from: currentRuntimeConfig["admin_web_auth_disable"]) ?? false),
-            normalized["admin_web_auth_disable"] == nil
-        {
-            normalized["admin_web_username"] = ""
-            normalized["admin_web_auth_disable"] = true
-        }
+        ObstacleBridgeRuntimeConfigPolicy.enforceAdminAuthenticationUpdate(
+            &normalized,
+            currentAuthDisabled: boolValue(from: currentRuntimeConfig["admin_web_auth_disable"]) ?? false
+        )
         return normalized
     }
 

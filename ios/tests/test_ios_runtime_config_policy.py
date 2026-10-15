@@ -44,6 +44,18 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                     "tcp_peer_port": 443,
                     "tcp_peer_resolve_family": "ipv4",
                 ])
+                var authDisabled: [String: Any] = [
+                    "admin_web_auth_disable": true,
+                    "admin_web_username": "operator",
+                    "admin_web_password": "secret",
+                ]
+                ObstacleBridgeRuntimeConfigPolicy.enforceAdminAuthenticationUpdate(
+                    &authDisabled, currentAuthDisabled: false
+                )
+                var preservedDisable: [String: Any] = ["admin_web_password": ""]
+                ObstacleBridgeRuntimeConfigPolicy.enforceAdminAuthenticationUpdate(
+                    &preservedDisable, currentAuthDisabled: true
+                )
                 let output: [String: Any] = [
                     "websocket4": websocket.ipv4,
                     "websocket6": websocket.ipv6,
@@ -51,6 +63,10 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                     "mapped6": mapped.ipv6,
                     "ipv4_only4": ipv4Only.ipv4,
                     "ipv4_only6": ipv4Only.ipv6,
+                    "disabled_username": authDisabled["admin_web_username"]!,
+                    "disabled_password": authDisabled["admin_web_password"]!,
+                    "preserved_disable": preservedDisable["admin_web_auth_disable"]!,
+                    "preserved_username": preservedDisable["admin_web_username"]!,
                 ]
                 FileHandle.standardOutput.write(
                     try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
@@ -80,4 +96,8 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
         "mapped6": ["::ffff:198.51.100.10/128"],
         "ipv4_only4": [],
         "ipv4_only6": [],
+        "disabled_username": "",
+        "disabled_password": "",
+        "preserved_disable": True,
+        "preserved_username": "",
     }
