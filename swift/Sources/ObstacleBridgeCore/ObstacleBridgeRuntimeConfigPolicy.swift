@@ -62,4 +62,79 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         guard let raw = stringValue(from: value)?.lowercased() else { return nil }
         return ["prefer-ipv6", "ipv4", "ipv6"].contains(raw) ? raw : nil
     }
+
+    static func wsPeerAddresses(from value: Any?) -> [String] {
+        let values = (value as? [Any]) ?? (value.map { [$0] } ?? [])
+        var addresses: [String] = []
+        for value in values {
+            guard let rendered = stringValue(from: value) else { continue }
+            for token in rendered.replacingOccurrences(of: ";", with: ",").split(separator: ",", omittingEmptySubsequences: false) {
+                let trimmed = String(token).trimmingCharacters(in: .whitespacesAndNewlines)
+                let address = trimmed.hasPrefix("[") && trimmed.hasSuffix("]") ? String(trimmed.dropFirst().dropLast()) : trimmed
+                if !address.isEmpty, !addresses.contains(address) { addresses.append(address) }
+            }
+        }
+        return addresses
+    }
+
+    static func peerHost(for transport: String, payload: [String: Any]) -> String? {
+        let keys = ["myudp": "udp_peer", "tcp": "tcp_peer", "quic": "quic_peer", "ws": "ws_peer"]
+        return keys[transport].flatMap { stringValue(from: payload[$0]) }
+    }
+
+    static func peerPort(for transport: String, payload: [String: Any]) -> Int? {
+        let keys = ["myudp": "udp_peer_port", "tcp": "tcp_peer_port", "quic": "quic_peer_port", "ws": "ws_peer_port"]
+        return keys[transport].flatMap { intValue(from: payload[$0]) }
+    }
+
+    static func overlayPeerExcludedRoutes(from flatPayload: [String: Any]) -> (ipv4: [String], ipv6: [String]) {
+        let transport = (stringValue(from: flatPayload["overlay_transport"]) ?? "myudp")
+            .split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? "myudp"
+        guard let host = peerHost(for: transport, payload: flatPayload),
+              let port = peerPort(for: transport, payload: flatPayload), port > 0 else { return ([], []) }
+        let resolveFamily = resolveFamily(for: transport, payload: flatPayload)
+        let bindHost = bindHost(for: transport, payload: flatPayload)
+        let wsAddresses = transport == "ws" ? wsPeerAddresses(from: flatPayload["ws_peer_addresses"]) : []
+        let candidates = wsAddresses.isEmpty ? splitConfiguredPeerHosts(host) : wsAddresses
+        var ipv4: [String] = []; var ipv6: [String] = []
+        for host in candidates {
+            guard let route = ObstacleBridgePacketTunnelRoutePolicy.hostRouteCIDR(host) else { continue }
+            if route.isIPv6 {
+                if resolveFamily != "ipv4" { ipv6.append(route.route) }
+            } else if resolveFamily != "ipv6" {
+                ipv4.append(route.route)
+                if resolveFamily != "ipv4", bindHost == "::", let mapped = ObstacleBridgePacketTunnelRoutePolicy.ipv4MappedIPv6RouteCIDR(host) { ipv6.append(mapped) }
+            }
+        }
+        return (dedupeRoutes(ipv4), dedupeRoutes(ipv6))
+    }
+
+    static func effectiveExcludedRoutes(from flatPayload: [String: Any], baseIPv4: [String], baseIPv6: [String]) -> (ipv4: [String], ipv6: [String]) {
+        let peerRoutes = overlayPeerExcludedRoutes(from: flatPayload)
+        return (dedupeRoutes(baseIPv4 + peerRoutes.ipv4), dedupeRoutes(baseIPv6 + peerRoutes.ipv6))
+    }
+
+    private static func bindHost(for transport: String, payload: [String: Any]) -> String {
+        let keys = ["myudp": "udp_bind", "tcp": "tcp_bind", "quic": "quic_bind", "ws": "ws_bind"]
+        return keys[transport].flatMap { stringValue(from: payload[$0]) } ?? "::"
+    }
+
+    private static func resolveFamily(for transport: String, payload: [String: Any]) -> String {
+        let keys = ["myudp": "udp_peer_resolve_family", "tcp": "tcp_peer_resolve_family", "quic": "quic_peer_resolve_family", "ws": "ws_peer_resolve_family"]
+        return keys[transport].flatMap { peerResolveFamilyValue(from: payload[$0]) } ?? "prefer-ipv6"
+    }
+
+    private static func splitConfiguredPeerHosts(_ host: String) -> [String] {
+        host.replacingOccurrences(of: ";", with: ",").split(separator: ",")
+            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+    }
+
+    private static func dedupeRoutes(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty && seen.insert(trimmed).inserted ? trimmed : nil
+        }
+    }
 }

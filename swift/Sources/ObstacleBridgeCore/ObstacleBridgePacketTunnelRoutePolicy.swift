@@ -69,6 +69,22 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
         ]
     }
 
+    static func hostRouteCIDR(_ host: String) -> (route: String, isIPv6: Bool)? {
+        let trimmed = stripBrackets(host)
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed.hasPrefix("::ffff:") ? String(trimmed.dropFirst(7)) : trimmed
+        if ipv4Value(normalized) != nil { return ("\(normalized)/32", false) }
+        if ipv6Bytes(normalized) != nil { return ("\(normalized)/128", true) }
+        return nil
+    }
+
+    static func ipv4MappedIPv6RouteCIDR(_ host: String) -> String? {
+        let trimmed = stripBrackets(host)
+        let normalized = trimmed.hasPrefix("::ffff:") ? String(trimmed.dropFirst(7)) : trimmed
+        guard ipv4Value(normalized) != nil else { return nil }
+        return "::ffff:\(normalized)/128"
+    }
+
     private static func ipv4Value(_ host: String) -> UInt32? {
         let parts = host.split(separator: ".").map(String.init)
         guard parts.count == 4 else { return nil }
@@ -78,6 +94,12 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
             value = (value << 8) | UInt32(octet)
         }
         return value
+    }
+
+    private static func stripBrackets(_ host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("["), trimmed.hasSuffix("]") else { return trimmed }
+        return String(trimmed.dropFirst().dropLast())
     }
 
     private static func ipv6Bytes(_ host: String) -> [UInt8]? {

@@ -959,231 +959,24 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func wsPeerAddresses(from value: Any?) -> [String] {
-        let rawValues: [Any]
-        if let values = value as? [Any] {
-            rawValues = values
-        } else if let value, !(value is NSNull) {
-            rawValues = [value]
-        } else {
-            rawValues = []
-        }
-        var addresses: [String] = []
-        for rawValue in rawValues {
-            guard let rendered = stringValue(from: rawValue) else { continue }
-            for token in rendered.replacingOccurrences(of: ";", with: ",").split(separator: ",", omittingEmptySubsequences: false) {
-                let address = ObstacleBridgePeerAddressResolver.stripBrackets(
-                    String(token).trimmingCharacters(in: .whitespacesAndNewlines)
-                )
-                if !address.isEmpty, !addresses.contains(address) {
-                    addresses.append(address)
-                }
-            }
-        }
-        return addresses
+        ObstacleBridgeRuntimeConfigPolicy.wsPeerAddresses(from: value)
     }
 
     static func peerHost(for transport: String, payload: [String: Any]) -> String? {
-        switch transport {
-        case "myudp":
-            return stringValue(from: payload["udp_peer"])
-        case "tcp":
-            return stringValue(from: payload["tcp_peer"])
-        case "quic":
-            return stringValue(from: payload["quic_peer"])
-        case "ws":
-            return stringValue(from: payload["ws_peer"])
-        default:
-            return nil
-        }
+        ObstacleBridgeRuntimeConfigPolicy.peerHost(for: transport, payload: payload)
     }
 
     static func peerPort(for transport: String, payload: [String: Any]) -> Int? {
-        switch transport {
-        case "myudp":
-            return intValue(from: payload["udp_peer_port"])
-        case "tcp":
-            return intValue(from: payload["tcp_peer_port"])
-        case "quic":
-            return intValue(from: payload["quic_peer_port"])
-        case "ws":
-            return intValue(from: payload["ws_peer_port"])
-        default:
-            return nil
-        }
-    }
-
-    private static func bindHost(for transport: String, payload: [String: Any]) -> String {
-        switch transport {
-        case "myudp":
-            return stringValue(from: payload["udp_bind"]) ?? "::"
-        case "tcp":
-            return stringValue(from: payload["tcp_bind"]) ?? "::"
-        case "quic":
-            return stringValue(from: payload["quic_bind"]) ?? "::"
-        case "ws":
-            return stringValue(from: payload["ws_bind"]) ?? "::"
-        default:
-            return "::"
-        }
-    }
-
-    private static func peerResolveFamily(for transport: String, payload: [String: Any]) -> String {
-        switch transport {
-        case "myudp":
-            return stringValue(from: payload["udp_peer_resolve_family"]) ?? "prefer-ipv6"
-        case "tcp":
-            return stringValue(from: payload["tcp_peer_resolve_family"]) ?? "prefer-ipv6"
-        case "quic":
-            return stringValue(from: payload["quic_peer_resolve_family"]) ?? "prefer-ipv6"
-        case "ws":
-            return stringValue(from: payload["ws_peer_resolve_family"]) ?? "prefer-ipv6"
-        default:
-            return "prefer-ipv6"
-        }
-    }
-
-    private static func splitConfiguredPeerHosts(_ host: String) -> [String] {
-        let rendered = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !rendered.isEmpty else {
-            return []
-        }
-        guard rendered.contains(",") || rendered.contains(";") else {
-            return [rendered]
-        }
-        return rendered
-            .replacingOccurrences(of: ";", with: ",")
-            .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-    }
-
-    private static func stripHostBrackets(_ host: String) -> String {
-        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.hasPrefix("[") && trimmed.hasSuffix("]") {
-            return String(trimmed.dropFirst().dropLast())
-        }
-        return trimmed
-    }
-
-    private static func normalizedRouteCIDR(for host: String) -> String? {
-        let trimmed = stripHostBrackets(host)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-        let normalized: String
-        if trimmed.hasPrefix("::ffff:") {
-            normalized = String(trimmed.dropFirst(7))
-        } else {
-            normalized = trimmed
-        }
-        var ipv4 = in_addr()
-        if normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
-            return "\(normalized)/32"
-        }
-        var ipv6 = in6_addr()
-        if normalized.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
-            return "\(normalized)/128"
-        }
-        return nil
-    }
-
-    private static func ipv4MappedIPv6RouteCIDR(for host: String) -> String? {
-        let trimmed = stripHostBrackets(host)
-        guard !trimmed.isEmpty else {
-            return nil
-        }
-        let normalized: String
-        if trimmed.hasPrefix("::ffff:") {
-            normalized = String(trimmed.dropFirst(7))
-        } else {
-            normalized = trimmed
-        }
-        var ipv4 = in_addr()
-        guard normalized.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 else {
-            return nil
-        }
-        return "::ffff:\(normalized)/128"
-    }
-
-    private static func routeHostFamily(_ host: String) -> Int32? {
-        let rendered = stripHostBrackets(host)
-        guard !rendered.isEmpty else {
-            return nil
-        }
-        var ipv4 = in_addr()
-        if rendered.withCString({ inet_pton(AF_INET, $0, &ipv4) }) == 1 {
-            return AF_INET
-        }
-        var ipv6 = in6_addr()
-        if rendered.withCString({ inet_pton(AF_INET6, $0, &ipv6) }) == 1 {
-            return AF_INET6
-        }
-        return nil
-    }
-
-    private static func dedupeRoutes(_ values: [String]) -> [String] {
-        var out: [String] = []
-        var seen: Set<String> = []
-        for raw in values {
-            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, !seen.contains(trimmed) else {
-                continue
-            }
-            seen.insert(trimmed)
-            out.append(trimmed)
-        }
-        return out
+        ObstacleBridgeRuntimeConfigPolicy.peerPort(for: transport, payload: payload)
     }
 
     static func overlayPeerExcludedRoutes(from payload: [String: Any]) -> (ipv4: [String], ipv6: [String]) {
-        let flat = flatten(payload)
-        let transport = (stringValue(from: flat["overlay_transport"]) ?? "myudp")
-            .split(separator: ",")
-            .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first(where: { !$0.isEmpty }) ?? "myudp"
-        guard let host = peerHost(for: transport, payload: flat),
-              !host.isEmpty,
-              let port = peerPort(for: transport, payload: flat),
-              port > 0
-        else {
-            return ([], [])
-        }
-        let resolveFamily = peerResolveFamily(for: transport, payload: flat)
-        let bindHost = bindHost(for: transport, payload: flat)
-        var routes4: [String] = []
-        var routes6: [String] = []
-        let wsAddresses = transport == "ws" ? wsPeerAddresses(from: flat["ws_peer_addresses"]) : []
-        let candidateHosts = wsAddresses.isEmpty ? splitConfiguredPeerHosts(host) : wsAddresses
-        for candidateHost in candidateHosts {
-            guard let family = routeHostFamily(candidateHost),
-                  let route = normalizedRouteCIDR(for: candidateHost) else {
-                continue
-            }
-            if family == AF_INET6 {
-                guard resolveFamily != "ipv4" else {
-                    continue
-                }
-                routes6.append(route)
-            } else {
-                guard resolveFamily != "ipv6" else {
-                    continue
-                }
-                routes4.append(route)
-                if resolveFamily != "ipv4",
-                   bindHost.trimmingCharacters(in: .whitespacesAndNewlines) == "::",
-                   let mappedRoute = ipv4MappedIPv6RouteCIDR(for: candidateHost) {
-                    routes6.append(mappedRoute)
-                }
-            }
-        }
-        return (dedupeRoutes(routes4), dedupeRoutes(routes6))
+        ObstacleBridgeRuntimeConfigPolicy.overlayPeerExcludedRoutes(from: flatten(payload))
     }
 
     static func effectiveExcludedRoutes(from payload: [String: Any], baseIPv4: [String], baseIPv6: [String]) -> (ipv4: [String], ipv6: [String]) {
-        let peerRoutes = overlayPeerExcludedRoutes(from: payload)
-        return (
-            dedupeRoutes(baseIPv4 + peerRoutes.ipv4),
-            dedupeRoutes(baseIPv6 + peerRoutes.ipv6)
+        ObstacleBridgeRuntimeConfigPolicy.effectiveExcludedRoutes(
+            from: flatten(payload), baseIPv4: baseIPv4, baseIPv6: baseIPv6
         )
     }
 

@@ -529,8 +529,9 @@ def test_runtime_config_source_exists() -> None:
     assert "static func remoteServerSpecs(" in runtime
     assert "static func tunnelRoutingOverride(" in runtime
     assert "static func overlayPeerExcludedRoutes(" in runtime
-    assert 'let wsAddresses = transport == "ws" ? wsPeerAddresses(from: flat["ws_peer_addresses"]) : []' in runtime
+    assert "ObstacleBridgeRuntimeConfigPolicy.overlayPeerExcludedRoutes(from: flatten(payload))" in runtime
     assert "static func effectiveExcludedRoutes(" in runtime
+    assert "ObstacleBridgeRuntimeConfigPolicy.effectiveExcludedRoutes(" in runtime
     assert "static func localTunServiceSpec(" in runtime
     assert "static func packetflowConnectorSelection(" in runtime
     assert "static func runtimeExecutionMode(" in runtime
@@ -551,6 +552,9 @@ def test_runtime_config_source_exists() -> None:
     assert "import Glibc" not in runtime
     assert "enum ObstacleBridgeRuntimeConfigPolicy" in policy
     assert "static func overlaySessionMaxAppPayload" in policy
+    assert "static func wsPeerAddresses(" in policy
+    assert "static func overlayPeerExcludedRoutes(" in policy
+    assert "ObstacleBridgePacketTunnelRoutePolicy.hostRouteCIDR" in policy
     assert "ObstacleBridgeRuntimeConfigPolicy.overlaySessionMaxAppPayload" in runtime
 
 

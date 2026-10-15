@@ -160,7 +160,7 @@
     {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgePeerAddressResolver.swift", "kind": "darwin-posix", "reason": "Darwin sockaddr and resolver adapter."},
     {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift", "kind": "apple-framework", "reason": "Network.framework proxy listener adapter."},
     {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework QUIC resource owner."},
-    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift", "kind": "darwin-posix", "reason": "Darwin route/CIDR normalization adapter; portable policy extraction is LSW-SC.2L-K."},
+    {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift", "kind": "darwin-posix", "reason": "Darwin route/CIDR normalization and Apple configuration adapter; remaining portable extraction is tracked by LSW-SC.2L-K."},
     {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift", "kind": "apple-framework", "reason": "Network.framework TCP resource owner."},
     {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTelemetryMTLSUploader.swift", "kind": "apple-framework", "reason": "Security framework mTLS uploader."},
     {"source": "ios/native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift", "kind": "apple-abi", "reason": "macOS XPC helper transport ABI."},
