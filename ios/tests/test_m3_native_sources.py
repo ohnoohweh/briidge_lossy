@@ -557,6 +557,7 @@ def test_runtime_config_source_exists() -> None:
     assert "static func wsPeerAddresses(" in policy
     assert "static func overlayPeerExcludedRoutes(" in policy
     assert "static func enforceAdminAuthenticationUpdate(" in policy
+    assert "static func looksGrouped(" in policy
     assert "ObstacleBridgePacketTunnelRoutePolicy.hostRouteCIDR" in policy
     assert "ObstacleBridgeRuntimeConfigPolicy.overlaySessionMaxAppPayload" in runtime
 

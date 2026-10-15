@@ -67,6 +67,10 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
                     "disabled_password": authDisabled["admin_web_password"]!,
                     "preserved_disable": preservedDisable["admin_web_auth_disable"]!,
                     "preserved_username": preservedDisable["admin_web_username"]!,
+                    "grouped": ObstacleBridgeRuntimeConfigPolicy.looksGrouped([
+                        "udp_session": ["udp_peer": "192.0.2.1"],
+                    ]),
+                    "flat": ObstacleBridgeRuntimeConfigPolicy.looksGrouped(["udp_peer": "192.0.2.1"]),
                 ]
                 FileHandle.standardOutput.write(
                     try JSONSerialization.data(withJSONObject: output, options: [.sortedKeys])
@@ -100,4 +104,6 @@ def test_runtime_config_peer_exclusions_are_portable_and_dual_stack(tmp_path: Pa
         "disabled_password": "",
         "preserved_disable": True,
         "preserved_username": "",
+        "grouped": True,
+        "flat": False,
     }

@@ -575,9 +575,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     static func looksGrouped(_ payload: [String: Any]) -> Bool {
-        payload.values.contains { value in
-            value is [String: Any] || Mirror(reflecting: value).displayStyle == .dictionary
-        }
+        ObstacleBridgeRuntimeConfigPolicy.looksGrouped(payload)
     }
 
     static func tunnelRoutingOverride(from payload: [String: Any]) -> ObstacleBridgeTunnelRoutingOverride? {

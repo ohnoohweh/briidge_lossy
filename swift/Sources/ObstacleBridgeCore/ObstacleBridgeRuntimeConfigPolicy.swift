@@ -63,6 +63,12 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         return ["prefer-ipv6", "ipv4", "ipv6"].contains(raw) ? raw : nil
     }
 
+    static func looksGrouped(_ payload: [String: Any]) -> Bool {
+        payload.values.contains { value in
+            value is [String: Any] || Mirror(reflecting: value).displayStyle == .dictionary
+        }
+    }
+
     static func wsPeerAddresses(from value: Any?) -> [String] {
         let values = (value as? [Any]) ?? (value.map { [$0] } ?? [])
         var addresses: [String] = []
