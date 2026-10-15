@@ -310,34 +310,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     }
 
     private static func serviceSpecs(_ root: [String: Any], key: String) throws -> [ObstacleBridgeLinuxServiceSpec] {
-        let mux = root["channel_mux"] as? [String: Any]
-        guard let values = (mux?[key] ?? root[key]) as? [Any] else { return [] }
-        return try values.enumerated().map { index, value in
-            guard let row = value as? [String: Any],
-                  let listen = row["listen"] as? [String: Any],
-                  let target = row["target"] as? [String: Any],
-                  let listenName = string(listen["protocol"]),
-                  let targetName = string(target["protocol"]),
-                  let listenProtocol = channelProtocol(listenName),
-                  let targetProtocol = channelProtocol(targetName),
-                  let listenHost = string(listen["bind"]),
-                  let listenPort = integer(listen["port"]),
-                  let targetHost = string(target["host"]),
-                  let targetPort = integer(target["port"]),
-                  (1...65535).contains(listenPort),
-                  (1...65535).contains(targetPort),
-                  listenProtocol == targetProtocol
-            else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has invalid \(key) service at index \(index)") }
-            let nativeSpec = ObstacleBridgeNativeServiceSpec(
-                svcID: index + 1,
-                name: string(row["name"]),
-                listenProtocol: listenName,
-                listenBind: listenHost,
-                listenPort: listenPort,
-                targetProtocol: targetName,
-                targetHost: targetHost,
-                targetPort: targetPort
-            )
+        let catalog = ObstacleBridgeRuntimeConfigPort.serviceCatalog(root, key: key)
+        if let index = catalog.invalidIndex {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has invalid \(key) service at index \(index)")
+        }
+        return try catalog.records.map { nativeSpec in
+            guard nativeSpec.listenProtocol == nativeSpec.targetProtocol else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has unsupported service protocol or identifier")
+            }
             return try .init(nativeSpec: nativeSpec)
         }
     }

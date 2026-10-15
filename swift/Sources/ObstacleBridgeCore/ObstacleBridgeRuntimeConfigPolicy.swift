@@ -261,6 +261,33 @@ public enum ObstacleBridgeRuntimeConfigPort {
         return normalized
     }
 
+    /// Decodes the shared service-catalog spelling without binding sockets or
+    /// interpreting platform addresses. `nil` is an invalid row at `index`.
+    public static func serviceCatalog(
+        _ payload: [String: Any], key: String, defaultTunMTU: Int = 1600
+    ) -> (records: [ObstacleBridgeNativeServiceSpec], invalidIndex: Int?) {
+        let mux = groupedSectionPayload("channel_mux", from: payload)
+        guard let rows = (mux[key] ?? payload[key]) as? [Any] else { return ([], nil) }
+        var records: [ObstacleBridgeNativeServiceSpec] = []
+        for (index, value) in rows.enumerated() {
+            guard let row = value as? [String: Any],
+                  let listen = row["listen"] as? [String: Any],
+                  let target = row["target"] as? [String: Any],
+                  let lproto = ObstacleBridgeRuntimeConfigPolicy.stringValue(from: listen["protocol"]),
+                  let rproto = ObstacleBridgeRuntimeConfigPolicy.stringValue(from: target["protocol"]),
+                  ["tcp", "udp", "tun"].contains(lproto), ["tcp", "udp", "tun"].contains(rproto),
+                  lproto == rproto
+            else { return (records, index) }
+            let lhost = lproto == "tun" ? ObstacleBridgeRuntimeConfigPolicy.stringValue(from: listen["ifname"]) : ObstacleBridgeRuntimeConfigPolicy.stringValue(from: listen["bind"])
+            let rhost = rproto == "tun" ? ObstacleBridgeRuntimeConfigPolicy.stringValue(from: target["ifname"]) : ObstacleBridgeRuntimeConfigPolicy.stringValue(from: target["host"])
+            let lport = lproto == "tun" ? (ObstacleBridgeRuntimeConfigPolicy.intValue(from: listen["mtu"]) ?? defaultTunMTU) : ObstacleBridgeRuntimeConfigPolicy.intValue(from: listen["port"])
+            let rport = rproto == "tun" ? (ObstacleBridgeRuntimeConfigPolicy.intValue(from: target["mtu"]) ?? defaultTunMTU) : ObstacleBridgeRuntimeConfigPolicy.intValue(from: target["port"])
+            guard let lhost, let rhost, let lport, let rport, (1...65535).contains(lport), (1...65535).contains(rport) else { return (records, index) }
+            records.append(.init(svcID: index + 1, name: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: row["name"]), listenProtocol: lproto, listenBind: lhost, listenPort: lport, targetProtocol: rproto, targetHost: rhost, targetPort: rport))
+        }
+        return (records, nil)
+    }
+
     private static func normalizedSectionPayload(_ section: String, _ payload: [String: Any]) -> [String: Any] {
         guard let rows = schemaSnapshot()[section] as? [[String: Any]] else { return payload }
         var result = payload
