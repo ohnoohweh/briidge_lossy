@@ -114,6 +114,30 @@ struct ObstacleBridgeOverlayBootstrapSettings {
         self.compressAlgo = compressAlgo
     }
 
+    init(payload: [String: Any]) throws {
+        let overlayTransport = ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["overlay_transport"]) ?? "myudp"
+        let configuredPeers: [String: Bool] = [
+            "myudp": ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["udp_peer"]) != nil,
+            "tcp": ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["tcp_peer"]) != nil,
+            "quic": ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["quic_peer"]) != nil,
+            "ws": ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["ws_peer"]) != nil,
+        ]
+        let transports = try ObstacleBridgeOverlayStackPlanner.parseOverlayTransports(
+            raw: overlayTransport, hasConfiguredPeerByTransport: configuredPeers
+        )
+        let transport = transports.first ?? "myudp"
+        try self.init(
+            overlayTransport: overlayTransport,
+            configuredPeers: configuredPeers,
+            peerHost: ObstacleBridgeRuntimeConfigPolicy.peerHost(for: transport, payload: payload),
+            secureLinkEnabled: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: payload["secure_link"]) ?? false,
+            secureLinkModeRaw: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["secure_link_mode"]) ?? "off",
+            secureLinkPSK: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["secure_link_psk"]) ?? "",
+            compressEnabled: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: payload["compress_layer"]) ?? false,
+            compressAlgo: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: payload["compress_layer_algo"]) ?? "zlib"
+        )
+    }
+
     func summary(runtimeConfigGrouped: Bool? = nil) -> [String: Any] {
         var summary: [String: Any] = [
             "status": "prepared", "transport": transport, "transports": transports,

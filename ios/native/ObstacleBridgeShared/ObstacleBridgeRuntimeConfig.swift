@@ -1,39 +1,6 @@
 import Foundation
 import Darwin
 
-extension ObstacleBridgeOverlayBootstrapSettings {
-    init(payload: [String: Any]) throws {
-        let overlayTransport = ObstacleBridgeRuntimeConfig.stringValue(from: payload["overlay_transport"]) ?? "myudp"
-        let configuredPeers: [String: Bool] = [
-            "myudp": ObstacleBridgeRuntimeConfig.stringValue(from: payload["udp_peer"]) != nil,
-            "tcp": ObstacleBridgeRuntimeConfig.stringValue(from: payload["tcp_peer"]) != nil,
-            "quic": ObstacleBridgeRuntimeConfig.stringValue(from: payload["quic_peer"]) != nil,
-            "ws": ObstacleBridgeRuntimeConfig.stringValue(from: payload["ws_peer"]) != nil,
-        ]
-        let transports = try ObstacleBridgeOverlayStackPlanner.parseOverlayTransports(
-            raw: overlayTransport,
-            hasConfiguredPeerByTransport: configuredPeers
-        )
-        let selectedTransport = transports.first ?? "myudp"
-        let peerHost = ObstacleBridgeRuntimeConfig.peerHost(for: selectedTransport, payload: payload)
-        let secureLinkEnabled = ObstacleBridgeRuntimeConfig.boolValue(from: payload["secure_link"]) ?? false
-        let secureLinkModeRaw = ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_mode"]) ?? "off"
-        let secureLinkPSK = ObstacleBridgeRuntimeConfig.stringValue(from: payload["secure_link_psk"]) ?? ""
-        let compressEnabled = ObstacleBridgeRuntimeConfig.boolValue(from: payload["compress_layer"]) ?? false
-        let compressAlgo = ObstacleBridgeRuntimeConfig.stringValue(from: payload["compress_layer_algo"]) ?? "zlib"
-        try self.init(
-            overlayTransport: overlayTransport,
-            configuredPeers: configuredPeers,
-            peerHost: peerHost,
-            secureLinkEnabled: secureLinkEnabled,
-            secureLinkModeRaw: secureLinkModeRaw,
-            secureLinkPSK: secureLinkPSK,
-            compressEnabled: compressEnabled,
-            compressAlgo: compressAlgo
-        )
-    }
-}
-
 enum ObstacleBridgeRuntimeConfig {
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.

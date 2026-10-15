@@ -518,10 +518,12 @@ def test_runtime_config_source_exists() -> None:
     admin_web = (CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeRuntimeConfig" in runtime
+    assert "extension ObstacleBridgeOverlayBootstrapSettings" not in runtime
     assert "struct ObstacleBridgeRuntimeServiceSpec" in native_spec
     assert "struct ObstacleBridgeDerivedTunnelSettings" in native_spec
     assert "struct ObstacleBridgeTunnelRoutingOverride" in native_spec
     assert "struct ObstacleBridgeOverlayBootstrapSettings" in native_spec
+    assert "init(payload: [String: Any]) throws" in native_spec
     assert "struct ObstacleBridgeAdminUIBootstrapState" in admin_web
     assert "ObstacleBridgeAdminWebSupport.bootstrapState(" in runtime
     assert "static func flatten(" in runtime
