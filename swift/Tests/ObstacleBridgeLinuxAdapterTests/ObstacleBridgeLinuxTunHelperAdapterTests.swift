@@ -60,6 +60,18 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
             try adapter.send(command: .snapshot, payload: [:])
         }
     }
+
+    @Test func reconnectsAfterHelperLossOnFreshCoreOperation() throws {
+        let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstReply: true)
+        defer { peer.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path)
+        #expect(throws: (any Error).self) {
+            try adapter.send(command: .snapshot, payload: [:])
+        }
+        let response = try adapter.send(command: .snapshot, payload: [:])
+        #expect(response["seq"] as? Int == 2)
+        #expect(peer.sequences == [1, 2])
+    }
 }
 
 private final class UnixHelperPeer: @unchecked Sendable {
@@ -68,6 +80,7 @@ private final class UnixHelperPeer: @unchecked Sendable {
     private let expectedConnections: Int
     private let corruptFirstSequence: Bool
     private let omitFirstResponse: Bool
+    private let disconnectFirstReply: Bool
     private let lock = NSLock()
     private var capturedOperations: [String] = []
     private var capturedSequences: [Int] = []
@@ -76,10 +89,11 @@ private final class UnixHelperPeer: @unchecked Sendable {
     var sequences: [Int] { lock.lock(); defer { lock.unlock() }; return capturedSequences }
     var packets: [Data] { lock.lock(); defer { lock.unlock() }; return capturedPackets }
 
-    init(connectionCount: Int, corruptFirstSequence: Bool = false, omitFirstResponse: Bool = false) throws {
+    init(connectionCount: Int, corruptFirstSequence: Bool = false, omitFirstResponse: Bool = false, disconnectFirstReply: Bool = false) throws {
         self.expectedConnections = connectionCount
         self.corruptFirstSequence = corruptFirstSequence
         self.omitFirstResponse = omitFirstResponse
+        self.disconnectFirstReply = disconnectFirstReply
         self.path = "/tmp/obstaclebridge-helper-\(UUID().uuidString).sock"
         self.listener = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
         guard listener >= 0 else { throw PeerError.socket }
@@ -118,6 +132,10 @@ private final class UnixHelperPeer: @unchecked Sendable {
                 lock.lock(); capturedPackets.append(packet); lock.unlock()
             }
             lock.lock(); capturedOperations.append(operation); capturedSequences.append(sequence); lock.unlock()
+            if disconnectFirstReply && index == 0 {
+                _ = close(fd)
+                continue
+            }
             let responseSequence = corruptFirstSequence && index == 0 ? sequence + 1 : sequence
             let response: [String: Any] = omitFirstResponse && index == 0 ? [:] : ["response": ["ok": true, "op": operation, "seq": responseSequence, "payload": ["opened": operation != "STOP"]]]
             guard let reply = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]) else { return }
