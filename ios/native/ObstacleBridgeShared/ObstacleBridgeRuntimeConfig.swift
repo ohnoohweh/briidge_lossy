@@ -1205,16 +1205,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func optionalStringValueAllowEmpty(from value: Any?) -> String? {
-        guard let value else {
-            return nil
-        }
-        if let string = value as? String {
-            return string.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        if let number = value as? NSNumber {
-            return number.stringValue
-        }
-        return nil
+        ObstacleBridgeRuntimeConfigPolicy.optionalStringValueAllowEmpty(from: value)
     }
 }
 
