@@ -1,6 +1,6 @@
 import Foundation
 
-enum ObstacleBridgeTunHelperCommand: String, CaseIterable {
+public enum ObstacleBridgeTunHelperCommand: String, CaseIterable {
     case openTun = "OPEN_TUN"
     case applyNetwork = "APPLY_NETWORK"
     case removeNetwork = "REMOVE_NETWORK"
@@ -9,7 +9,7 @@ enum ObstacleBridgeTunHelperCommand: String, CaseIterable {
     case stop = "STOP"
 }
 
-enum ObstacleBridgeTunHelperFrameKind: String, CaseIterable {
+public enum ObstacleBridgeTunHelperFrameKind: String, CaseIterable {
     case controlRequest = "CONTROL_REQUEST"
     case controlResponse = "CONTROL_RESPONSE"
     case packetFromHelper = "PACKET_FROM_HELPER"
@@ -23,13 +23,13 @@ enum ObstacleBridgeTunHelperPlatformScope {
     static let iOSUsesNetworkExtensionBoundary = true
 }
 
-enum ObstacleBridgeTunHelperCommandError: Error, LocalizedError {
+public enum ObstacleBridgeTunHelperCommandError: Error, LocalizedError {
     case invalidPayload(String)
     case invalidResponse(String)
     case unsupportedCommand(String)
     case unsupportedFrame(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .invalidPayload(let detail):
             return detail
@@ -43,18 +43,18 @@ enum ObstacleBridgeTunHelperCommandError: Error, LocalizedError {
     }
 }
 
-struct ObstacleBridgeTunHelperCommandEnvelope {
-    let command: ObstacleBridgeTunHelperCommand
-    let payload: [String: Any]
-    let sequence: Int
+public struct ObstacleBridgeTunHelperCommandEnvelope {
+    public let command: ObstacleBridgeTunHelperCommand
+    public let payload: [String: Any]
+    public let sequence: Int
 
-    init(command: ObstacleBridgeTunHelperCommand, payload: [String: Any], sequence: Int = 0) {
+    public init(command: ObstacleBridgeTunHelperCommand, payload: [String: Any], sequence: Int = 0) {
         self.command = command
         self.payload = payload
         self.sequence = max(0, sequence)
     }
 
-    func xpcPayload() -> [String: Any] {
+    public func xpcPayload() -> [String: Any] {
         [
             "command": command.rawValue,
             "seq": sequence,
@@ -62,7 +62,7 @@ struct ObstacleBridgeTunHelperCommandEnvelope {
         ]
     }
 
-    static func decode(_ message: [String: Any]) throws -> ObstacleBridgeTunHelperCommandEnvelope {
+    public static func decode(_ message: [String: Any]) throws -> ObstacleBridgeTunHelperCommandEnvelope {
         guard let commandName = message["command"] as? String,
               let command = ObstacleBridgeTunHelperCommand(rawValue: commandName) else {
             throw ObstacleBridgeTunHelperCommandError.unsupportedCommand("unsupported helper command")
@@ -86,18 +86,18 @@ struct ObstacleBridgeTunHelperCommandEnvelope {
     }
 }
 
-struct ObstacleBridgeTunHelperPacketEnvelope {
-    let frameKind: ObstacleBridgeTunHelperFrameKind
-    let payload: [String: Any]
-    let sequence: Int
+public struct ObstacleBridgeTunHelperPacketEnvelope {
+    public let frameKind: ObstacleBridgeTunHelperFrameKind
+    public let payload: [String: Any]
+    public let sequence: Int
 
-    init(frameKind: ObstacleBridgeTunHelperFrameKind, payload: [String: Any], sequence: Int = 0) {
+    public init(frameKind: ObstacleBridgeTunHelperFrameKind, payload: [String: Any], sequence: Int = 0) {
         self.frameKind = frameKind
         self.payload = payload
         self.sequence = max(0, sequence)
     }
 
-    static func packetFromHelper(_ packet: Data, sequence: Int = 0) -> ObstacleBridgeTunHelperPacketEnvelope {
+    public static func packetFromHelper(_ packet: Data, sequence: Int = 0) -> ObstacleBridgeTunHelperPacketEnvelope {
         ObstacleBridgeTunHelperPacketEnvelope(
             frameKind: .packetFromHelper,
             payload: [
@@ -108,7 +108,7 @@ struct ObstacleBridgeTunHelperPacketEnvelope {
         )
     }
 
-    static func packetToHelper(_ packet: Data, sequence: Int = 0) -> ObstacleBridgeTunHelperPacketEnvelope {
+    public static func packetToHelper(_ packet: Data, sequence: Int = 0) -> ObstacleBridgeTunHelperPacketEnvelope {
         ObstacleBridgeTunHelperPacketEnvelope(
             frameKind: .packetToHelper,
             payload: [
@@ -119,7 +119,7 @@ struct ObstacleBridgeTunHelperPacketEnvelope {
         )
     }
 
-    func xpcPayload() -> [String: Any] {
+    public func xpcPayload() -> [String: Any] {
         [
             "frame_kind": frameKind.rawValue,
             "seq": sequence,
@@ -127,7 +127,7 @@ struct ObstacleBridgeTunHelperPacketEnvelope {
         ]
     }
 
-    static func decode(_ message: [String: Any]) throws -> ObstacleBridgeTunHelperPacketEnvelope {
+    public static func decode(_ message: [String: Any]) throws -> ObstacleBridgeTunHelperPacketEnvelope {
         guard let kindName = message["frame_kind"] as? String,
               let frameKind = ObstacleBridgeTunHelperFrameKind(rawValue: kindName) else {
             throw ObstacleBridgeTunHelperCommandError.unsupportedFrame("unsupported helper frame")
@@ -480,7 +480,7 @@ final class ObstacleBridgeTunHelperCommandServer {
     }
 }
 
-protocol ObstacleBridgeTunHelperCommandTransport {
+public protocol ObstacleBridgeTunHelperCommandTransport {
     func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any]) throws -> [String: Any]
     func sendPacketToHelper(_ packet: Data) throws -> [String: Any]
 }
@@ -502,12 +502,12 @@ final class ObstacleBridgeLoopbackTunHelperCommandTransport: ObstacleBridgeTunHe
     }
 }
 
-final class ObstacleBridgeXPCShapedTunHelperCommandTransport: ObstacleBridgeTunHelperCommandTransport {
+public final class ObstacleBridgeXPCShapedTunHelperCommandTransport: ObstacleBridgeTunHelperCommandTransport {
     private let sendEnvelope: ([String: Any]) throws -> [String: Any]
     private let sendPacketEnvelope: ([String: Any]) throws -> [String: Any]
     private var nextSequence = 0
 
-    init(
+    public init(
         sendEnvelope: @escaping ([String: Any]) throws -> [String: Any],
         sendPacketEnvelope: @escaping ([String: Any]) throws -> [String: Any]
     ) {
@@ -526,7 +526,7 @@ final class ObstacleBridgeXPCShapedTunHelperCommandTransport: ObstacleBridgeTunH
         )
     }
 
-    func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any]) throws -> [String: Any] {
+    public func send(command: ObstacleBridgeTunHelperCommand, payload: [String: Any]) throws -> [String: Any] {
         let sequence = nextOperationSequence()
         let envelope = ObstacleBridgeTunHelperCommandEnvelope(command: command, payload: payload, sequence: sequence)
         let response = try sendEnvelope(envelope.xpcPayload())
@@ -545,7 +545,7 @@ final class ObstacleBridgeXPCShapedTunHelperCommandTransport: ObstacleBridgeTunH
         return response
     }
 
-    func sendPacketToHelper(_ packet: Data) throws -> [String: Any] {
+    public func sendPacketToHelper(_ packet: Data) throws -> [String: Any] {
         let sequence = nextOperationSequence()
         let envelope = ObstacleBridgeTunHelperPacketEnvelope.packetToHelper(packet, sequence: sequence)
         let response = try sendPacketEnvelope(envelope.xpcPayload())

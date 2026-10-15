@@ -36,7 +36,7 @@ behavior is in parity.
 | `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 13 | Keep POSIX descriptors, listener/server I/O, timers, and Linux HTTP serving; remove common protocol policy as its core owner lands. |
 | `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |
 
-The checked inventory currently contains 107 Swift files. Its file-level entries
+The checked inventory currently contains 108 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 
