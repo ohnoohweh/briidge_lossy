@@ -606,3 +606,192 @@ enum ObstacleBridgeOverlayChannelCore {
         }
     }
 }
+
+/// Public resource-owner port for the otherwise private overlay TUN policy.
+///
+/// Platform adapters supply packet-device I/O, monotonic transport observations,
+/// catalog frames, and connection lifecycle input.  This object deliberately
+/// retains all ChannelMux/TUN state so an adapter cannot reimplement admission,
+/// route selection, counters, or the post-mux delay boundary.
+public final class ObstacleBridgeOverlayChannelRuntime {
+    public struct Backpressure: Sendable {
+        public let bufferedFrames: Int
+        public let inflight: Int
+        public let maxInflight: Int
+        public let transmitDelayEstMS: Double
+        public let transportPreviousWindowBytes: Int
+        public let stalled: Bool
+
+        public init(
+            bufferedFrames: Int,
+            inflight: Int? = nil,
+            maxInflight: Int = 0,
+            transmitDelayEstMS: Double = 0,
+            transportPreviousWindowBytes: Int = 0,
+            stalled: Bool = false
+        ) {
+            self.bufferedFrames = max(0, bufferedFrames)
+            self.inflight = max(0, inflight ?? bufferedFrames)
+            self.maxInflight = max(0, maxInflight)
+            self.transmitDelayEstMS = max(0, transmitDelayEstMS)
+            self.transportPreviousWindowBytes = max(0, transportPreviousWindowBytes)
+            self.stalled = stalled
+        }
+    }
+
+    public enum PacketDeviceEffect: Equatable, Sendable {
+        case dropped(String)
+        case forwarded(channelID: Int, allocatedChannel: Bool)
+        case relayed(channelID: Int)
+        case delivered(channelID: Int)
+        case counterDiscontinuity(channelID: Int, counter: Int)
+        case openRejected(channelID: Int)
+        case openChunkRejected(channelID: Int)
+    }
+
+    private let tunIfname: String
+    private let tunMTU: Int
+    private let serviceSpec: ObstacleBridgeChannelMuxCodec.ServiceSpec
+    private let tunRuntime: ObstacleBridgeChannelMuxTunRuntime
+    private var started = true
+    private var overlayReady = false
+    private var activeChannelIDs = Set<Int>()
+    private var stats: [String: Int] = [:]
+
+    public init(
+        interfaceName: String,
+        mtu: Int,
+        instanceID: UInt64,
+        connectionSequence: UInt32,
+        localAddress: String? = nil,
+        localAddress6: String? = nil
+    ) {
+        self.tunIfname = interfaceName
+        self.tunMTU = max(0, mtu)
+        self.serviceSpec = ObstacleBridgeOverlayChannelCore.localTunServiceSpec(ifname: interfaceName, mtu: max(0, mtu))
+        self.tunRuntime = ObstacleBridgeChannelMuxTunRuntime(
+            instanceID: instanceID,
+            connectionSeq: connectionSequence,
+            localSpec: self.serviceSpec,
+            localTunnelAddress: localAddress,
+            localTunnelAddress6: localAddress6
+        )
+    }
+
+    public func setOverlayReady(_ ready: Bool) {
+        overlayReady = ready
+    }
+
+    /// Retire all ChannelMux state from the old overlay connection. A later
+    /// packet necessarily emits a replacement OPEN before DATA.
+    public func transportEpochChanged() {
+        tunRuntime.resetTransportEpoch()
+        activeChannelIDs.removeAll()
+    }
+
+    public func stop() {
+        started = false
+        overlayReady = false
+    }
+
+    public func start() {
+        started = true
+    }
+
+    public func sendLocalPacket(
+        _ packet: Data,
+        backpressure: Backpressure,
+        startupFrames: @escaping () -> [Data],
+        sendMuxFrames: @escaping ([Data]) -> Void,
+        effectSink: @escaping (PacketDeviceEffect) -> Void
+    ) {
+        let snapshot = ObstacleBridgeOverlayChannelCore.simpleBackpressureSnapshot(
+            bufferedFrames: backpressure.bufferedFrames,
+            inflight: backpressure.inflight,
+            maxInflight: backpressure.maxInflight,
+            transmitDelayEstMS: backpressure.transmitDelayEstMS,
+            transportPrevWindowBytes: backpressure.transportPreviousWindowBytes,
+            stalled: backpressure.stalled
+        )
+        do {
+            try ObstacleBridgeOverlayChannelCore.sendLocalTunPacket(
+                packet,
+                started: started,
+                tunRuntime: tunRuntime,
+                tunServiceSpec: serviceSpec,
+                tunIfname: tunIfname,
+                tunMTU: tunMTU,
+                overlayConnected: overlayReady,
+                bufferedFrames: backpressure.bufferedFrames,
+                backpressure: snapshot,
+                activeTunChanIDs: &activeChannelIDs,
+                tunStats: &stats,
+                sendMuxFrames: sendMuxFrames,
+                startupMuxFramesForNewTunOpen: startupFrames,
+                onLocalDrop: { effectSink(.dropped($0.reason)) },
+                onLocalForward: { effectSink(.forwarded(channelID: $0.chanID, allocatedChannel: $0.allocatedChannel)) }
+            )
+        } catch {
+            effectSink(.dropped("channelmux_error"))
+        }
+    }
+
+    public func receiveMuxFrame(
+        _ frame: ObstacleBridgeChannelMuxFrame,
+        currentPeerID: Int? = nil,
+        sendMuxFrames: @escaping ([Data]) -> Void,
+        deliverPacket: @escaping (Data) -> Void,
+        effectSink: @escaping (PacketDeviceEffect) -> Void
+    ) {
+        guard let legacyFrame = Self.legacyFrame(frame) else {
+            effectSink(.dropped("invalid_mux_frame"))
+            return
+        }
+        ObstacleBridgeOverlayChannelCore.handleInboundTunMuxFrame(
+            legacyFrame,
+            tunRuntime: tunRuntime,
+            tunServiceSpec: serviceSpec,
+            tunIfname: tunIfname,
+            tunMTU: tunMTU,
+            overlayConnected: overlayReady,
+            bufferedFrames: 0,
+            currentTunPeerID: currentPeerID,
+            activeTunChanIDs: &activeChannelIDs,
+            tunStats: &stats,
+            tunPacketSink: deliverPacket,
+            sendMuxFrames: sendMuxFrames,
+            onInboundDrop: { effectSink(.dropped($0.reason)) },
+            onInboundRelay: { effectSink(.relayed(channelID: $0.sourceChanID)) },
+            onInboundDeliver: { effectSink(.delivered(channelID: $0.chanID)) },
+            onInboundCounterDiscontinuity: { channelID, counter in effectSink(.counterDiscontinuity(channelID: channelID, counter: counter)) },
+            onOpenRejected: { effectSink(.openRejected(channelID: $0)) },
+            onOpenChunkRejected: { effectSink(.openChunkRejected(channelID: $0)) }
+        )
+    }
+
+    public func connectionRows(backpressure: Backpressure) -> [[String: Any]] {
+        ObstacleBridgeOverlayChannelCore.tunRows(
+            activeTunChanIDs: activeChannelIDs,
+            tunStats: stats,
+            tunRuntime: tunRuntime,
+            tunServiceSpec: serviceSpec,
+            tunIfname: tunIfname,
+            tunMTU: tunMTU,
+            backpressure: ObstacleBridgeOverlayChannelCore.simpleBackpressureSnapshot(
+                bufferedFrames: backpressure.bufferedFrames,
+                inflight: backpressure.inflight,
+                maxInflight: backpressure.maxInflight,
+                transmitDelayEstMS: backpressure.transmitDelayEstMS,
+                transportPrevWindowBytes: backpressure.transportPreviousWindowBytes,
+                stalled: backpressure.stalled
+            )
+        )
+    }
+
+    private static func legacyFrame(_ frame: ObstacleBridgeChannelMuxFrame) -> ObstacleBridgeChannelMuxCodec.MuxFrame? {
+        guard let proto = ObstacleBridgeChannelMuxCodec.Proto(rawValue: Int(frame.protocolType.rawValue)),
+              let type = ObstacleBridgeChannelMuxCodec.MType(rawValue: Int(frame.messageType.rawValue))
+        else { return nil }
+        return .init(chanID: Int(frame.channelID), proto: proto, counter: Int(frame.counter), mtype: type, body: frame.body)
+    }
+}
