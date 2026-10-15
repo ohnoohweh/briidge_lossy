@@ -10,6 +10,8 @@ CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
 IPSERVER_DIR = ROOT / "ios" / "build" / "obstacle_bridge_ios" / "ios" / "xcode" / "IPServer"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
+MACOS_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS"
+IOS_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeiOS"
 
 
 def test_shared_packet_tunnel_configuration_source_exists() -> None:
@@ -55,7 +57,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "func cancel()" in source
     assert "session.invalidateAndCancel()" in source
     assert '"identity_available": identityAvailable' in source
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert '"telemetry": ObstacleBridgeTelemetryAdminStatus.snapshot(' in provider
     assert "emitter: telemetryEmitter" in provider
     assert "spool: telemetrySpool" in provider
@@ -63,7 +65,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
     assert "func statusSnapshot() -> [String: Any]" in source
     assert "private let telemetryQueue = DispatchQueue(label: \"PacketTunnelProvider.Telemetry\")" in provider
     assert "startTelemetryIfConfigured(providerConfiguration: providerConfiguration)" in provider
-    control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    control = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     assert "ObstacleBridgeTelemetryIdentityStore.importStagedIdentityIfPresent()" in control
     assert "@objc class func clearSharedLogs()" in control
     assert "ObstacleBridgeTelemetryIdentityStore.clearAppGroupDiagnosticLogs()" in control
@@ -99,7 +101,7 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
 
 
 def test_ipserver_packet_tunnel_provider_source_exists() -> None:
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "NEPacketTunnelProvider" in provider
@@ -216,7 +218,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
     assert '"mode": "system"' in provider
-    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert 'let egress = (section?["egress"] ?? runtimeConfig["proxy_provider_egress"]) as? [String: Any] ?? [' in host_runner
     assert '"mode": "system"' in host_runner
     assert 'let rekeyAfterFrames = Self.intValue(from: runtimeConfig["secure_link_rekey_after_frames"]) ?? 0' in host_runner
@@ -228,7 +230,7 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
 
 
 def test_native_packet_flow_bridge_source_exists() -> None:
-    bridge = (IPSERVER_NATIVE_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
+    bridge = (IOS_SWIFT_DIR / "ObstacleBridgePacketFlowBridge.swift").read_text(encoding="utf-8")
 
     assert "@objc(ObstacleBridgePacketFlowBridge)" in bridge
     assert "PacketFlowPCAPWriter" in bridge
@@ -252,7 +254,7 @@ def test_native_packet_flow_bridge_source_exists() -> None:
 
 
 def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> None:
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()" in provider
     assert '"runtime_health_recent_records"' in provider
@@ -365,8 +367,8 @@ def test_swift_websocket_reconnect_starts_a_fresh_tun_epoch_before_new_task() ->
 def test_swift_overlay_remote_service_catalog_uses_current_tun_epoch() -> None:
     tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     overlay_core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
-    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     owners = [
         (SHARED_NATIVE_DIR / name).read_text(encoding="utf-8")
@@ -581,8 +583,8 @@ def test_webadmin_server_source_exists() -> None:
 def test_proxy_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeProxyProtocolPolicy.swift").read_text(encoding="utf-8")
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeProxyProtocolCodec" in policy
@@ -689,7 +691,7 @@ def test_tun_probe_diagnostics_support_source_exists() -> None:
 
 
 def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_ios_app.sh").read_text(encoding="utf-8")
     support = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
     resolver = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift").read_text(encoding="utf-8")
@@ -826,8 +828,8 @@ def test_ios_packet_tunnel_tun_routing_verification_source_exists() -> None:
 
 
 def test_macos_swift_host_runner_source_exists() -> None:
-    wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
-    runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    wrapper = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
+    runtime = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     shared_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     runtime_policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     native_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
@@ -882,13 +884,13 @@ def test_shared_admin_api_exposes_status_and_bootstrap_routes() -> None:
 
 
 def test_macos_app_main_source_exists() -> None:
-    app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
+    app_main = (MACOS_SWIFT_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     package_script = (ROOT / "ios" / "scripts" / "package_macos_app.sh").read_text(encoding="utf-8")
     integration_workflow = (ROOT / ".github" / "workflows" / "bridge-py-integration-gate.yml").read_text(encoding="utf-8")
     release_workflow = (ROOT / ".github" / "workflows" / "publish-macos-preview.yml").read_text(encoding="utf-8")
-    control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
-    runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    control = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
     tun_helper_contract = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
     macos_helper_client = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
@@ -1026,8 +1028,8 @@ def test_websocket_overlay_runtime_source_exists() -> None:
 
 def test_websocket_overlay_transport_owner_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebSocketOverlayTransportOwner" in runtime
     assert "URLSessionWebSocketTask" in runtime
@@ -1249,8 +1251,8 @@ def test_secure_link_psk_transport_adapter_source_exists() -> None:
 
 
 def test_swift_secure_link_admin_snapshots_use_python_state_vocabulary() -> None:
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert '"frames_from_client_passed_total": snapshot.framesFromClientPassedTotal' in host_runner
     assert '"frames_from_client_dropped_total": snapshot.framesFromClientDroppedTotal' in host_runner
     assert '"frames_to_client_passed_total": snapshot.framesToClientPassedTotal' in host_runner
@@ -1435,7 +1437,7 @@ def test_ios_packaging_config_includes_native_bridge_and_local_webadmin_ats() ->
 
 
 def test_ipserver_extension_sources_are_swift_only() -> None:
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     entitlements = (IPSERVER_NATIVE_DIR / "IPServer.entitlements").read_text(encoding="utf-8")
     info_plist = (IPSERVER_NATIVE_DIR / "Info.plist").read_text(encoding="utf-8")
     shim = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "ipserver_extension.py").read_text(encoding="utf-8")
@@ -1475,7 +1477,7 @@ def test_ipserver_extension_sources_are_swift_only() -> None:
 
 
 def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_thread() -> None:
-    control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    control = (IOS_SWIFT_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
     ios_app = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "app.py").read_text(encoding="utf-8")
 
@@ -1493,7 +1495,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert '"/api/tun-routing/control"' in control
     assert '"/api/tun-routing/status"' in control
     assert "iOS displays the extension's Admin API directly; no foreground proxy." in control
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     assert "tunnelInflowAllowed()" in provider
     assert "packet_pump_dropped_before_overlay_ready" in provider
     assert "swift_simple_udp_packetflow_dropped_before_overlay_ready" in provider
@@ -1609,7 +1611,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
     assert "DispatchSemaphore" in control
     assert "timed out loading VPN preferences" not in control
 
-    host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     assert "private func requestRestart()" in host_runner
     assert "private func requestReconnect()" in host_runner
     assert "private func reloadRuntimeStateForControlAction()" in host_runner
@@ -1639,7 +1641,7 @@ def test_app_tunnel_control_manages_ipserver_profile_without_blocking_main_threa
 
 
 def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
-    provider = (IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "private var runtimeReloadInProgress = false" in provider
     assert "private func stopEmbeddedRuntimeForReload()" in provider
@@ -1659,7 +1661,7 @@ def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
 def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
-    macos_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    macos_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()" in runtime
     assert '"iOS_TUN_connector": [' in policy
