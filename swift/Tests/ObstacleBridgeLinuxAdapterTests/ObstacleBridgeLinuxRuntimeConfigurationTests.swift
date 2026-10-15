@@ -378,7 +378,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
     @Test func corePacketTunnelPlanMergesDefaultsOverridesAndPeerExclusions() throws {
         let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: [
             "runner": ["overlay_transport": "tcp"],
-            "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443],
+            "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443, "tcp_bind": "::"],
             "TUN_routing": ["mtu": 1400, "dns_servers": ["9.9.9.9"], "excluded_routes": ["10.0.0.0/8"]],
         ]))
         #expect(plan.includedRoutes == ["0.0.0.0/0"])
@@ -387,6 +387,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(plan.mtu == 1400)
         #expect(plan.routeDiagnostics.baseExcludedRoutes == ["10.0.0.0/8"])
         #expect(plan.routeDiagnostics.peerExcludedRoutes == ["192.0.2.44/32"])
+        #expect(plan.routeDiagnostics.peerExcludedRoutes6 == ["::ffff:192.0.2.44/128"])
     }
 
     @Test func linuxAdmissionRetainsDisabledCorePacketTunnelPlan() throws {
