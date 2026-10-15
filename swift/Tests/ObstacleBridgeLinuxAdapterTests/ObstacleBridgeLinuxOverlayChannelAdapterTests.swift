@@ -19,18 +19,20 @@ private final class OverlayEvents {
 }
 
 struct ObstacleBridgeLinuxOverlayChannelAdapterTests {
-    private func packet() -> Data {
-        Data([0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 10, 0, 0, 1, 10, 0, 0, 2])
+    private func packet(source: [UInt8] = [10, 0, 0, 1], destination: [UInt8] = [10, 0, 0, 2]) -> Data {
+        Data([0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0] + source + destination)
     }
 
     private func makeAdapter(
         device: OverlayPacketDevice? = OverlayPacketDevice(),
         delayMS: Double = 0,
+        sharedTunPeers: [ObstacleBridgeOverlayChannelRuntime.SharedTunPeer] = [],
         events: OverlayEvents
     ) -> ObstacleBridgeLinuxOverlayChannelAdapter {
         ObstacleBridgeLinuxOverlayChannelAdapter(
             interfaceName: "obtun0", mtu: 1500, instanceID: 7, connectionSequence: 3,
             packetDevice: device,
+            sharedTunPeers: sharedTunPeers,
             backpressureSnapshot: { .init(bufferedFrames: 0, transmitDelayEstMS: delayMS) },
             startupFrames: { [Data([0xca, 0xfe])] },
             sendMuxFrames: { events.sent.append($0) },
@@ -102,5 +104,29 @@ struct ObstacleBridgeLinuxOverlayChannelAdapterTests {
         adapter.receivedMuxFrame(.init(channelID: 9, protocolType: .tun, counter: 3, messageType: .data, body: packet()))
         #expect(events.diagnostics.filter { $0.0 == "tun_packet_device_write_failed" }.count == 2)
         #expect(events.diagnostics.filter { $0.0 == "tun_counter_discontinuity" }.count == 1)
+    }
+
+    @Test func sharedRouteFansOutAndInboundUnicastRelaysThroughCore() throws {
+        let device = OverlayPacketDevice()
+        let events = OverlayEvents()
+        let peers: [ObstacleBridgeOverlayChannelRuntime.SharedTunPeer] = [
+            .init(reference: "one", ipv4: ["10.0.0.1"]),
+            .init(reference: "two", ipv4: ["10.0.0.2"]),
+        ]
+        let adapter = makeAdapter(device: device, sharedTunPeers: peers, events: events)
+        adapter.overlayLifecycleChanged(ready: true)
+        adapter.receivedMuxFrame(try inboundOpen(channelID: 9), peerID: 1)
+        adapter.receivedMuxFrame(try inboundOpen(channelID: 10), peerID: 2)
+        // Learn both Core-owned peer references before asking Core to select a route.
+        adapter.receivedMuxFrame(.init(channelID: 10, protocolType: .tun, counter: 1, messageType: .data, body: packet(source: [10, 0, 0, 2], destination: [10, 0, 0, 99])), peerID: 2)
+        adapter.receivedMuxFrame(.init(channelID: 9, protocolType: .tun, counter: 1, messageType: .data, body: packet(source: [10, 0, 0, 1], destination: [10, 0, 0, 2])), peerID: 1)
+        #expect(events.diagnostics.contains { $0.0 == "tun_packet_relayed" && $0.1["channel_id"] as? Int == 9 })
+
+        let batchesBeforeBroadcast = events.sent.count
+        adapter.receivedPacketFromDevice(packet(source: [10, 0, 0, 99], destination: [255, 255, 255, 255]))
+        #expect(events.sent.count == batchesBeforeBroadcast + 2)
+        #expect(events.sent.suffix(2).allSatisfy { batch in
+            batch.compactMap { try? ObstacleBridgeChannelMuxCodec.decode($0) }.contains { $0.messageType == .data }
+        })
     }
 }

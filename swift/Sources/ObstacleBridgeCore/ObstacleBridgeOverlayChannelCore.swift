@@ -614,6 +614,18 @@ enum ObstacleBridgeOverlayChannelCore {
 /// retains all ChannelMux/TUN state so an adapter cannot reimplement admission,
 /// route selection, counters, or the post-mux delay boundary.
 public final class ObstacleBridgeOverlayChannelRuntime {
+    public struct SharedTunPeer: Equatable, Sendable {
+        public let reference: String
+        public let ipv4: [String]
+        public let ipv6: [String]
+
+        public init(reference: String, ipv4: [String] = [], ipv6: [String] = []) {
+            self.reference = reference
+            self.ipv4 = ipv4
+            self.ipv6 = ipv6
+        }
+    }
+
     public struct Backpressure: Sendable {
         public let bufferedFrames: Int
         public let inflight: Int
@@ -664,11 +676,16 @@ public final class ObstacleBridgeOverlayChannelRuntime {
         instanceID: UInt64,
         connectionSequence: UInt32,
         localAddress: String? = nil,
-        localAddress6: String? = nil
+        localAddress6: String? = nil,
+        sharedTunPeers: [SharedTunPeer] = []
     ) {
         self.tunIfname = interfaceName
         self.tunMTU = max(0, mtu)
-        self.serviceSpec = ObstacleBridgeOverlayChannelCore.localTunServiceSpec(ifname: interfaceName, mtu: max(0, mtu))
+        self.serviceSpec = Self.serviceSpec(
+            interfaceName: interfaceName,
+            mtu: max(0, mtu),
+            sharedTunPeers: sharedTunPeers
+        )
         self.tunRuntime = ObstacleBridgeChannelMuxTunRuntime(
             instanceID: instanceID,
             connectionSeq: connectionSequence,
@@ -793,5 +810,28 @@ public final class ObstacleBridgeOverlayChannelRuntime {
               let type = ObstacleBridgeChannelMuxCodec.MType(rawValue: Int(frame.messageType.rawValue))
         else { return nil }
         return .init(chanID: Int(frame.channelID), proto: proto, counter: Int(frame.counter), mtype: type, body: frame.body)
+    }
+
+    private static func serviceSpec(
+        interfaceName: String,
+        mtu: Int,
+        sharedTunPeers: [SharedTunPeer]
+    ) -> ObstacleBridgeChannelMuxCodec.ServiceSpec {
+        guard !sharedTunPeers.isEmpty else {
+            return ObstacleBridgeOverlayChannelCore.localTunServiceSpec(ifname: interfaceName, mtu: mtu)
+        }
+        let peers: [ObstacleBridgeChannelMuxCodec.JSONValue] = sharedTunPeers.map { peer in
+            .object([
+                "peer_ref": .string(peer.reference),
+                "ipv4": .array(peer.ipv4.map(ObstacleBridgeChannelMuxCodec.JSONValue.string)),
+                "ipv6": .array(peer.ipv6.map(ObstacleBridgeChannelMuxCodec.JSONValue.string)),
+            ])
+        }
+        return .init(
+            svcID: 0, lProto: "tun", lBind: interfaceName, lPort: mtu,
+            rProto: "tun", rHost: interfaceName, rPort: mtu, name: nil,
+            lifecycleHooks: nil,
+            options: ["shared_tun_ownership": .object(["peers": .array(peers)])]
+        )
     }
 }

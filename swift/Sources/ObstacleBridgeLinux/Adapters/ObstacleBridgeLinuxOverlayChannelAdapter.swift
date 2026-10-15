@@ -32,6 +32,7 @@ public final class ObstacleBridgeLinuxOverlayChannelAdapter {
         packetDevice: (any ObstacleBridgeLinuxPacketDevice)? = nil,
         localAddress: String? = nil,
         localAddress6: String? = nil,
+        sharedTunPeers: [ObstacleBridgeOverlayChannelRuntime.SharedTunPeer] = [],
         backpressureSnapshot: @escaping () -> ObstacleBridgeOverlayChannelRuntime.Backpressure,
         startupFrames: @escaping () -> [Data],
         sendMuxFrames: @escaping ([Data]) -> Void,
@@ -43,7 +44,8 @@ public final class ObstacleBridgeLinuxOverlayChannelAdapter {
             instanceID: instanceID,
             connectionSequence: connectionSequence,
             localAddress: localAddress,
-            localAddress6: localAddress6
+            localAddress6: localAddress6,
+            sharedTunPeers: sharedTunPeers
         )
         self.packetDevice = packetDevice
         self.backpressureSnapshot = backpressureSnapshot
