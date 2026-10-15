@@ -64,6 +64,8 @@ def _compile_swift_tcp_transport_owner_probe(source_path: Path, binary_path: Pat
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeNativeServiceSpec.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketTunnelRoutePolicy.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeConfigPolicy.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
         str(source_path),

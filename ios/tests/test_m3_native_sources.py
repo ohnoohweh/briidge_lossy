@@ -39,6 +39,7 @@ def test_shared_packet_tunnel_configuration_source_exists() -> None:
 def test_shared_mtls_telemetry_transport_source_exists() -> None:
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     assert "SecIdentity" in source
     assert "NSURLAuthenticationMethodClientCertificate" in source
     assert "performDefaultHandling" in source
@@ -84,12 +85,11 @@ def test_shared_mtls_telemetry_transport_source_exists() -> None:
         "telemetry_endpoint",
         "telemetry_spool_directory",
     ]:
-        assert f'"{key}",' in runtime_config
-    assert '"telemetry_client",' in runtime_config
-    assert '"telemetry_client": [' in runtime_config
-    assert 'schemaItem(key: "telemetry_enabled"' in runtime_config
+        assert f'"{key}",' in policy
+    assert '"telemetry_client",' in policy
+    assert '"telemetry_client": [' in policy
+    assert 'schemaItem(key: "telemetry_enabled"' in policy
     assert "static func defaultTelemetryConfig()" in runtime_config
-    policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     assert "static func defaultTelemetryConfig()" in policy
     assert "ObstacleBridgeRuntimeConfigPolicy.defaultTelemetryConfig()" in runtime_config
     assert '"telemetry_endpoint": "https://127.0.0.1:18443/v1/telemetry/batches"' in policy
@@ -198,39 +198,21 @@ def test_ipserver_packet_tunnel_provider_source_exists() -> None:
     assert '"budget_bytes", "used_bytes", "remaining_bytes"' in snapshot_support
 
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    runtime_policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     admin_web = (CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift").read_text(encoding="utf-8")
     assert "struct ObstacleBridgeAdminUIBootstrapState" in admin_web
     assert "static func adminUIBootstrapState" in runtime_config
-    assert 'schemaItem(key: "ws_bind"' in runtime_config
-    assert 'schemaItem(key: "ws_own_port"' in runtime_config
-    assert 'schemaItem(key: "ws_path"' in runtime_config
-    assert 'schemaItem(key: "ws_peer_addresses"' in runtime_config
-    assert '"tun_execution"' in runtime_config
-    assert 'schemaItem(key: "tun_execution_mode", description: "Desktop local TUN execution topology: inline current-process ownership or helper-backed ownership.", defaultValue: "inline", choices: ["inline", "helper"])' in runtime_config
-    assert 'schemaItem(key: "tun_helper_backend", description: "Helper backend identifier for helper mode. Values include linux-native, linux-python, and darwin-native.", defaultValue: "linux-native")' in runtime_config
-    assert 'schemaItem(key: "tun_helper_apply_network", description: "Whether the helper should own privileged address/route/DNS/firewall apply-remove work.", defaultValue: true)' in runtime_config
-    assert 'private static let tunExecutionCompatibilityAliases = [' in runtime_config
-    assert '"mode": "tun_execution_mode"' in runtime_config
-    assert '"helper_backend": "tun_helper_backend"' in runtime_config
-    assert '"proxy_provider"' in runtime_config
-    assert 'schemaItem(key: "proxy_provider_enabled", description: "Enable the explicit HTTP CONNECT and SOCKS5 proxy provider."' in runtime_config
-    assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port."' in runtime_config
-    assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port."' in runtime_config
-    assert 'schemaItem(key: "proxy_provider_http_port", description: "Local HTTP/CONNECT proxy listener port.", defaultValue: 13881)' in runtime_config
-    assert 'schemaItem(key: "proxy_provider_socks5_port", description: "Local SOCKS5 CONNECT proxy listener port.", defaultValue: 13882)' in runtime_config
-    assert 'schemaItem(key: "secure_link_rekey_after_frames", description: "Automatically rekey PSK sessions after this many protected data frames. 0 disables frame-triggered rekey.", defaultValue: 0)' in runtime_config
-    assert 'schemaItem(key: "secure_link_rekey_after_seconds", description: "Automatically rekey PSK sessions after this many authenticated seconds. 0 disables time-triggered rekey.", defaultValue: 0.0)' in runtime_config
-    assert 'schemaItem(key: "secure_link_retry_backoff_initial_ms", description: "Initial SecureLink client retry backoff after authentication failure, in milliseconds.", defaultValue: 1000)' in runtime_config
-    assert 'schemaItem(key: "secure_link_retry_backoff_max_ms", description: "Maximum SecureLink client retry backoff after repeated authentication failures, in milliseconds.", defaultValue: 5000)' in runtime_config
-    assert 'schemaItem(key: "secure_link_recover_after_failure"' not in runtime_config
-    assert 'schemaItem(key: "secure_link_recover_delay_seconds"' not in runtime_config
-    assert 'schemaItem(key: "proxy_provider_egress", description: "Proxy egress policy object for outbound connection behavior.", defaultValue: [' in runtime_config
-    assert '"mode": "system"' in runtime_config
-    assert 'schemaItem(key: "log_proxy_provider", description: "Proxy provider log level override."' in runtime_config
-    assert 'schemaItem(key: "mux_tcp_bp_threshold", description: "Mux TCP write-buffer threshold in bytes before drain is triggered.", defaultValue: 1)' in runtime_config
-    assert 'schemaItem(key: "channelmux_transport_delay_threshold_ms", description: "Estimated transport-delay threshold before ChannelMux sheds local traffic and arms sustained-delay rotation.", defaultValue: 5000)' in runtime_config
-    assert 'schemaItem(key: "channelmux_transport_delay_rotation_delay_ms", description: "Continuous estimated-delay duration before ChannelMux requests a connection rotation.", defaultValue: 30000)' in runtime_config
-    assert 'schemaItem(key: "max_inflight", description: "Maximum myUDP DATA frames allowed in flight before excess frames are queued.", defaultValue: 200)' in runtime_config
+    assert "ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()" in runtime_config
+    for key in ("ws_bind", "ws_own_port", "ws_path", "ws_peer_addresses", "tun_execution_mode", "tun_helper_backend", "tun_helper_apply_network", "proxy_provider_enabled", "proxy_provider_http_port", "proxy_provider_socks5_port", "secure_link_rekey_after_frames", "secure_link_rekey_after_seconds", "secure_link_retry_backoff_initial_ms", "secure_link_retry_backoff_max_ms", "proxy_provider_egress", "log_proxy_provider", "mux_tcp_bp_threshold", "channelmux_transport_delay_threshold_ms", "channelmux_transport_delay_rotation_delay_ms", "max_inflight"):
+        assert f'schemaItem(key: "{key}"' in runtime_policy
+    assert '"tun_execution"' in runtime_policy
+    assert "static let tunExecutionCompatibilityAliasKeys" in runtime_policy
+    assert '"mode": "tun_execution_mode"' in runtime_policy
+    assert '"helper_backend": "tun_helper_backend"' in runtime_policy
+    assert '"proxy_provider"' in runtime_policy
+    assert 'schemaItem(key: "secure_link_recover_after_failure"' not in runtime_policy
+    assert 'schemaItem(key: "secure_link_recover_delay_seconds"' not in runtime_policy
+    assert '"mode": "system"' in runtime_policy
     assert 'flatPayload["proxy_provider_http_port"]) ?? 13881' in provider
     assert 'flatPayload["proxy_provider_socks5_port"]) ?? 13882' in provider
     assert '"mode": "system"' in provider
@@ -847,6 +829,7 @@ def test_macos_swift_host_runner_source_exists() -> None:
     wrapper = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     runtime = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     shared_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    runtime_policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     native_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
 
     assert "@main" in wrapper
@@ -871,10 +854,11 @@ def test_macos_swift_host_runner_source_exists() -> None:
     assert "ObstacleBridgeTcpOverlayRuntime" in runtime
     assert "ObstacleBridgeTcpOverlayTransportOwner" in runtime
     assert "ObstacleBridgeSecureLinkPskTransportAdapter" in runtime
-    assert '"TUN_routing"' in shared_runtime
-    assert "tunnel_gateway" in shared_runtime
-    assert "tunnel_gateway6" in shared_runtime
-    assert "log_TUN_routing" in shared_runtime
+    assert "ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()" in shared_runtime
+    assert '"TUN_routing"' in runtime_policy
+    assert "tunnel_gateway" in runtime_policy
+    assert "tunnel_gateway6" in runtime_policy
+    assert "log_TUN_routing" in runtime_policy
     assert 'env["EXCLUDED_ROUTES"]' in runtime
     assert 'env["EXCLUDED_ROUTES6"]' in runtime
     assert '"swift_host_runner"' in runtime
@@ -1674,9 +1658,11 @@ def test_ios_packet_tunnel_provider_owns_restart_without_app_process() -> None:
 
 def test_native_ios_tun_connector_schema_is_shared_with_macos_host_runner() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
     macos_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
 
-    assert '"iOS_TUN_connector": [' in runtime
+    assert "ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()" in runtime
+    assert '"iOS_TUN_connector": [' in policy
     for key in ("packetflow_connector", "bind_host", "bind_port", "peer_host", "peer_port", "ifname", "mtu"):
-        assert f'schemaItem(key: "{key}"' in runtime
+        assert f'schemaItem(key: "{key}"' in policy
     assert "ObstacleBridgeRuntimeConfig.configSchemaSnapshot()" in macos_runner

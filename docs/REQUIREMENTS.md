@@ -579,8 +579,8 @@ contract is exercised rather than bypassed by an absent counter. Its standalone
 Swift compilation includes both the Core ChannelMux codec and its compatibility
 extension, so macOS parity evidence exercises the same source closure as the
 Core target rather than relying on an incidental compile order.
-The iOS TUN helper probe likewise compiles RuntimeConfig with its NativeService
-and Admin-config Core dependencies, preserving the product source closure while
+The iOS TUN helper probe likewise compiles RuntimeConfig with its NativeService,
+Admin-config, and packet-tunnel route-policy Core dependencies, preserving the product source closure while
 its Darwin resolver remains outside the portable Core state owner. Apple-only
 shared adapters reside in `swift/Sources/ObstacleBridgeAppleShared`; Core and
 all Apple product closures reference that single source location.
