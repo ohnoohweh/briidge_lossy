@@ -58,8 +58,10 @@ The active testing focus on this branch is:
   acknowledgement, and retransmission transitions without Apple-only sender
   state; its retired SessionCodec companion is absent from all compile lists
 - the iOS TUN helper probe compiles RuntimeConfig with its Core RuntimeConfig scalar policy and NativeService
-  and Admin-config dependencies, and exercises the Darwin-specific address
-  resolver separately from the portable TUN-probe state owner
+  and Admin-config dependencies, while the focused RuntimeConfig-policy probe
+  verifies portable WebSocket literal-peer exclusions, IPv4-mapped IPv6 route
+  derivation, and resolve-family suppression separately from Darwin resolution
+  and the portable TUN-probe state owner
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`
