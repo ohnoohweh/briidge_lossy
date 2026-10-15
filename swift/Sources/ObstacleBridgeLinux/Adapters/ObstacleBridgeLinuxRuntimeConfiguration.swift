@@ -174,6 +174,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         }
         let tunHelperSocket = tunMode == "helper" ? string(tunExecution["tun_helper_socket"]) : nil
         let tunRouting = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: root)
+        if let route = tunRouting.invalidRoute {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config has invalid TUN route \(route)")
+        }
         if tunRouting.enabledOnStartup {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
         }

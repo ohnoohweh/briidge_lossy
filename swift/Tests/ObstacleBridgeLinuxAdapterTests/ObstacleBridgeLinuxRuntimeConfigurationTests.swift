@@ -342,6 +342,21 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(routing.excludedRoutes6 == ["::1/128"])
     }
 
+    @Test func coreTunnelRoutingRecordRejectsInvalidCIDR() throws {
+        let routing = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: [
+            "TUN_routing": ["included_routes": ["not-an-address/24"]],
+        ])
+        #expect(routing.invalidRoute == "not-an-address/24")
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config has invalid TUN route not-an-address/24")) {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "runner": ["overlay_transport": "tcp"],
+                "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 443],
+                "TUN_routing": ["included_routes": ["not-an-address/24"]],
+            ])
+            _ = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: data)
+        }
+    }
+
     @Test func coreCatalogFramesEncodeConfiguredRemoteServices() throws {
         let frames = ObstacleBridgeRuntimeConfigPort.remoteServiceCatalogFrames(
             from: [

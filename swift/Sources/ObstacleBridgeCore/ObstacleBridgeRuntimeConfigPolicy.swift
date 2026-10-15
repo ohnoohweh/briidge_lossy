@@ -227,6 +227,7 @@ public enum ObstacleBridgeRuntimeConfigPort {
         public let excludedRoutes: [String]
         public let includedRoutes6: [String]
         public let excludedRoutes6: [String]
+        public let invalidRoute: String?
     }
     public static func schemaSnapshot() -> [String: Any] {
         ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
@@ -366,13 +367,26 @@ public enum ObstacleBridgeRuntimeConfigPort {
     public static func tunnelRouting(from payload: [String: Any]) -> TunnelRoutingRecord {
         let routing = groupedSectionPayload("TUN_routing", from: payload)
         func strings(_ key: String) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }
+        let includedRoutes = strings("included_routes"), excludedRoutes = strings("excluded_routes")
+        let includedRoutes6 = strings("included_routes6"), excludedRoutes6 = strings("excluded_routes6")
+        func invalid(_ routes: [String], ipv6: Bool) -> String? {
+            routes.first { route in
+                let parts = route.split(separator: "/", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let prefix = Int(parts[1]) else { return true }
+                return ipv6
+                    ? !ObstacleBridgePacketTunnelRoutePolicy.ipv6RouteContains(host: parts[0], network: parts[0], prefix: prefix)
+                    : !ObstacleBridgePacketTunnelRoutePolicy.ipv4RouteContains(host: parts[0], network: parts[0], prefix: prefix)
+            }
+        }
         return .init(
             enabledOnStartup: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: routing["enabled_on_startup"] ?? routing["enabled"]) ?? false,
             tunnelAddress: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address"]),
             tunnelAddress6: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address6"]),
             mtu: ObstacleBridgeRuntimeConfigPolicy.intValue(from: routing["mtu"]),
-            includedRoutes: strings("included_routes"), excludedRoutes: strings("excluded_routes"),
-            includedRoutes6: strings("included_routes6"), excludedRoutes6: strings("excluded_routes6")
+            includedRoutes: includedRoutes, excludedRoutes: excludedRoutes,
+            includedRoutes6: includedRoutes6, excludedRoutes6: excludedRoutes6,
+            invalidRoute: invalid(includedRoutes + excludedRoutes, ipv6: false)
+                ?? invalid(includedRoutes6 + excludedRoutes6, ipv6: true)
         )
     }
 
