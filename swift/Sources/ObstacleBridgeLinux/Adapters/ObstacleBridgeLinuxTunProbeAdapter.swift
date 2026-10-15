@@ -8,6 +8,13 @@ import Glibc
 /// has no packet-device descriptor: Linux TUN probing remains fail-closed until
 /// the privileged device owner is admitted by LSW-005.
 public enum ObstacleBridgeLinuxTunProbeAdapter {
+    /// Creates the Core-owned probe state used by a future admitted packet-device
+    /// reader.  The adapter supplies POSIX inputs; it never owns matching or
+    /// diagnostic counters.
+    public static func makeRuntime(identifier: UInt16 = 1) -> ObstacleBridgeTunProbeRuntime {
+        ObstacleBridgeTunProbeRuntime(identifier: identifier)
+    }
+
     public static func resolve(target: String, tunnelAddress: String = "", tunnelAddress6: String = "") -> (target: String?, family: Int32, error: String) {
         let families = ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(
             tunnelAddress: tunnelAddress, tunnelAddress6: tunnelAddress6
@@ -21,6 +28,22 @@ public enum ObstacleBridgeLinuxTunProbeAdapter {
         ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(
             "Linux Swift TUN probing is unavailable until LSW-005 admits a /dev/net/tun packet-device owner"
         )
+    }
+
+    public static func packetInjected(_ launch: ObstacleBridgeTunProbeRuntime.Launch, runtime: ObstacleBridgeTunProbeRuntime) {
+        runtime.packetInjected(launch.token)
+    }
+
+    public static func receivedPacket(_ packet: Data, at monotonicNS: UInt64, runtime: ObstacleBridgeTunProbeRuntime) -> ObstacleBridgeTunProbeRuntime.Observation {
+        runtime.receive(packet, receivedMonotonicNS: monotonicNS)
+    }
+
+    public static func timeout(_ launch: ObstacleBridgeTunProbeRuntime.Launch, at monotonicNS: UInt64, runtime: ObstacleBridgeTunProbeRuntime) -> [String: Any]? {
+        runtime.timeout(launch.token, at: monotonicNS)
+    }
+
+    public static func packetDeviceFailed(_ launch: ObstacleBridgeTunProbeRuntime.Launch, detail: String, at monotonicNS: UInt64, runtime: ObstacleBridgeTunProbeRuntime) -> [String: Any]? {
+        runtime.packetDeviceFailed(launch.token, detail: detail, at: monotonicNS)
     }
 
     private static func resolvePOSIX(host: String, family: Int32) -> String? {
