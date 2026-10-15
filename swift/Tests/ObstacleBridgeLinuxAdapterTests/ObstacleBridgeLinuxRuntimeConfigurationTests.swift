@@ -402,6 +402,18 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(plan.excludedRoutes == ["127.0.0.0/8", "192.0.2.44/32"])
     }
 
+    @Test func linuxAdmissionAllowsEnabledPlanOnlyWithHelperOwner() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443],
+            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_socket": "/tmp/obstaclebridge-helper.sock"],
+            "TUN_routing": ["enabled_on_startup": true],
+        ])
+        let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: data)
+        #expect(configuration.packetTunnelPlan?.enabledOnStartup == true)
+        #expect(configuration.tunHelperSocketPath == "/tmp/obstaclebridge-helper.sock")
+    }
+
     @Test func coreConfigurationPortPublishesSecretMetadataAndRedactsValues() throws {
         #expect(ObstacleBridgeRuntimeConfigPort.secretKeys() == Set(["admin_web_password", "secure_link_psk"]))
         let redacted = ObstacleBridgeRuntimeConfigPort.redactedConfiguration([

@@ -138,6 +138,18 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         return try ObstacleBridgeLinuxTunHelperAdapter(socketPath: tunHelperSocketPath, timeoutMilliseconds: timeoutMilliseconds)
     }
 
+    /// Delegates an enabled Core plan only to the explicitly configured helper.
+    /// The foreground Linux runtime never opens a packet device or edits routes.
+    public func applyPacketTunnelPlanThroughHelper(interfaceName: String) throws -> [String: Any] {
+        guard let packetTunnelPlan, packetTunnelPlan.enabledOnStartup else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup has no enabled Core plan")
+        }
+        guard let helper = try makeTunHelperAdapter() else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
+        }
+        return try helper.applyWithRollback(packetTunnelPlan: packetTunnelPlan, interfaceName: interfaceName)
+    }
+
     public static func load(path: String) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
         do {
             return try parse(data: Data(contentsOf: URL(fileURLWithPath: path)))
@@ -181,7 +193,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         if let route = tunRouting.invalidRoute {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config has invalid TUN route \(route)")
         }
-        if tunRouting.enabledOnStartup {
+        if tunRouting.enabledOnStartup, tunHelperSocket == nil {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
         }
         let packetTunnelPlan = ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: root)
