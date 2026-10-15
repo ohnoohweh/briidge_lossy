@@ -36,6 +36,26 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
         return [(mask >> 24) & 0xff, (mask >> 16) & 0xff, (mask >> 8) & 0xff, mask & 0xff]
             .map(String.init).joined(separator: ".")
     }
+
+    static func ipv4RouteContains(host: String, network: String, prefix: Int) -> Bool {
+        guard (0...32).contains(prefix), let hostValue = ipv4Value(host), let networkValue = ipv4Value(network) else {
+            return false
+        }
+        if prefix == 0 { return true }
+        let mask = UInt32.max << UInt32(32 - prefix)
+        return (hostValue & mask) == (networkValue & mask)
+    }
+
+    private static func ipv4Value(_ host: String) -> UInt32? {
+        let parts = host.split(separator: ".").map(String.init)
+        guard parts.count == 4 else { return nil }
+        var value: UInt32 = 0
+        for part in parts {
+            guard let octet = UInt8(part) else { return nil }
+            value = (value << 8) | UInt32(octet)
+        }
+        return value
+    }
 }
 
 enum ObstacleBridgePacketTunnelConfigurationError: LocalizedError {

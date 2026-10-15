@@ -239,37 +239,9 @@ struct ObstacleBridgePacketTunnelConfiguration {
             return false
         }
         if version == 4 {
-            return ipv4RouteContains(host: host, network: parts[0], prefix: prefix)
+            return ObstacleBridgePacketTunnelRoutePolicy.ipv4RouteContains(host: host, network: parts[0], prefix: prefix)
         }
         return ipv6RouteContains(host: host, network: parts[0], prefix: prefix)
-    }
-
-    private static func ipv4RouteContains(host: String, network: String, prefix: Int) -> Bool {
-        guard prefix >= 0, prefix <= 32,
-              let hostValue = ipv4Value(host),
-              let networkValue = ipv4Value(network) else {
-            return false
-        }
-        if prefix == 0 {
-            return true
-        }
-        let mask = UInt32.max << UInt32(32 - prefix)
-        return (hostValue & mask) == (networkValue & mask)
-    }
-
-    private static func ipv4Value(_ host: String) -> UInt32? {
-        let parts = host.split(separator: ".").map(String.init)
-        guard parts.count == 4 else {
-            return nil
-        }
-        var value: UInt32 = 0
-        for part in parts {
-            guard let octet = UInt8(part) else {
-                return nil
-            }
-            value = (value << 8) | UInt32(octet)
-        }
-        return value
     }
 
     private static func ipv6RouteContains(host: String, network: String, prefix: Int) -> Bool {
