@@ -100,8 +100,11 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let channelMuxMaximumApplicationPayload: Int
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
+    /// Explicit helper-control endpoint. This is admitted independently from
+    /// TUN startup: selecting it never opens `/dev/net/tun` in this runtime.
+    public let tunHelperSocketPath: String?
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = []) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -123,6 +126,12 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.channelMuxMaximumApplicationPayload = max(32, min(channelMuxMaximumApplicationPayload, 65_535))
         self.ownServices = ownServices
         self.remoteServices = remoteServices
+        self.tunHelperSocketPath = tunHelperSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tunHelperSocketPath : nil
+    }
+
+    public func makeTunHelperAdapter(timeoutMilliseconds: Int = 2_000) throws -> ObstacleBridgeLinuxTunHelperAdapter? {
+        guard let tunHelperSocketPath else { return nil }
+        return try ObstacleBridgeLinuxTunHelperAdapter(socketPath: tunHelperSocketPath, timeoutMilliseconds: timeoutMilliseconds)
     }
 
     public static func load(path: String) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
@@ -155,6 +164,12 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
         }
         let runner = root["runner"] as? [String: Any] ?? [:]
+        let tunExecution = root["tun_execution"] as? [String: Any] ?? [:]
+        let tunMode = (string(tunExecution["tun_execution_mode"]) ?? "inline").lowercased()
+        guard tunMode == "inline" || tunMode == "helper" else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("tun_execution.tun_execution_mode must be inline or helper")
+        }
+        let tunHelperSocket = tunMode == "helper" ? string(tunExecution["tun_helper_socket"]) : nil
         if let tun = root["TUN_routing"] as? [String: Any],
            boolean(tun["enabled_on_startup"] ?? tun["enabled"]) == true {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
@@ -268,7 +283,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
             compressionPolicy: compressionPolicy,
             ownServices: try serviceSpecs(root, key: "own_servers"),
-            remoteServices: try serviceSpecs(root, key: "remote_servers")
+            remoteServices: try serviceSpecs(root, key: "remote_servers"),
+            tunHelperSocketPath: tunHelperSocket
         )
     }
 

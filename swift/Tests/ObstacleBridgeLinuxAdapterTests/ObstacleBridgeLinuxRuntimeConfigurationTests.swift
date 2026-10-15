@@ -3,6 +3,15 @@ import Testing
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func admitsExplicitHelperControlSocketWithoutAdmittingTunStartup() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4433],
+            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_socket": "/run/obstaclebridge/helper.sock"],
+        ]))
+        #expect(config.tunHelperSocketPath == "/run/obstaclebridge/helper.sock")
+        #expect(try config.makeTunHelperAdapter() != nil)
+    }
     @Test func corePeerAddressPortNormalizesLinuxCandidateLists() {
         let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
             transport: .tcp,
