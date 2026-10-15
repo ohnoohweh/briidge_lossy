@@ -298,6 +298,71 @@ public enum ObstacleBridgeRuntimeConfigPort {
         return (records, nil)
     }
 
+    /// Derives the deterministic ChannelMux control frames for the configured
+    /// remote service catalog. Adapters deliver these frames on their selected
+    /// transport; Core retains catalog encoding and control-frame chunking.
+    public static func remoteServiceCatalogFrames(
+        from payload: [String: Any], instanceID: UInt64 = 0, connectionSequence: UInt32 = 0
+    ) -> [ObstacleBridgeChannelMuxFrame] {
+        let catalog = serviceCatalog(payload, key: "remote_servers")
+        guard catalog.invalidIndex == nil else { return [] }
+        return remoteServiceCatalogFrames(
+            catalog.records, instanceID: instanceID, connectionSequence: connectionSequence
+        )
+    }
+
+    public static func remoteServiceCatalogFrames(
+        _ records: [ObstacleBridgeNativeServiceSpec], instanceID: UInt64 = 0, connectionSequence: UInt32 = 0
+    ) -> [ObstacleBridgeChannelMuxFrame] {
+        guard !records.isEmpty else { return [] }
+        let services: [ObstacleBridgeServiceSpec]
+        do {
+            services = try records.map { record in
+                let protocolCode: (String) -> UInt8? = { value in
+                    switch value {
+                    case "udp": return ObstacleBridgeChannelMuxProtocol.udp.rawValue
+                    case "tcp": return ObstacleBridgeChannelMuxProtocol.tcp.rawValue
+                    case "tun": return ObstacleBridgeChannelMuxProtocol.tun.rawValue
+                    default: return nil
+                    }
+                }
+                guard let listenProtocol = protocolCode(record.listenProtocol),
+                      let targetProtocol = protocolCode(record.targetProtocol),
+                      listenProtocol == targetProtocol,
+                      let serviceID = UInt16(exactly: record.svcID),
+                      let listenPort = UInt16(exactly: record.listenPort),
+                      let targetPort = UInt16(exactly: record.targetPort),
+                      serviceID > 0, listenPort > 0, targetPort > 0
+                else { throw ObstacleBridgeServiceCodecError.invalidPayload }
+                return .init(
+                    serviceID: serviceID, name: record.name,
+                    listenProtocol: listenProtocol, listenHost: record.listenBind, listenPort: listenPort,
+                    targetProtocol: targetProtocol, targetHost: record.targetHost, targetPort: targetPort
+                )
+            }
+            let payload = try ObstacleBridgeServiceCodec.encodeRemoteServices(
+                instanceID: instanceID, connectionSequence: connectionSequence, services: services
+            )
+            if payload.count <= Int(UInt16.max) {
+                return [.init(
+                    channelID: 0, protocolType: .udp, counter: 0,
+                    messageType: .remoteServicesSetV2, body: payload
+                )]
+            }
+            let chunks = try ObstacleBridgeControlChunkCodec.chunk(
+                transactionID: 1, maximumApplicationPayload: Int(UInt16.max), payload: payload
+            )
+            return chunks.enumerated().map { index, chunk in
+                .init(
+                    channelID: 0, protocolType: .udp, counter: UInt16(truncatingIfNeeded: index),
+                    messageType: .remoteServicesSetV2Chunk, body: chunk
+                )
+            }
+        } catch {
+            return []
+        }
+    }
+
     public static func tunnelRouting(from payload: [String: Any]) -> TunnelRoutingRecord {
         let routing = groupedSectionPayload("TUN_routing", from: payload)
         func strings(_ key: String) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }

@@ -342,6 +342,28 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(routing.excludedRoutes6 == ["::1/128"])
     }
 
+    @Test func coreCatalogFramesEncodeConfiguredRemoteServices() throws {
+        let frames = ObstacleBridgeRuntimeConfigPort.remoteServiceCatalogFrames(
+            from: [
+                "channel_mux": [
+                    "remote_servers": [[
+                        "name": "echo",
+                        "listen": ["protocol": "tcp", "bind": "127.0.0.1", "port": "7001"],
+                        "target": ["protocol": "tcp", "host": "example.test", "port": 7002],
+                    ]],
+                ],
+            ],
+            instanceID: 9, connectionSequence: 3
+        )
+        #expect(frames.count == 1)
+        #expect(frames.first?.messageType == .remoteServicesSetV2)
+        let catalog = try ObstacleBridgeServiceCodec.decodeRemoteServices(try #require(frames.first?.body))
+        #expect(catalog.instanceID == 9)
+        #expect(catalog.connectionSequence == 3)
+        #expect(catalog.services.first?.name == "echo")
+        #expect(catalog.services.first?.targetHost == "example.test")
+    }
+
     @Test func runtimeStatusReportsAdmissionStateWithoutLeakingPsk() throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp,
