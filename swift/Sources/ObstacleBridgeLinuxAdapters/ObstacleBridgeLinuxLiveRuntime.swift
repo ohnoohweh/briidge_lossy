@@ -33,6 +33,8 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
     private let admission: ObstacleBridgeLinuxConnectionAdmission
     private let lock = NSLock()
     private var activeEpoch: UInt64?
+    private var retryTimer: DispatchSourceTimer?
+    private var receiveWorker: ObstacleBridgeLinuxReceiveWorker?
 
     init(runtime: ObstacleBridgeLinuxConfiguredRuntime, expectedTransport: ObstacleBridgeLinuxTransport) {
         self.runtime = runtime
@@ -94,6 +96,47 @@ private class ObstacleBridgeLinuxTransportLifecycleOwner: @unchecked Sendable {
     func cancelInFlightConnection() {
         runtime.cancelInFlightConnection()
     }
+
+    /// Core lifecycle effects are dispatched to the selected resource owner,
+    /// not retained by the shared coordinator adapter.  Each concrete owner
+    /// therefore fences its own reader and retry callback with its epoch.
+    func replaceReceiveWorker(with worker: ObstacleBridgeLinuxReceiveWorker?) {
+        lock.lock()
+        let previous = receiveWorker
+        receiveWorker = worker
+        lock.unlock()
+        previous?.stop()
+    }
+
+    func receiveSnapshot() -> ObstacleBridgeLinuxReceiveWorkerSnapshot? {
+        lock.lock()
+        let worker = receiveWorker
+        lock.unlock()
+        return worker?.snapshot()
+    }
+
+    func scheduleRetry(on queue: DispatchQueue, token: UInt64, afterMilliseconds delay: Int, fired: @escaping () -> Void) {
+        cancelRetry()
+        let timer = DispatchSource.makeTimerSource(queue: queue)
+        lock.lock()
+        retryTimer = timer
+        lock.unlock()
+        timer.schedule(deadline: .now() + .milliseconds(delay))
+        timer.setEventHandler { [weak self] in
+            self?.cancelRetry()
+            fired()
+        }
+        timer.resume()
+    }
+
+    func cancelRetry() {
+        lock.lock()
+        let timer = retryTimer
+        retryTimer = nil
+        lock.unlock()
+        timer?.setEventHandler {}
+        timer?.cancel()
+    }
 }
 
 private final class ObstacleBridgeLinuxTCPLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner, @unchecked Sendable {
@@ -122,8 +165,6 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var statusProjection: ObstacleBridgeLinuxRuntimeStatus
     private var session: ObstacleBridgeLinuxConfiguredSession?
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
-    private var retryTimer: DispatchSourceTimer?
-    private var receiveWorker: ObstacleBridgeLinuxReceiveWorker?
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
@@ -168,7 +209,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// serialized transport owner.
     public func status() -> ObstacleBridgeLinuxRuntimeStatus {
         statusLock.lock()
-        let receive = receiveWorker?.snapshot()
+        let receive = transportLifecycleOwner.receiveSnapshot()
         let summaries = (serviceOwners + remoteServiceOwners).map { $0.snapshot() }
         let activeTCPChannels = summaries.reduce(0) { $0 + $1.activeTCPChannels }
         let activeUDPChannels = summaries.reduce(0) { $0 + $1.activeUDPChannels }
@@ -389,22 +430,14 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
-        cancelRetry()
-        let timer = DispatchSource.makeTimerSource(queue: queue)
-        retryTimer = timer
-        timer.schedule(deadline: .now() + .milliseconds(delay))
-        timer.setEventHandler { [weak self] in
+        transportLifecycleOwner.scheduleRetry(on: queue, token: token, afterMilliseconds: delay) { [weak self] in
             guard let self else { return }
-            self.cancelRetry()
             self.apply(self.coordinator.handle(.retryTimerFired(token: token)))
         }
-        timer.resume()
     }
 
     private func cancelRetry() {
-        retryTimer?.setEventHandler {}
-        retryTimer?.cancel()
-        retryTimer = nil
+        transportLifecycleOwner.cancelRetry()
     }
 
     /// Executes only platform mechanics requested by Core.  The coordinator
@@ -570,11 +603,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// replaces an epoch. Keep the publication atomic and cancel an old reader
     /// only after no status reader can retain the mutable owner slot.
     private func replaceReceiveWorker(with worker: ObstacleBridgeLinuxReceiveWorker?) {
-        statusLock.lock()
-        let previous = receiveWorker
-        receiveWorker = worker
-        statusLock.unlock()
-        previous?.stop()
+        transportLifecycleOwner.replaceReceiveWorker(with: worker)
     }
 
     private func receiveFailed(workerEpoch: UInt64, coordinatorEpoch: UInt64, reason: String) {
@@ -671,7 +700,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     private func appendRuntimeHealth(event: String, controlledStop: Bool = false) {
         let status = configuredRuntime.status()
-        let receive = receiveWorker?.snapshot()
+        let receive = transportLifecycleOwner.receiveSnapshot()
         runtimeHealthLock.lock()
         runtimeHealthSequence += 1
         runtimeHealthRing.append(.init(
@@ -702,7 +731,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     deinit {
         runtimeHealthTimer?.cancel()
         livenessProbeTimer?.cancel()
-        retryTimer?.cancel()
+        transportLifecycleOwner.cancelRetry()
+        transportLifecycleOwner.replaceReceiveWorker(with: nil)
         stopServiceOwners()
         stopRemoteServiceOwners()
         configuredRuntime.disconnect()
