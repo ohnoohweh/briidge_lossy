@@ -44,6 +44,18 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(try readExactly(outbound.count, from: pair.1) == outbound)
     }
 
+    /// This is intentionally opt-in: opening a kernel TUN device requires
+    /// CAP_NET_ADMIN and must not make ordinary CI depend on host privileges.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))
+    func privilegedKernelTunOpensAndAcceptsIPv4() throws {
+        let name = "obq\(getpid() % 100_000)"
+        let device = try ObstacleBridgeLinuxTunDevice(interfaceName: name, mtu: 1500, packetSink: { _ in })
+        defer { device.stop() }
+        try device.start()
+        #expect(device.actualInterfaceName == name)
+        try device.writePacket(ipv4Packet())
+    }
+
     private func expectation() -> DispatchSemaphore { DispatchSemaphore(value: 0) }
 
     private func makeSocketPair() throws -> (Int32, Int32) {
