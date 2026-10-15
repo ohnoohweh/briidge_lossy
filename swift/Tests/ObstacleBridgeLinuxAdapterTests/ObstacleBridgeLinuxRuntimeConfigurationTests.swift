@@ -325,6 +325,23 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(configuration.port == 4242)
     }
 
+    @Test func coreTunnelRoutingRecordRetainsIPv4AndIPv6Configuration() {
+        let routing = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: [
+            "TUN_routing": [
+                "enabled_on_startup": true,
+                "tunnel_address": "192.0.2.1", "tunnel_address6": "2001:db8::1", "mtu": "1400",
+                "included_routes": ["10.0.0.0/8"], "excluded_routes": ["127.0.0.0/8"],
+                "included_routes6": ["2001:db8::/32"], "excluded_routes6": ["::1/128"],
+            ],
+        ])
+        #expect(routing.enabledOnStartup)
+        #expect(routing.tunnelAddress == "192.0.2.1")
+        #expect(routing.tunnelAddress6 == "2001:db8::1")
+        #expect(routing.mtu == 1400)
+        #expect(routing.includedRoutes == ["10.0.0.0/8"])
+        #expect(routing.excludedRoutes6 == ["::1/128"])
+    }
+
     @Test func runtimeStatusReportsAdmissionStateWithoutLeakingPsk() throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp,
