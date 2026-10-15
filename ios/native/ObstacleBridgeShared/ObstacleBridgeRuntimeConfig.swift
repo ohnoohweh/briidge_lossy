@@ -8,23 +8,6 @@ enum ObstacleBridgeRuntimeConfig {
     // iOS deliberately has no process-environment override at runtime.
     static let appRuntimeConfigOverrideEnvironmentKey = "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG"
 
-    private static let proxyProviderCompatibilityAliases = [
-        "enabled": "proxy_provider_enabled",
-        "bind": "proxy_provider_bind",
-        "http_port": "proxy_provider_http_port",
-        "socks5_port": "proxy_provider_socks5_port",
-        "protocols": "proxy_provider_protocols",
-        "auth": "proxy_provider_auth",
-        "egress": "proxy_provider_egress",
-        "policy": "proxy_provider_policy",
-    ]
-    private static let tunExecutionCompatibilityAliases = [
-        "mode": "tun_execution_mode",
-        "helper_backend": "tun_helper_backend",
-        "helper_socket": "tun_helper_socket",
-        "helper_apply_network": "tun_helper_apply_network",
-        "helper_log_level": "tun_helper_log_level",
-    ]
 
     static func defaultTelemetryConfig() -> [String: Any] {
         ObstacleBridgeRuntimeConfigPolicy.defaultTelemetryConfig()
@@ -450,12 +433,12 @@ enum ObstacleBridgeRuntimeConfig {
         var normalized = payload
         if sectionName == "proxy_provider" {
             applyCompatibilityAliases(to: &normalized)
-            for alias in proxyProviderCompatibilityAliases.keys {
+            for alias in ObstacleBridgeRuntimeConfigPolicy.proxyProviderCompatibilityAliasKeys {
                 normalized.removeValue(forKey: alias)
             }
         } else if sectionName == "tun_execution" {
             applyCompatibilityAliases(to: &normalized)
-            for alias in tunExecutionCompatibilityAliases.keys {
+            for alias in ObstacleBridgeRuntimeConfigPolicy.tunExecutionCompatibilityAliasKeys {
                 normalized.removeValue(forKey: alias)
             }
         }
