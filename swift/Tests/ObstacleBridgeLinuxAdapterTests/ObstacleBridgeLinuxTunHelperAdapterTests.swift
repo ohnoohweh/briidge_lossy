@@ -58,6 +58,18 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(environment["TUN_DNS_SERVERS"] as? String == "1.1.1.1")
     }
 
+    @Test func helperApplyFailureRequestsRollbackOnFreshExchange() throws {
+        let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstReply: true)
+        defer { peer.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path)
+        let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
+        #expect(throws: (any Error).self) {
+            try adapter.applyWithRollback(packetTunnelPlan: plan, interfaceName: "obtest0")
+        }
+        #expect(peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
+        #expect(peer.sequences == [1, 2])
+    }
+
     @Test func coreRejectsMismatchedUnixHelperSequence() throws {
         let peer = try UnixHelperPeer(connectionCount: 1, corruptFirstSequence: true)
         defer { peer.stop() }

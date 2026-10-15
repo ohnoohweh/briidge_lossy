@@ -80,6 +80,17 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         ])
     }
 
+    /// If an apply reply is lost after helper-side partial work, request the
+    /// paired removal on a fresh bounded IPC exchange before surfacing failure.
+    public func applyWithRollback(packetTunnelPlan plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) throws -> [String: Any] {
+        do {
+            return try apply(packetTunnelPlan: plan, interfaceName: interfaceName)
+        } catch {
+            _ = try? rollback(packetTunnelPlan: plan, interfaceName: interfaceName)
+            throw error
+        }
+    }
+
     public func rollback(packetTunnelPlan plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) throws -> [String: Any] {
         try send(command: .removeNetwork, payload: [
             "action": "down", "argv": [], "env": Self.planEnvironment(plan, interfaceName: interfaceName),
