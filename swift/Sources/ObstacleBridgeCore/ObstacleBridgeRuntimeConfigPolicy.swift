@@ -298,6 +298,7 @@ public enum ObstacleBridgeRuntimeConfigPort {
 
     public static func normalizedUpdates(_ updates: [String: Any], current: [String: Any]) -> [String: Any] {
         var normalized = updates
+        let currentFlat = flatten(current)
         for section in ObstacleBridgeRuntimeConfigPolicy.knownGroupedSections {
             guard let grouped = normalized.removeValue(forKey: section) as? [String: Any] else { continue }
             for (key, value) in normalizedSectionPayload(section, grouped) { normalized[key] = value }
@@ -305,7 +306,7 @@ public enum ObstacleBridgeRuntimeConfigPort {
         ObstacleBridgeRuntimeConfigPolicy.applyCompatibilityAliases(to: &normalized)
         ObstacleBridgeRuntimeConfigPolicy.enforceAdminAuthenticationUpdate(
             &normalized,
-            currentAuthDisabled: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: current["admin_web_auth_disable"]) ?? false
+            currentAuthDisabled: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: currentFlat["admin_web_auth_disable"]) ?? false
         )
         return normalized
     }

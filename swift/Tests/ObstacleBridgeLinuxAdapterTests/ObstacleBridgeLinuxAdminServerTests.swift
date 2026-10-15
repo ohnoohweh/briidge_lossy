@@ -20,6 +20,22 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_auth_disable"] as? Bool == true)
     }
 
+    @Test func configurationStoreUsesCoreAdminCredentialUpdatePolicy() throws {
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "admin_web": ["admin_web_auth_disable": false, "admin_web_username": "operator", "admin_web_password": "secret"],
+        ])
+        let disabled = try store.apply(updates: ["admin_web_auth_disable": true])
+        let disabledAdmin = try #require(disabled.configuration["admin_web"] as? [String: Any])
+        #expect(disabledAdmin["admin_web_auth_disable"] as? Bool == true)
+        #expect(disabledAdmin["admin_web_username"] as? String == "")
+        #expect(disabledAdmin["admin_web_password"] as? String == "")
+
+        let preserved = try store.apply(updates: ["admin_web_password": ""])
+        let preservedAdmin = try #require(preserved.configuration["admin_web"] as? [String: Any])
+        #expect(preservedAdmin["admin_web_auth_disable"] as? Bool == true)
+        #expect(preservedAdmin["admin_web_username"] as? String == "")
+    }
+
     @Test func configHTTPUpdatePersistsValidatedFieldsAndRejectsInvalidInput() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: ["admin_web": ["admin_web_auth_disable": false]])

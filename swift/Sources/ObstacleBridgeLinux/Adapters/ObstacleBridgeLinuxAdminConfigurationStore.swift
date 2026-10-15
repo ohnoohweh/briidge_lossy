@@ -30,16 +30,19 @@ public final class ObstacleBridgeLinuxAdminConfigurationStore: @unchecked Sendab
         return result
     }
 
-    private static func sections() -> [String: String] { [
-        "admin_web_auth_disable": "admin_web",
-        "admin_web_security_advisor_disable": "admin_web",
-        "admin_web_security_advisor_startup_disable": "admin_web",
-        "admin_web_first_tab": "admin_web",
-    ] }
-    private static func schema() -> [String: [String: Any]] { [
-        "admin_web_auth_disable": ["default": false],
-        "admin_web_security_advisor_disable": ["default": false],
-        "admin_web_security_advisor_startup_disable": ["default": false],
-        "admin_web_first_tab": ["default": "home"],
-    ] }
+    private static func sections() -> [String: String] {
+        ObstacleBridgeRuntimeConfigPort.schemaSnapshot().reduce(into: [:]) { result, entry in
+            for row in entry.value as? [[String: Any]] ?? [] {
+                if let key = row["key"] as? String { result[key] = entry.key }
+            }
+        }
+    }
+
+    private static func schema() -> [String: [String: Any]] {
+        ObstacleBridgeRuntimeConfigPort.schemaSnapshot().values.reduce(into: [:]) { result, value in
+            for row in value as? [[String: Any]] ?? [] {
+                if let key = row["key"] as? String { result[key] = row }
+            }
+        }
+    }
 }

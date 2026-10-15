@@ -15,7 +15,9 @@ public enum ObstacleBridgeAdminConfigUpdatePort {
             currentRuntimeConfig: currentRuntimeConfig,
             updates: updates,
             configurationPolicy: .init(
-                normalizedUpdates: { updates, _ in updates },
+                normalizedUpdates: { updates, current in
+                    ObstacleBridgeRuntimeConfigPort.normalizedUpdates(updates, current: current)
+                },
                 looksGrouped: { raw in raw.values.contains { $0 is [String: Any] } },
                 schemaRow: { schema[$0] },
                 sectionName: { sections[$0] }
