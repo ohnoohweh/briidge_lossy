@@ -385,6 +385,8 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(plan.excludedRoutes == ["10.0.0.0/8", "192.0.2.44/32"])
         #expect(plan.dnsServers == ["9.9.9.9"])
         #expect(plan.mtu == 1400)
+        #expect(plan.routeDiagnostics.baseExcludedRoutes == ["10.0.0.0/8"])
+        #expect(plan.routeDiagnostics.peerExcludedRoutes == ["192.0.2.44/32"])
     }
 
     @Test func linuxAdmissionRetainsDisabledCorePacketTunnelPlan() throws {

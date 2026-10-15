@@ -218,6 +218,17 @@ enum ObstacleBridgeRuntimeConfigPolicy {
 /// grouped/flat precedence, schema coercion, and compatibility spelling are
 /// shared protocol policy rather than Apple or Linux behavior.
 public enum ObstacleBridgeRuntimeConfigPort {
+    public struct PacketTunnelRouteDiagnostics: Equatable, Sendable {
+        public let includedRoutes: [String]
+        public let baseExcludedRoutes: [String]
+        public let peerExcludedRoutes: [String]
+        public let effectiveExcludedRoutes: [String]
+        public let includedRoutes6: [String]
+        public let baseExcludedRoutes6: [String]
+        public let peerExcludedRoutes6: [String]
+        public let effectiveExcludedRoutes6: [String]
+    }
+
     public struct PacketTunnelPlan: Equatable, Sendable {
         public let enabledOnStartup: Bool
         public let tunnelAddress: String
@@ -230,6 +241,7 @@ public enum ObstacleBridgeRuntimeConfigPort {
         public let excludedRoutes6: [String]
         public let dnsServers: [String]
         public let mtu: Int
+        public let routeDiagnostics: PacketTunnelRouteDiagnostics
     }
     public struct OverlayBootstrapRecord: Equatable, Sendable {
         public let transport: String
@@ -481,17 +493,25 @@ public enum ObstacleBridgeRuntimeConfigPort {
         }
         func int(_ key: String, _ fallback: Int) -> Int { ObstacleBridgeRuntimeConfigPolicy.intValue(from: routing[key]) ?? fallback }
         func strings(_ key: String, _ fallback: [String]) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) }.isEmpty ? fallback : (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }
+        let includedRoutes = record.includedRoutes.isEmpty ? ["0.0.0.0/0"] : record.includedRoutes
+        let includedRoutes6 = record.includedRoutes6.isEmpty ? ["::/0"] : record.includedRoutes6
+        let effectiveExcludedRoutes = dedupe(baseExcludedRoutes + record.peerExcludedRoutes)
+        let effectiveExcludedRoutes6 = dedupe(baseExcludedRoutes6 + record.peerExcludedRoutes6)
         return .init(
             enabledOnStartup: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: routing["enabled_on_startup"] ?? routing["enabled"]) ?? true,
             tunnelAddress: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address"]) ?? "192.168.106.1",
             tunnelPrefix: int("tunnel_prefix", 30),
             tunnelAddress6: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address6"]) ?? "fd20:106::1",
             tunnelPrefix6: int("tunnel_prefix6", 126),
-            includedRoutes: record.includedRoutes.isEmpty ? ["0.0.0.0/0"] : record.includedRoutes,
-            excludedRoutes: dedupe(baseExcludedRoutes + record.peerExcludedRoutes),
-            includedRoutes6: record.includedRoutes6.isEmpty ? ["::/0"] : record.includedRoutes6,
-            excludedRoutes6: dedupe(baseExcludedRoutes6 + record.peerExcludedRoutes6),
-            dnsServers: strings("dns_servers", ["1.1.1.1"]), mtu: int("mtu", 1600)
+            includedRoutes: includedRoutes, excludedRoutes: effectiveExcludedRoutes,
+            includedRoutes6: includedRoutes6, excludedRoutes6: effectiveExcludedRoutes6,
+            dnsServers: strings("dns_servers", ["1.1.1.1"]), mtu: int("mtu", 1600),
+            routeDiagnostics: .init(
+                includedRoutes: includedRoutes, baseExcludedRoutes: baseExcludedRoutes,
+                peerExcludedRoutes: record.peerExcludedRoutes, effectiveExcludedRoutes: effectiveExcludedRoutes,
+                includedRoutes6: includedRoutes6, baseExcludedRoutes6: baseExcludedRoutes6,
+                peerExcludedRoutes6: record.peerExcludedRoutes6, effectiveExcludedRoutes6: effectiveExcludedRoutes6
+            )
         )
     }
 
