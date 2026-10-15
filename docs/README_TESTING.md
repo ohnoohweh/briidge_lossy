@@ -69,7 +69,9 @@ The active testing focus on this branch is:
   respective `swift/Sources/ObstacleBridgeiOS` and `ObstacleBridgeMacOS` roots.
 - The iOS Xcode patch tests verify those generated project references use the
   canonical repository-relative depth, are idempotent, and repair stale path
-  depths from earlier generated projects.
+  depths from earlier generated projects; they also pin the paired Core
+  ChannelMux codec and compatibility-extension compile inventory, plus the
+  generated repair for stale CPython extension-framework metadata.
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`

@@ -206,6 +206,8 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert patched.count("IPHONEOS_DEPLOYMENT_TARGET = 15.0;") == 2
     assert 'PBXNativeTarget "IPServer"' in patched
     assert "NetworkExtension.framework" in patched
+    assert "NetworkExtension.framework in Sources" not in patched
+    assert "71C400000000000000000003 /* NetworkExtension.framework in App Frameworks */" in patched
     assert "Embed App Extensions" in patched
     assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched
     assert "native/IPServer/IPServer.entitlements" in patched
@@ -229,6 +231,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift" in patched
@@ -260,6 +263,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeUdpOverlaySessionCodec.swift" not in patched
     assert "ObstacleBridgeAdminAPI.swift in Sources" in patched
     assert "ObstacleBridgeChannelMuxCodec.swift in Sources" in patched
+    assert "ObstacleBridgeChannelMuxCompatibilityCodec.swift in Sources" in patched
     assert "ObstacleBridgeRuntimeConfig.swift in Sources" in patched
     assert "ObstacleBridgeOverlayStackPlanner.swift in Sources" in patched
     assert "ObstacleBridgeWebAdminServer.swift in Sources" in patched
@@ -301,6 +305,8 @@ def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
     assert "app_packages/bin" in patched
     assert "_testcapi _testclinic" in patched
     assert "_remote_debugging xxlimited" in patched
+    assert "Repair stale Python extension frameworks missing required bundle metadata." in patched
+    assert 'PYTHON_DYLIB_INFO_TEMPLATE="$PROJECT_DIR/Support/Python.xcframework/build/iOS-dylib-Info-template.plist"' in patched
     assert "org.python.$(echo $FULL_MODULE_NAME" not in patched
     assert "Process Python libraries for IPServer" not in patched
     assert "ObstacleBridgePythonBridge.m" not in patched

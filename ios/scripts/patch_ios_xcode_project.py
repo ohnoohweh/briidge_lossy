@@ -54,6 +54,28 @@ PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "done\n"
 )
 
+# Briefcase's Python installer keeps an existing extension-framework directory
+# on incremental builds.  A stale directory created by an older installer can
+# contain its binary but no Info.plist, which Xcode rejects during app-bundle
+# validation.  Restore the normal framework metadata before final signing.
+PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT = (
+    "\n"
+    "# Repair stale Python extension frameworks missing required bundle metadata.\n"
+    'PYTHON_DYLIB_INFO_TEMPLATE="$PROJECT_DIR/Support/Python.xcframework/build/iOS-dylib-Info-template.plist"\n'
+    'for framework_path in "$CODESIGNING_FOLDER_PATH"/Frameworks/*.framework\n'
+    "do\n"
+    '    [ -d "$framework_path" ] || continue\n'
+    '    if [ ! -f "$framework_path/Info.plist" ]; then\n'
+    '        framework_name="$(basename "$framework_path" .framework)"\n'
+    '        cp "$PYTHON_DYLIB_INFO_TEMPLATE" "$framework_path/Info.plist"\n'
+    '        plutil -replace CFBundleExecutable -string "$framework_name" "$framework_path/Info.plist"\n'
+    '        framework_bundle_id=$(echo "$PRODUCT_BUNDLE_IDENTIFIER.$framework_name" | tr "_" "-" | sed "s/\\.-/./g")\n'
+    '        plutil -replace CFBundleIdentifier -string "$framework_bundle_id" "$framework_path/Info.plist"\n'
+    '        /usr/bin/codesign --force --sign "$EXPANDED_CODE_SIGN_IDENTITY" ${OTHER_CODE_SIGN_FLAGS:-} -o runtime --timestamp=none --preserve-metadata=identifier,entitlements,flags --generate-entitlement-der "$framework_path"\n'
+    "    fi\n"
+    "done\n"
+)
+
 MALFORMED_PYTHON_APP_STORE_CLEANUP_SCRIPT = (
     "\n"
     "# Strip CPython test/support payloads that are not needed by ObstacleBridge and\n"
@@ -84,6 +106,7 @@ IPSERVER_SHARED_SWIFT_SOURCES = [
     ("71C500000000000000000018", "71C500000000000000000118", "ObstacleBridgeAdminWebSupport.swift"),
     ("71C500000000000000000045", "71C500000000000000000145", "ObstacleBridgeTelemetryMTLSUploader.swift"),
     ("71C500000000000000000002", "71C500000000000000000102", "ObstacleBridgeChannelMuxCodec.swift"),
+    ("71C500000000000000000053", "71C500000000000000000153", "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
     ("71C500000000000000000003", "71C500000000000000000103", "ObstacleBridgeSecureLinkPskCodec.swift"),
     ("71C500000000000000000004", "71C500000000000000000104", "ObstacleBridgeSecureLinkPskRuntime.swift"),
     ("71C500000000000000000005", "71C500000000000000000105", "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
@@ -162,6 +185,7 @@ APP_SHARED_SWIFT_SOURCES = [
     ("71C610000000000000000015", "71C610000000000000000115", "ObstacleBridgeAdminWebSupport.swift"),
     ("71C610000000000000000045", "71C610000000000000000145", "ObstacleBridgeTelemetryMTLSUploader.swift"),
     ("71C610000000000000000028", "71C610000000000000000128", "ObstacleBridgeChannelMuxCodec.swift"),
+    ("71C610000000000000000053", "71C610000000000000000153", "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
     ("71C610000000000000000001", "71C610000000000000000101", "ObstacleBridgeSecureLinkPskCodec.swift"),
     ("71C610000000000000000002", "71C610000000000000000102", "ObstacleBridgeSecureLinkPskRuntime.swift"),
     ("71C610000000000000000003", "71C610000000000000000103", "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
@@ -247,8 +271,8 @@ CORE_SWIFT_SOURCE_ROOT = "../../../../../swift/Sources/ObstacleBridgeCore"
 
 
 def shared_swift_source_path(name: str) -> str:
-    if name == "ObstacleBridgeChannelMuxCodec.swift":
-        return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeChannelMuxCompatibilityCodec.swift"
+    if name in {"ObstacleBridgeChannelMuxCodec.swift", "ObstacleBridgeChannelMuxCompatibilityCodec.swift"}:
+        return f"{CORE_SWIFT_SOURCE_ROOT}/{name}"
     if name == "ObstacleBridgeAdminAuthPolicy.swift":
         return f"{CORE_SWIFT_SOURCE_ROOT}/ObstacleBridgeAdminAuthPolicy.swift"
     if name == "ObstacleBridgeAdminAuth.swift":
@@ -508,6 +532,16 @@ def add_app_generated_swift_source(text: str) -> str:
 
 def add_ipserver_generated_swift_source(text: str) -> str:
     build_id, file_id, name = IPSERVER_GENERATED_SWIFT_SOURCE
+    # Earlier project patches reused the IPServer build-file ID with the app
+    # source label.  Remove that stale row before adding the extension-only
+    # entry so Xcode does not compile the generated stamp twice.
+    text = re.sub(
+        rf'^\t\t{build_id} /\* {re.escape(name)} in Sources \*/ = \{{isa = PBXBuildFile; fileRef = {file_id} /\* {re.escape(name)} \*/; \}};\n',
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = text.replace(f"\t\t\t\t{build_id} /* {name} in Sources */,\n", "")
     text = insert_before(
         text,
         "/* End PBXBuildFile section */\n",
@@ -705,18 +739,58 @@ def patch_python_build_script(text: str) -> str:
                 break
         else:
             raise ValueError("Process Python libraries install_python command not found")
+    info_plist_variants = (
+        PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT,
+        PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT.replace("\n", "\\n").replace('"', '\\"'),
+    )
+    if not any(info_plist_script in text for info_plist_script in info_plist_variants):
+        for cleanup in cleanup_variants:
+            if cleanup in text:
+                info_plist_script = (
+                    PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT.replace("\n", "\\n").replace('"', '\\"')
+                    if "\\n" in cleanup
+                    else PYTHON_EXTENSION_FRAMEWORK_INFO_PLIST_SCRIPT
+                )
+                text = text.replace(cleanup, cleanup + info_plist_script, 1)
+                break
+        else:
+            raise ValueError("Process Python libraries cleanup script not found")
     if not any(marker in text for marker in ('source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh', 'source $PROJECT_DIR/Support/Python.xcframework/build/utils.sh\\n')):
         raise ValueError("Process Python libraries shell script not found")
     return text
 
 def add_app_network_extension_framework(text: str) -> str:
+    # A previous generated project put NetworkExtension in the app Sources
+    # phase and retained Briefcase's duplicate framework row.  Frameworks are
+    # linked only through the app Frameworks phase.
+    text = re.sub(
+        r'^\t\t71C400000000000000000002 /\* NetworkExtension\.framework in Sources \*/ = .*?;\n',
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = text.replace("\t\t\t\t71C400000000000000000002 /* NetworkExtension.framework in Sources */,\n", "")
+    text = re.sub(
+        r'^\t\t71C400000000000000000002 /\* NetworkExtension\.framework in App Frameworks \*/ = .*?;\n',
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = text.replace("\t\t\t\t71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */,\n", "")
+    text = re.sub(
+        r'^\t\t91062982305E3B4A00240836 /\* NetworkExtension\.framework in Frameworks \*/ = .*?;\n',
+        "",
+        text,
+        flags=re.MULTILINE,
+    )
+    text = text.replace("\t\t\t\t91062982305E3B4A00240836 /* NetworkExtension.framework in Frameworks */,\n", "")
     build_file = (
-        "\t\t71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */ = "
+        "\t\t71C400000000000000000003 /* NetworkExtension.framework in App Frameworks */ = "
         "{isa = PBXBuildFile; fileRef = 71C200000000000000000030 /* NetworkExtension.framework */; };\n"
     )
     text = insert_before(text, "/* End PBXBuildFile section */\n", build_file)
 
-    if "71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */," in text:
+    if "71C400000000000000000003 /* NetworkExtension.framework in App Frameworks */," in text:
         return text
 
     match = re.search(
@@ -750,7 +824,7 @@ def add_app_network_extension_framework(text: str) -> str:
 
     replacement = (
         r"\1"
-        "\t\t\t\t71C400000000000000000002 /* NetworkExtension.framework in App Frameworks */,\n"
+        "\t\t\t\t71C400000000000000000003 /* NetworkExtension.framework in App Frameworks */,\n"
     )
 
     patched, count = re.subn(phase_pattern, replacement, text, count=1)

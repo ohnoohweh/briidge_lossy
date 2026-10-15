@@ -589,7 +589,11 @@ Platform entrypoints are co-located in `swift/Sources/ObstacleBridgeiOS` and
 `swift/Sources/ObstacleBridgeLinux/Adapters` beside the Linux executable.
 The generated iOS Xcode project shall resolve each relocated Swift source from
 its project directory with the canonical five-parent repository-relative path;
-its patcher shall also repair earlier four- or six-parent generated paths.
+its patcher shall also repair earlier four- or six-parent generated paths and
+include both the Core ChannelMux codec definition and its compatibility
+extension in every Apple target that consumes ChannelMux service specifications.
+The generated Python-library phase shall restore required `Info.plist` metadata
+for stale CPython extension frameworks before Xcode validates the app bundle.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

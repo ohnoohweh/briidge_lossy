@@ -1068,6 +1068,10 @@ REQ-LST-001:
   # Apple-only adapters remain co-located under swift/Sources/ObstacleBridgeAppleShared.
   # The iOS project patcher retains the canonical source-root depth and repairs
   # stale generated four- or six-parent Swift paths after a source relocation.
+  # Apple targets include both Core ChannelMux codec source files where the
+  # service-specification API is consumed.
+  # Generated Python extension frameworks regain required Info.plist metadata
+  # before Xcode bundle validation.
   # The ChannelMux parity runner compiles the Core SecureLink transcript,
   # native-service specification, RuntimeConfig policy, and packet-tunnel route policy with portable
   # RuntimeConfig schema/scalar parsing/peer fields/peer exclusions/admin-auth transitions/overlay limits, packet-tunnel route validation/containment/subnet masks/diagnostics, service, listener-hook,
@@ -1081,6 +1085,7 @@ REQ-LST-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
   unit_tests:
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_repairs_stale_six_level_swift_source_paths
+    - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpRegistryListenerKeepsTwoUdpPeersIsolated
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections
