@@ -455,6 +455,12 @@ public enum ObstacleBridgeRuntimeConfigPort {
         let routing = groupedSectionPayload("TUN_routing", from: payload)
         let record = tunnelRouting(from: payload)
         guard record.invalidRoute == nil else { return nil }
+        let baseExcludedRoutes = record.excludedRoutes.isEmpty ? ["127.0.0.0/8"] : record.excludedRoutes
+        let baseExcludedRoutes6 = record.excludedRoutes6.isEmpty ? ["::1/128"] : record.excludedRoutes6
+        func dedupe(_ values: [String]) -> [String] {
+            var seen: Set<String> = []
+            return values.filter { seen.insert($0).inserted }
+        }
         func int(_ key: String, _ fallback: Int) -> Int { ObstacleBridgeRuntimeConfigPolicy.intValue(from: routing[key]) ?? fallback }
         func strings(_ key: String, _ fallback: [String]) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) }.isEmpty ? fallback : (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }
         return .init(
@@ -464,9 +470,9 @@ public enum ObstacleBridgeRuntimeConfigPort {
             tunnelAddress6: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address6"]) ?? "fd20:106::1",
             tunnelPrefix6: int("tunnel_prefix6", 126),
             includedRoutes: record.includedRoutes.isEmpty ? ["0.0.0.0/0"] : record.includedRoutes,
-            excludedRoutes: record.effectiveExcludedRoutes.isEmpty ? ["127.0.0.0/8"] : record.effectiveExcludedRoutes,
+            excludedRoutes: dedupe(baseExcludedRoutes + record.peerExcludedRoutes),
             includedRoutes6: record.includedRoutes6.isEmpty ? ["::/0"] : record.includedRoutes6,
-            excludedRoutes6: record.effectiveExcludedRoutes6.isEmpty ? ["::1/128"] : record.effectiveExcludedRoutes6,
+            excludedRoutes6: dedupe(baseExcludedRoutes6 + record.peerExcludedRoutes6),
             dnsServers: strings("dns_servers", ["1.1.1.1"]), mtu: int("mtu", 1600)
         )
     }

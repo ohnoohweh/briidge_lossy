@@ -387,6 +387,19 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(plan.mtu == 1400)
     }
 
+    @Test func linuxAdmissionRetainsDisabledCorePacketTunnelPlan() throws {
+        let data = try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443],
+            "TUN_routing": ["enabled_on_startup": false, "mtu": 1400],
+        ])
+        let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: data)
+        let plan = try #require(configuration.packetTunnelPlan)
+        #expect(!plan.enabledOnStartup)
+        #expect(plan.mtu == 1400)
+        #expect(plan.excludedRoutes == ["127.0.0.0/8", "192.0.2.44/32"])
+    }
+
     @Test func coreConfigurationPortPublishesSecretMetadataAndRedactsValues() throws {
         #expect(ObstacleBridgeRuntimeConfigPort.secretKeys() == Set(["admin_web_password", "secure_link_psk"]))
         let redacted = ObstacleBridgeRuntimeConfigPort.redactedConfiguration([
