@@ -587,6 +587,9 @@ all Apple product closures reference that single source location.
 Platform entrypoints are co-located in `swift/Sources/ObstacleBridgeiOS` and
 `swift/Sources/ObstacleBridgeMacOS`, while Linux adapter sources reside under
 `swift/Sources/ObstacleBridgeLinux/Adapters` beside the Linux executable.
+The generated iOS Xcode project shall resolve each relocated Swift source from
+its project directory with the canonical five-parent repository-relative path;
+its patcher shall also repair earlier four- or six-parent generated paths.
 
 Cross-runtime service qualification treats authenticated overlay readiness and
 local listener publication as separate observable states; it waits a bounded

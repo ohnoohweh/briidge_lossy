@@ -269,6 +269,9 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeProxyServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
     assert "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" in patched
+    assert "../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift" in patched
+    assert "../../../../../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" in patched
+    assert 'path = "../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' not in patched
 
 
 def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
@@ -310,6 +313,18 @@ def test_patch_pbxproj_text_is_idempotent() -> None:
     twice = patch_pbxproj_text(once)
 
     assert once == twice
+
+
+def test_patch_pbxproj_text_repairs_stale_six_level_swift_source_paths() -> None:
+    stale = BASELINE_PROJECT.replace(
+        "/* End PBXFileReference section */",
+        '\t\tDEADBEEFDEADBEEFDEADBEEF /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; path = "../../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift"; sourceTree = SOURCE_ROOT; };\n/* End PBXFileReference section */',
+    )
+
+    patched = patch_pbxproj_text(stale)
+
+    assert 'path = "../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' in patched
+    assert 'path = "../../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' not in patched
 
 
 def test_patch_pbxproj_text_gives_app_and_extension_matching_bundle_defaults() -> None:

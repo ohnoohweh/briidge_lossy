@@ -67,6 +67,9 @@ The active testing focus on this branch is:
   closure distinct from portable `ObstacleBridgeCore` policy.
 - Source-layout probes also resolve iOS and macOS entrypoints from their
   respective `swift/Sources/ObstacleBridgeiOS` and `ObstacleBridgeMacOS` roots.
+- The iOS Xcode patch tests verify those generated project references use the
+  canonical repository-relative depth, are idempotent, and repair stale path
+  depths from earlier generated projects.
 - Linux Swift adapter tests use a Python UDP peer to prove Core-timer recovery
   after dropped DATA and exact-once reassembly of duplicated, out-of-order chunks
 - configuration and hook-contract derivation from `TUN_routing`
