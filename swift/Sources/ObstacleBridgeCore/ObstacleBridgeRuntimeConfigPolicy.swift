@@ -45,6 +45,14 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         return (value as? NSNumber)?.stringValue
     }
 
+    static func firstStringValue(from value: Any?) -> String? {
+        if let string = stringValue(from: value) { return string }
+        if let values = value as? [Any] {
+            return values.compactMap { stringValue(from: $0) }.first
+        }
+        return nil
+    }
+
     static func overlaySessionMaxAppPayload(from payload: [String: Any]) -> Int {
         let transport = (stringValue(from: payload["overlay_transport"]) ?? "myudp").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         var limit = transport == "ws" ? max(1, intValue(from: payload["ws_max_size"]) ?? 65535) : 65535

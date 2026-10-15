@@ -899,16 +899,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func firstStringValue(from value: Any?) -> String? {
-        if let string = stringValue(from: value) {
-            return string
-        }
-        if let values = value as? [String] {
-            return values.compactMap { stringValue(from: $0) }.first
-        }
-        if let values = value as? [Any] {
-            return values.compactMap { stringValue(from: $0) }.first
-        }
-        return nil
+        ObstacleBridgeRuntimeConfigPolicy.firstStringValue(from: value)
     }
 
     static func peerResolveFamilyValue(from value: Any?) -> String? {
