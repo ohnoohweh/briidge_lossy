@@ -366,6 +366,25 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         try assertProtectedReceiveFailureReconnects(mode: "ws-securelink-close-after-ack", transport: .ws)
     }
 
+    @Test func webSocketHandshakeFailureUsesBoundedCoreRetryLifecycle() throws {
+        let peer = try PythonOverlayPeer(mode: "ws-handshake-reject")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .ws, host: "127.0.0.1", port: peer.port,
+                webSocketProxy: .init(mode: .off)
+            ),
+            policy: .init(initialDelayMilliseconds: 5, maximumDelayMilliseconds: 10, maximumAttempts: 2)
+        )
+        let failed = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "failed" { failed.signal() } }
+        runtime.start()
+        #expect(failed.wait(timeout: .now() + 3) == .success)
+        #expect(runtime.snapshot.attempts == 2)
+        #expect(runtime.snapshot.failureReason != nil)
+        runtime.stop()
+    }
+
     @Test func protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect() throws {
         try assertProtectedReceiveFailureReconnects(mode: "myudp-securelink-close-after-ack", transport: .myudp)
     }

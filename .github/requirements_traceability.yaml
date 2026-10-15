@@ -796,6 +796,7 @@ REQ-LIFE-005:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsOneCleartextReceiveWorkerAndCancelsItOnStop
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedWebSocketReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::webSocketHandshakeFailureUsesBoundedCoreRetryLifecycle
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedPeerInitiatedCatalogReachesLiveServiceOwner
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::liveRuntimeOwnsAuthenticatedSessionAndStops

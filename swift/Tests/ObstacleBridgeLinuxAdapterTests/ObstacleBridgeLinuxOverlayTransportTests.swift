@@ -999,6 +999,21 @@ final class PythonOverlayPeer {
             p=b'\\0python-first'; c.sendall(bytes([130,len(p)])+p); c.close(); s.close()
             """
         }
+        if mode == "ws-handshake-reject" {
+            return """
+            import socket
+            s=socket.socket(); s.bind(('127.0.0.1',0)); s.listen(2); print(s.getsockname()[1], flush=True)
+            for _ in range(2):
+                c,_=s.accept(); request=b''
+                while b'\\r\\n\\r\\n' not in request:
+                    chunk=c.recv(4096)
+                    if not chunk: break
+                    request+=chunk
+                c.sendall(b'HTTP/1.1 503 Service Unavailable\\r\\nContent-Length: 0\\r\\nConnection: close\\r\\n\\r\\n')
+                c.close()
+            s.close()
+            """
+        }
         if mode == "myudp-duplex" {
             return """
             import socket, struct, time

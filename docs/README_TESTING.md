@@ -262,6 +262,11 @@ pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --run --admin-port 8080
 ```
 
+The Linux Swift live-runtime suite includes a Python peer that accepts the
+WebSocket TCP connection but rejects HTTP upgrade, proving the selected
+WebSocket owner reports that connection-completion failure through Core's
+bounded retry lifecycle.
+
 The Linux Swift lane pins the selected Swift Crypto backend's SHA-256,
 HMAC/HKDF/PBKDF2, AEAD, Ed25519, X25519, and Python-derived SecureLink PSK
 transcript vectors. It also exercises authenticated SecureLink PSK handshake
