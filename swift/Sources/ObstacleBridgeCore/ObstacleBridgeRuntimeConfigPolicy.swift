@@ -8,6 +8,11 @@ enum ObstacleBridgeRuntimeConfigPolicy {
         "admin_web", "debug_logging", "telemetry_client", "channel_mux",
         "iOS_TUN_connector", "proxy_provider",
     ]
+    static func applyCompatibilityAliases(to payload: inout [String: Any]) {
+        if payload["udp_peer_resolve_family"] == nil, let value = payload["peer_resolve_family"] { payload["udp_peer_resolve_family"] = value }
+        for (alias, canonical) in ["enabled": "proxy_provider_enabled", "bind": "proxy_provider_bind", "http_port": "proxy_provider_http_port", "socks5_port": "proxy_provider_socks5_port", "protocols": "proxy_provider_protocols", "auth": "proxy_provider_auth", "egress": "proxy_provider_egress", "policy": "proxy_provider_policy"] where payload[canonical] == nil { if let value = payload[alias] { payload[canonical] = value } }
+        for (alias, canonical) in ["mode": "tun_execution_mode", "helper_backend": "tun_helper_backend", "helper_socket": "tun_helper_socket", "helper_apply_network": "tun_helper_apply_network", "helper_log_level": "tun_helper_log_level"] where payload[canonical] == nil { if let value = payload[alias] { payload[canonical] = value } }
+    }
 
     static func defaultTelemetryConfig() -> [String: Any] {
         [

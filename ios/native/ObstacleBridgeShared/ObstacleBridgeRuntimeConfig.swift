@@ -486,19 +486,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func applyCompatibilityAliases(to payload: inout [String: Any]) {
-        if payload["udp_peer_resolve_family"] == nil, let value = payload["peer_resolve_family"] {
-            payload["udp_peer_resolve_family"] = value
-        }
-        for (alias, canonical) in proxyProviderCompatibilityAliases where payload[canonical] == nil {
-            if let value = payload[alias] {
-                payload[canonical] = value
-            }
-        }
-        for (alias, canonical) in tunExecutionCompatibilityAliases where payload[canonical] == nil {
-            if let value = payload[alias] {
-                payload[canonical] = value
-            }
-        }
+        ObstacleBridgeRuntimeConfigPolicy.applyCompatibilityAliases(to: &payload)
     }
 
     private static func normalizeValueForSchema(rawValue: Any, defaultValue: Any?) -> Any {
