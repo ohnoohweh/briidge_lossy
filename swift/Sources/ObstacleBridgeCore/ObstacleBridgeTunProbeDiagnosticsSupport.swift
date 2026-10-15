@@ -24,14 +24,14 @@ struct ObstacleBridgeTunProbeHistory {
     let lastSuccessRTTMS: Double
 }
 
-enum ObstacleBridgeTunProbeDiagnosticsSupport {
-    static let ipv4Family: Int32 = 2
+public enum ObstacleBridgeTunProbeDiagnosticsSupport {
+    public static let ipv4Family: Int32 = 2
 #if os(Linux)
-    static let ipv6Family: Int32 = 10
+    public static let ipv6Family: Int32 = 10
 #elseif os(Windows)
-    static let ipv6Family: Int32 = 23
+    public static let ipv6Family: Int32 = 23
 #else
-    static let ipv6Family: Int32 = 30
+    public static let ipv6Family: Int32 = 30
 #endif
     static let localReplyStageKeys = ObstacleBridgeTunProbeDiagnosticsPolicy.localReplyStageKeys
     static let tunICMPStageKeys = ObstacleBridgeTunProbeDiagnosticsPolicy.tunICMPStageKeys
@@ -99,7 +99,7 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         )
     }
 
-    static func sourceProbeFamilies(tunnelAddress: String, tunnelAddress6: String) -> [Int32] {
+    public static func sourceProbeFamilies(tunnelAddress: String, tunnelAddress6: String) -> [Int32] {
         var families: [Int32] = []
         if !tunnelAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             families.append(ipv4Family)
@@ -120,7 +120,7 @@ enum ObstacleBridgeTunProbeDiagnosticsSupport {
         return tunnelAddress.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    static func resolveTunProbeTarget(
+    public static func resolveTunProbeTarget(
         _ target: String,
         candidateFamilies: [Int32],
         resolver: (String, Int32) -> String? = { _, _ in nil }
