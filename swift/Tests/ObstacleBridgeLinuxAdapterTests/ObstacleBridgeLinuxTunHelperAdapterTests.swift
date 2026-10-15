@@ -42,6 +42,16 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(peer.packets == [Data([0x45, 0x00, 0x12, 0x34])])
     }
 
+    @Test func helperAppliesAndRollsBackCorePacketTunnelPlan() throws {
+        let peer = try UnixHelperPeer(connectionCount: 2)
+        defer { peer.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path)
+        let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true, "mtu": 1400]]))
+        _ = try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")
+        _ = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
+        #expect(peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
+    }
+
     @Test func coreRejectsMismatchedUnixHelperSequence() throws {
         let peer = try UnixHelperPeer(connectionCount: 1, corruptFirstSequence: true)
         defer { peer.stop() }
@@ -101,7 +111,7 @@ private final class UnixHelperPeer: @unchecked Sendable {
         let bytes = Array(path.utf8) + [0]
         withUnsafeMutableBytes(of: &address.sun_path) { destination in
             destination.initializeMemory(as: UInt8.self, repeating: 0)
-            destination.baseAddress!.assumingMemoryBound(to: UInt8.self).assign(from: bytes, count: bytes.count)
+            destination.baseAddress!.assumingMemoryBound(to: UInt8.self).update(from: bytes, count: bytes.count)
         }
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }

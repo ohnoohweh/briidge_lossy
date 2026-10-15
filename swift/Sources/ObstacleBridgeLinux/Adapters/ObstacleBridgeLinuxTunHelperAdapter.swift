@@ -69,6 +69,27 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         return try coreTransport.sendPacketToHelper(packet)
     }
 
+    /// Delegates a Core-derived network plan to the explicitly configured
+    /// privileged helper. The Linux process never applies routes or DNS itself.
+    public func apply(packetTunnelPlan plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) throws -> [String: Any] {
+        guard plan.enabledOnStartup else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("disabled packet-tunnel plan cannot be applied")
+        }
+        return try send(command: .applyNetwork, payload: [
+            "action": "up", "argv": [], "env": Self.planEnvironment(plan, interfaceName: interfaceName),
+        ])
+    }
+
+    public func rollback(packetTunnelPlan plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) throws -> [String: Any] {
+        try send(command: .removeNetwork, payload: [
+            "action": "down", "argv": [], "env": Self.planEnvironment(plan, interfaceName: interfaceName),
+        ])
+    }
+
+    private static func planEnvironment(_ plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) -> [String: String] {
+        ["TUN_IFNAME": interfaceName, "TUN_ADDR": "\(plan.tunnelAddress)/\(plan.tunnelPrefix)", "TUN_ADDR6": "\(plan.tunnelAddress6)/\(plan.tunnelPrefix6)", "TUN_MTU": "\(plan.mtu)", "TUN_INCLUDED_ROUTES": plan.includedRoutes.joined(separator: ","), "TUN_EXCLUDED_ROUTES": plan.excludedRoutes.joined(separator: ","), "TUN_INCLUDED_ROUTES6": plan.includedRoutes6.joined(separator: ","), "TUN_EXCLUDED_ROUTES6": plan.excludedRoutes6.joined(separator: ","), "TUN_DNS_SERVERS": plan.dnsServers.joined(separator: ",")]
+    }
+
     private func exchange(kind: String, envelope: [String: Any]) throws -> [String: Any] {
         let request: [String: Any] = ["kind": kind, "envelope": Self.jsonSafe(envelope)]
         let body: Data
@@ -99,7 +120,7 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         guard bytes.count <= capacity else { _ = close(fd); throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper socket path is too long") }
         withUnsafeMutableBytes(of: &address.sun_path) { destination in
             destination.initializeMemory(as: UInt8.self, repeating: 0)
-            destination.baseAddress!.assumingMemoryBound(to: UInt8.self).assign(from: bytes, count: bytes.count)
+            destination.baseAddress!.assumingMemoryBound(to: UInt8.self).update(from: bytes, count: bytes.count)
         }
         let result = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
