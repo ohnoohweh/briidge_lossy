@@ -497,18 +497,7 @@ enum ObstacleBridgeRuntimeConfig {
     }
 
     private static func schemaItem(key: String, description: String, defaultValue: Any, choices: [Any]? = nil, secret: Bool = false) -> [String: Any] {
-        var row: [String: Any] = [
-            "key": key,
-            "description": description,
-            "default": defaultValue,
-        ]
-        if let choices {
-            row["choices"] = choices
-        }
-        if secret {
-            row["secret"] = true
-        }
-        return row
+        ObstacleBridgeRuntimeConfigPolicy.schemaItem(key: key, description: description, defaultValue: defaultValue, choices: choices, secret: secret)
     }
 
     static func flatten(_ payload: [String: Any]) -> [String: Any] {

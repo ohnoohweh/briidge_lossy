@@ -10,6 +10,12 @@ enum ObstacleBridgeRuntimeConfigPolicy {
     ]
     static let proxyProviderCompatibilityAliasKeys = ["enabled", "bind", "http_port", "socks5_port", "protocols", "auth", "egress", "policy"]
     static let tunExecutionCompatibilityAliasKeys = ["mode", "helper_backend", "helper_socket", "helper_apply_network", "helper_log_level"]
+    static func schemaItem(key: String, description: String, defaultValue: Any, choices: [Any]? = nil, secret: Bool = false) -> [String: Any] {
+        var row: [String: Any] = ["key": key, "description": description, "default": defaultValue]
+        if let choices { row["choices"] = choices }
+        if secret { row["secret"] = true }
+        return row
+    }
     static func applyCompatibilityAliases(to payload: inout [String: Any]) {
         if payload["udp_peer_resolve_family"] == nil, let value = payload["peer_resolve_family"] { payload["udp_peer_resolve_family"] = value }
         for (alias, canonical) in ["enabled": "proxy_provider_enabled", "bind": "proxy_provider_bind", "http_port": "proxy_provider_http_port", "socks5_port": "proxy_provider_socks5_port", "protocols": "proxy_provider_protocols", "auth": "proxy_provider_auth", "egress": "proxy_provider_egress", "policy": "proxy_provider_policy"] where payload[canonical] == nil { if let value = payload[alias] { payload[canonical] = value } }
