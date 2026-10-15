@@ -2,6 +2,9 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
 @testable import ObstacleBridgeCore
+#if os(Linux)
+import Glibc
+#endif
 
 struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func unavailableEndpointFailsClosedWithoutPrivilegedFallback() throws {
@@ -22,4 +25,95 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
             _ = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: "/tmp/helper.sock", timeoutMilliseconds: 0)
         }
     }
+
+    @Test func unixHelperRoundTripsCoreSequencedCommandsAndPacketBoundary() throws {
+        let peer = try UnixHelperPeer(connectionCount: 6)
+        defer { peer.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path)
+
+        for command in [ObstacleBridgeTunHelperCommand.openTun, .applyNetwork, .removeNetwork, .snapshot, .stop] {
+            let payload: [String: Any] = command == .openTun ? ["ifname": "obtest0", "mtu": 1400] : [:]
+            let response = try adapter.send(command: command, payload: payload)
+            #expect(response["op"] as? String == command.rawValue)
+        }
+        _ = try adapter.sendPacketToHelper(Data([0x45, 0x00, 0x12, 0x34]))
+        #expect(peer.operations == ["OPEN_TUN", "APPLY_NETWORK", "REMOVE_NETWORK", "SNAPSHOT", "STOP", "WRITE_PACKET"])
+        #expect(peer.sequences == [1, 2, 3, 4, 5, 6])
+        #expect(peer.packets == [Data([0x45, 0x00, 0x12, 0x34])])
+    }
+}
+
+private final class UnixHelperPeer: @unchecked Sendable {
+    let path: String
+    private let listener: Int32
+    private let expectedConnections: Int
+    private let lock = NSLock()
+    private var worker: Thread?
+    private var capturedOperations: [String] = []
+    private var capturedSequences: [Int] = []
+    private var capturedPackets: [Data] = []
+    var operations: [String] { lock.lock(); defer { lock.unlock() }; return capturedOperations }
+    var sequences: [Int] { lock.lock(); defer { lock.unlock() }; return capturedSequences }
+    var packets: [Data] { lock.lock(); defer { lock.unlock() }; return capturedPackets }
+
+    init(connectionCount: Int) throws {
+        self.expectedConnections = connectionCount
+        self.path = "/tmp/obstaclebridge-helper-\(UUID().uuidString).sock"
+        self.listener = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
+        guard listener >= 0 else { throw PeerError.socket }
+        var address = sockaddr_un(); address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8) + [0]
+        withUnsafeMutableBytes(of: &address.sun_path) { destination in
+            destination.initializeMemory(as: UInt8.self, repeating: 0)
+            destination.baseAddress!.assumingMemoryBound(to: UInt8.self).assign(from: bytes, count: bytes.count)
+        }
+        let result = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard result == 0, listen(listener, 8) == 0 else { _ = close(listener); throw PeerError.socket }
+        worker = Thread { [weak self] in self?.serve() }; worker?.start()
+    }
+
+    func stop() { _ = close(listener); try? FileManager.default.removeItem(atPath: path) }
+
+    private func serve() {
+        for _ in 0..<expectedConnections {
+            let fd = accept(listener, nil, nil); guard fd >= 0 else { return }
+            defer { _ = close(fd) }
+            guard let request = try? readFrame(fd),
+                  let object = try? JSONSerialization.jsonObject(with: request) as? [String: Any],
+                  let envelope = object["envelope"] as? [String: Any],
+                  let sequence = envelope["seq"] as? Int
+            else { return }
+            let operation = (envelope["command"] as? String) ?? "WRITE_PACKET"
+            if let payload = envelope["payload"] as? [String: Any],
+               let encoded = (payload["packet"] as? [String: Any])?["__ob_data_base64"] as? String,
+               let packet = Data(base64Encoded: encoded) {
+                lock.lock(); capturedPackets.append(packet); lock.unlock()
+            }
+            lock.lock(); capturedOperations.append(operation); capturedSequences.append(sequence); lock.unlock()
+            let response: [String: Any] = ["response": ["ok": true, "op": operation, "seq": sequence, "payload": ["opened": operation != "STOP"]]]
+            guard let reply = try? JSONSerialization.data(withJSONObject: response, options: [.sortedKeys]) else { return }
+            try? writeFrame(reply, fd)
+        }
+    }
+
+    private func readFrame(_ fd: Int32) throws -> Data {
+        let length = try readExactly(MemoryLayout<UInt32>.size, fd).withUnsafeBytes { $0.load(as: UInt32.self).bigEndian }
+        return try readExactly(Int(length), fd)
+    }
+    private func writeFrame(_ body: Data, _ fd: Int32) throws {
+        var length = UInt32(body.count).bigEndian; var wire = Data(bytes: &length, count: 4); wire.append(body)
+        try writeAll(wire, fd)
+    }
+    private func readExactly(_ count: Int, _ fd: Int32) throws -> Data {
+        var data = Data(); var buffer = [UInt8](repeating: 0, count: max(1, count))
+        while data.count < count { let readCount = read(fd, &buffer, count - data.count); guard readCount > 0 else { throw PeerError.socket }; data.append(buffer, count: Int(readCount)) }
+        return data
+    }
+    private func writeAll(_ data: Data, _ fd: Int32) throws {
+        var offset = 0
+        while offset < data.count { let count = data.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: offset), data.count - offset) }; guard count > 0 else { throw PeerError.socket }; offset += Int(count) }
+    }
+    private enum PeerError: Error { case socket }
 }
