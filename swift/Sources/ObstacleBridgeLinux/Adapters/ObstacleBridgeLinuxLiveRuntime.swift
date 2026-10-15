@@ -165,6 +165,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var statusProjection: ObstacleBridgeLinuxRuntimeStatus
     private var session: ObstacleBridgeLinuxConfiguredSession?
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
+    private var tunDevice: ObstacleBridgeLinuxTunDevice?
+    private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
@@ -420,6 +422,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             apply(coordinator.handle(.authenticated(epoch: epoch)))
             try publishRemoteCatalog()
             try startOwnServiceOwners()
+            try startPacketDeviceIfNeeded()
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
             // Do not publish a retry that could briefly outlive shutdown.
@@ -453,6 +456,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 session?.close()
                 session = nil
                 channelMux = nil
+                stopPacketDevice()
                 activeCoordinatorEpoch = nil
                 replaceReceiveWorker(with: nil)
                 stopServiceOwners()
@@ -519,6 +523,62 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func stopServiceOwners() {
         for owner in serviceOwners { owner.stop() }
         serviceOwners.removeAll()
+    }
+
+    private func startPacketDeviceIfNeeded() throws {
+        guard tunDevice == nil,
+              let plan = configuredRuntime.configuration.packetTunnelPlan,
+              configuredRuntime.configuration.packetTunnelEnabled,
+              channelMux != nil
+        else { return }
+        let runtime = self
+        let device = try ObstacleBridgeLinuxTunDevice(
+            interfaceName: configuredRuntime.configuration.tunInterfaceName,
+            mtu: plan.mtu,
+            packetSink: { packet in
+                runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) }
+            },
+            diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
+        )
+        let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
+            interfaceName: configuredRuntime.configuration.tunInterfaceName,
+            mtu: plan.mtu,
+            instanceID: catalogInstanceID,
+            connectionSequence: UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch),
+            packetDevice: device,
+            localAddress: plan.tunnelAddress,
+            localAddress6: plan.tunnelAddress6,
+            backpressureSnapshot: { .init(bufferedFrames: 0) },
+            startupFrames: { [] },
+            sendMuxFrames: { frames in
+                runtime.queue.async {
+                    for data in frames {
+                        guard let frame = try? ObstacleBridgeChannelMuxCodec.decode(data) else { continue }
+                        guard let mux = runtime.channelMux else { return }
+                        do { try mux.sendUnsolicited(frame) }
+                        catch {
+                            if let epoch = runtime.activeCoordinatorEpoch {
+                                runtime.apply(runtime.coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
+                            }
+                            return
+                        }
+                    }
+                }
+            },
+            diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
+        )
+        tunDevice = device
+        tunChannelAdapter = adapter
+        adapter.overlayLifecycleChanged(ready: true)
+        do { try device.start() }
+        catch { stopPacketDevice(); throw error }
+    }
+
+    private func stopPacketDevice() {
+        tunChannelAdapter?.stop()
+        tunChannelAdapter = nil
+        tunDevice?.stop()
+        tunDevice = nil
     }
 
     private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
@@ -619,6 +679,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {
+        if frame.protocolType == .tun, let tunChannelAdapter {
+            tunChannelAdapter.receivedMuxFrame(frame)
+            return
+        }
         if frame.messageType == .remoteServicesSetV2 {
             guard let decoded = try? ObstacleBridgeLinuxServiceCatalog.decode(frame.body),
                   let install = try? remoteCatalogStore.install(instanceID: decoded.instanceID, connectionSequence: decoded.connectionSequence, services: decoded.services),

@@ -52,8 +52,8 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
     public let mtu: Int
     public private(set) var actualInterfaceName: String
     private let queue: DispatchQueue
-    private let packetSink: PacketSink
-    private let diagnosticSink: DiagnosticSink
+    private var packetSink: PacketSink?
+    private var diagnosticSink: DiagnosticSink?
     private let lock = NSLock()
     private var fd: Int32 = -1
     private var readSource: DispatchSourceRead?
@@ -96,6 +96,8 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
         readSource = nil
         let descriptor = fd
         fd = -1
+        packetSink = nil
+        diagnosticSink = nil
         lock.unlock()
         source?.cancel()
         if source == nil, descriptor >= 0 {
@@ -147,7 +149,7 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
         let flags = fcntl(fileDescriptor, F_GETFL)
         guard flags >= 0, fcntl(fileDescriptor, F_SETFL, flags | O_NONBLOCK) == 0 else {
             _ = close(fileDescriptor)
-            diagnosticSink("linux_tun_start_failed", ["errno": errno])
+            diagnosticSink?("linux_tun_start_failed", ["errno": errno])
             return
         }
         lock.lock()
@@ -167,7 +169,7 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
         readSource = source
         lock.unlock()
         source.resume()
-        diagnosticSink("linux_tun_started", ["requested_ifname": requestedInterfaceName, "actual_ifname": actualInterfaceName, "mtu": mtu])
+        diagnosticSink?("linux_tun_started", ["requested_ifname": requestedInterfaceName, "actual_ifname": actualInterfaceName, "mtu": mtu])
 #else
         _ = fileDescriptor
 #endif
@@ -183,15 +185,15 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
             if count > 0 {
                 let packet = Data(buffer.prefix(Int(count)))
                 guard let first = packet.first, first >> 4 == 4 || first >> 4 == 6 else {
-                    diagnosticSink("linux_tun_packet_rejected", ["reason": "invalid_ip_version", "packet_bytes": packet.count])
+                    diagnosticSink?("linux_tun_packet_rejected", ["reason": "invalid_ip_version", "packet_bytes": packet.count])
                     continue
                 }
-                packetSink(packet)
+                packetSink?(packet)
                 continue
             }
             if count == 0 { return }
             if errno == EAGAIN || errno == EWOULDBLOCK { return }
-            diagnosticSink("linux_tun_read_failed", ["errno": errno, "ifname": actualInterfaceName])
+            diagnosticSink?("linux_tun_read_failed", ["errno": errno, "ifname": actualInterfaceName])
             return
         }
 #endif

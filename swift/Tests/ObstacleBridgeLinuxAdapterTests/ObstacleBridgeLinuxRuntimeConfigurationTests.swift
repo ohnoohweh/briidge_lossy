@@ -399,6 +399,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: data)
         let plan = try #require(configuration.packetTunnelPlan)
         #expect(!plan.enabledOnStartup)
+        #expect(!configuration.packetTunnelEnabled)
         #expect(plan.mtu == 1400)
         #expect(plan.excludedRoutes == ["127.0.0.0/8", "192.0.2.44/32"])
     }
@@ -412,6 +413,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         ])
         let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: data)
         #expect(configuration.packetTunnelPlan?.enabledOnStartup == true)
+        #expect(configuration.packetTunnelEnabled)
         #expect(configuration.tunHelperSocketPath == "/tmp/obstaclebridge-helper.sock")
     }
 
