@@ -227,6 +227,10 @@ public enum ObstacleBridgeRuntimeConfigPort {
         public let excludedRoutes: [String]
         public let includedRoutes6: [String]
         public let excludedRoutes6: [String]
+        public let peerExcludedRoutes: [String]
+        public let peerExcludedRoutes6: [String]
+        public let effectiveExcludedRoutes: [String]
+        public let effectiveExcludedRoutes6: [String]
         public let invalidRoute: String?
     }
     public static func schemaSnapshot() -> [String: Any] {
@@ -366,9 +370,14 @@ public enum ObstacleBridgeRuntimeConfigPort {
 
     public static func tunnelRouting(from payload: [String: Any]) -> TunnelRoutingRecord {
         let routing = groupedSectionPayload("TUN_routing", from: payload)
+        let flat = flatten(payload)
         func strings(_ key: String) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }
         let includedRoutes = strings("included_routes"), excludedRoutes = strings("excluded_routes")
         let includedRoutes6 = strings("included_routes6"), excludedRoutes6 = strings("excluded_routes6")
+        let peerExcluded = ObstacleBridgeRuntimeConfigPolicy.overlayPeerExcludedRoutes(from: flat)
+        let effectiveExcluded = ObstacleBridgeRuntimeConfigPolicy.effectiveExcludedRoutes(
+            from: flat, baseIPv4: excludedRoutes, baseIPv6: excludedRoutes6
+        )
         func invalid(_ routes: [String], ipv6: Bool) -> String? {
             routes.first { route in
                 let parts = route.split(separator: "/", maxSplits: 1).map(String.init)
@@ -385,6 +394,8 @@ public enum ObstacleBridgeRuntimeConfigPort {
             mtu: ObstacleBridgeRuntimeConfigPolicy.intValue(from: routing["mtu"]),
             includedRoutes: includedRoutes, excludedRoutes: excludedRoutes,
             includedRoutes6: includedRoutes6, excludedRoutes6: excludedRoutes6,
+            peerExcludedRoutes: peerExcluded.ipv4, peerExcludedRoutes6: peerExcluded.ipv6,
+            effectiveExcludedRoutes: effectiveExcluded.ipv4, effectiveExcludedRoutes6: effectiveExcluded.ipv6,
             invalidRoute: invalid(includedRoutes + excludedRoutes, ipv6: false)
                 ?? invalid(includedRoutes6 + excludedRoutes6, ipv6: true)
         )

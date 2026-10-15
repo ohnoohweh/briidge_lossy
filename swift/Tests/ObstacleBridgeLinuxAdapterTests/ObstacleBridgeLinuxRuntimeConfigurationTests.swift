@@ -357,6 +357,24 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         }
     }
 
+    @Test func coreTunnelRoutingRecordDerivesIPv4AndIPv6PeerExclusions() {
+        let routing = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": [
+                "tcp_peer": "192.0.2.44", "tcp_peer_port": 443,
+                "tcp_resolve_family": "prefer-ipv6", "tcp_bind_host": "::",
+            ],
+            "TUN_routing": [
+                "excluded_routes": ["127.0.0.0/8"],
+                "excluded_routes6": ["::1/128"],
+            ],
+        ])
+        #expect(routing.peerExcludedRoutes == ["192.0.2.44/32"])
+        #expect(routing.peerExcludedRoutes6 == ["::ffff:192.0.2.44/128"])
+        #expect(routing.effectiveExcludedRoutes == ["127.0.0.0/8", "192.0.2.44/32"])
+        #expect(routing.effectiveExcludedRoutes6 == ["::1/128", "::ffff:192.0.2.44/128"])
+    }
+
     @Test func coreCatalogFramesEncodeConfiguredRemoteServices() throws {
         let frames = ObstacleBridgeRuntimeConfigPort.remoteServiceCatalogFrames(
             from: [
