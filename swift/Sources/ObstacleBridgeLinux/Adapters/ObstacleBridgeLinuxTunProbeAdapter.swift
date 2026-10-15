@@ -4,10 +4,26 @@ import ObstacleBridgeCore
 import Glibc
 #endif
 
+/// Explicit Linux disposition for a Core packet-tunnel plan. This adapter is
+/// intentionally not a privileged packet-device or route/DNS owner.
+public enum ObstacleBridgeLinuxPacketTunnelPlanDisposition: Equatable, Sendable {
+    case retainedDisabled(ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan)
+    case unavailableEnabled(String)
+}
+
 /// POSIX resolver boundary for Core-owned TUN probe selection.  It deliberately
 /// has no packet-device descriptor: Linux TUN probing remains fail-closed until
 /// the privileged device owner is admitted by LSW-005.
 public enum ObstacleBridgeLinuxTunProbeAdapter {
+    public static func packetTunnelPlanDisposition(
+        _ plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan
+    ) -> ObstacleBridgeLinuxPacketTunnelPlanDisposition {
+        guard plan.enabledOnStartup else { return .retainedDisabled(plan) }
+        return .unavailableEnabled(
+            "Linux Swift packet-tunnel execution is unavailable until LSW-005 admits a /dev/net/tun owner and LSW-006 qualifies route and DNS execution"
+        )
+    }
+
     /// Creates the Core-owned probe state used by a future admitted packet-device
     /// reader.  The adapter supplies POSIX inputs; it never owns matching or
     /// diagnostic counters.

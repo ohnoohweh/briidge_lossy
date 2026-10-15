@@ -4,6 +4,22 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxTunProbeAdapterTests {
+    @Test func packetTunnelPlansRemainDisabledWithoutPrivilegedOwner() throws {
+        let disabled = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: [
+            "TUN_routing": ["enabled_on_startup": false],
+        ]))
+        #expect(ObstacleBridgeLinuxTunProbeAdapter.packetTunnelPlanDisposition(disabled) == .retainedDisabled(disabled))
+
+        let enabled = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: [
+            "TUN_routing": ["enabled_on_startup": true],
+        ]))
+        guard case .unavailableEnabled(let reason) = ObstacleBridgeLinuxTunProbeAdapter.packetTunnelPlanDisposition(enabled) else {
+            Issue.record("enabled packet-tunnel plan must fail closed")
+            return
+        }
+        #expect(reason.contains("/dev/net/tun"))
+    }
+
     @Test func resolvesLiteralIPv4AndIPv6ThroughCoreFamilySelection() {
         let ipv4 = ObstacleBridgeLinuxTunProbeAdapter.resolve(target: "198.51.100.7", tunnelAddress: "198.18.0.1")
         #expect(ipv4.target == "198.51.100.7")
