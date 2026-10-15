@@ -61,6 +61,17 @@ public final class ObstacleBridgeLinuxServiceCatalogStore {
 /// immutable per connection epoch; callers create a fresh instance/revision on
 /// reconnect so peers can replace stale installed listeners deterministically.
 public enum ObstacleBridgeLinuxServiceCatalog {
+    /// Linux supplies its typed socket records while Core derives the bounded
+    /// ChannelMux catalog frames. The live owner only delivers those frames.
+    public static func frames(instanceID: UInt64, connectionSequence: UInt32, services: [ObstacleBridgeLinuxServiceSpec]) throws -> [ObstacleBridgeChannelMuxFrame] {
+        let records = try services.map(nativeSpec)
+        let frames = ObstacleBridgeRuntimeConfigPort.remoteServiceCatalogFrames(
+            records, instanceID: instanceID, connectionSequence: connectionSequence
+        )
+        guard !frames.isEmpty else { throw ObstacleBridgeLinuxServiceCatalogError.invalidPayload }
+        return frames
+    }
+
     public static func encode(instanceID: UInt64, connectionSequence: UInt32, services: [ObstacleBridgeLinuxServiceSpec]) throws -> Data {
         do {
             let coreServices = try services.map { service -> ObstacleBridgeServiceSpec in

@@ -543,8 +543,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func publishRemoteCatalog() throws {
         guard let channelMux, !configuredRuntime.configuration.remoteServices.isEmpty else { return }
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
-        let payload = try ObstacleBridgeLinuxServiceCatalog.encode(instanceID: catalogInstanceID, connectionSequence: sequence, services: configuredRuntime.configuration.remoteServices)
-        try channelMux.sendUnsolicited(.init(channelID: 0, protocolType: .udp, counter: 0, messageType: .remoteServicesSetV2, body: payload))
+        let frames = try ObstacleBridgeLinuxServiceCatalog.frames(
+            instanceID: catalogInstanceID, connectionSequence: sequence,
+            services: configuredRuntime.configuration.remoteServices
+        )
+        for frame in frames {
+            try channelMux.sendUnsolicited(frame)
+        }
     }
 
     private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
