@@ -148,9 +148,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 .flatMap { ObstacleBridgeAdminAPI.linuxJSONResponse($0) } ?? .init(statusCode: 404, body: Data("{}".utf8))
         case "/api/config":
             if method == "GET" {
-                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["config": ObstacleBridgeAdminConfigProjectionPort.redacted(adminConfigurationProvider())]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(adminConfigurationProvider())]) ?? .init(statusCode: 500, body: Data("{}".utf8))
             } else if let updates = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["updates"] as? [String: Any], let configurationStore {
-                do { let saved = try configurationStore.apply(updates: updates); response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "updated_keys": saved.normalizedKeys, "config": ObstacleBridgeAdminConfigProjectionPort.redacted(saved.configuration)]) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
+                do { let saved = try configurationStore.apply(updates: updates); response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "updated_keys": saved.normalizedKeys, "config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(saved.configuration)]) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
                 catch { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": error.localizedDescription], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
             } else { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "invalid JSON body or configuration writes unavailable"], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
         case "/api/onboarding/invite":

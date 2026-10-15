@@ -375,6 +375,20 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(routing.effectiveExcludedRoutes6 == ["::1/128", "::ffff:192.0.2.44/128"])
     }
 
+    @Test func coreConfigurationPortPublishesSecretMetadataAndRedactsValues() throws {
+        #expect(ObstacleBridgeRuntimeConfigPort.secretKeys() == Set(["admin_web_password", "secure_link_psk"]))
+        let redacted = ObstacleBridgeRuntimeConfigPort.redactedConfiguration([
+            "admin_web": ["admin_web_password": "admin-secret"],
+            "secure_link": ["secure_link_psk": "link-secret"],
+        ])
+        let admin = try #require(redacted["admin_web"] as? [String: Any])
+        let secure = try #require(redacted["secure_link"] as? [String: Any])
+        #expect(admin["admin_web_password"] as? String == "***hidden***")
+        #expect(admin["admin_web_password_present"] as? Bool == true)
+        #expect(secure["secure_link_psk"] as? String == "***hidden***")
+        #expect(secure["secure_link_psk_present"] as? Bool == true)
+    }
+
     @Test func coreCatalogFramesEncodeConfiguredRemoteServices() throws {
         let frames = ObstacleBridgeRuntimeConfigPort.remoteServiceCatalogFrames(
             from: [

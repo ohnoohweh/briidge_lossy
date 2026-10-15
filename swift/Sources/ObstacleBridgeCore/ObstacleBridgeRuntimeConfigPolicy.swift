@@ -237,6 +237,21 @@ public enum ObstacleBridgeRuntimeConfigPort {
         ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
     }
 
+    /// Secret-bearing schema keys are Core-owned metadata. Adapters use this
+    /// only for display and persistence projections, never to handle secrets.
+    public static func secretKeys() -> Set<String> {
+        Set(schemaSnapshot().values.flatMap { rows in
+            (rows as? [[String: Any]] ?? []).compactMap { row in
+                (row["secret"] as? Bool) == true ? row["key"] as? String : nil
+            }
+        })
+    }
+
+    /// Applies the shared redaction policy to a platform-provided config tree.
+    public static func redactedConfiguration(_ payload: [String: Any]) -> [String: Any] {
+        ObstacleBridgeAdminConfigProjectionPort.redacted(payload)
+    }
+
     public static func groupedSectionPayload(_ section: String, from payload: [String: Any]) -> [String: Any] {
         if let nested = payload[section] as? [String: Any] {
             return normalizedSectionPayload(section, nested)
