@@ -218,6 +218,16 @@ enum ObstacleBridgeRuntimeConfigPolicy {
 /// grouped/flat precedence, schema coercion, and compatibility spelling are
 /// shared protocol policy rather than Apple or Linux behavior.
 public enum ObstacleBridgeRuntimeConfigPort {
+    public struct TunnelRoutingRecord: Equatable, Sendable {
+        public let enabledOnStartup: Bool
+        public let tunnelAddress: String?
+        public let tunnelAddress6: String?
+        public let mtu: Int?
+        public let includedRoutes: [String]
+        public let excludedRoutes: [String]
+        public let includedRoutes6: [String]
+        public let excludedRoutes6: [String]
+    }
     public static func schemaSnapshot() -> [String: Any] {
         ObstacleBridgeRuntimeConfigPolicy.configSchemaSnapshot()
     }
@@ -286,6 +296,19 @@ public enum ObstacleBridgeRuntimeConfigPort {
             records.append(.init(svcID: index + 1, name: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: row["name"]), listenProtocol: lproto, listenBind: lhost, listenPort: lport, targetProtocol: rproto, targetHost: rhost, targetPort: rport))
         }
         return (records, nil)
+    }
+
+    public static func tunnelRouting(from payload: [String: Any]) -> TunnelRoutingRecord {
+        let routing = groupedSectionPayload("TUN_routing", from: payload)
+        func strings(_ key: String) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }
+        return .init(
+            enabledOnStartup: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: routing["enabled_on_startup"] ?? routing["enabled"]) ?? false,
+            tunnelAddress: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address"]),
+            tunnelAddress6: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address6"]),
+            mtu: ObstacleBridgeRuntimeConfigPolicy.intValue(from: routing["mtu"]),
+            includedRoutes: strings("included_routes"), excludedRoutes: strings("excluded_routes"),
+            includedRoutes6: strings("included_routes6"), excludedRoutes6: strings("excluded_routes6")
+        )
     }
 
     private static func normalizedSectionPayload(_ section: String, _ payload: [String: Any]) -> [String: Any] {

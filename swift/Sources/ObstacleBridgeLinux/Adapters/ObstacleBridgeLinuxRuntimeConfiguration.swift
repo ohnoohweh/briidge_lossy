@@ -173,9 +173,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("tun_execution.tun_execution_mode must be inline or helper")
         }
         let tunHelperSocket = tunMode == "helper" ? string(tunExecution["tun_helper_socket"]) : nil
-        let tun = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("TUN_routing", from: root)
-        if !tun.isEmpty,
-           boolean(tun["enabled_on_startup"] ?? tun["enabled"]) == true {
+        let tunRouting = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: root)
+        if tunRouting.enabledOnStartup {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
         }
         let proxy = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("proxy_provider", from: root)
