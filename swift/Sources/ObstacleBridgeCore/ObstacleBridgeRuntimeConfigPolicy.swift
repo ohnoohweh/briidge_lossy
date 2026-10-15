@@ -270,7 +270,25 @@ public enum ObstacleBridgeRuntimeConfigPort {
 
     /// Applies the shared redaction policy to a platform-provided config tree.
     public static func redactedConfiguration(_ payload: [String: Any]) -> [String: Any] {
-        ObstacleBridgeAdminConfigProjectionPort.redacted(payload)
+        redactConfigurationValue(payload) as? [String: Any] ?? [:]
+    }
+
+    private static func redactConfigurationValue(_ value: Any) -> Any {
+        if let object = value as? [String: Any] {
+            var output: [String: Any] = [:]
+            for (key, nested) in object {
+                let normalized = key.lowercased()
+                if normalized.contains("password") || normalized.contains("psk") || normalized.contains("private_key") || normalized.contains("cert_sig") {
+                    output[key] = "***hidden***"
+                    output["\(key)_present"] = (nested as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+                } else {
+                    output[key] = redactConfigurationValue(nested)
+                }
+            }
+            return output
+        }
+        if let values = value as? [Any] { return values.map(redactConfigurationValue) }
+        return value
     }
 
     /// Selects the overlay transport and layer stack from the shared config
