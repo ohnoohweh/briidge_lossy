@@ -218,6 +218,19 @@ enum ObstacleBridgeRuntimeConfigPolicy {
 /// grouped/flat precedence, schema coercion, and compatibility spelling are
 /// shared protocol policy rather than Apple or Linux behavior.
 public enum ObstacleBridgeRuntimeConfigPort {
+    public struct PacketTunnelPlan: Equatable, Sendable {
+        public let enabledOnStartup: Bool
+        public let tunnelAddress: String
+        public let tunnelPrefix: Int
+        public let tunnelAddress6: String
+        public let tunnelPrefix6: Int
+        public let includedRoutes: [String]
+        public let excludedRoutes: [String]
+        public let includedRoutes6: [String]
+        public let excludedRoutes6: [String]
+        public let dnsServers: [String]
+        public let mtu: Int
+    }
     public struct OverlayBootstrapRecord: Equatable, Sendable {
         public let transport: String
         public let transports: [String]
@@ -433,6 +446,28 @@ public enum ObstacleBridgeRuntimeConfigPort {
             effectiveExcludedRoutes: effectiveExcluded.ipv4, effectiveExcludedRoutes6: effectiveExcluded.ipv6,
             invalidRoute: invalid(includedRoutes + excludedRoutes, ipv6: false)
                 ?? invalid(includedRoutes6 + excludedRoutes6, ipv6: true)
+        )
+    }
+
+    /// Platform-neutral packet-tunnel plan. Apple turns this into NetworkExtension
+    /// settings; Linux retains the CIDR/DNS representation for its privileged owner.
+    public static func packetTunnelPlan(from payload: [String: Any]) -> PacketTunnelPlan? {
+        let routing = groupedSectionPayload("TUN_routing", from: payload)
+        let record = tunnelRouting(from: payload)
+        guard record.invalidRoute == nil else { return nil }
+        func int(_ key: String, _ fallback: Int) -> Int { ObstacleBridgeRuntimeConfigPolicy.intValue(from: routing[key]) ?? fallback }
+        func strings(_ key: String, _ fallback: [String]) -> [String] { (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) }.isEmpty ? fallback : (routing[key] as? [Any] ?? []).compactMap { ObstacleBridgeRuntimeConfigPolicy.stringValue(from: $0) } }
+        return .init(
+            enabledOnStartup: ObstacleBridgeRuntimeConfigPolicy.boolValue(from: routing["enabled_on_startup"] ?? routing["enabled"]) ?? true,
+            tunnelAddress: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address"]) ?? "192.168.106.1",
+            tunnelPrefix: int("tunnel_prefix", 30),
+            tunnelAddress6: ObstacleBridgeRuntimeConfigPolicy.stringValue(from: routing["tunnel_address6"]) ?? "fd20:106::1",
+            tunnelPrefix6: int("tunnel_prefix6", 126),
+            includedRoutes: record.includedRoutes.isEmpty ? ["0.0.0.0/0"] : record.includedRoutes,
+            excludedRoutes: record.effectiveExcludedRoutes.isEmpty ? ["127.0.0.0/8"] : record.effectiveExcludedRoutes,
+            includedRoutes6: record.includedRoutes6.isEmpty ? ["::/0"] : record.includedRoutes6,
+            excludedRoutes6: record.effectiveExcludedRoutes6.isEmpty ? ["::1/128"] : record.effectiveExcludedRoutes6,
+            dnsServers: strings("dns_servers", ["1.1.1.1"]), mtu: int("mtu", 1600)
         )
     }
 
