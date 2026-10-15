@@ -50,6 +50,12 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         _ = try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")
         _ = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
         #expect(peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
+        let apply = try #require(peer.payloads.first)
+        let environment = try #require(apply["env"] as? [String: Any])
+        #expect(environment["TUN_IFNAME"] as? String == "obtest0")
+        #expect(environment["TUN_MTU"] as? String == "1400")
+        #expect(environment["TUN_INCLUDED_ROUTES"] as? String == "0.0.0.0/0")
+        #expect(environment["TUN_DNS_SERVERS"] as? String == "1.1.1.1")
     }
 
     @Test func coreRejectsMismatchedUnixHelperSequence() throws {
@@ -95,9 +101,11 @@ private final class UnixHelperPeer: @unchecked Sendable {
     private var capturedOperations: [String] = []
     private var capturedSequences: [Int] = []
     private var capturedPackets: [Data] = []
+    private var capturedPayloads: [[String: Any]] = []
     var operations: [String] { lock.lock(); defer { lock.unlock() }; return capturedOperations }
     var sequences: [Int] { lock.lock(); defer { lock.unlock() }; return capturedSequences }
     var packets: [Data] { lock.lock(); defer { lock.unlock() }; return capturedPackets }
+    var payloads: [[String: Any]] { lock.lock(); defer { lock.unlock() }; return capturedPayloads }
 
     init(connectionCount: Int, corruptFirstSequence: Bool = false, omitFirstResponse: Bool = false, disconnectFirstReply: Bool = false) throws {
         self.expectedConnections = connectionCount
@@ -136,6 +144,9 @@ private final class UnixHelperPeer: @unchecked Sendable {
                   let sequence = envelope["seq"] as? Int
             else { return }
             let operation = (envelope["command"] as? String) ?? "WRITE_PACKET"
+            if let payload = envelope["payload"] as? [String: Any] {
+                lock.lock(); capturedPayloads.append(payload); lock.unlock()
+            }
             if let payload = envelope["payload"] as? [String: Any],
                let encoded = (payload["packet"] as? [String: Any])?["__ob_data_base64"] as? String,
                let packet = Data(base64Encoded: encoded) {
