@@ -126,6 +126,18 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.filter { $0 == ["ip", "-4", "route", "replace", "10.0.0.0/8", "dev", "obtest0"] }.count == 2)
         #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
     }
+
+    @Test func nativeSwiftHelperPinsExcludedRoutesToTheCapturedUnderlay() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            commands.append(arguments)
+            return arguments.contains("-j") ? "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.2\"}]" : ""
+        })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["excluded_routes": ["203.0.113.9/32"]]])
+        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.1", "dev", "eth0", "src", "192.0.2.2"]))
+        _ = try backend.removeNetwork([:])
+        #expect(commands.contains(["ip", "-4", "route", "del", "203.0.113.9/32"]))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

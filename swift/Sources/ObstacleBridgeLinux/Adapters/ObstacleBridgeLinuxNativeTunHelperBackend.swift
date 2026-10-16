@@ -21,6 +21,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var appliedAddresses: [(String, String)] = []
     private var appliedRoutes: [(String, String)] = []
     private var configuredRoutes: [(String, String)] = []
+    private var excludedRoutes: [(String, String)] = []
+    private var underlay: [String: [String: String]] = [:]
 
     public init(packetSink: @escaping PacketSink = { _ in }, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
         self.packetSink = packetSink; self.commandRunner = commandRunner
@@ -57,6 +59,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         let mtu = (routing["mtu"] as? Int) ?? 1_500
         var addresses: [(String, String)] = []
         var routes: [(String, String)] = []
+        var excluded: [(String, String)] = []
+        var savedUnderlay: [String: [String: String]] = [:]
         func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
             guard let address = routing[addressKey] as? String, !address.isEmpty else { return nil }
             guard let prefix = routing[prefixKey] as? Int, prefix > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("APPLY_NETWORK has an invalid \(addressKey) prefix") }
@@ -67,26 +71,52 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         for (family, key) in [("-4", "included_routes"), ("-6", "included_routes6")] {
             for route in (routing[key] as? [String] ?? []) where !route.isEmpty { routes.append((family, route)) }
         }
+        for (family, key) in [("-4", "excluded_routes"), ("-6", "excluded_routes6")] {
+            for route in (routing[key] as? [String] ?? []) where !route.isEmpty { excluded.append((family, route)) }
+        }
         do {
+            for family in ["-4", "-6"] {
+                let text = try commandRunner(["ip", "-j", family, "route", "show", "default"], false)
+                if let value = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]], let route = value.first,
+                   let dev = route["dev"] as? String, !dev.isEmpty {
+                    var record = ["dev": dev]
+                    if let via = route["gateway"] as? String { record["via"] = via }
+                    if let source = route["prefsrc"] as? String { record["src"] = source }
+                    savedUnderlay[family] = record
+                }
+            }
+            if !excluded.isEmpty && (savedUnderlay["-4"] == nil && excluded.contains { $0.0 == "-4" } || savedUnderlay["-6"] == nil && excluded.contains { $0.0 == "-6" }) {
+                throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("APPLY_NETWORK cannot preserve excluded routes without an underlay default route")
+            }
             _ = try commandRunner(["ip", "link", "set", "dev", ifname, "up", "mtu", String(mtu)], false)
             for (family, cidr) in addresses { _ = try commandRunner(["ip", family, "addr", "replace", cidr, "dev", ifname], false) }
+            for (family, route) in excluded {
+                guard let saved = savedUnderlay[family], let dev = saved["dev"] else { continue }
+                var command = ["ip", family, "route", "replace", route]
+                if let via = saved["via"] { command += ["via", via] }
+                command += ["dev", dev]
+                if let source = saved["src"] { command += ["src", source] }
+                _ = try commandRunner(command, false)
+            }
             if tunEnabled { for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) } }
         } catch {
             for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+            for (family, route) in excluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
             for (family, cidr) in addresses.reversed() { _ = try? commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; lock.unlock()
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
     public func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] {
-        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; lock.unlock()
+        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; lock.unlock()
         guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
         for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+        for (family, route) in excluded.reversed() { _ = try commandRunner(["ip", family, "route", "del", route], true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
-        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; lock.unlock()
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; lock.unlock()
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
     }
 
