@@ -328,6 +328,10 @@ Current implementation note:
   dirty flag, and diff digest emitted from code embedded in that executable,
   builds when the executable is absent or mismatched, and rebuilds rather than
   reusing a dirty checkout.
+  Its native full-tunnel policy keeps every kernel-connected local subnet in
+  the main routing table before the helper default, including host-only and
+  bridge networks such as `vmnet8` and libvirt; the helper persists and
+  recovers those policy rules and tables during cleanup.
   Core owns that protocol-v1 frame and versioned JSON-control codec; Linux
   socket and Apple helper transports shall consume it rather than reimplement
   the binary framing or control serialization.

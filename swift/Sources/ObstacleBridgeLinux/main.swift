@@ -5,7 +5,6 @@ import ObstacleBridgeCore
 import Glibc
 #endif
 
-@main
 enum ObstacleBridgeLinuxMain {
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
@@ -289,6 +288,8 @@ enum ObstacleBridgeLinuxMain {
         FileHandle.standardError.write(Data("\(message)\n".utf8))
     }
 }
+
+ObstacleBridgeLinuxMain.main()
 
 private struct RuntimeRunOptions {
     let configPath: String

@@ -139,6 +139,29 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["ip", "-4", "route", "del", "203.0.113.9/32"]))
     }
 
+    @Test func nativeSwiftHelperFullTunnelRetainsEveryKernelConnectedLocalLAN() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            commands.append(arguments)
+            if arguments == ["ip", "-j", "-4", "route", "show", "proto", "kernel", "scope", "link"] {
+                return "[{\"dst\":\"10.0.0.0/24\"},{\"dst\":\"192.168.122.0/24\"},{\"dst\":\"192.168.179.0/24\"}]"
+            }
+            return arguments.contains("-j") ? "[]" : ""
+        })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": [
+            "tunnel_address": "198.18.70.2", "tunnel_prefix": 24, "tunnel_gateway": "198.18.70.1",
+            "included_routes": ["0.0.0.0/0"],
+        ]])
+        let snapshot = try backend.snapshot()
+        #expect(commands.contains(["ip", "-4", "rule", "add", "pref", "10001", "to", "192.168.122.0/24", "lookup", "main"]))
+        #expect(commands.contains(["ip", "-4", "rule", "add", "pref", "10002", "to", "192.168.179.0/24", "lookup", "main"]))
+        #expect(commands.contains(["ip", "-4", "route", "replace", "table", "20205", "default", "via", "198.18.70.1", "dev", "obtest0", "onlink"]))
+        let policyRules = snapshot["policy_rules"] as? [String] ?? []
+        #expect(policyRules.contains(where: { $0.contains("192.168.179.0/24 lookup main") }))
+        _ = try backend.removeNetwork([:])
+        #expect(commands.contains(["ip", "-4", "route", "flush", "table", "20205"]))
+    }
+
     @Test func nativeSwiftHelperRestoresPriorExcludedRouteInsteadOfDeletingIt() throws {
         var commands: [[String]] = []
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in

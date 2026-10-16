@@ -28,6 +28,11 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var appliedFirewallRules: [[String]] = []
     private var appliedHookPath = ""
     private var previousExcludedRoutes: [String: [String: Any]] = [:]
+    /// Full-tunnel defaults live in dedicated tables. Destination-specific
+    /// rules retain every kernel-connected LAN in main, including vmnet/libvirt.
+    private var policyTables: [String: Int] = [:]
+    private var policyRules: [(family: String, preference: Int, destination: String, table: String)] = []
+    private var policyGateways: [String: String] = [:]
     private let stateURL: URL?
 
     public init(packetSink: @escaping PacketSink = { _ in }, stateURL: URL? = nil, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
@@ -51,6 +56,16 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         }
         for entry in (snapshot["applied_routes"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "route", interfaceName: ifname) }
         for entry in (snapshot["excluded_routes"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "route", interfaceName: nil) }
+        for record in (snapshot["policy_rule_records"] as? [[String: Any]] ?? []).reversed() {
+            guard let family = record["family"] as? String, family == "-4" || family == "-6",
+                  let preference = record["preference"] as? Int, preference > 0,
+                  let destination = record["destination"] as? String, !destination.isEmpty,
+                  let table = record["table"] as? String, !table.isEmpty else { continue }
+            _ = try commandRunner(["ip", family, "rule", "del", "pref", String(preference), "to", destination, "lookup", table], true)
+        }
+        for (family, table) in (snapshot["policy_tables"] as? [String: Int] ?? [:]) where family == "-4" || family == "-6" {
+            _ = try commandRunner(["ip", family, "route", "flush", "table", String(table)], true)
+        }
         if !(snapshot["dns_servers"] as? [String] ?? []).isEmpty { _ = try commandRunner(["resolvectl", "revert", ifname], true) }
         for rule in (snapshot["firewall_rules"] as? [[String]] ?? []).reversed() { _ = try commandRunner(Self.removeFirewallRule(rule), true) }
         for entry in (snapshot["applied_addresses"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "addr", interfaceName: ifname) }
@@ -96,6 +111,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         var firewallRules: [[String]] = []
         var savedUnderlay: [String: [String: String]] = [:]
         var previousExcluded: [String: [String: Any]] = [:]
+        var fullTunnelGateways: [String: String] = [:]
         func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
             guard let address = routing[addressKey] as? String, !address.isEmpty else { return nil }
             guard let prefix = routing[prefixKey] as? Int, prefix > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("APPLY_NETWORK has an invalid \(addressKey) prefix") }
@@ -113,8 +129,11 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                 ]
             }
         }
-        for (family, key) in [("-4", "included_routes"), ("-6", "included_routes6")] {
-            for route in (routing[key] as? [String] ?? []) where !route.isEmpty { routes.append((family, route)) }
+        for (family, key, gatewayKey) in [("-4", "included_routes", "tunnel_gateway"), ("-6", "included_routes6", "tunnel_gateway6")] {
+            for route in (routing[key] as? [String] ?? []) where !route.isEmpty {
+                if Self.isDefaultRoute(route) { fullTunnelGateways[family] = (routing[gatewayKey] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+                else { routes.append((family, route)) }
+            }
         }
         for (family, key) in [("-4", "excluded_routes"), ("-6", "excluded_routes6")] {
             for route in (routing[key] as? [String] ?? []) where !route.isEmpty { excluded.append((family, route)) }
@@ -148,6 +167,11 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                 _ = try commandRunner(command, false)
             }
             if tunEnabled { for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) } }
+            if tunEnabled {
+                for family in ["-4", "-6"] where fullTunnelGateways[family] != nil {
+                    try installFullTunnelPolicy(family: family, gateway: fullTunnelGateways[family] ?? "", ifname: ifname, excluded: excluded)
+                }
+            }
             if !dnsServers.isEmpty {
                 _ = try commandRunner(["resolvectl", "dns", ifname] + dnsServers, false)
                 _ = try commandRunner(["resolvectl", "domain", ifname, "~."], false)
@@ -159,13 +183,14 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             if !hookPath.isEmpty { _ = try? commandRunner([hookPath, "down", ifname], true) }
             _ = try? commandRunner(["resolvectl", "revert", ifname], true)
             for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+            removeFullTunnelPolicy(allowFailure: true)
             for (family, route) in excluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
             for (family, cidr) in addresses.reversed() { _ = try? commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
             for rule in firewallRules.reversed() { _ = try? commandRunner(Self.removeFirewallRule(rule), true) }
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; appliedHookPath = hookPath; previousExcludedRoutes = previousExcluded; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; appliedHookPath = hookPath; previousExcludedRoutes = previousExcluded; policyGateways = fullTunnelGateways; lock.unlock()
         emitEvent("network applied interface=\(ifname)")
         persistState()
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
@@ -175,6 +200,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; let dnsServers = appliedDNSServers; let firewall = appliedFirewallRules; let hookPath = appliedHookPath; let previousExcluded = previousExcludedRoutes; lock.unlock()
         guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
         for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+        removeFullTunnelPolicy(allowFailure: true)
         for (family, route) in excluded.reversed() {
             let key = "\(family) \(route)"
             if let previous = previousExcluded[key] { _ = try commandRunner(Self.restoreRoute(family: family, fallback: route, record: previous), true) }
@@ -184,7 +210,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         for rule in firewall.reversed() { _ = try commandRunner(Self.removeFirewallRule(rule), true) }
         if !hookPath.isEmpty { _ = try commandRunner([hookPath, "down", ifname], true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
-        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; appliedFirewallRules = []; appliedHookPath = ""; previousExcludedRoutes = [:]; lock.unlock()
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; appliedFirewallRules = []; appliedHookPath = ""; previousExcludedRoutes = [:]; policyGateways = [:]; lock.unlock()
         emitEvent("network removed interface=\(ifname)")
         persistState()
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
@@ -206,13 +232,18 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         let ifname = appliedInterface
         let routes = configuredRoutes
         let activeRoutes = appliedRoutes
+        let gateways = policyGateways
+        let excluded = excludedRoutes
+        let hasPolicy = !policyTables.isEmpty
         lock.unlock()
         if !ifname.isEmpty {
-            if enabled && activeRoutes.isEmpty {
+            if enabled && activeRoutes.isEmpty && !hasPolicy {
                 for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) }
+                for family in ["-4", "-6"] where gateways[family] != nil { try installFullTunnelPolicy(family: family, gateway: gateways[family] ?? "", ifname: ifname, excluded: excluded) }
                 lock.lock(); appliedRoutes = routes; lock.unlock()
-            } else if !enabled && !activeRoutes.isEmpty {
+            } else if !enabled && (!activeRoutes.isEmpty || hasPolicy) {
                 for (family, route) in activeRoutes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+                removeFullTunnelPolicy(allowFailure: true)
                 lock.lock(); appliedRoutes = []; lock.unlock()
             }
         }
@@ -281,7 +312,64 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             "firewall_rules": appliedFirewallRules,
             "hook_path": appliedHookPath,
             "previous_excluded_routes": previousExcludedRoutes,
+            "policy_tables": policyTables, "policy_rules": policyRules.map { "\($0.family) pref \($0.preference) to \($0.destination) lookup \($0.table)" },
+            "policy_rule_records": policyRules.map { ["family": $0.family, "preference": $0.preference, "destination": $0.destination, "table": $0.table] },
         ]) { _, new in new }
+    }
+
+    private static func isDefaultRoute(_ route: String) -> Bool {
+        let value = route.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return value == "default" || value == "0.0.0.0/0" || value == "::/0" || value == "::0/0"
+    }
+
+    private static func policyTableID(ifname: String, family: String) -> Int {
+        let base = family == "-4" ? 20_000 : 21_000
+        return base + ifname.utf8.reduce(0) { ($0 + Int($1)) % 500 }
+    }
+
+    private func connectedMainRoutes(family: String) throws -> [String] {
+        let text = try commandRunner(["ip", "-j", family, "route", "show", "proto", "kernel", "scope", "link"], true)
+        guard let rows = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]] else { return [] }
+        var result: [String] = []
+        for row in rows {
+            let route = (row["dst"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !route.isEmpty, !Self.isDefaultRoute(route), !result.contains(route) { result.append(route) }
+        }
+        return result
+    }
+
+    private func installFullTunnelPolicy(family: String, gateway: String, ifname: String, excluded: [(String, String)]) throws {
+        let table = String(Self.policyTableID(ifname: ifname, family: family))
+        var destinations = try connectedMainRoutes(family: family)
+        for (_, route) in excluded.filter({ $0.0 == family }) where !destinations.contains(route) { destinations.append(route) }
+        let preferenceBase = family == "-4" ? 10_000 : 11_000
+        var installed: [(family: String, preference: Int, destination: String, table: String)] = []
+        for (index, destination) in destinations.enumerated() {
+            let preference = preferenceBase + index
+            // A recovered helper can encounter an already-present rule. The
+            // desired policy is still represented by this idempotent argv.
+            _ = try commandRunner(["ip", family, "rule", "add", "pref", String(preference), "to", destination, "lookup", "main"], true)
+            installed.append((family, preference, destination, "main"))
+        }
+        let defaultDestination = family == "-4" ? "0.0.0.0/0" : "::/0"
+        let defaultPreference = preferenceBase + destinations.count
+        _ = try commandRunner(["ip", family, "rule", "add", "pref", String(defaultPreference), "to", defaultDestination, "lookup", table], true)
+        installed.append((family, defaultPreference, defaultDestination, table))
+        var routeCommand = ["ip", family, "route", "replace", "table", table, "default"]
+        if !gateway.isEmpty { routeCommand += ["via", gateway] }
+        routeCommand += ["dev", ifname]
+        if !gateway.isEmpty && family == "-4" { routeCommand.append("onlink") }
+        if !gateway.isEmpty && family == "-6" { routeCommand += ["metric", "1", "onlink"] }
+        _ = try commandRunner(routeCommand, false)
+        lock.lock(); policyTables[family] = Int(table); policyRules += installed; lock.unlock()
+    }
+
+    private func removeFullTunnelPolicy(allowFailure: Bool) {
+        lock.lock(); let rules = policyRules; let tables = policyTables; policyRules = []; policyTables = [:]; lock.unlock()
+        for rule in rules.reversed() {
+            _ = try? commandRunner(["ip", rule.family, "rule", "del", "pref", String(rule.preference), "to", rule.destination, "lookup", rule.table], allowFailure)
+        }
+        for (family, table) in tables { _ = try? commandRunner(["ip", family, "route", "flush", "table", String(table)], allowFailure) }
     }
 
     public static func runProcess(_ arguments: [String], _ allowFailure: Bool) throws -> String {
