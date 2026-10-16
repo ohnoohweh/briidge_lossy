@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_linux_swift_privileged_tun:
+        description: Run the Linux Swift privileged TUN qualification on an authorized self-hosted runner.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -153,6 +159,21 @@ jobs:
 
       - name: Run full Linux overlay qualification suite
         run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only"
+
+  bridge-py-integration-linux-swift-privileged-tun:
+    name: Integration Gate (Linux Swift privileged TUN)
+    timeout-minutes: 15
+    needs: detect-bridge-change
+    if: github.event_name == 'workflow_dispatch' && inputs.run_linux_swift_privileged_tun && needs.detect-bridge-change.outputs.changed == 'true'
+    runs-on: [self-hosted, linux, obstaclebridge-privileged]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Run Linux Swift privileged TUN qualification
+        env:
+          OBSTACLEBRIDGE_PRIVILEGED_TUN: "1"
+        run: ./scripts/run_linux_swift_privileged_tun_tests.sh
 
   bridge-py-integration-windows:
     name: Integration Gate (Windows-specific)
