@@ -167,6 +167,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
     private var tunDevice: (any ObstacleBridgeLinuxPacketDevice)?
     private var tunHelperPacketDevice: ObstacleBridgeLinuxTunHelperPacketDevice?
+    private var managedTunHelper: ObstacleBridgeLinuxManagedTunHelper?
     private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
     private var tunNetworkApplied = false
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
@@ -534,6 +535,15 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
               channelMux != nil
         else { return }
         let runtime = self
+        if configuredRuntime.configuration.launchSwiftTunHelper, managedTunHelper == nil {
+            guard let socketPath = configuredRuntime.configuration.tunHelperSocketPath,
+                  let token = configuredRuntime.configuration.tunHelperSessionToken else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("managed Swift TUN helper requires an explicit socket and session token")
+            }
+            let owner = try ObstacleBridgeLinuxManagedTunHelper(socketPath: socketPath, sessionToken: token, executable: configuredRuntime.configuration.tunHelperExecutable)
+            try owner.start()
+            managedTunHelper = owner
+        }
         guard let helper = try configuredRuntime.configuration.makeTunHelperAdapter() else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
         }
@@ -592,6 +602,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         tunHelperPacketDevice?.stop()
         tunHelperPacketDevice = nil
         tunDevice = nil
+        managedTunHelper?.stop()
+        managedTunHelper = nil
     }
 
     private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
