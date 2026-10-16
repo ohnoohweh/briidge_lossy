@@ -18,6 +18,8 @@ enum ObstacleBridgeLinuxMain {
             printHelp()
         case ["--version"]:
             print("\(ObstacleBridgeCoreRuntime.productName) build baseline (\(ObstacleBridgeLinuxAdapters.platform))")
+        case ["--helper-build-info"]:
+            print(ObstacleBridgeLinuxBuildInfo.json())
         case let values where values.count == 5 && values[0] == "--transport-probe":
             runTransportProbe(transportName: values[1], host: values[2], portText: values[3], payloadBase64: values[4])
         case let values where values.count == 3 && values[0] == "--tcp-psk-echo-listener":
@@ -52,6 +54,7 @@ enum ObstacleBridgeLinuxMain {
         Usage:
           ObstacleBridgeLinux --help
           ObstacleBridgeLinux --version
+          ObstacleBridgeLinux --helper-build-info
           ObstacleBridgeLinux --transport-probe <tcp|ws> <host> <port> <payload-base64>
           ObstacleBridgeLinux --tcp-psk-echo-listener <port> <psk>
           ObstacleBridgeLinux --runtime-config <path>
@@ -68,9 +71,9 @@ enum ObstacleBridgeLinuxMain {
         redacted local Admin API. ChannelMux service routing is qualified by
         its dedicated package. TUN startup requires an explicitly configured,
         authenticated privileged helper; native route/DNS/hook qualification
-        remains tracked in LSW-006. --tun-helper-server starts the Swift
-        protocol-v1 helper endpoint as a separate process; its native backend
-        intentionally refuses network-policy mutation until that parity exists.
+        is owned by the native helper. --helper-build-info emits the build
+        identity embedded in this executable. --tun-helper-server starts the
+        Swift protocol-v1 helper endpoint as a separate process.
         """)
     }
 

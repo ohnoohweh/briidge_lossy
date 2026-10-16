@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .bridge_tun_helper_client import _open_local_helper_connection
+from .bridge_swift_tun_helper import ensure_linux_swift_tun_helper, is_linux_swift_backend
 from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, TelemetrySpool
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
@@ -1141,21 +1142,33 @@ class Runner:
         env = dict(os.environ)
         existing_pythonpath = str(env.get("PYTHONPATH") or "").strip()
         env["PYTHONPATH"] = repo_src if not existing_pythonpath else os.pathsep.join([repo_src, existing_pythonpath])
-        self._tun_helper_config_path = self._write_tun_helper_launch_config()
-        helper_executable = self._tun_helper_executable()
-        module_argv = [
-            helper_executable,
-            "-m",
-            "obstacle_bridge.bridge_tun_helper_server",
-            "--config-path",
-            self._tun_helper_config_path,
-        ]
-        exec_argv = list(module_argv)
         backend_name = str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
+        swift_linux = is_linux_swift_backend(backend_name)
+        helper_executable = self._tun_helper_executable()
+        if swift_linux:
+            helper_executable = ensure_linux_swift_tun_helper()
+            module_argv = [
+                helper_executable,
+                "--tun-helper-server",
+                str(self._tun_helper_socket_path),
+                str(self._tun_helper_session_token),
+                "--idle-sec",
+                str(int(self._tun_helper_authenticated_client_idle_timeout_s())),
+            ]
+        else:
+            self._tun_helper_config_path = self._write_tun_helper_launch_config()
+            module_argv = [
+                helper_executable,
+                "-m",
+                "obstacle_bridge.bridge_tun_helper_server",
+                "--config-path",
+                self._tun_helper_config_path,
+            ]
+        exec_argv = list(module_argv)
         geteuid = getattr(os, "geteuid", None)
         needs_linux_helper_privilege = bool(
             sys.platform.startswith("linux")
-            and backend_name in {"linux-native", "linux_native", "linux-real"}
+            and (backend_name in {"linux-native", "linux_native", "linux-real"} or swift_linux)
             and callable(geteuid)
             and int(geteuid()) != 0
         )
@@ -1174,8 +1187,8 @@ class Runner:
             sudo_path = shutil.which("sudo")
             if not sudo_path:
                 raise RuntimeError(
-                    "Linux helper mode with the native backend needs elevated privileges, but sudo is not available. "
-                    "Install sudo, run as root, or select the linux-python helper backend."
+                "Linux helper mode with the native or Swift backend needs elevated privileges, but sudo is not available. "
+                "Install sudo, run as root, or select the linux-python helper backend."
                 )
             print(
                 "ObstacleBridge helper mode needs elevated privileges to create/configure the local Linux TUN device. "
@@ -1183,10 +1196,10 @@ class Runner:
                 file=sys.stderr,
                 flush=True,
             )
-            self.log.warning("[RUNNER] launching elevated Linux TUN helper subprocess for native helper backend")
+            self.log.warning("[RUNNER] launching elevated Linux TUN helper subprocess for %s helper backend", backend_name)
             exec_argv = _sudo_tun_helper_exec_argv(module_argv)
         elif needs_linux_helper_privilege:
-            self.log.info("[RUNNER] launching native Linux TUN helper without sudo because CAP_NET_ADMIN/CAP_SYS_ADMIN is already available")
+            self.log.info("[RUNNER] launching Linux TUN helper without sudo because CAP_NET_ADMIN/CAP_SYS_ADMIN is already available")
         elif needs_darwin_helper_privilege:
             sudo_path = shutil.which("sudo")
             if not sudo_path:
