@@ -222,6 +222,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,
+            "operator_capabilities": operatorCapabilities(),
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],
                 ["name": "secure_link", "state": status.secureLinkState, "authenticated": status.secureLinkState == "authenticated"],
@@ -247,6 +248,31 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "peer": peerPayload(status.peer),
         ]
         return payload
+    }
+
+    /// Host facts and actionable guidance for the Linux resource boundaries.
+    /// This exposes neither configured endpoints nor credentials.
+    private func operatorCapabilities() -> [String: Any] {
+        let manager = FileManager.default
+        let tunPresent = manager.fileExists(atPath: "/dev/net/tun")
+        let effectiveCapabilities = (try? String(contentsOfFile: "/proc/self/status"))?
+            .split(separator: "\n").first(where: { $0.hasPrefix("CapEff:") })?
+            .split(separator: "\t").last.flatMap { UInt64($0, radix: 16) } ?? 0
+        let netAdmin = effectiveCapabilities & (UInt64(1) << 12) != 0
+        let ipAvailable = ["/usr/sbin/ip", "/sbin/ip"].contains { manager.isExecutableFile(atPath: $0) }
+        let resolvectlAvailable = ["/usr/bin/resolvectl", "/bin/resolvectl"].contains { manager.isExecutableFile(atPath: $0) }
+        let firewallAvailable = ["/usr/sbin/iptables", "/sbin/iptables"].contains { manager.isExecutableFile(atPath: $0) }
+        var guidance: [String] = []
+        if !tunPresent { guidance.append("/dev/net/tun is unavailable") }
+        if !netAdmin { guidance.append("grant CAP_NET_ADMIN to the helper process or launch it through an authorized supervisor") }
+        if !ipAvailable { guidance.append("install iproute2 for address and route policy") }
+        if !resolvectlAvailable { guidance.append("install systemd-resolved/resolvectl before configuring helper-owned DNS") }
+        return [
+            "tun_device_present": tunPresent, "net_admin_effective": netAdmin,
+            "ip_available": ipAvailable, "resolvectl_available": resolvectlAvailable,
+            "iptables_available": firewallAvailable, "privileged_tun_ready": tunPresent && netAdmin && ipAvailable,
+            "guidance": guidance,
+        ]
     }
 
     private func peersPayload() -> [[String: Any]] {

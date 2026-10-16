@@ -107,6 +107,14 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let receiveLoop = status["receive_loop"] as? [String: Any]
         #expect(receiveLoop?["state"] as? String == "stopped")
         #expect(receiveLoop?["queue_depth"] as? Int == 0)
+        let capabilities = try #require(status["operator_capabilities"] as? [String: Any])
+        #expect(capabilities["tun_device_present"] as? Bool != nil)
+        #expect(capabilities["net_admin_effective"] as? Bool != nil)
+        #expect(capabilities["ip_available"] as? Bool != nil)
+        #expect(capabilities["resolvectl_available"] as? Bool != nil)
+        #expect(capabilities["iptables_available"] as? Bool != nil)
+        #expect(capabilities["privileged_tun_ready"] as? Bool != nil)
+        #expect(capabilities["guidance"] as? [String] != nil)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: status), as: UTF8.self).contains("never-expose-this"))
 
         let peers = try await getJSON("http://127.0.0.1:\(server.port)/api/peers")
