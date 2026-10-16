@@ -26,6 +26,55 @@ public enum ObstacleBridgeLinuxTunHelperAdapterError: Error, Equatable, Localize
     }
 }
 
+/// Long-lived authenticated packet endpoint for a helper-owned TUN device.
+/// Control requests intentionally remain on bounded independent exchanges;
+/// this connection only carries packet and EVENT fan-out.
+public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinuxPacketDevice, @unchecked Sendable {
+    private let adapter: ObstacleBridgeLinuxTunHelperAdapter
+    private let packetSink: (Data) -> Void
+    private let eventSink: (String) -> Void
+    private let lock = NSLock()
+    private var fd: Int32 = -1
+    private var running = false
+
+    public init(adapter: ObstacleBridgeLinuxTunHelperAdapter, packetSink: @escaping (Data) -> Void, eventSink: @escaping (String) -> Void = { _ in }) {
+        self.adapter = adapter; self.packetSink = packetSink; self.eventSink = eventSink
+    }
+
+    public func start() throws {
+        lock.lock(); defer { lock.unlock() }
+        guard !running else { return }
+        let connected = try adapter.connectSocket()
+        do { try adapter.authenticate(on: connected) } catch { _ = close(connected); throw error }
+        fd = connected; running = true
+        DispatchQueue.global().async { [weak self] in self?.receiveLoop() }
+    }
+
+    public func writePacket(_ packet: Data) throws {
+        lock.lock(); let active = running ? fd : -1; lock.unlock()
+        guard active >= 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
+        try adapter.writeFrame(kind: .packetToHelper, body: packet, to: active)
+    }
+
+    public func stop() {
+        lock.lock(); let active = fd; fd = -1; running = false; lock.unlock()
+        if active >= 0 { _ = shutdown(active, Int32(SHUT_RDWR)); _ = close(active) }
+    }
+
+    private func receiveLoop() {
+        while true {
+            lock.lock(); let active = running ? fd : -1; lock.unlock()
+            guard active >= 0, let (kind, body) = try? adapter.readFrame(from: active) else { stop(); return }
+            switch kind {
+            case .packetFromHelper: packetSink(body)
+            case .event:
+                if let value = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let detail = value["detail"] as? String { eventSink(detail) }
+            default: continue
+            }
+        }
+    }
+}
+
 /// Unix-domain-socket client for the Python helper protocol v1. Every bounded
 /// exchange authenticates with HELLO before issuing one control operation.
 /// This deliberately matches `bridge_tun_helper_protocol.py`; it is not the
@@ -33,7 +82,7 @@ public enum ObstacleBridgeLinuxTunHelperAdapterError: Error, Equatable, Localize
 public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     public static let maximumFrameBytes = 1_048_576
     private static let protocolVersion = 1
-    private enum FrameKind: UInt8 { case controlRequest = 1, controlResponse = 2, packetFromHelper = 3, packetToHelper = 4, event = 5 }
+    fileprivate enum FrameKind: UInt8 { case controlRequest = 1, controlResponse = 2, packetFromHelper = 3, packetToHelper = 4, event = 5 }
 
     public let socketPath: String
     public let sessionToken: String
@@ -119,7 +168,7 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         return try readControlResponse(expectedOperation: "\(operation)_OK", from: fd)
     }
 
-    private func authenticate(on fd: Int32) throws {
+    fileprivate func authenticate(on fd: Int32) throws {
         try writeControl(operation: "HELLO", payload: ["token": sessionToken], to: fd)
         _ = try readControlResponse(expectedOperation: "HELLO_OK", from: fd)
     }
@@ -149,7 +198,7 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         return payload.merging(["ok": true, "op": expectedOperation]) { _, response in response }
     }
 
-    private func connectSocket() throws -> Int32 {
+    fileprivate func connectSocket() throws -> Int32 {
         let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
         guard fd >= 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(errno) }
         var timeout = timeval(tv_sec: timeoutMilliseconds / 1000, tv_usec: (timeoutMilliseconds % 1000) * 1_000)
@@ -173,14 +222,14 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         return fd
     }
 
-    private func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
+    fileprivate func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
         guard body.count <= Self.maximumFrameBytes else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
         var length = UInt32(body.count).bigEndian
         var wire = Data([kind.rawValue]); wire.append(Data(bytes: &length, count: MemoryLayout<UInt32>.size)); wire.append(body)
         try writeAll(wire, to: fd)
     }
 
-    private func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
+    fileprivate func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
         let header = try readExactly(5, from: fd)
         guard let kind = FrameKind(rawValue: header[header.startIndex]) else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unknown frame kind") }
         let length = header.dropFirst().reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
