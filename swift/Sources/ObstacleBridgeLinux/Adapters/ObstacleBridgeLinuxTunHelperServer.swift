@@ -15,11 +15,13 @@ public protocol ObstacleBridgeLinuxTunHelperServerBackend: AnyObject {
     func setTunEnabled(_ payload: [String: Any]) throws -> [String: Any]
     func writePacket(_ packet: Data) throws
     func snapshot() throws -> [String: Any]
+    func recordFailure(stage: String, error: String)
     func stop()
 }
 
 public extension ObstacleBridgeLinuxTunHelperServerBackend {
     func setPacketSink(_ sink: @escaping (Data) -> Void) { _ = sink }
+    func recordFailure(stage: String, error: String) { _ = (stage, error) }
 }
 
 /// Partial Swift replacement for the Python local TUN helper server. It
@@ -162,7 +164,10 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             default: try sendError("unsupported_op", operation, to: client); return
             }
             try sendControl("\(operation)_OK", reply, to: client)
-        } catch { try? sendError("\(operation.lowercased())_failed", error.localizedDescription, to: client) }
+        } catch {
+            backend.recordFailure(stage: operation.lowercased(), error: error.localizedDescription)
+            try? sendError("\(operation.lowercased())_failed", error.localizedDescription, to: client)
+        }
     }
     private func markAuthenticatedActivity() { lock.lock(); lastAuthenticatedActivity = Date(); lock.unlock() }
     private func expireIdleHelperIfNeeded() {

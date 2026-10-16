@@ -11,6 +11,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var device: ObstacleBridgeLinuxTunDevice?
     private var packetsFromRuntime = 0
     private var packetsToRuntime = 0
+    private var lastFailure: [String: Any] = [:]
 
     public init(packetSink: @escaping PacketSink = { _ in }) { self.packetSink = packetSink }
 
@@ -56,7 +57,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     public func snapshot() throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         guard let device else {
-            return ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime]
+            return ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure]
         }
         return snapshotLocked(device: device)
     }
@@ -66,7 +67,11 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         device?.stop()
     }
 
+    public func recordFailure(stage: String, error: String) {
+        lock.lock(); lastFailure = ["stage": stage, "error": error]; lock.unlock()
+    }
+
     private func snapshotLocked(device: ObstacleBridgeLinuxTunDevice) -> [String: Any] {
-        ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime]
+        ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure]
     }
 }
