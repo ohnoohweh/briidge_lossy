@@ -225,6 +225,24 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "up", "obtest0"]))
         #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "down", "obtest0"]))
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))
+    func privilegedNativeSwiftHelperAppliesAndRemovesKernelTunPolicy() throws {
+        #if os(Linux)
+        let name = "obq\(getpid() % 100_000)"
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
+        defer { backend.stop() }
+        _ = try backend.openTun(["ifname": name, "mtu": 1400])
+        _ = try backend.applyNetwork(["ifname": name, "tun_routing": [
+            "tunnel_address": "198.18.0.1", "tunnel_prefix": 24,
+            "included_routes": ["198.19.0.0/16"],
+        ]])
+        let snapshot = try backend.snapshot()
+        #expect(snapshot["network_applied"] as? Bool == true)
+        _ = try backend.removeNetwork([:])
+        #expect(try backend.snapshot()["network_applied"] as? Bool == false)
+        #endif
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
