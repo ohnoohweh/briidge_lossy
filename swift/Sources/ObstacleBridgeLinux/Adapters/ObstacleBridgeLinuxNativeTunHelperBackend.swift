@@ -12,6 +12,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var packetsFromRuntime = 0
     private var packetsToRuntime = 0
     private var lastFailure: [String: Any] = [:]
+    private var tunEnabled = true
 
     public init(packetSink: @escaping PacketSink = { _ in }) { self.packetSink = packetSink }
 
@@ -44,7 +45,19 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     }
 
     public func setTunEnabled(_ payload: [String: Any]) throws -> [String: Any] {
-        throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Swift native helper suspend/resume is not implemented")
+        let value = payload["enabled"]
+        let enabled: Bool
+        if let boolean = value as? Bool { enabled = boolean }
+        else if let number = value as? NSNumber { enabled = number.boolValue }
+        else if let text = value as? String {
+            switch text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "1", "true", "yes", "on": enabled = true
+            case "0", "false", "no", "off": enabled = false
+            default: throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("SET_TUN_ENABLED requires a boolean enabled value")
+            }
+        } else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("SET_TUN_ENABLED requires a boolean enabled value") }
+        lock.lock(); tunEnabled = enabled; let snapshot = self.device.map(snapshotLocked) ?? closedSnapshotLocked(); lock.unlock()
+        return snapshot.merging(["tun_enabled": enabled]) { _, new in new }
     }
 
     public func writePacket(_ packet: Data) throws {
@@ -57,7 +70,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     public func snapshot() throws -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
         guard let device else {
-            return ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure]
+            return closedSnapshotLocked()
         }
         return snapshotLocked(device: device)
     }
@@ -72,6 +85,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     }
 
     private func snapshotLocked(device: ObstacleBridgeLinuxTunDevice) -> [String: Any] {
-        ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure]
+        ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled]
     }
+    private func closedSnapshotLocked() -> [String: Any] { ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled] }
 }
