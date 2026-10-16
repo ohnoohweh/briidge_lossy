@@ -24,6 +24,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var configuredRoutes: [(String, String)] = []
     private var excludedRoutes: [(String, String)] = []
     private var underlay: [String: [String: String]] = [:]
+    private var appliedDNSServers: [String] = []
 
     public init(packetSink: @escaping PacketSink = { _ in }, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
         self.packetSink = packetSink; self.commandRunner = commandRunner
@@ -62,6 +63,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         var addresses: [(String, String)] = []
         var routes: [(String, String)] = []
         var excluded: [(String, String)] = []
+        let dnsServers = (routing["dns_servers"] as? [String] ?? []).filter { !$0.isEmpty }
         var savedUnderlay: [String: [String: String]] = [:]
         func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
             guard let address = routing[addressKey] as? String, !address.isEmpty else { return nil }
@@ -101,25 +103,32 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                 _ = try commandRunner(command, false)
             }
             if tunEnabled { for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) } }
+            if !dnsServers.isEmpty {
+                _ = try commandRunner(["resolvectl", "dns", ifname] + dnsServers, false)
+                _ = try commandRunner(["resolvectl", "domain", ifname, "~."], false)
+                _ = try commandRunner(["resolvectl", "default-route", ifname, "yes"], false)
+            }
         } catch {
+            _ = try? commandRunner(["resolvectl", "revert", ifname], true)
             for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
             for (family, route) in excluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
             for (family, cidr) in addresses.reversed() { _ = try? commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; lock.unlock()
         emitEvent("network applied interface=\(ifname)")
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
     public func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] {
-        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; lock.unlock()
+        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; let dnsServers = appliedDNSServers; lock.unlock()
         guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
         for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
         for (family, route) in excluded.reversed() { _ = try commandRunner(["ip", family, "route", "del", route], true) }
+        if !dnsServers.isEmpty { _ = try commandRunner(["resolvectl", "revert", ifname], true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
-        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; lock.unlock()
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; lock.unlock()
         emitEvent("network removed interface=\(ifname)")
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
     }
@@ -189,7 +198,17 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private func closedSnapshotLocked() -> [String: Any] { ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled] }
 
     public static func runProcess(_ arguments: [String], _ allowFailure: Bool) throws -> String {
-        let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/ip")
+        guard let command = arguments.first else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux helper command is empty") }
+        let paths: [String]
+        switch command {
+        case "ip": paths = ["/usr/sbin/ip", "/sbin/ip"]
+        case "resolvectl": paths = ["/usr/bin/resolvectl", "/bin/resolvectl"]
+        default: paths = []
+        }
+        guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux helper command is unavailable: \(command)")
+        }
+        let process = Process(); process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = Array(arguments.dropFirst())
         let stdout = Pipe(); let stderr = Pipe(); process.standardOutput = stdout; process.standardError = stderr
         try process.run(); process.waitUntilExit()

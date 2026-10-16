@@ -148,6 +148,19 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         _ = try backend.removeNetwork([:])
         #expect(events == ["network applied interface=obtest0", "tun enabled=false", "network removed interface=obtest0"])
     }
+
+    @Test func nativeSwiftHelperAppliesAndRevertsResolvedDNS() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            commands.append(arguments); return arguments.contains("-j") ? "[]" : ""
+        })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["dns_servers": ["1.1.1.1", "2606:4700:4700::1111"]]])
+        _ = try backend.removeNetwork([:])
+        #expect(commands.contains(["resolvectl", "dns", "obtest0", "1.1.1.1", "2606:4700:4700::1111"]))
+        #expect(commands.contains(["resolvectl", "domain", "obtest0", "~."]))
+        #expect(commands.contains(["resolvectl", "default-route", "obtest0", "yes"]))
+        #expect(commands.contains(["resolvectl", "revert", "obtest0"]))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
