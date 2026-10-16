@@ -389,6 +389,15 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'control.operation == "HELLO"' in protocol_server
     assert 'case "APPLY_NETWORK"' in protocol_server
     assert "applyPythonNetwork" in protocol_server
+    assert "backend.setPacketSink" in protocol_server
+    assert "backend.setEventSink" in protocol_server
+    assert ".packetFromHelper" in protocol_server
+    assert ".event" in protocol_server
+    assert "authenticatedClients" in protocol_server
+    assert "writerLock" in protocol_server
+    assert "expireIfIdle" in protocol_server
+    assert 'values[3] == "--idle-sec"' in helper_main
+    assert "defaultGateway(address: address, prefix: prefix, ipv6: false)" in (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
     assert "public enum ObstacleBridgeTunHelperProtocolV1" in protocol_v1
     assert "case controlRequest = 1" in protocol_v1
 

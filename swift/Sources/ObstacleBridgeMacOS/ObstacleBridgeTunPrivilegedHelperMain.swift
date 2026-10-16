@@ -6,8 +6,9 @@ enum ObstacleBridgeTunPrivilegedHelperMain {
     static func main() {
         let args = Set(CommandLine.arguments.dropFirst())
         let values = Array(CommandLine.arguments.dropFirst())
-        if values.count == 3, values[0] == "--tun-helper-server" {
-            do { try ObstacleBridgeMacOSProtocolV1TunHelperServer(socketPath: values[1], token: values[2]).run() }
+        if values.count == 3 || (values.count == 5 && values[3] == "--idle-sec") {
+            guard values[0] == "--tun-helper-server", let idle = values.count == 5 ? TimeInterval(values[4]) : Optional(TimeInterval(5)) else { fputs("ObstacleBridgeTunHelper: invalid tun-helper-server arguments\n", stderr); exit(2) }
+            do { try ObstacleBridgeMacOSProtocolV1TunHelperServer(socketPath: values[1], token: values[2], idleTimeout: idle).run() }
             catch { fputs("ObstacleBridgeTunHelper: \(error.localizedDescription)\n", stderr); exit(1) }
             return
         }

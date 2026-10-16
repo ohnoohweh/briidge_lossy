@@ -1,12 +1,15 @@
 import Foundation
+#if os(macOS)
+import Darwin
+#endif
 
 /// macOS resource owner for the portable TUN-helper contract. It owns utun
 /// descriptor lifecycle and hook-process execution; Core owns all envelopes,
 /// command validation, state snapshots, and loopback transport semantics.
 final class ObstacleBridgeInProcessMacOSTunHelperClient: ObstacleBridgeTunHelperClienting {
     private let queue: DispatchQueue
-    private let packetSink: (Data) -> Void
-    private let eventSink: ((String, [String: Any]) -> Void)?
+    private var packetSink: (Data) -> Void
+    private var eventSink: ((String, [String: Any]) -> Void)?
     private var adapter: ObstacleBridgeMacOSTunAdapter?
     private(set) var runtimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
 
@@ -15,6 +18,11 @@ final class ObstacleBridgeInProcessMacOSTunHelperClient: ObstacleBridgeTunHelper
         self.packetSink = packetSink
         self.eventSink = eventSink
     }
+
+    /// The standalone Unix server attaches these sinks after its stored
+    /// properties are initialized; app/XPC callers provide them at creation.
+    func setPacketSink(_ sink: @escaping (Data) -> Void) { packetSink = sink }
+    func setEventSink(_ sink: ((String, [String: Any]) -> Void)?) { eventSink = sink }
 
     var requestedIfname: String { adapter?.requestedIfname ?? runtimeSnapshot.requestedIfname }
     var actualIfname: String { adapter?.actualIfname ?? runtimeSnapshot.ifname }
@@ -73,11 +81,13 @@ final class ObstacleBridgeInProcessMacOSTunHelperClient: ObstacleBridgeTunHelper
             "INCLUDED_ROUTES6": routes("included_routes6"), "EXCLUDED_ROUTES6": routes("excluded_routes6"),
         ]
         let address = text("tunnel_address"), prefix = text("tunnel_prefix"), gateway = text("tunnel_gateway")
+        let resolvedGateway = gateway.isEmpty ? defaultGateway(address: address, prefix: prefix, ipv6: false) : gateway
         if !address.isEmpty, !prefix.isEmpty { env["TUN_ADDR"] = "\(address)/\(prefix)" }
-        if !gateway.isEmpty { env["TUN_GW"] = gateway; env["PEER_ADDR"] = gateway }
+        if !resolvedGateway.isEmpty { env["TUN_GW"] = resolvedGateway; env["PEER_ADDR"] = resolvedGateway }
         let address6 = text("tunnel_address6"), prefix6 = text("tunnel_prefix6"), gateway6 = text("tunnel_gateway6")
+        let resolvedGateway6 = gateway6.isEmpty ? defaultGateway(address: address6, prefix: prefix6, ipv6: true) : gateway6
         if !address6.isEmpty, !prefix6.isEmpty { env["TUN_ADDR6"] = "\(address6)/\(prefix6)" }
-        if !gateway6.isEmpty { env["TUN_GW6"] = gateway6; env["PEER_ADDR6"] = gateway6 }
+        if !resolvedGateway6.isEmpty { env["TUN_GW6"] = resolvedGateway6; env["PEER_ADDR6"] = resolvedGateway6 }
         let dns = routing["dns_servers"] as? [Any] ?? []
         if dns.indices.contains(0) { env["DNS1"] = String(describing: dns[0]) }
         if dns.indices.contains(1) { env["DNS2"] = String(describing: dns[1]) }
@@ -97,6 +107,37 @@ final class ObstacleBridgeInProcessMacOSTunHelperClient: ObstacleBridgeTunHelper
     }
 
     func recordFailure(stage: String, error: String) { runtimeSnapshot.markFailure(stage: stage, error: error) }
+
+    /// Matches Python's ip_interface(...).network.hosts() choice: use the
+    /// first usable subnet peer unless it is the local address, then use the
+    /// next. This is only relevant when configuration omits an explicit peer.
+    private func defaultGateway(address: String, prefix: String, ipv6: Bool) -> String {
+#if os(macOS)
+        let width = ipv6 ? 16 : 4
+        guard let length = Int(prefix), (ipv6 ? 0...128 : 0...32).contains(length), length < width * 8 else { return "" }
+        let family: Int32 = ipv6 ? AF_INET6 : AF_INET
+        var input = in6_addr()
+        guard inet_pton(family, address, &input) == 1 else { return "" }
+        var local = withUnsafeBytes(of: input) { Array($0.prefix(width)) }
+        var candidate = local
+        for index in 0..<width {
+            let bitsBefore = index * 8
+            if length <= bitsBefore { candidate[index] = 0 }
+            else if length < bitsBefore + 8 { candidate[index] &= UInt8(0xff << (8 - (length - bitsBefore))) }
+        }
+        func increment(_ bytes: inout [UInt8]) -> Bool {
+            for index in bytes.indices.reversed() { if bytes[index] < 255 { bytes[index] += 1; return true }; bytes[index] = 0 }
+            return false
+        }
+        guard increment(&candidate) else { return "" }
+        if candidate == local { guard increment(&candidate) else { return "" } }
+        var output = [CChar](repeating: 0, count: Int(INET6_ADDRSTRLEN))
+        let rendered: UnsafePointer<CChar>? = candidate.withUnsafeBytes { bytes in inet_ntop(family, bytes.baseAddress, &output, socklen_t(output.count)) }
+        return rendered.map { String(cString: $0) } ?? ""
+#else
+        return ""
+#endif
+    }
 
     private func runHook(action: String, argv: [String], env: [String: String], removing: Bool) {
         guard let executable = argv.first, !executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
