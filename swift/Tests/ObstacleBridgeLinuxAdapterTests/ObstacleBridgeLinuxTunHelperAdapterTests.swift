@@ -115,6 +115,17 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(recorded.contains(["ip", "-4", "route", "replace", "10.0.0.0/8", "dev", "obtest0"]))
         #expect(recorded.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
     }
+
+    @Test func nativeSwiftHelperSuspendsAndResumesInstalledRoutes() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in commands.append(arguments); return "" })
+        let payload: [String: Any] = ["ifname": "obtest0", "tun_routing": ["included_routes": ["10.0.0.0/8"]]]
+        _ = try backend.applyNetwork(payload)
+        _ = try backend.setTunEnabled(["enabled": false])
+        _ = try backend.setTunEnabled(["enabled": true])
+        #expect(commands.filter { $0 == ["ip", "-4", "route", "replace", "10.0.0.0/8", "dev", "obtest0"] }.count == 2)
+        #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

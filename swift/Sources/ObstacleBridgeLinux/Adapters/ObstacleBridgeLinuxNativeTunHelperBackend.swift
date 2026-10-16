@@ -20,6 +20,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var appliedInterface = ""
     private var appliedAddresses: [(String, String)] = []
     private var appliedRoutes: [(String, String)] = []
+    private var configuredRoutes: [(String, String)] = []
 
     public init(packetSink: @escaping PacketSink = { _ in }, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
         self.packetSink = packetSink; self.commandRunner = commandRunner
@@ -76,7 +77,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; appliedRoutes = tunEnabled ? routes : []; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; lock.unlock()
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
@@ -85,7 +86,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
         for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
-        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; lock.unlock()
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; lock.unlock()
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
     }
 
@@ -101,6 +102,20 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             default: throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("SET_TUN_ENABLED requires a boolean enabled value")
             }
         } else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("SET_TUN_ENABLED requires a boolean enabled value") }
+        lock.lock()
+        let ifname = appliedInterface
+        let routes = configuredRoutes
+        let activeRoutes = appliedRoutes
+        lock.unlock()
+        if !ifname.isEmpty {
+            if enabled && activeRoutes.isEmpty {
+                for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) }
+                lock.lock(); appliedRoutes = routes; lock.unlock()
+            } else if !enabled && !activeRoutes.isEmpty {
+                for (family, route) in activeRoutes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+                lock.lock(); appliedRoutes = []; lock.unlock()
+            }
+        }
         lock.lock(); tunEnabled = enabled; let snapshot = self.device.map(snapshotLocked) ?? closedSnapshotLocked(); lock.unlock()
         return snapshot.merging(["tun_enabled": enabled]) { _, new in new }
     }
