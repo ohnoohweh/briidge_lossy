@@ -161,6 +161,17 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["resolvectl", "default-route", "obtest0", "yes"]))
         #expect(commands.contains(["resolvectl", "revert", "obtest0"]))
     }
+
+    @Test func nativeSwiftHelperSnapshotDescribesAppliedPolicyWithoutSecrets() throws {
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            arguments.contains("-j") ? "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]" : ""
+        })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["included_routes": ["10.0.0.0/8"], "dns_servers": ["1.1.1.1"]]])
+        let snapshot = try backend.snapshot()
+        #expect(snapshot["network_applied"] as? Bool == true)
+        #expect(snapshot["dns_servers"] as? [String] == ["1.1.1.1"])
+        #expect(snapshot["applied_routes"] as? [String] == ["-4 10.0.0.0/8"])
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

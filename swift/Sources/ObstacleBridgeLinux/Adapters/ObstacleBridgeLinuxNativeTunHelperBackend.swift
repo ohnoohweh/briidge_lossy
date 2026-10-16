@@ -193,9 +193,19 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private func emitEvent(_ detail: String) { lock.lock(); let sink = eventSink; lock.unlock(); sink(detail) }
 
     private func snapshotLocked(device: ObstacleBridgeLinuxTunDevice) -> [String: Any] {
-        ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled]
+        snapshotFields(["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu])
     }
-    private func closedSnapshotLocked() -> [String: Any] { ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled] }
+    private func closedSnapshotLocked() -> [String: Any] { snapshotFields(["backend": "linux-swift-native", "opened": false]) }
+    private func snapshotFields(_ base: [String: Any]) -> [String: Any] {
+        base.merging([
+            "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime,
+            "last_failure": lastFailure, "tun_enabled": tunEnabled, "network_applied": !appliedInterface.isEmpty,
+            "applied_addresses": appliedAddresses.map { "\($0.0) \($0.1)" },
+            "applied_routes": appliedRoutes.map { "\($0.0) \($0.1)" },
+            "excluded_routes": excludedRoutes.map { "\($0.0) \($0.1)" },
+            "underlay": underlay, "dns_servers": appliedDNSServers,
+        ]) { _, new in new }
+    }
 
     public static func runProcess(_ arguments: [String], _ allowFailure: Bool) throws -> String {
         guard let command = arguments.first else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux helper command is empty") }
