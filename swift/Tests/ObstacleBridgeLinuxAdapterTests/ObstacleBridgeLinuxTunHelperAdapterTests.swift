@@ -243,6 +243,42 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(try backend.snapshot()["network_applied"] as? Bool == false)
         #endif
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))
+    func privilegedNativeSwiftHelperQualifiesTunRouteDNSAndHookLifecycle() throws {
+        #if os(Linux)
+        let name = "obq\(getpid() % 100_000)"
+        let directory = URL(fileURLWithPath: "/tmp/obstaclebridge-swift-hook-\(UUID().uuidString)", isDirectory: true)
+        let hook = directory.appendingPathComponent("hook.sh")
+        let marker = directory.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$2\" >> '\(marker.path)'\n".utf8).write(to: hook)
+        guard chmod(hook.path, 0o700) == 0 else { throw POSIXError(.EPERM) }
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
+        defer { backend.stop() }
+        _ = try backend.openTun(["ifname": name, "mtu": 1400])
+        let interface = try #require(backend.snapshot()["ifname"] as? String)
+        let route = "198.19.0.0/16"
+        let address = "198.18.0.1"
+        _ = try backend.applyNetwork(["ifname": interface, "hook_path": hook.path, "tun_routing": [
+            "tunnel_address": address, "tunnel_prefix": 24,
+            "included_routes": [route], "dns_servers": ["192.0.2.53"],
+        ]])
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "addr", "show", "dev", interface], false).contains(address))
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", route], false).contains(interface))
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["resolvectl", "dns", interface], false).contains("192.0.2.53"))
+        _ = try backend.removeNetwork([:])
+        let addressesAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "addr", "show", "dev", interface], false)
+        let routesAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", route], false)
+        let dnsAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["resolvectl", "dns", interface], false)
+        #expect(!addressesAfterRemoval.contains(address))
+        #expect(!routesAfterRemoval.contains(interface))
+        #expect(!dnsAfterRemoval.contains("192.0.2.53"))
+        #expect(String(decoding: try Data(contentsOf: marker), as: UTF8.self) == "up:\(interface)\ndown:\(interface)\n")
+        #endif
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
