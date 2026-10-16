@@ -5,6 +5,12 @@ import Dispatch
 enum ObstacleBridgeTunPrivilegedHelperMain {
     static func main() {
         let args = Set(CommandLine.arguments.dropFirst())
+        let values = Array(CommandLine.arguments.dropFirst())
+        if values.count == 3, values[0] == "--tun-helper-server" {
+            do { try ObstacleBridgeMacOSProtocolV1TunHelperServer(socketPath: values[1], token: values[2]).run() }
+            catch { fputs("ObstacleBridgeTunHelper: \(error.localizedDescription)\n", stderr); exit(1) }
+            return
+        }
         if args.contains("--version") {
             print("ObstacleBridgeTunHelper skeleton 1")
             return

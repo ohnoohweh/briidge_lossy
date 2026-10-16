@@ -310,6 +310,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     service = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift").read_text(encoding="utf-8")
     xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
     helper_main = (APP_NATIVE_DIR / "ObstacleBridgeTunPrivilegedHelperMain.swift").read_text(encoding="utf-8")
+    protocol_server = (APP_NATIVE_DIR / "ObstacleBridgeMacOSProtocolV1TunHelperServer.swift").read_text(encoding="utf-8")
     protocol_v1 = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperProtocolV1.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
 
@@ -380,6 +381,12 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "NSXPCListener(machServiceName: ObstacleBridgeMacOSTunHelperService.xpcMachServiceName)" in helper_main
     assert "ObstacleBridgeTunHelperXPCListenerDelegate()" in helper_main
     assert "dispatchMain()" in helper_main
+    assert 'values[0] == "--tun-helper-server"' in helper_main
+    assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
+    assert "ObstacleBridgeTunHelperProtocolV1.decodeControl" in protocol_server
+    assert 'control.operation == "HELLO"' in protocol_server
+    assert 'case "APPLY_NETWORK"' in protocol_server
+    assert "applyPythonNetwork" in protocol_server
     assert "public enum ObstacleBridgeTunHelperProtocolV1" in protocol_v1
     assert "case controlRequest = 1" in protocol_v1
 

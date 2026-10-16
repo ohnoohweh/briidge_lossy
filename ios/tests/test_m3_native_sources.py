@@ -936,6 +936,7 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridgeTunHelperProtocolV1" in tun_helper_protocol
     assert "ObstacleBridgeMacOSTunHelperService.swift" in build_script
     assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
+    assert "ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" in build_script
     assert "ObstacleBridgeTunHelper" in build_script
     assert "Contents/MacOS/${HELPER_EXECUTABLE_NAME}" in build_script
     assert "Library/LaunchDaemons" in build_script

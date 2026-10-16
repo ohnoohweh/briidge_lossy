@@ -57,6 +57,39 @@ final class ObstacleBridgeInProcessMacOSTunHelperClient: ObstacleBridgeTunHelper
     func applyNetwork(action: String, argv: [String], env: [String: String]) { runHook(action: action, argv: argv, env: env, removing: false) }
     func removeNetwork(action: String, argv: [String], env: [String: String]) { runHook(action: action, argv: argv, env: env, removing: true) }
 
+    /// Translates the Python protocol-v1 network payload into the same bundled
+    /// Darwin hook contract used by the packaged Swift helper.
+    func applyPythonNetwork(_ payload: [String: Any], removing: Bool) throws -> [String: Any] {
+        guard let routing = payload["tun_routing"] as? [String: Any] else {
+            throw ObstacleBridgeTunHelperCommandError.invalidPayload("APPLY_NETWORK requires tun_routing")
+        }
+        let ifname = (payload["ifname"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? actualIfname
+        guard !ifname.isEmpty else { throw ObstacleBridgeTunHelperCommandError.invalidPayload("APPLY_NETWORK requires an open TUN interface") }
+        func text(_ key: String) -> String { String(describing: routing[key] ?? "").trimmingCharacters(in: .whitespacesAndNewlines) }
+        func routes(_ key: String) -> String { (routing[key] as? [Any] ?? []).map { String(describing: $0) }.filter { !$0.isEmpty }.joined(separator: ",") }
+        var env: [String: String] = [
+            "MTU": text("mtu").isEmpty ? String(mtu) : text("mtu"),
+            "INCLUDED_ROUTES": routes("included_routes"), "EXCLUDED_ROUTES": routes("excluded_routes"),
+            "INCLUDED_ROUTES6": routes("included_routes6"), "EXCLUDED_ROUTES6": routes("excluded_routes6"),
+        ]
+        let address = text("tunnel_address"), prefix = text("tunnel_prefix"), gateway = text("tunnel_gateway")
+        if !address.isEmpty, !prefix.isEmpty { env["TUN_ADDR"] = "\(address)/\(prefix)" }
+        if !gateway.isEmpty { env["TUN_GW"] = gateway; env["PEER_ADDR"] = gateway }
+        let address6 = text("tunnel_address6"), prefix6 = text("tunnel_prefix6"), gateway6 = text("tunnel_gateway6")
+        if !address6.isEmpty, !prefix6.isEmpty { env["TUN_ADDR6"] = "\(address6)/\(prefix6)" }
+        if !gateway6.isEmpty { env["TUN_GW6"] = gateway6; env["PEER_ADDR6"] = gateway6 }
+        let dns = routing["dns_servers"] as? [Any] ?? []
+        if dns.indices.contains(0) { env["DNS1"] = String(describing: dns[0]) }
+        if dns.indices.contains(1) { env["DNS2"] = String(describing: dns[1]) }
+        for (key, value) in payload["listener_hook_env"] as? [String: Any] ?? [:] { env[key] = String(describing: value) }
+        let serverSide = String(describing: payload["service_catalog"] ?? "").lowercased() == "remote_servers"
+        let hookName = serverSide ? "server-tun-hook-macos.sh" : "client-tun-hook-macos.sh"
+        let hook = Bundle.main.bundleURL.appendingPathComponent("Contents/Resources/scripts/\(hookName)").path
+        runHook(action: removing ? "down" : "up", argv: [hook, removing ? "down" : "up", ifname], env: env, removing: removing)
+        if !runtimeSnapshot.lastFailure.isEmpty { throw ObstacleBridgeTunHelperCommandError.invalidResponse("Darwin TUN hook failed") }
+        return runtimeSnapshot.payload()
+    }
+
     func writePacket(_ packet: Data) throws {
         guard let adapter else { return }
         try adapter.write(packet: packet)

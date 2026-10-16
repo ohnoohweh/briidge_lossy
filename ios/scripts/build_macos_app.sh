@@ -152,6 +152,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift" \
