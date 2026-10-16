@@ -76,7 +76,9 @@ enum ObstacleBridgeLinuxMain {
 
     private static func runTunHelperServer(socketPath: String, sessionToken: String, idleTimeout: TimeInterval) {
         do {
-            let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
+            let backend = ObstacleBridgeLinuxNativeTunHelperBackend(
+                stateURL: URL(fileURLWithPath: socketPath + ".state.json")
+            )
             let server = try ObstacleBridgeLinuxTunHelperServer(
                 socketPath: socketPath,
                 sessionToken: sessionToken,

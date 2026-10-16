@@ -181,6 +181,16 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "198.18.0.1/24", "-o", "eth0", "-j", "MASQUERADE"]))
         #expect(commands.contains(["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "198.18.0.1/24", "-o", "eth0", "-j", "MASQUERADE"]))
     }
+
+    @Test func nativeSwiftHelperPersistsRedactedPolicySnapshot() throws {
+        let path = URL(fileURLWithPath: "/tmp/obstaclebridge-native-state-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in arguments.contains("-j") ? "[]" : "" })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["dns_servers": ["1.1.1.1"]]])
+        let snapshot = try JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any]
+        #expect(snapshot?["network_applied"] as? Bool == true)
+        #expect(snapshot?["dns_servers"] as? [String] == ["1.1.1.1"])
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
