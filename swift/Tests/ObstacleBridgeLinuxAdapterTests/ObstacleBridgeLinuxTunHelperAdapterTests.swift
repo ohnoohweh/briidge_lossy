@@ -191,6 +191,18 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(snapshot?["network_applied"] as? Bool == true)
         #expect(snapshot?["dns_servers"] as? [String] == ["1.1.1.1"])
     }
+
+    @Test func nativeSwiftHelperRecoversPersistedPolicyBeforeNewOwnership() throws {
+        let path = URL(fileURLWithPath: "/tmp/obstaclebridge-native-recovery-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: path) }
+        let writer = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in arguments.contains("-j") ? "[]" : "" })
+        _ = try writer.applyNetwork(["ifname": "obtest0", "tun_routing": ["included_routes": ["10.0.0.0/8"]]])
+        var commands: [[String]] = []
+        let recovery = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in commands.append(arguments); return "" })
+        try recovery.recoverPersistedPolicy()
+        #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
+        #expect(!FileManager.default.fileExists(atPath: path.path))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

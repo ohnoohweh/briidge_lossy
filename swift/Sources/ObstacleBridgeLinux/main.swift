@@ -79,6 +79,7 @@ enum ObstacleBridgeLinuxMain {
             let backend = ObstacleBridgeLinuxNativeTunHelperBackend(
                 stateURL: URL(fileURLWithPath: socketPath + ".state.json")
             )
+            try backend.recoverPersistedPolicy()
             let server = try ObstacleBridgeLinuxTunHelperServer(
                 socketPath: socketPath,
                 sessionToken: sessionToken,

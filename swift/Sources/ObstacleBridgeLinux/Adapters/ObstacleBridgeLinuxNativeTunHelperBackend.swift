@@ -35,6 +35,27 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     public func setPacketSink(_ sink: @escaping PacketSink) { lock.lock(); packetSink = sink; lock.unlock() }
     public func setEventSink(_ sink: @escaping (String) -> Void) { lock.lock(); eventSink = sink; lock.unlock() }
 
+    /// Clears state left by a terminated prior helper before this helper takes
+    /// ownership.  The persisted record is redacted and only contains argv
+    /// fragments that this backend originally created.
+    public func recoverPersistedPolicy() throws {
+        guard let stateURL, FileManager.default.fileExists(atPath: stateURL.path),
+              let data = try? Data(contentsOf: stateURL),
+              let snapshot = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              snapshot["network_applied"] as? Bool == true else { return }
+        let ifname = snapshot["policy_interface"] as? String ?? ""
+        guard ObstacleBridgeLinuxTunDevice.isValidInterfaceName(ifname) else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("persisted helper policy has no safe interface name")
+        }
+        for entry in (snapshot["applied_routes"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "route", interfaceName: ifname) }
+        for entry in (snapshot["excluded_routes"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "route", interfaceName: nil) }
+        if !(snapshot["dns_servers"] as? [String] ?? []).isEmpty { _ = try commandRunner(["resolvectl", "revert", ifname], true) }
+        for rule in (snapshot["firewall_rules"] as? [[String]] ?? []).reversed() { _ = try commandRunner(Self.removeFirewallRule(rule), true) }
+        for entry in (snapshot["applied_addresses"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "addr", interfaceName: ifname) }
+        try FileManager.default.removeItem(at: stateURL)
+        emitEvent("recovered prior helper policy interface=\(ifname)")
+    }
+
     public func openTun(_ payload: [String: Any]) throws -> [String: Any] {
         guard let requested = payload["ifname"] as? String, !requested.isEmpty else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("OPEN_TUN requires ifname")
@@ -213,6 +234,13 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     }
 
     private func emitEvent(_ detail: String) { lock.lock(); let sink = eventSink; lock.unlock(); sink(detail) }
+    private func removePersistedIP(_ entry: String, kind: String, interfaceName: String?) throws {
+        let parts = entry.split(separator: " ", maxSplits: 1).map(String.init)
+        guard parts.count == 2, parts[0] == "-4" || parts[0] == "-6" else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("persisted helper policy has invalid IP entry") }
+        var command = ["ip", parts[0], kind, "del", parts[1]]
+        if let interfaceName { command += ["dev", interfaceName] }
+        _ = try commandRunner(command, true)
+    }
     private func persistState() {
         guard let stateURL else { return }
         lock.lock(); let value = snapshotFields(["backend": "linux-swift-native", "opened": device != nil]); lock.unlock()
@@ -229,6 +257,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         base.merging([
             "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime,
             "last_failure": lastFailure, "tun_enabled": tunEnabled, "network_applied": !appliedInterface.isEmpty,
+            "policy_interface": appliedInterface,
             "applied_addresses": appliedAddresses.map { "\($0.0) \($0.1)" },
             "applied_routes": appliedRoutes.map { "\($0.0) \($0.1)" },
             "excluded_routes": excludedRoutes.map { "\($0.0) \($0.1)" },
