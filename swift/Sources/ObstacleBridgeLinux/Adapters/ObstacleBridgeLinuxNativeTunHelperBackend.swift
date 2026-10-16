@@ -7,12 +7,14 @@ import Foundation
 public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
     public typealias PacketSink = (Data) -> Void
     private let lock = NSLock()
-    private let packetSink: PacketSink
+    private var packetSink: PacketSink
     private var device: ObstacleBridgeLinuxTunDevice?
     private var packetsFromRuntime = 0
     private var packetsToRuntime = 0
 
     public init(packetSink: @escaping PacketSink = { _ in }) { self.packetSink = packetSink }
+
+    public func setPacketSink(_ sink: @escaping PacketSink) { lock.lock(); packetSink = sink; lock.unlock() }
 
     public func openTun(_ payload: [String: Any]) throws -> [String: Any] {
         guard let requested = payload["ifname"] as? String, !requested.isEmpty else {
@@ -24,7 +26,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         lock.unlock()
         let device = try ObstacleBridgeLinuxTunDevice(interfaceName: requested, mtu: mtu, packetSink: { [weak self] packet in
             self?.lock.lock(); self?.packetsToRuntime += 1; self?.lock.unlock()
-            self?.packetSink(packet)
+            self?.lock.lock(); let sink = self?.packetSink; self?.lock.unlock()
+            sink?(packet)
         })
         try device.start()
         lock.lock(); self.device = device; let reply = snapshotLocked(device: device); lock.unlock()

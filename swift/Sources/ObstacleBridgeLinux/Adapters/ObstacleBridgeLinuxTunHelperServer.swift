@@ -8,6 +8,7 @@ import Glibc
 /// Privileged ownership deliberately lives behind this protocol rather than in
 /// the Unix-socket parser.
 public protocol ObstacleBridgeLinuxTunHelperServerBackend: AnyObject {
+    func setPacketSink(_ sink: @escaping (Data) -> Void)
     func openTun(_ payload: [String: Any]) throws -> [String: Any]
     func applyNetwork(_ payload: [String: Any]) throws -> [String: Any]
     func removeNetwork(_ payload: [String: Any]) throws -> [String: Any]
@@ -15,6 +16,10 @@ public protocol ObstacleBridgeLinuxTunHelperServerBackend: AnyObject {
     func writePacket(_ packet: Data) throws
     func snapshot() throws -> [String: Any]
     func stop()
+}
+
+public extension ObstacleBridgeLinuxTunHelperServerBackend {
+    func setPacketSink(_ sink: @escaping (Data) -> Void) { _ = sink }
 }
 
 /// Partial Swift replacement for the Python local TUN helper server. It
@@ -32,8 +37,10 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
     private let lock = NSLock()
+    private let writerLock = NSLock()
     private var listener: Int32 = -1
     private var running = false
+    private var authenticatedClients: Set<Int32> = []
 
     public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend) throws {
         guard !socketPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sessionToken.isEmpty else {
@@ -42,6 +49,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         self.socketPath = socketPath
         self.sessionToken = sessionToken
         self.backend = backend
+        backend.setPacketSink { [weak self] packet in self?.emitPacket(packet) }
     }
 
     public func start() throws {
@@ -70,6 +78,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         listener = -1; running = false
         lock.unlock()
         if fd >= 0 { _ = shutdown(fd, Int32(SHUT_RDWR)); _ = close(fd) }
+        lock.lock(); authenticatedClients.removeAll(); lock.unlock()
         _ = unlink(socketPath)
         backend.stop()
     }
@@ -85,7 +94,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     }
 
     private func handle(client: Int32) {
-        defer { _ = close(client) }
+        defer { lock.lock(); authenticatedClients.remove(client); lock.unlock(); _ = close(client) }
         var authenticated = false
         while true {
             guard let (kind, body) = try? readFrame(from: client) else { return }
@@ -96,6 +105,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
                 if operation == "HELLO" {
                     guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", to: client); continue }
                     authenticated = true
+                    lock.lock(); authenticatedClients.insert(client); lock.unlock()
                     try? sendControl("HELLO_OK", ["authenticated": true], to: client)
                     continue
                 }
@@ -135,9 +145,16 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         let body = try JSONSerialization.data(withJSONObject: ["version": Self.version, "op": operation, "payload": payload], options: [.sortedKeys])
         try writeFrame(kind: .controlResponse, body: body, to: fd)
     }
+    /// Packet and event producers use this fan-out path; only clients that
+    /// completed HELLO receive helper-originated traffic.
+    public func emitPacket(_ packet: Data) {
+        lock.lock(); let clients = authenticatedClients; lock.unlock()
+        for client in clients { try? writeFrame(kind: .packetFromHelper, body: packet, to: client) }
+    }
     private func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
         guard body.count <= Self.maximumFrameBytes else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
         var length = UInt32(body.count).bigEndian; var frame = Data([kind.rawValue]); frame.append(Data(bytes: &length, count: 4)); frame.append(body)
+        writerLock.lock(); defer { writerLock.unlock() }
         var offset = 0
         while offset < frame.count { let count = frame.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset) }; guard count > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }; offset += Int(count) }
     }
