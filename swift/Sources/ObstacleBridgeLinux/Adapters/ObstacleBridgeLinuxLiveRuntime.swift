@@ -154,6 +154,11 @@ private final class ObstacleBridgeLinuxWebSocketLifecycleOwner: ObstacleBridgeLi
 /// Foreground owner for one admitted overlay epoch. All session, retry, and
 /// shutdown work is serialized here so lower transport callbacks cannot revive
 /// a stopped runtime or retain a stale SecureLink epoch.
+public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
+    case interrupt = "SIGINT"
+    case terminate = "SIGTERM"
+}
+
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
 
@@ -320,6 +325,15 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             apply(coordinator.handle(.stop))
             stopRuntimeHealthHeartbeat()
             appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
+        }
+    }
+
+    /// Records the externally observed shutdown cause without accepting
+    /// arbitrary process data into the persisted Admin health projection.
+    public func recordShutdownSignal(_ signal: ObstacleBridgeLinuxShutdownSignal) {
+        queue.sync {
+            guard !stopped else { return }
+            appendRuntimeHealth(event: "shutdown_signal:\(signal.rawValue)")
         }
     }
 

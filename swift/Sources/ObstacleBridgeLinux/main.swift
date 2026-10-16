@@ -235,7 +235,12 @@ enum ObstacleBridgeLinuxMain {
             }
             let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
-            resources.append(contentsOf: installForegroundShutdown(stop: { runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds))
+            resources.append(contentsOf: installForegroundShutdown(
+                stop: { runtime.stop() },
+                recordSignal: runtime.recordShutdownSignal,
+                admin: admin,
+                holdSeconds: options.holdSeconds
+            ))
             withExtendedLifetime(resources) { dispatchMain() }
         } catch {
             writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")
@@ -243,7 +248,12 @@ enum ObstacleBridgeLinuxMain {
         }
     }
 
-    private static func installForegroundShutdown(stop: @escaping () -> Void, admin: ObstacleBridgeLinuxAdminServer?, holdSeconds: Int?) -> [Any] {
+    private static func installForegroundShutdown(
+        stop: @escaping () -> Void,
+        recordSignal: ((ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
+        admin: ObstacleBridgeLinuxAdminServer?,
+        holdSeconds: Int?
+    ) -> [Any] {
         func shutdown() {
             stop()
             admin?.stop()
@@ -254,10 +264,10 @@ enum ObstacleBridgeLinuxMain {
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
         let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        interrupt.setEventHandler { shutdown() }
+        interrupt.setEventHandler { recordSignal?(.interrupt); shutdown() }
         interrupt.resume()
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        terminate.setEventHandler { shutdown() }
+        terminate.setEventHandler { recordSignal?(.terminate); shutdown() }
         terminate.resume()
         resources.append(interrupt)
         resources.append(terminate)

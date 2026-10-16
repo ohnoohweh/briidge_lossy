@@ -255,7 +255,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private func operatorCapabilities() -> [String: Any] {
         let manager = FileManager.default
         let tunPresent = manager.fileExists(atPath: "/dev/net/tun")
-        let effectiveCapabilities = (try? String(contentsOfFile: "/proc/self/status"))?
+        let effectiveCapabilities = (try? String(contentsOfFile: "/proc/self/status", encoding: .utf8))?
             .split(separator: "\n").first(where: { $0.hasPrefix("CapEff:") })?
             .split(separator: "\t").last.flatMap { UInt64($0, radix: 16) } ?? 0
         let netAdmin = effectiveCapabilities & (UInt64(1) << 12) != 0

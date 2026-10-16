@@ -41,6 +41,19 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         next.stop()
     }
 
+    @Test func runtimeHealthRecordsKnownShutdownSignalWithoutCallerText() throws {
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 1)
+        )
+        runtime.start()
+        runtime.recordShutdownSignal(.terminate)
+        #expect(runtime.runtimeHealthRecentRecordsForAdmin().contains(where: {
+            $0.event == "shutdown_signal:SIGTERM" && !$0.controlledStop
+        }))
+        runtime.stop()
+    }
+
     /// Pins the subset of Python's peer lifecycle contract supported by the
     /// Linux Swift foreground runtime.  In particular, transport lifecycle
     /// and SecureLink protocol state are separate fields: an authenticated
