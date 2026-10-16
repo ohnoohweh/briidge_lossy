@@ -26,6 +26,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var underlay: [String: [String: String]] = [:]
     private var appliedDNSServers: [String] = []
     private var appliedFirewallRules: [[String]] = []
+    private var appliedHookPath = ""
     private let stateURL: URL?
 
     public init(packetSink: @escaping PacketSink = { _ in }, stateURL: URL? = nil, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
@@ -89,6 +90,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         let dnsServers = (routing["dns_servers"] as? [String] ?? []).filter { !$0.isEmpty }
         let hookEnvironment = payload["listener_hook_env"] as? [String: Any] ?? [:]
         let wanInterface = (hookEnvironment["WAN_IF"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let hookPath = (payload["hook_path"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !hookPath.isEmpty && !hookPath.hasPrefix("/") { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("hook_path must be an absolute executable path") }
         var firewallRules: [[String]] = []
         var savedUnderlay: [String: [String: String]] = [:]
         func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
@@ -145,7 +148,9 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                 _ = try commandRunner(["resolvectl", "default-route", ifname, "yes"], false)
             }
             for rule in firewallRules { _ = try commandRunner(rule, false) }
+            if !hookPath.isEmpty { _ = try commandRunner([hookPath, "up", ifname], false) }
         } catch {
+            if !hookPath.isEmpty { _ = try? commandRunner([hookPath, "down", ifname], true) }
             _ = try? commandRunner(["resolvectl", "revert", ifname], true)
             for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
             for (family, route) in excluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
@@ -154,21 +159,22 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; appliedHookPath = hookPath; lock.unlock()
         emitEvent("network applied interface=\(ifname)")
         persistState()
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
     public func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] {
-        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; let dnsServers = appliedDNSServers; let firewall = appliedFirewallRules; lock.unlock()
+        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; let dnsServers = appliedDNSServers; let firewall = appliedFirewallRules; let hookPath = appliedHookPath; lock.unlock()
         guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
         for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
         for (family, route) in excluded.reversed() { _ = try commandRunner(["ip", family, "route", "del", route], true) }
         if !dnsServers.isEmpty { _ = try commandRunner(["resolvectl", "revert", ifname], true) }
         for rule in firewall.reversed() { _ = try commandRunner(Self.removeFirewallRule(rule), true) }
+        if !hookPath.isEmpty { _ = try commandRunner([hookPath, "down", ifname], true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
-        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; appliedFirewallRules = []; lock.unlock()
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; appliedFirewallRules = []; appliedHookPath = ""; lock.unlock()
         emitEvent("network removed interface=\(ifname)")
         persistState()
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
@@ -263,6 +269,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             "excluded_routes": excludedRoutes.map { "\($0.0) \($0.1)" },
             "underlay": underlay, "dns_servers": appliedDNSServers,
             "firewall_rules": appliedFirewallRules,
+            "hook_path": appliedHookPath,
         ]) { _, new in new }
     }
 
@@ -276,7 +283,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         case "ip6tables": paths = ["/usr/sbin/ip6tables", "/sbin/ip6tables"]
         default: paths = []
         }
-        guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else {
+        let selectedPaths = command.hasPrefix("/") ? [command] : paths
+        guard let executable = selectedPaths.first(where: FileManager.default.isExecutableFile(atPath:)) else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux helper command is unavailable: \(command)")
         }
         let process = Process(); process.executableURL = URL(fileURLWithPath: executable)

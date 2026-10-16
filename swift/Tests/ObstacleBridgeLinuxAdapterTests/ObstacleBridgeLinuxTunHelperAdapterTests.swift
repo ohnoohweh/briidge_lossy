@@ -203,6 +203,15 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
         #expect(!FileManager.default.fileExists(atPath: path.path))
     }
+
+    @Test func nativeSwiftHelperRunsConfiguredHookAroundPolicyLifecycle() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in commands.append(arguments); return arguments.contains("-j") ? "[]" : "" })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "hook_path": "/opt/obstaclebridge/tun-hook", "tun_routing": [:]])
+        _ = try backend.removeNetwork([:])
+        #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "up", "obtest0"]))
+        #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "down", "obtest0"]))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
