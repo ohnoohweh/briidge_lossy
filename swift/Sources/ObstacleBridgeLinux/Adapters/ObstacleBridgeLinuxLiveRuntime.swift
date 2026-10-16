@@ -165,7 +165,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var statusProjection: ObstacleBridgeLinuxRuntimeStatus
     private var session: ObstacleBridgeLinuxConfiguredSession?
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
-    private var tunDevice: ObstacleBridgeLinuxTunDevice?
+    private var tunDevice: (any ObstacleBridgeLinuxPacketDevice)?
+    private var tunHelperPacketDevice: ObstacleBridgeLinuxTunHelperPacketDevice?
     private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
     private var tunNetworkApplied = false
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
@@ -533,13 +534,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
               channelMux != nil
         else { return }
         let runtime = self
-        let device = try ObstacleBridgeLinuxTunDevice(
-            interfaceName: configuredRuntime.configuration.tunInterfaceName,
-            mtu: plan.mtu,
-            packetSink: { packet in
-                runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) }
-            },
-            diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
+        guard let helper = try configuredRuntime.configuration.makeTunHelperAdapter() else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel startup requires an explicit helper owner")
+        }
+        let device = ObstacleBridgeLinuxTunHelperPacketDevice(
+            adapter: helper,
+            packetSink: { packet in runtime.queue.async { runtime.tunChannelAdapter?.receivedPacketFromDevice(packet) } },
+            eventSink: { detail in runtime.appendRuntimeHealth(event: "tun_helper: \(detail)") }
         )
         let adapter = ObstacleBridgeLinuxOverlayChannelAdapter(
             interfaceName: configuredRuntime.configuration.tunInterfaceName,
@@ -569,8 +570,10 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             diagnosticSink: { event, _ in runtime.appendRuntimeHealth(event: event) }
         )
         tunDevice = device
+        tunHelperPacketDevice = device
         tunChannelAdapter = adapter
         do {
+            _ = try helper.send(command: .openTun, payload: ["ifname": configuredRuntime.configuration.tunInterfaceName, "mtu": plan.mtu])
             try device.start()
             _ = try configuredRuntime.configuration.applyPacketTunnelPlanThroughHelper(interfaceName: configuredRuntime.configuration.tunInterfaceName)
             tunNetworkApplied = true
@@ -586,7 +589,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             _ = try? configuredRuntime.configuration.removePacketTunnelPlanThroughHelper(interfaceName: configuredRuntime.configuration.tunInterfaceName)
             tunNetworkApplied = false
         }
-        tunDevice?.stop()
+        tunHelperPacketDevice?.stop()
+        tunHelperPacketDevice = nil
         tunDevice = nil
     }
 
