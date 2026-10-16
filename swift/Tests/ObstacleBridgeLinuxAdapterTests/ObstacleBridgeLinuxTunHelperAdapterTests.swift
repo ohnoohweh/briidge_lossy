@@ -131,12 +131,25 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         var commands: [[String]] = []
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
             commands.append(arguments)
-            return arguments.contains("-j") ? "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.2\"}]" : ""
+            return arguments == ["ip", "-j", "-4", "route", "show", "default"] ? "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\",\"prefsrc\":\"192.0.2.2\"}]" : "[]"
         })
         _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["excluded_routes": ["203.0.113.9/32"]]])
         #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.1", "dev", "eth0", "src", "192.0.2.2"]))
         _ = try backend.removeNetwork([:])
         #expect(commands.contains(["ip", "-4", "route", "del", "203.0.113.9/32"]))
+    }
+
+    @Test func nativeSwiftHelperRestoresPriorExcludedRouteInsteadOfDeletingIt() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            commands.append(arguments)
+            if arguments == ["ip", "-j", "-4", "route", "show", "default"] { return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]" }
+            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\"}]" }
+            return "[]"
+        })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": ["excluded_routes": ["203.0.113.9/32"]]])
+        _ = try backend.removeNetwork([:])
+        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1"]))
     }
 
     @Test func nativeSwiftHelperEmitsLifecycleEvents() throws {
