@@ -260,8 +260,10 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         defer { backend.stop() }
         _ = try backend.openTun(["ifname": name, "mtu": 1400])
         let interface = try #require(backend.snapshot()["ifname"] as? String)
-        let route = "198.19.0.0/16"
-        let address = "198.18.0.1"
+        // This opt-in test runs concurrently with the basic privileged
+        // route test, so its host policy must not compete for that route.
+        let route = "198.21.0.0/16"
+        let address = "198.20.0.1"
         _ = try backend.applyNetwork(["ifname": interface, "hook_path": hook.path, "tun_routing": [
             "tunnel_address": address, "tunnel_prefix": 24,
             "included_routes": [route], "dns_servers": ["192.0.2.53"],
