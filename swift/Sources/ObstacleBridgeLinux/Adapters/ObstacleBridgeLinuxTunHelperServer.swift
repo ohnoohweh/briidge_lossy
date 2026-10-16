@@ -71,7 +71,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         }
         let bound = withUnsafePointer(to: &address) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         guard bound == 0, listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(code) }
-        _ = chmod(socketPath, 0o600)
+        applySocketOwnership()
         listener = fd; running = true; lastAuthenticatedActivity = Date()
         let watchdog = DispatchSource.makeTimerSource(queue: queue)
         watchdog.schedule(deadline: .now() + authenticatedClientIdleTimeout, repeating: min(authenticatedClientIdleTimeout, 1))
@@ -102,6 +102,16 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             guard client >= 0 else { continue }
             queue.async { [weak self] in self?.handle(client: client) }
         }
+    }
+
+    /// Mirrors Python's SUDO_UID/SUDO_GID handoff: a privileged helper keeps
+    /// its endpoint private to the invoking user, while a directly launched
+    /// helper is owner-only for the current account.
+    private func applySocketOwnership() {
+        let uid = ProcessInfo.processInfo.environment["SUDO_UID"].flatMap { UInt32($0) }.map { uid_t($0) }
+        let gid = ProcessInfo.processInfo.environment["SUDO_GID"].flatMap { UInt32($0) }.map { gid_t($0) }
+        if uid != nil || gid != nil { _ = chown(socketPath, uid ?? uid_t.max, gid ?? gid_t.max) }
+        _ = chmod(socketPath, uid == nil ? 0o600 : 0o660)
     }
 
     private func handle(client: Int32) {
