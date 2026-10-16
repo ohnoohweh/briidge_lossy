@@ -129,7 +129,13 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             case "REMOVE_NETWORK": reply = try backend.removeNetwork(payload)
             case "SET_TUN_ENABLED": reply = try backend.setTunEnabled(payload)
             case "SNAPSHOT": reply = try backend.snapshot()
-            case "STOP": try sendControl("STOP_OK", ["stopping": true], to: client); return
+            case "STOP":
+                try sendControl("STOP_OK", ["stopping": true], to: client)
+                emitEvent("helper stopping")
+                // Match the Python server: acknowledge first, then stop on a
+                // separate task so the client can receive STOP_OK.
+                queue.async { [weak self] in self?.stop() }
+                return
             default: try sendError("unsupported_op", operation, to: client); return
             }
             try sendControl("\(operation)_OK", reply, to: client)

@@ -86,6 +86,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         _ = try adapter.sendPacketToHelper(Data([0x45, 0x00]))
         #expect(backend.waitForPacket())
         #expect(backend.packets == [Data([0x45, 0x00])])
+        #expect(try adapter.send(command: .stop, payload: [:])["stopping"] as? Bool == true)
     }
 }
 
