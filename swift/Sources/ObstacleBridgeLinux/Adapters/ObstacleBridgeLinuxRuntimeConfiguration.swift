@@ -103,13 +103,15 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// Explicit helper-control endpoint. This is admitted independently from
     /// TUN startup: selecting it never opens `/dev/net/tun` in this runtime.
     public let tunHelperSocketPath: String?
+    /// Secret used to authenticate every protocol-v1 helper exchange.
+    public let tunHelperSessionToken: String?
     public let tunInterfaceName: String
     public let packetTunnelEnabled: Bool
     /// Core-derived packet-tunnel policy retained for a future privileged Linux
     /// owner. Its presence never admits packet-device, route, or DNS execution.
     public let packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan?
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -132,6 +134,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.ownServices = ownServices
         self.remoteServices = remoteServices
         self.tunHelperSocketPath = tunHelperSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tunHelperSocketPath : nil
+        self.tunHelperSessionToken = tunHelperSessionToken?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tunHelperSessionToken : nil
         self.tunInterfaceName = tunInterfaceName
         self.packetTunnelEnabled = packetTunnelEnabled
         self.packetTunnelPlan = packetTunnelPlan
@@ -139,7 +142,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
 
     public func makeTunHelperAdapter(timeoutMilliseconds: Int = 2_000) throws -> ObstacleBridgeLinuxTunHelperAdapter? {
         guard let tunHelperSocketPath else { return nil }
-        return try ObstacleBridgeLinuxTunHelperAdapter(socketPath: tunHelperSocketPath, timeoutMilliseconds: timeoutMilliseconds)
+        guard let tunHelperSessionToken else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux TUN helper session token is required")
+        }
+        return try ObstacleBridgeLinuxTunHelperAdapter(socketPath: tunHelperSocketPath, sessionToken: tunHelperSessionToken, timeoutMilliseconds: timeoutMilliseconds)
     }
 
     /// Delegates an enabled Core plan only to the explicitly configured helper.
@@ -203,13 +209,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("tun_execution.tun_execution_mode must be inline or helper")
         }
         let tunHelperSocket = tunMode == "helper" ? string(tunExecution["tun_helper_socket"]) : nil
+        let tunHelperSessionToken = tunMode == "helper" ? string(tunExecution["tun_helper_session_token"]) : nil
         let tunInterfaceName = string(tunExecution["tun_interface_name"]) ?? "obtun0"
         let tunRouting = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: root)
         if let route = tunRouting.invalidRoute {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config has invalid TUN route \(route)")
         }
-        if tunRouting.enabledOnStartup, tunHelperSocket == nil {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")
+        if tunRouting.enabledOnStartup, tunHelperSocket == nil || tunHelperSessionToken == nil {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN requires an explicit helper socket and session token; no unauthenticated Python fallback is used")
         }
         let packetTunnelPlan = ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: root)
         let proxy = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("proxy_provider", from: root)
@@ -327,7 +334,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             compressionPolicy: compressionPolicy,
             ownServices: try serviceSpecs(root, key: "own_servers"),
             remoteServices: try serviceSpecs(root, key: "remote_servers"),
-            tunHelperSocketPath: tunHelperSocket, tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan
+            tunHelperSocketPath: tunHelperSocket, tunHelperSessionToken: tunHelperSessionToken, tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan
         )
     }
 

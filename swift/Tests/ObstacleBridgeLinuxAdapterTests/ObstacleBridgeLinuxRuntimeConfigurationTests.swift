@@ -8,7 +8,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
             "runner": ["overlay_transport": "tcp"],
             "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4433],
-            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_socket": "/run/obstaclebridge/helper.sock"],
+            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_socket": "/run/obstaclebridge/helper.sock", "tun_helper_session_token": "test-helper-token"],
         ]))
         #expect(config.tunHelperSocketPath == "/run/obstaclebridge/helper.sock")
         #expect(try config.makeTunHelperAdapter() != nil)
@@ -286,7 +286,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
                 "secure_link": ["secure_link_mode": "psk"],
             ]))
         }
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN is unavailable until LSW-005 delivers the /dev/net/tun adapter; no Python fallback is used")) {
+        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN requires an explicit helper socket and session token; no unauthenticated Python fallback is used")) {
             try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
                 "runner": ["overlay_transport": "tcp"],
                 "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
@@ -408,7 +408,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         let data = try JSONSerialization.data(withJSONObject: [
             "runner": ["overlay_transport": "tcp"],
             "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443],
-            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_socket": "/tmp/obstaclebridge-helper.sock"],
+            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_socket": "/tmp/obstaclebridge-helper.sock", "tun_helper_session_token": "test-helper-token"],
             "TUN_routing": ["enabled_on_startup": true],
         ])
         let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: data)
@@ -418,17 +418,21 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
     }
 
     @Test func coreConfigurationPortPublishesSecretMetadataAndRedactsValues() throws {
-        #expect(ObstacleBridgeRuntimeConfigPort.secretKeys() == Set(["admin_web_password", "secure_link_psk"]))
+        #expect(ObstacleBridgeRuntimeConfigPort.secretKeys() == Set(["admin_web_password", "secure_link_psk", "tun_helper_session_token"]))
         let redacted = ObstacleBridgeRuntimeConfigPort.redactedConfiguration([
             "admin_web": ["admin_web_password": "admin-secret"],
             "secure_link": ["secure_link_psk": "link-secret"],
+            "tun_execution": ["tun_helper_session_token": "helper-secret"],
         ])
         let admin = try #require(redacted["admin_web"] as? [String: Any])
         let secure = try #require(redacted["secure_link"] as? [String: Any])
+        let tunExecution = try #require(redacted["tun_execution"] as? [String: Any])
         #expect(admin["admin_web_password"] as? String == "***hidden***")
         #expect(admin["admin_web_password_present"] as? Bool == true)
         #expect(secure["secure_link_psk"] as? String == "***hidden***")
         #expect(secure["secure_link_psk_present"] as? Bool == true)
+        #expect(tunExecution["tun_helper_session_token"] as? String == "***hidden***")
+        #expect(tunExecution["tun_helper_session_token_present"] as? Bool == true)
     }
 
     @Test func coreBootstrapSelectsLinuxClientTransportAndLayers() throws {
