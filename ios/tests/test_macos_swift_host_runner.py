@@ -310,6 +310,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     service = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift").read_text(encoding="utf-8")
     xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
     helper_main = (APP_NATIVE_DIR / "ObstacleBridgeTunPrivilegedHelperMain.swift").read_text(encoding="utf-8")
+    protocol_v1 = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperProtocolV1.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
 
     assert 'helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"' in service
@@ -350,6 +351,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'result["xpc_runtime"] = runtime' in service
     assert "ObstacleBridgeTunHelperXPC.ping(machServiceName: xpcMachServiceName)" in service
     assert '"helper_pid": ProcessInfo.processInfo.processIdentifier' in xpc_source
+    assert '"python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version' in xpc_source
     assert "registerSkeletonResult(appBundleURL:" in service
     assert "startSkeletonResult(appBundleURL:" in service
     assert "stopSkeletonResult(appBundleURL:" in service
@@ -373,10 +375,13 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeMacOSTunHelperService.expectedHelperVersion" in helper_main
     assert "ObstacleBridgeTunHelperCommand.allCases.map" in helper_main
     assert "ObstacleBridgeTunHelperFrameKind.allCases.map" in helper_main
+    assert '"python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version' in helper_main
     assert "runXPCListener()" in helper_main
     assert "NSXPCListener(machServiceName: ObstacleBridgeMacOSTunHelperService.xpcMachServiceName)" in helper_main
     assert "ObstacleBridgeTunHelperXPCListenerDelegate()" in helper_main
     assert "dispatchMain()" in helper_main
+    assert "public enum ObstacleBridgeTunHelperProtocolV1" in protocol_v1
+    assert "case controlRequest = 1" in protocol_v1
 
     assert "@objc protocol ObstacleBridgeTunHelperXPCServicing" in xpc_source
     assert "@objc protocol ObstacleBridgeTunHelperXPCClientCallbacks" in xpc_source
@@ -1495,6 +1500,7 @@ def _compile_swift_tun_helper_contract_probe(source_path: Path, binary_path: Pat
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift"),
+            str(CORE_SWIFT_DIR / "ObstacleBridgeTunHelperProtocolV1.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift"),
         str(source_path),

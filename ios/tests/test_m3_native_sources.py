@@ -893,6 +893,7 @@ def test_macos_app_main_source_exists() -> None:
     runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     macos_tun = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift").read_text(encoding="utf-8")
     tun_helper_contract = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+    tun_helper_protocol = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperProtocolV1.swift").read_text(encoding="utf-8")
     macos_helper_client = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
 
     assert "@main" in app_main
@@ -928,9 +929,11 @@ def test_macos_app_main_source_exists() -> None:
     assert "ObstacleBridgeMacAppMain.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter.swift" in build_script
     assert "ObstacleBridgeTunHelperContract.swift" in build_script
+    assert "ObstacleBridgeTunHelperProtocolV1.swift" in build_script
     assert "ObstacleBridgeMacOSTunHelperClient.swift" in build_script
     assert "ObstacleBridgeMacOSTunAdapter" in macos_helper_client
     assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
+    assert "ObstacleBridgeTunHelperProtocolV1" in tun_helper_protocol
     assert "ObstacleBridgeMacOSTunHelperService.swift" in build_script
     assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
     assert "ObstacleBridgeTunHelper" in build_script

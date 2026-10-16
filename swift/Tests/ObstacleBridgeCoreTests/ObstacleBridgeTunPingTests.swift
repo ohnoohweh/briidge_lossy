@@ -3,6 +3,16 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeTunPingTests {
+    @Test func protocolV1FramesAndControlsRemainPythonCompatible() throws {
+        let control = try ObstacleBridgeTunHelperProtocolV1.control(operation: "HELLO", payload: ["token": "test-token"])
+        let frame = try ObstacleBridgeTunHelperProtocolV1.frame(kind: .controlRequest, body: control)
+        let header = try ObstacleBridgeTunHelperProtocolV1.header(Data(frame.prefix(ObstacleBridgeTunHelperProtocolV1.headerBytes)))
+        #expect(header.kind == .controlRequest)
+        #expect(header.bodyLength == control.count)
+        let decoded = try ObstacleBridgeTunHelperProtocolV1.decodeControl(Data(frame.dropFirst(ObstacleBridgeTunHelperProtocolV1.headerBytes)))
+        #expect(decoded.operation == "HELLO")
+        #expect(decoded.payload["token"] as? String == "test-token")
+    }
     @Test func buildsBoundedIPv4ProbePacket() throws {
         let payload = ObstacleBridgeTunPing.probePayload(
             probeKind: ObstacleBridgeTunPing.probeKindPeer,

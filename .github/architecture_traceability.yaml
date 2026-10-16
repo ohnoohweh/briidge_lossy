@@ -464,6 +464,7 @@ ARC-CMP-004:
     - tests/unit/test_swift_tun_helper.py::test_dirty_checkout_rebuilds_even_when_embedded_identity_matches
     - tests/unit/test_swift_tun_helper.py::test_clean_matching_checkout_reuses_embedded_artifact
     - tests/unit/test_swift_tun_helper.py::test_embedded_identity_is_read_from_binary_protocol
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1FramesAndControlsRemainPythonCompatible
     - tests/unit/test_tun_helper_linux_backend.py::test_apply_network_can_start_with_included_routes_suspended_and_toggle_later
     - tests/unit/test_stream_peer_rotation.py::test_tcp_reconnect_cleanup_survives_stopped_event_loop
     - tests/unit/test_stream_peer_rotation.py::test_ws_reconnect_cleanup_survives_stopped_event_loop

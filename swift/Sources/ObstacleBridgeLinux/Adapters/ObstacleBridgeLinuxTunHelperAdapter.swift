@@ -4,6 +4,8 @@ import ObstacleBridgeCore
 import Glibc
 #endif
 
+fileprivate typealias ObstacleBridgeLinuxTunHelperFrameKind = ObstacleBridgeTunHelperProtocolV1.FrameKind
+
 /// Failure boundary for the Linux-only helper IPC owner. This adapter never
 /// opens `/dev/net/tun`, applies routes, or executes hooks; those privileged
 /// actions remain behind the explicitly selected local helper endpoint.
@@ -80,9 +82,7 @@ public final class ObstacleBridgeLinuxTunHelperPacketDevice: ObstacleBridgeLinux
 /// This deliberately matches `bridge_tun_helper_protocol.py`; it is not the
 /// XPC-shaped Core helper envelope, which is a separate in-process contract.
 public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
-    public static let maximumFrameBytes = 1_048_576
-    private static let protocolVersion = 1
-    fileprivate enum FrameKind: UInt8 { case controlRequest = 1, controlResponse = 2, packetFromHelper = 3, packetToHelper = 4, event = 5 }
+    public static let maximumFrameBytes = ObstacleBridgeTunHelperProtocolV1.maximumFrameBytes
 
     public let socketPath: String
     public let sessionToken: String
@@ -174,21 +174,20 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     }
 
     private func writeControl(operation: String, payload: [String: Any], to fd: Int32) throws {
-        let request: [String: Any] = ["version": Self.protocolVersion, "op": operation, "payload": payload]
         let body: Data
-        do { body = try JSONSerialization.data(withJSONObject: request, options: [.sortedKeys]) }
+        do { body = try ObstacleBridgeTunHelperProtocolV1.control(operation: operation, payload: payload) }
         catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("unable to encode Linux TUN helper request") }
         try writeFrame(kind: .controlRequest, body: body, to: fd)
     }
 
     private func readControlResponse(expectedOperation: String, from fd: Int32) throws -> [String: Any] {
         let (kind, body) = try readFrame(from: fd)
-        guard kind == .controlResponse,
-              let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
-              object["version"] as? Int == Self.protocolVersion,
-              let operation = object["op"] as? String,
-              let payload = object["payload"] as? [String: Any]
-        else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned malformed protocol-v1 response") }
+        guard kind == .controlResponse else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned malformed protocol-v1 response") }
+        let control: (operation: String, payload: [String: Any])
+        do { control = try ObstacleBridgeTunHelperProtocolV1.decodeControl(body) }
+        catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned malformed protocol-v1 response") }
+        let operation = control.operation
+        let payload = control.payload
         if operation == "ERROR" {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper rejected \(expectedOperation): \(payload["detail"] as? String ?? "unspecified error")")
         }
@@ -222,19 +221,18 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         return fd
     }
 
-    fileprivate func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
-        guard body.count <= Self.maximumFrameBytes else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
-        var length = UInt32(body.count).bigEndian
-        var wire = Data([kind.rawValue]); wire.append(Data(bytes: &length, count: MemoryLayout<UInt32>.size)); wire.append(body)
-        try writeAll(wire, to: fd)
+    fileprivate func writeFrame(kind: ObstacleBridgeLinuxTunHelperFrameKind, body: Data, to fd: Int32) throws {
+        do { try writeAll(try ObstacleBridgeTunHelperProtocolV1.frame(kind: kind, body: body), to: fd) }
+        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
     }
 
-    fileprivate func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
-        let header = try readExactly(5, from: fd)
-        guard let kind = FrameKind(rawValue: header[header.startIndex]) else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unknown frame kind") }
-        let length = header.dropFirst().reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-        guard length <= UInt32(Self.maximumFrameBytes) else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
-        return (kind, try readExactly(Int(length), from: fd))
+    fileprivate func readFrame(from fd: Int32) throws -> (ObstacleBridgeLinuxTunHelperFrameKind, Data) {
+        let wireHeader = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, from: fd)
+        let parsed: (kind: ObstacleBridgeLinuxTunHelperFrameKind, bodyLength: Int)
+        do { parsed = try ObstacleBridgeTunHelperProtocolV1.header(wireHeader) }
+        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+        catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unknown frame kind") }
+        return (parsed.kind, try readExactly(parsed.bodyLength, from: fd))
     }
 
     private func writeAll(_ data: Data, to fd: Int32) throws {

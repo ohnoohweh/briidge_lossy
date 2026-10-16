@@ -23,6 +23,7 @@ enum ObstacleBridgeTunPrivilegedHelperMain {
             "bundle_identifier": ObstacleBridgeMacOSTunHelperService.helperBundleIdentifier,
             "executable_name": ObstacleBridgeMacOSTunHelperService.helperExecutableName,
             "helper_version": ObstacleBridgeMacOSTunHelperService.expectedHelperVersion,
+            "python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version,
             "supported_commands": ObstacleBridgeTunHelperCommand.allCases.map { $0.rawValue },
             "supported_frame_kinds": ObstacleBridgeTunHelperFrameKind.allCases.map { $0.rawValue },
         ]

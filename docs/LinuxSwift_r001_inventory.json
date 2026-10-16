@@ -87,6 +87,7 @@
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallengePolicy.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallenge.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift",
+        "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperProtocolV1.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift",
         "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeRuntime.swift",
         "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeConfigSecretCodec.swift",

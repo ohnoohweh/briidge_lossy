@@ -32,8 +32,8 @@ public extension ObstacleBridgeLinuxTunHelperServerBackend {
 /// lifecycle remains deliberately incomplete, so callers cannot mistake it
 /// for full replacement parity yet.
 public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
-    private enum FrameKind: UInt8 { case controlRequest = 1, controlResponse = 2, packetFromHelper = 3, packetToHelper = 4, event = 5 }
-    private static let version = 1
+    private typealias FrameKind = ObstacleBridgeTunHelperProtocolV1.FrameKind
+    private static let version = ObstacleBridgeTunHelperProtocolV1.version
     private static let maximumFrameBytes = ObstacleBridgeLinuxTunHelperAdapter.maximumFrameBytes
 
     public let socketPath: String
@@ -181,12 +181,11 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     }
 
     private func decodeControl(_ body: Data) -> (operation: String, payload: [String: Any])? {
-        guard let value = try? JSONSerialization.jsonObject(with: body) as? [String: Any], value["version"] as? Int == Self.version, let operation = value["op"] as? String, let payload = value["payload"] as? [String: Any] else { return nil }
-        return (operation, payload)
+        try? ObstacleBridgeTunHelperProtocolV1.decodeControl(body)
     }
     private func sendError(_ code: String, _ detail: String, to fd: Int32) throws { try sendControl("ERROR", ["code": code, "detail": detail], to: fd) }
     private func sendControl(_ operation: String, _ payload: [String: Any], to fd: Int32) throws {
-        let body = try JSONSerialization.data(withJSONObject: ["version": Self.version, "op": operation, "payload": payload], options: [.sortedKeys])
+        let body = try ObstacleBridgeTunHelperProtocolV1.control(operation: operation, payload: payload)
         try writeFrame(kind: .controlResponse, body: body, to: fd)
     }
     /// Packet and event producers use this fan-out path; only clients that
@@ -203,8 +202,9 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         for client in clients { try? writeFrame(kind: .event, body: body, to: client) }
     }
     private func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
-        guard body.count <= Self.maximumFrameBytes else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
-        var length = UInt32(body.count).bigEndian; var frame = Data([kind.rawValue]); frame.append(Data(bytes: &length, count: 4)); frame.append(body)
+        let frame: Data
+        do { frame = try ObstacleBridgeTunHelperProtocolV1.frame(kind: kind, body: body) }
+        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
         writerLock.lock(); defer { writerLock.unlock() }
         var offset = 0
         while offset < frame.count {
@@ -220,11 +220,12 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         }
     }
     private func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
-        let header = try readExactly(5, from: fd)
-        guard let kind = FrameKind(rawValue: header[header.startIndex]) else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("unknown frame kind") }
-        let length = header.dropFirst().reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }
-        guard length <= UInt32(Self.maximumFrameBytes) else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
-        return (kind, try readExactly(Int(length), from: fd))
+        let wireHeader = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, from: fd)
+        let parsed: (kind: FrameKind, bodyLength: Int)
+        do { parsed = try ObstacleBridgeTunHelperProtocolV1.header(wireHeader) }
+        catch ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
+        catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("unknown frame kind") }
+        return (parsed.kind, try readExactly(parsed.bodyLength, from: fd))
     }
     private func readExactly(_ count: Int, from fd: Int32) throws -> Data {
         var result = Data(); var buffer = [UInt8](repeating: 0, count: min(8192, max(1, count)))

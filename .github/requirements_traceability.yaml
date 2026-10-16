@@ -1013,6 +1013,7 @@ REQ-LIFE-010:
     - tests/unit/test_swift_tun_helper.py::test_dirty_checkout_rebuilds_even_when_embedded_identity_matches
     - tests/unit/test_swift_tun_helper.py::test_clean_matching_checkout_reuses_embedded_artifact
     - tests/unit/test_swift_tun_helper.py::test_embedded_identity_is_read_from_binary_protocol
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1FramesAndControlsRemainPythonCompatible
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
     - tests/unit/test_runner_tun_helper.py::test_runner_attaches_to_prestarted_tun_helper_from_env_config
     - tests/unit/test_runner_tun_helper.py::test_stop_tun_helper_process_is_noop_for_prestarted_helper
