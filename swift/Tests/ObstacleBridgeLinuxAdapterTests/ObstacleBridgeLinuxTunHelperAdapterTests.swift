@@ -72,6 +72,35 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(throws: (any Error).self) { try adapter.send(command: .snapshot, payload: [:]) }
         #expect(peer.operations.isEmpty)
     }
+
+    @Test func swiftHelperServerAcceptsProtocolV1AuthenticatedControl() throws {
+        let backend = SwiftHelperBackend()
+        let path = "/tmp/obstaclebridge-swift-helper-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
+        try server.start(); defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true]]))
+        #expect(try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")["applied"] as? Bool == true)
+        #expect(try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")["removed"] as? Bool == true)
+        #expect(try adapter.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
+        _ = try adapter.sendPacketToHelper(Data([0x45, 0x00]))
+        #expect(backend.waitForPacket())
+        #expect(backend.packets == [Data([0x45, 0x00])])
+    }
+}
+
+private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
+    private let lock = NSLock(); private var receivedPackets: [Data] = []
+    private let receivedPacket = DispatchSemaphore(value: 0)
+    var packets: [Data] { lock.lock(); defer { lock.unlock() }; return receivedPackets }
+    func openTun(_ payload: [String: Any]) throws -> [String: Any] { ["opened": true] }
+    func applyNetwork(_ payload: [String: Any]) throws -> [String: Any] { ["applied": true] }
+    func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] { ["removed": true] }
+    func setTunEnabled(_ payload: [String: Any]) throws -> [String: Any] { ["enabled": true] }
+    func writePacket(_ packet: Data) throws { lock.lock(); receivedPackets.append(packet); lock.unlock(); receivedPacket.signal() }
+    func waitForPacket() -> Bool { receivedPacket.wait(timeout: .now() + 1) == .success }
+    func snapshot() throws -> [String: Any] { ["backend": "swift-test"] }
+    func stop() {}
 }
 
 private final class PythonTunHelperPeer {
