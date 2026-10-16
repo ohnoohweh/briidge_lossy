@@ -169,7 +169,9 @@ struct ObstacleBridgeLinuxAdminServerTests {
 
     @Test func liveStatusCorrelatesRedactedResourceHealth() async throws {
         let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
-            transport: .tcp, host: "127.0.0.1", port: 1
+            transport: .tcp, host: "127.0.0.1", port: 1,
+            tunHelperSocketPath: "/tmp/obstaclebridge-helper-control.sock",
+            tunHelperSessionToken: "never-expose-helper-token"
         ))
         let server = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime)
         try server.start()
@@ -179,13 +181,16 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let packetTunnel = try #require(resources["packet_tunnel"] as? [String: Any])
         let serviceSockets = try #require(resources["service_sockets"] as? [String: Any])
         #expect(packetTunnel["configured"] as? Bool == false)
-        #expect(packetTunnel["helper_configured"] as? Bool == false)
+        #expect(packetTunnel["helper_configured"] as? Bool == true)
         #expect(packetTunnel["managed_helper_running"] as? Bool == false)
         #expect(packetTunnel["device_open"] as? Bool == false)
         #expect(packetTunnel["network_policy_applied"] as? Bool == false)
         #expect(serviceSockets["configured_local"] as? Int == 0)
         #expect(serviceSockets["active_local"] as? Int == 0)
         #expect(serviceSockets["active_remote"] as? Int == 0)
+        let serialized = String(decoding: try JSONSerialization.data(withJSONObject: status), as: UTF8.self)
+        #expect(!serialized.contains("obstaclebridge-helper-control.sock"))
+        #expect(!serialized.contains("never-expose-helper-token"))
     }
 
     @Test func peerProjectionUsesCoreCountersAndNeverSerializesPSK() async throws {
