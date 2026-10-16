@@ -46,6 +46,18 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(routing["dns_servers"] as? [String] == ["1.1.1.1"])
     }
 
+    @Test func realPythonHelperAcceptsAuthenticatedSwiftApplyAndRemove() throws {
+        let helper = try PythonTunHelperPeer(); defer { helper.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: helper.path, sessionToken: helper.token)
+        let plan = try #require(ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: ["TUN_routing": ["enabled_on_startup": true, "mtu": 1400]]))
+        let applied = try adapter.apply(packetTunnelPlan: plan, interfaceName: "obtest0")
+        #expect(applied["applied"] as? Bool == true)
+        #expect(applied["backend"] as? String == "linux-python-memory")
+        let removed = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
+        #expect(removed["removed"] as? Bool == true)
+        #expect(removed["backend"] as? String == "linux-python-memory")
+    }
+
     @Test func helperApplyFailureRequestsRollbackOnFreshAuthenticatedExchange() throws {
         let peer = try UnixHelperPeer(connectionCount: 2, disconnectFirstCommandReply: true); defer { peer.stop() }
         let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path, sessionToken: peer.token)
@@ -60,6 +72,38 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(throws: (any Error).self) { try adapter.send(command: .snapshot, payload: [:]) }
         #expect(peer.operations.isEmpty)
     }
+}
+
+private final class PythonTunHelperPeer {
+    let path = "/tmp/obstaclebridge-python-helper-\(UUID().uuidString).sock"
+    let token = "swift-linux-helper-token"
+    private let process = Process()
+
+    init() throws {
+        let workingDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        let projectRoot = FileManager.default.fileExists(atPath: workingDirectory.appendingPathComponent("src").path) ? workingDirectory : workingDirectory.deletingLastPathComponent()
+        let python = [projectRoot.appendingPathComponent(".venv/bin/python").path, "/usr/bin/python3"].first(where: FileManager.default.isExecutableFile(atPath:))!
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-m", "obstacle_bridge.bridge_tun_helper_server", "--socket-path", path, "--session-token", token, "--backend", "linux-python"]
+        var environment = ProcessInfo.processInfo.environment
+        environment["PYTHONPATH"] = projectRoot.appendingPathComponent("src").path
+        process.environment = environment
+        process.standardOutput = Pipe(); process.standardError = Pipe()
+        try process.run()
+        let deadline = Date().addingTimeInterval(2)
+        while !FileManager.default.fileExists(atPath: path), process.isRunning, Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        guard FileManager.default.fileExists(atPath: path) else { stop(); throw PeerError.didNotStart }
+    }
+
+    func stop() {
+        // The helper CLI waits for a process signal after listener shutdown.
+        // This test owns the child, so terminate it deterministically.
+        if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
+        try? FileManager.default.removeItem(atPath: path)
+    }
+
+    private enum PeerError: Error { case didNotStart }
 }
 
 private final class UnixHelperPeer: @unchecked Sendable {
