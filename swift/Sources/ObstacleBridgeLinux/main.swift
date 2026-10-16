@@ -56,8 +56,10 @@ enum ObstacleBridgeLinuxMain {
         config shape and Linux transport admission without exposing secrets.
         --runtime-probe is a bounded diagnostic. --run owns a long-lived
         admitted transport, SecureLink epoch, reconnect lifecycle, and
-        redacted local Admin API. ChannelMux service routing and TUN remain
-        unavailable until their dedicated work packages are delivered.
+        redacted local Admin API. ChannelMux service routing is qualified by
+        its dedicated package. TUN startup requires an explicitly configured,
+        authenticated privileged helper; native route/DNS/hook qualification
+        remains tracked in LSW-006.
         """)
     }
 
