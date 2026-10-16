@@ -98,6 +98,23 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
         #expect(!FileManager.default.fileExists(atPath: path))
     }
+
+    @Test func nativeSwiftHelperAppliesAndRollsBackAddressesAndRoutesThroughArgvOnlyCommands() throws {
+        let lock = NSLock(); var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            lock.lock(); commands.append(arguments); lock.unlock(); return ""
+        })
+        let payload: [String: Any] = ["ifname": "obtest0", "tun_routing": [
+            "mtu": 1400, "tunnel_address": "198.18.0.1", "tunnel_prefix": 24,
+            "included_routes": ["10.0.0.0/8"],
+        ]]
+        #expect(try backend.applyNetwork(payload)["applied"] as? Bool == true)
+        #expect(try backend.removeNetwork(payload)["removed"] as? Bool == true)
+        lock.lock(); let recorded = commands; lock.unlock()
+        #expect(recorded.contains(["ip", "-4", "addr", "replace", "198.18.0.1/24", "dev", "obtest0"]))
+        #expect(recorded.contains(["ip", "-4", "route", "replace", "10.0.0.0/8", "dev", "obtest0"]))
+        #expect(recorded.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

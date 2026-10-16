@@ -241,7 +241,7 @@ public final class ObstacleBridgeLinuxTunDevice: ObstacleBridgeLinuxPacketDevice
     }
 #endif
 
-    private static func isValidInterfaceName(_ value: String) -> Bool {
+    public static func isValidInterfaceName(_ value: String) -> Bool {
         let bytes = Array(value.utf8)
         return !bytes.isEmpty && bytes.count < interfaceNameCapacity && bytes.allSatisfy {
             ($0 >= 48 && $0 <= 57) || ($0 >= 65 && $0 <= 90) || ($0 >= 97 && $0 <= 122) || $0 == 46 || $0 == 45 || $0 == 95

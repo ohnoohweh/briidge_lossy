@@ -6,6 +6,9 @@ import Foundation
 /// route/DNS/firewall/hook lifecycle can be implemented equivalently.
 public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
     public typealias PacketSink = (Data) -> Void
+    /// Injectable command boundary keeps privileged host mutation out of unit
+    /// tests while production uses argv-only Process execution.
+    public typealias CommandRunner = (_ arguments: [String], _ allowFailure: Bool) throws -> String
     private let lock = NSLock()
     private var packetSink: PacketSink
     private var device: ObstacleBridgeLinuxTunDevice?
@@ -13,8 +16,14 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var packetsToRuntime = 0
     private var lastFailure: [String: Any] = [:]
     private var tunEnabled = true
+    private let commandRunner: CommandRunner
+    private var appliedInterface = ""
+    private var appliedAddresses: [(String, String)] = []
+    private var appliedRoutes: [(String, String)] = []
 
-    public init(packetSink: @escaping PacketSink = { _ in }) { self.packetSink = packetSink }
+    public init(packetSink: @escaping PacketSink = { _ in }, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
+        self.packetSink = packetSink; self.commandRunner = commandRunner
+    }
 
     public func setPacketSink(_ sink: @escaping PacketSink) { lock.lock(); packetSink = sink; lock.unlock() }
 
@@ -37,11 +46,47 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     }
 
     public func applyNetwork(_ payload: [String: Any]) throws -> [String: Any] {
-        throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Swift native helper network policy is not implemented; refusing route, DNS, firewall, and hook mutation")
+        guard let ifname = payload["ifname"] as? String, ObstacleBridgeLinuxTunDevice.isValidInterfaceName(ifname),
+              let routing = payload["tun_routing"] as? [String: Any] else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("APPLY_NETWORK requires a valid interface and tunnel-routing plan")
+        }
+        guard appliedInterface.isEmpty || appliedInterface == ifname else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Swift native helper refuses to replace another helper-owned interface")
+        }
+        let mtu = (routing["mtu"] as? Int) ?? 1_500
+        var addresses: [(String, String)] = []
+        var routes: [(String, String)] = []
+        func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
+            guard let address = routing[addressKey] as? String, !address.isEmpty else { return nil }
+            guard let prefix = routing[prefixKey] as? Int, prefix > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("APPLY_NETWORK has an invalid \(addressKey) prefix") }
+            return "\(address)/\(prefix)"
+        }
+        if let cidr = try cidr("tunnel_address", "tunnel_prefix", "-4") { addresses.append(("-4", cidr)) }
+        if let cidr = try cidr("tunnel_address6", "tunnel_prefix6", "-6") { addresses.append(("-6", cidr)) }
+        for (family, key) in [("-4", "included_routes"), ("-6", "included_routes6")] {
+            for route in (routing[key] as? [String] ?? []) where !route.isEmpty { routes.append((family, route)) }
+        }
+        do {
+            _ = try commandRunner(["ip", "link", "set", "dev", ifname, "up", "mtu", String(mtu)], false)
+            for (family, cidr) in addresses { _ = try commandRunner(["ip", family, "addr", "replace", cidr, "dev", ifname], false) }
+            if tunEnabled { for (family, route) in routes { _ = try commandRunner(["ip", family, "route", "replace", route, "dev", ifname], false) } }
+        } catch {
+            for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+            for (family, cidr) in addresses.reversed() { _ = try? commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
+            recordFailure(stage: "apply_network", error: error.localizedDescription)
+            throw error
+        }
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; appliedRoutes = tunEnabled ? routes : []; lock.unlock()
+        return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
     public func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] {
-        throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Swift native helper network policy is not implemented; refusing route, DNS, firewall, and hook mutation")
+        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; lock.unlock()
+        guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
+        for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
+        for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; lock.unlock()
+        return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
     }
 
     public func setTunEnabled(_ payload: [String: Any]) throws -> [String: Any] {
@@ -76,6 +121,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     }
 
     public func stop() {
+        _ = try? removeNetwork([:])
         lock.lock(); let device = self.device; self.device = nil; lock.unlock()
         device?.stop()
     }
@@ -88,4 +134,14 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled]
     }
     private func closedSnapshotLocked() -> [String: Any] { ["backend": "linux-swift-native", "opened": false, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled] }
+
+    public static func runProcess(_ arguments: [String], _ allowFailure: Bool) throws -> String {
+        let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/sbin/ip")
+        process.arguments = Array(arguments.dropFirst())
+        let stdout = Pipe(); let stderr = Pipe(); process.standardOutput = stdout; process.standardError = stderr
+        try process.run(); process.waitUntilExit()
+        let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        if process.terminationStatus != 0 && !allowFailure { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux helper command failed: \(arguments.joined(separator: " "))") }
+        return output
+    }
 }
