@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Mapping
 
 from .bridge_tun_helper_client import _open_local_helper_connection
-from .bridge_swift_tun_helper import ensure_linux_swift_tun_helper, is_linux_swift_backend
+from .bridge_swift_tun_helper import ensure_darwin_swift_tun_helper, ensure_linux_swift_tun_helper, is_darwin_swift_backend, is_linux_swift_backend
 from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, TelemetrySpool
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
@@ -1144,9 +1144,10 @@ class Runner:
         env["PYTHONPATH"] = repo_src if not existing_pythonpath else os.pathsep.join([repo_src, existing_pythonpath])
         backend_name = str(self._tun_helper_settings.helper_backend or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
         swift_linux = is_linux_swift_backend(backend_name)
+        swift_darwin = is_darwin_swift_backend(backend_name)
         helper_executable = self._tun_helper_executable()
-        if swift_linux:
-            helper_executable = ensure_linux_swift_tun_helper()
+        if swift_linux or swift_darwin:
+            helper_executable = ensure_linux_swift_tun_helper() if swift_linux else ensure_darwin_swift_tun_helper()
             module_argv = [
                 helper_executable,
                 "--tun-helper-server",
@@ -1174,7 +1175,7 @@ class Runner:
         )
         needs_darwin_helper_privilege = bool(
             sys.platform.startswith("darwin")
-            and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}
+            and (backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"} or swift_darwin)
             and callable(geteuid)
             and int(geteuid()) != 0
         )
@@ -1306,7 +1307,7 @@ class Runner:
         )
         needs_darwin_helper_privilege = bool(
             sys.platform.startswith("darwin")
-            and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}
+            and (backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"} or is_darwin_swift_backend(backend_name))
             and callable(geteuid)
             and int(geteuid()) != 0
         )
@@ -1327,7 +1328,7 @@ class Runner:
         backend_name = str(getattr(settings, "helper_backend", "") or DEFAULT_TUN_HELPER_BACKEND).strip().lower()
         if sys.platform.startswith("win") and backend_name in {"windows-native", "windows_native", "wintun-native", "wintun_native"}:
             return 20.0
-        if sys.platform.startswith("darwin") and backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"}:
+        if sys.platform.startswith("darwin") and (backend_name in {"darwin-native", "darwin_native", "macos-native", "macos_native"} or is_darwin_swift_backend(backend_name)):
             # Creating and bringing up utun can take longer than the generic
             # local IPC budget. Do not abandon OPEN_TUN before APPLY_NETWORK.
             return 10.0

@@ -93,7 +93,7 @@ class TunExecutionSettings:
         group.add_argument(
             "--tun-helper-backend",
             default=DEFAULT_TUN_HELPER_BACKEND,
-            help="Helper backend identifier for helper mode. Values include linux-native, linux-swift, linux-python, darwin-native, and windows-native.",
+            help="Helper backend identifier for helper mode. Values include linux-native, linux-swift, linux-python, darwin-native, darwin-swift, and windows-native.",
         )
         group.add_argument(
             "--tun-helper-socket",

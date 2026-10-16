@@ -217,6 +217,7 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
 "${SWIFTC_CMD}" \
   "${SWIFT_EXTRA_FLAGS_EXPANDED[@]}" \
   -o "${HELPER_BINARY_PATH}" \
+  "${GENERATED_BUILD_STAMP_SWIFT}" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperService.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperProtocolV1.swift" \

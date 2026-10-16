@@ -15,6 +15,10 @@ enum ObstacleBridgeTunPrivilegedHelperMain {
             print("ObstacleBridgeTunHelper skeleton 1")
             return
         }
+        if args.contains("--helper-build-info") {
+            writeBuildInfoJSON()
+            return
+        }
         if args.contains("--status-json") {
             writeStatusJSON()
             return
@@ -29,7 +33,7 @@ enum ObstacleBridgeTunPrivilegedHelperMain {
             "bundle_identifier": ObstacleBridgeMacOSTunHelperService.helperBundleIdentifier,
             "executable_name": ObstacleBridgeMacOSTunHelperService.helperExecutableName,
             "helper_version": ObstacleBridgeMacOSTunHelperService.expectedHelperVersion,
-            "python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version,
+            "python_helper_protocol_version": ObstacleBridgeMacOSTunHelperService.pythonHelperProtocolVersion,
             "supported_commands": ObstacleBridgeTunHelperCommand.allCases.map { $0.rawValue },
             "supported_frame_kinds": ObstacleBridgeTunHelperFrameKind.allCases.map { $0.rawValue },
         ]
@@ -38,6 +42,15 @@ enum ObstacleBridgeTunPrivilegedHelperMain {
             FileHandle.standardOutput.write(data)
             FileHandle.standardOutput.write(Data("\n".utf8))
         }
+    }
+
+    private static func writeBuildInfoJSON() {
+        let payload: [String: Any] = [
+            "artifact": "ObstacleBridgeTunHelper", "commit": ObstacleBridgeGeneratedBuildStamp.providerBuildCommit,
+            "dirty": ObstacleBridgeGeneratedBuildStamp.providerBuildDirty, "diff_sha": ObstacleBridgeGeneratedBuildStamp.providerBuildDiffSHA,
+            "build_timestamp_utc": ObstacleBridgeGeneratedBuildStamp.providerBuildTimestampUTC, "source": "embedded-build-info",
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) { FileHandle.standardOutput.write(data); FileHandle.standardOutput.write(Data("\n".utf8)) }
     }
 
     private static func runXPCListener() {

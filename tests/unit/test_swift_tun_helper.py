@@ -43,6 +43,18 @@ class SwiftTunHelperBuildTests(unittest.TestCase):
             self.assertEqual(swift_helper.ensure_linux_swift_tun_helper(), str(artifact))
         run.assert_not_called()
 
+    def test_darwin_selector_builds_packaged_helper_when_identity_is_stale(self):
+        root = pathlib.Path("/repo")
+        expected = {"commit": "abc123", "dirty": False, "diff_sha": ""}
+        with mock.patch.object(swift_helper.sys, "platform", "darwin"), \
+             mock.patch.object(swift_helper, "_repository_root", return_value=root), \
+             mock.patch.object(swift_helper, "expected_build_identity", return_value=expected), \
+             mock.patch.object(swift_helper, "_embedded_build_identity", side_effect=[None, dict(expected)]), \
+             mock.patch.object(swift_helper.subprocess, "run") as run:
+            artifact = swift_helper.ensure_darwin_swift_tun_helper()
+        self.assertEqual(artifact, str(root / "ios/build/macos/ObstacleBridge.app/Contents/MacOS/ObstacleBridgeTunHelper"))
+        self.assertEqual(run.call_args.args[0], [str(root / "ios/scripts/build_macos_app.sh")])
+
     def test_embedded_identity_is_read_from_binary_protocol(self):
         artifact = pathlib.Path("/opt/ObstacleBridgeLinux")
         completed = subprocess.CompletedProcess(

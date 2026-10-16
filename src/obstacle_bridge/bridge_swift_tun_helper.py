@@ -11,10 +11,15 @@ from typing import Any
 
 
 _LINUX_SWIFT_BACKENDS = {"linux-swift", "linux_swift", "swift-linux", "swift_native"}
+_DARWIN_SWIFT_BACKENDS = {"darwin-swift", "darwin_swift", "macos-swift", "macos_swift", "swift-darwin"}
 
 
 def is_linux_swift_backend(name: str) -> bool:
     return str(name or "").strip().lower() in _LINUX_SWIFT_BACKENDS
+
+
+def is_darwin_swift_backend(name: str) -> bool:
+    return str(name or "").strip().lower() in _DARWIN_SWIFT_BACKENDS
 
 
 def _repository_root() -> pathlib.Path:
@@ -98,4 +103,21 @@ def ensure_linux_swift_tun_helper() -> str:
         # binary whose embedded identity precisely describes this checkout.
         if not _identity_matches(_embedded_build_identity(artifact), expected):
             raise RuntimeError("built Linux Swift TUN helper has an unexpected embedded build identity")
+    return str(artifact)
+
+
+def ensure_darwin_swift_tun_helper() -> str:
+    """Return the current packaged macOS protocol-v1 helper."""
+    if not sys.platform.startswith("darwin"):
+        raise RuntimeError("darwin-swift helper backend is only available on macOS")
+    root = _repository_root()
+    expected = expected_build_identity(root)
+    artifact = root / "ios" / "build" / "macos" / "ObstacleBridge.app" / "Contents" / "MacOS" / "ObstacleBridgeTunHelper"
+    if expected["dirty"] or not _identity_matches(_embedded_build_identity(artifact), expected):
+        try:
+            subprocess.run([str(root / "ios" / "scripts" / "build_macos_app.sh")], cwd=root, check=True, stdin=subprocess.DEVNULL)
+        except (OSError, subprocess.CalledProcessError) as error:
+            raise RuntimeError("failed to build the macOS Swift TUN helper") from error
+        if not _identity_matches(_embedded_build_identity(artifact), expected):
+            raise RuntimeError("built macOS Swift TUN helper has an unexpected embedded build identity")
     return str(artifact)

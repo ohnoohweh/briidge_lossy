@@ -352,7 +352,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'result["xpc_runtime"] = runtime' in service
     assert "ObstacleBridgeTunHelperXPC.ping(machServiceName: xpcMachServiceName)" in service
     assert '"helper_pid": ProcessInfo.processInfo.processIdentifier' in xpc_source
-    assert '"python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version' in xpc_source
+    assert '"python_helper_protocol_version": ObstacleBridgeMacOSTunHelperService.pythonHelperProtocolVersion' in xpc_source
     assert "registerSkeletonResult(appBundleURL:" in service
     assert "startSkeletonResult(appBundleURL:" in service
     assert "stopSkeletonResult(appBundleURL:" in service
@@ -376,12 +376,14 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeMacOSTunHelperService.expectedHelperVersion" in helper_main
     assert "ObstacleBridgeTunHelperCommand.allCases.map" in helper_main
     assert "ObstacleBridgeTunHelperFrameKind.allCases.map" in helper_main
-    assert '"python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version' in helper_main
+    assert '"python_helper_protocol_version": ObstacleBridgeMacOSTunHelperService.pythonHelperProtocolVersion' in helper_main
     assert "runXPCListener()" in helper_main
     assert "NSXPCListener(machServiceName: ObstacleBridgeMacOSTunHelperService.xpcMachServiceName)" in helper_main
     assert "ObstacleBridgeTunHelperXPCListenerDelegate()" in helper_main
     assert "dispatchMain()" in helper_main
     assert 'values[0] == "--tun-helper-server"' in helper_main
+    assert 'args.contains("--helper-build-info")' in helper_main
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in helper_main
     assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
     assert "ObstacleBridgeTunHelperProtocolV1.decodeControl" in protocol_server
     assert 'control.operation == "HELLO"' in protocol_server

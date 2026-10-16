@@ -331,6 +331,9 @@ Current implementation note:
   Core owns that protocol-v1 frame and versioned JSON-control codec; Linux
   socket and Apple helper transports shall consume it rather than reimplement
   the binary framing or control serialization.
+  On macOS, `darwin-swift` shall build and select the packaged Swift helper,
+  verify its embedded identity using the same commit/dirty/diff contract, and
+  launch its authenticated protocol-v1 Unix-socket server.
 Elevated TUN route and DNS verification shall assert the configured local host-network state and its Admin diagnostics without depending on an external host's ICMP policy. Dedicated packet-carry cases shall prove overlay data delivery separately. Elevated test wrappers shall emit unbuffered per-test start/result markers; the macOS wrapper shall additionally capture route, interface, and process diagnostics on exit so a hosted-runner interruption can be correlated with its last running case.
 
   The macOS Swift elevated wrapper shall run the supported HostRunner fallback

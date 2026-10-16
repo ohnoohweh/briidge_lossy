@@ -9,6 +9,7 @@ enum ObstacleBridgeMacOSTunHelperService {
     static let helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"
     static let helperExecutableName = "ObstacleBridgeTunHelper"
     static let expectedHelperVersion = "1"
+    static let pythonHelperProtocolVersion = ObstacleBridgeTunHelperProtocolV1.version
     static let helperLaunchDaemonPlistName = "\(helperBundleIdentifier).plist"
     static let xpcMachServiceName = "\(helperBundleIdentifier).xpc"
     // SMAppService daemon helpers are executable programs within the app's

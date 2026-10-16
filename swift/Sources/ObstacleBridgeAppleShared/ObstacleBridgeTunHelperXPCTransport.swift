@@ -307,7 +307,7 @@ final class ObstacleBridgeTunHelperXPCService: NSObject, ObstacleBridgeTunHelper
             "implemented": true,
             "bundle_identifier": ObstacleBridgeMacOSTunHelperService.helperBundleIdentifier,
             "helper_version": ObstacleBridgeMacOSTunHelperService.expectedHelperVersion,
-            "python_helper_protocol_version": ObstacleBridgeTunHelperProtocolV1.version,
+            "python_helper_protocol_version": ObstacleBridgeMacOSTunHelperService.pythonHelperProtocolVersion,
             "helper_pid": ProcessInfo.processInfo.processIdentifier,
             "backend": backend.runtimeSnapshot.backend,
             "runtime": backend.runtimeSnapshot.payload(),
