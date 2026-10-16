@@ -25,10 +25,10 @@ public extension ObstacleBridgeLinuxTunHelperServerBackend {
 }
 
 /// Partial Swift replacement for the Python local TUN helper server. It
-/// implements the version-1 authenticated control and packet-to-helper wire
-/// boundary. Packet-from-helper and EVENT fan-out remain intentionally outside
-/// this first server slice, so callers cannot mistake it for full replacement
-/// parity yet.
+/// implements the version-1 authenticated control and packet wire boundary,
+/// including helper-originated packet and event fan-out. Network-policy
+/// lifecycle remains deliberately incomplete, so callers cannot mistake it
+/// for full replacement parity yet.
 public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private enum FrameKind: UInt8 { case controlRequest = 1, controlResponse = 2, packetFromHelper = 3, packetToHelper = 4, event = 5 }
     private static let version = 1
@@ -204,7 +204,17 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         var length = UInt32(body.count).bigEndian; var frame = Data([kind.rawValue]); frame.append(Data(bytes: &length, count: 4)); frame.append(body)
         writerLock.lock(); defer { writerLock.unlock() }
         var offset = 0
-        while offset < frame.count { let count = frame.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset) }; guard count > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }; offset += Int(count) }
+        while offset < frame.count {
+            let count = frame.withUnsafeBytes {
+                #if os(Linux)
+                send(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset, Int32(MSG_NOSIGNAL))
+                #else
+                write(fd, $0.baseAddress!.advanced(by: offset), frame.count - offset)
+                #endif
+            }
+            guard count > 0 else { throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected }
+            offset += Int(count)
+        }
     }
     private func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
         let header = try readExactly(5, from: fd)

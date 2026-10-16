@@ -28,6 +28,14 @@ enum ObstacleBridgeLinuxMain {
             printRuntimeStatus(configPath: values[1])
         case let values where values.count == 4 && values[0] == "--runtime-config" && values[2] == "--runtime-probe":
             runRuntimeProbe(configPath: values[1], payloadBase64: values[3])
+        case let values where values.count == 3 && values[0] == "--tun-helper-server":
+            runTunHelperServer(socketPath: values[1], sessionToken: values[2], idleTimeout: 5)
+        case let values where values.count == 5 && values[0] == "--tun-helper-server" && values[3] == "--idle-sec":
+            guard let idleTimeout = TimeInterval(values[4]), idleTimeout > 0 else {
+                writeError("ObstacleBridgeLinux: --idle-sec requires a positive number of seconds")
+                exit(2)
+            }
+            runTunHelperServer(socketPath: values[1], sessionToken: values[2], idleTimeout: idleTimeout)
         case []:
             printHelp()
         default:
@@ -50,6 +58,7 @@ enum ObstacleBridgeLinuxMain {
           ObstacleBridgeLinux --runtime-config <path> --status
           ObstacleBridgeLinux --runtime-config <path> --runtime-probe <payload-base64>
           ObstacleBridgeLinux --runtime-config <path> --run [--admin-port <port>] [--hold-sec <seconds>]
+          ObstacleBridgeLinux --tun-helper-server <socket-path> <session-token> [--idle-sec <seconds>]
 
         The transport probe validates Linux POSIX lower-layer TCP or cleartext
         WebSocket framing. --runtime-config validates the existing sectioned
@@ -59,8 +68,30 @@ enum ObstacleBridgeLinuxMain {
         redacted local Admin API. ChannelMux service routing is qualified by
         its dedicated package. TUN startup requires an explicitly configured,
         authenticated privileged helper; native route/DNS/hook qualification
-        remains tracked in LSW-006.
+        remains tracked in LSW-006. --tun-helper-server starts the Swift
+        protocol-v1 helper endpoint as a separate process; its native backend
+        intentionally refuses network-policy mutation until that parity exists.
         """)
+    }
+
+    private static func runTunHelperServer(socketPath: String, sessionToken: String, idleTimeout: TimeInterval) {
+        do {
+            let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
+            let server = try ObstacleBridgeLinuxTunHelperServer(
+                socketPath: socketPath,
+                sessionToken: sessionToken,
+                backend: backend,
+                authenticatedClientIdleTimeout: idleTimeout
+            )
+            try server.start()
+            print("{\"socket_path\":\"\(socketPath)\",\"state\":\"listening\",\"backend\":\"linux-swift-native\"}")
+            let resources: [Any] = [server, backend]
+                + installForegroundShutdown(stop: { server.stop() }, admin: nil, holdSeconds: nil)
+            withExtendedLifetime(resources) { dispatchMain() }
+        } catch {
+            writeError("ObstacleBridgeLinux: TUN helper server failed: \(error.localizedDescription)")
+            exit(1)
+        }
     }
 
     private static func runTransportProbe(transportName: String, host: String, portText: String, payloadBase64: String) {
@@ -209,10 +240,10 @@ enum ObstacleBridgeLinuxMain {
         }
     }
 
-    private static func installForegroundShutdown(stop: @escaping () -> Void, admin: ObstacleBridgeLinuxAdminServer, holdSeconds: Int?) -> [Any] {
+    private static func installForegroundShutdown(stop: @escaping () -> Void, admin: ObstacleBridgeLinuxAdminServer?, holdSeconds: Int?) -> [Any] {
         func shutdown() {
             stop()
-            admin.stop()
+            admin?.stop()
             exit(0)
         }
         var resources: [Any] = []
