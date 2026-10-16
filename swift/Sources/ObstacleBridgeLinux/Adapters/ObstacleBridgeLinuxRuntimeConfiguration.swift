@@ -154,6 +154,16 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         return try helper.applyWithRollback(packetTunnelPlan: packetTunnelPlan, interfaceName: interfaceName)
     }
 
+    /// Tears down the helper-owned network state before the selected packet
+    /// device is closed, preserving the helper's underlay/DNS cleanup order.
+    public func removePacketTunnelPlanThroughHelper(interfaceName: String) throws -> [String: Any] {
+        guard let packetTunnelPlan, packetTunnelEnabled else { return [:] }
+        guard let helper = try makeTunHelperAdapter() else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux packet-tunnel teardown requires an explicit helper owner")
+        }
+        return try helper.rollback(packetTunnelPlan: packetTunnelPlan, interfaceName: interfaceName)
+    }
+
     public static func load(path: String) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
         do {
             return try parse(data: Data(contentsOf: URL(fileURLWithPath: path)))

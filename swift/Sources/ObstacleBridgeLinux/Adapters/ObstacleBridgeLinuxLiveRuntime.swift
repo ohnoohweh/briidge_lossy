@@ -167,6 +167,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var channelMux: ObstacleBridgeLinuxChannelMuxSession?
     private var tunDevice: ObstacleBridgeLinuxTunDevice?
     private var tunChannelAdapter: ObstacleBridgeLinuxOverlayChannelAdapter?
+    private var tunNetworkApplied = false
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
@@ -569,14 +570,22 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         )
         tunDevice = device
         tunChannelAdapter = adapter
-        adapter.overlayLifecycleChanged(ready: true)
-        do { try device.start() }
+        do {
+            try device.start()
+            _ = try configuredRuntime.configuration.applyPacketTunnelPlanThroughHelper(interfaceName: configuredRuntime.configuration.tunInterfaceName)
+            tunNetworkApplied = true
+            adapter.overlayLifecycleChanged(ready: true)
+        }
         catch { stopPacketDevice(); throw error }
     }
 
     private func stopPacketDevice() {
         tunChannelAdapter?.stop()
         tunChannelAdapter = nil
+        if tunNetworkApplied {
+            _ = try? configuredRuntime.configuration.removePacketTunnelPlanThroughHelper(interfaceName: configuredRuntime.configuration.tunInterfaceName)
+            tunNetworkApplied = false
+        }
         tunDevice?.stop()
         tunDevice = nil
     }
