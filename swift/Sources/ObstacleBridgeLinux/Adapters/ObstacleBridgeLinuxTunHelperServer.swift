@@ -34,6 +34,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
 
     public let socketPath: String
     private let sessionToken: String
+    private let authenticatedClientIdleTimeout: TimeInterval
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
     private let lock = NSLock()
@@ -41,13 +42,16 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private var listener: Int32 = -1
     private var running = false
     private var authenticatedClients: Set<Int32> = []
+    private var lastAuthenticatedActivity = Date()
+    private var watchdog: DispatchSourceTimer?
 
-    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend) throws {
+    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5) throws {
         guard !socketPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sessionToken.isEmpty else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper server requires socket path and session token")
         }
         self.socketPath = socketPath
         self.sessionToken = sessionToken
+        self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0.5)
         self.backend = backend
         backend.setPacketSink { [weak self] packet in self?.emitPacket(packet) }
     }
@@ -68,7 +72,11 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         let bound = withUnsafePointer(to: &address) { pointer in pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         guard bound == 0, listen(fd, 16) == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxTunHelperAdapterError.connectFailed(code) }
         _ = chmod(socketPath, 0o600)
-        listener = fd; running = true
+        listener = fd; running = true; lastAuthenticatedActivity = Date()
+        let watchdog = DispatchSource.makeTimerSource(queue: queue)
+        watchdog.schedule(deadline: .now() + authenticatedClientIdleTimeout, repeating: min(authenticatedClientIdleTimeout, 1))
+        watchdog.setEventHandler { [weak self] in self?.expireIdleHelperIfNeeded() }
+        self.watchdog = watchdog; watchdog.resume()
         queue.async { [weak self] in self?.acceptLoop() }
     }
 
@@ -76,7 +84,10 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         lock.lock()
         let fd = listener
         listener = -1; running = false
+        let watchdog = self.watchdog
+        self.watchdog = nil
         lock.unlock()
+        watchdog?.cancel()
         if fd >= 0 { _ = shutdown(fd, Int32(SHUT_RDWR)); _ = close(fd) }
         lock.lock(); authenticatedClients.removeAll(); lock.unlock()
         _ = unlink(socketPath)
@@ -105,14 +116,16 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
                 if operation == "HELLO" {
                     guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", to: client); continue }
                     authenticated = true
-                    lock.lock(); authenticatedClients.insert(client); lock.unlock()
+                    lock.lock(); authenticatedClients.insert(client); lastAuthenticatedActivity = Date(); lock.unlock()
                     try? sendControl("HELLO_OK", ["authenticated": true], to: client)
                     continue
                 }
                 guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper commands", to: client); continue }
+                markAuthenticatedActivity()
                 handleControl(operation: operation, payload: message.payload, client: client)
             case .packetToHelper:
                 guard authenticated else { try? sendError("not_authenticated", "HELLO required before helper packet writes", to: client); continue }
+                markAuthenticatedActivity()
                 do { try backend.writePacket(body) } catch { try? sendError("write_packet_failed", error.localizedDescription, to: client) }
             default:
                 try? sendError("unexpected_frame_kind", "\(kind.rawValue)", to: client)
@@ -140,6 +153,13 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             }
             try sendControl("\(operation)_OK", reply, to: client)
         } catch { try? sendError("\(operation.lowercased())_failed", error.localizedDescription, to: client) }
+    }
+    private func markAuthenticatedActivity() { lock.lock(); lastAuthenticatedActivity = Date(); lock.unlock() }
+    private func expireIdleHelperIfNeeded() {
+        lock.lock()
+        let expired = running && authenticatedClients.isEmpty && Date().timeIntervalSince(lastAuthenticatedActivity) >= authenticatedClientIdleTimeout
+        lock.unlock()
+        if expired { emitEvent("helper authenticated-client idle timeout"); stop() }
     }
 
     private func decodeControl(_ body: Data) -> (operation: String, payload: [String: Any])? {

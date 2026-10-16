@@ -88,6 +88,16 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(backend.packets == [Data([0x45, 0x00])])
         #expect(try adapter.send(command: .stop, payload: [:])["stopping"] as? Bool == true)
     }
+
+    @Test func swiftHelperServerStopsAfterAuthenticatedClientIdleWindow() throws {
+        let backend = SwiftHelperBackend()
+        let path = "/tmp/obstaclebridge-swift-helper-idle-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5)
+        try server.start(); defer { server.stop() }
+        let deadline = Date().addingTimeInterval(1.5)
+        while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        #expect(!FileManager.default.fileExists(atPath: path))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
