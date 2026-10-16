@@ -25,6 +25,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     private var excludedRoutes: [(String, String)] = []
     private var underlay: [String: [String: String]] = [:]
     private var appliedDNSServers: [String] = []
+    private var appliedFirewallRules: [[String]] = []
 
     public init(packetSink: @escaping PacketSink = { _ in }, commandRunner: @escaping CommandRunner = ObstacleBridgeLinuxNativeTunHelperBackend.runProcess) {
         self.packetSink = packetSink; self.commandRunner = commandRunner
@@ -64,6 +65,9 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         var routes: [(String, String)] = []
         var excluded: [(String, String)] = []
         let dnsServers = (routing["dns_servers"] as? [String] ?? []).filter { !$0.isEmpty }
+        let hookEnvironment = payload["listener_hook_env"] as? [String: Any] ?? [:]
+        let wanInterface = (hookEnvironment["WAN_IF"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        var firewallRules: [[String]] = []
         var savedUnderlay: [String: [String: String]] = [:]
         func cidr(_ addressKey: String, _ prefixKey: String, _ family: String) throws -> String? {
             guard let address = routing[addressKey] as? String, !address.isEmpty else { return nil }
@@ -72,6 +76,16 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         }
         if let cidr = try cidr("tunnel_address", "tunnel_prefix", "-4") { addresses.append(("-4", cidr)) }
         if let cidr = try cidr("tunnel_address6", "tunnel_prefix6", "-6") { addresses.append(("-6", cidr)) }
+        if !wanInterface.isEmpty && wanInterface.lowercased() != "auto" {
+            for (family, cidr) in addresses {
+                let binary = family == "-4" ? "iptables" : "ip6tables"
+                firewallRules += [
+                    [binary, "-A", "FORWARD", "-i", ifname, "-o", wanInterface, "-j", "ACCEPT"],
+                    [binary, "-A", "FORWARD", "-i", wanInterface, "-o", ifname, "-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED", "-j", "ACCEPT"],
+                    [binary, "-t", "nat", "-A", "POSTROUTING", "-s", cidr, "-o", wanInterface, "-j", "MASQUERADE"],
+                ]
+            }
+        }
         for (family, key) in [("-4", "included_routes"), ("-6", "included_routes6")] {
             for route in (routing[key] as? [String] ?? []) where !route.isEmpty { routes.append((family, route)) }
         }
@@ -108,27 +122,30 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                 _ = try commandRunner(["resolvectl", "domain", ifname, "~."], false)
                 _ = try commandRunner(["resolvectl", "default-route", ifname, "yes"], false)
             }
+            for rule in firewallRules { _ = try commandRunner(rule, false) }
         } catch {
             _ = try? commandRunner(["resolvectl", "revert", ifname], true)
             for (family, route) in routes.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
             for (family, route) in excluded.reversed() { _ = try? commandRunner(["ip", family, "route", "del", route], true) }
             for (family, cidr) in addresses.reversed() { _ = try? commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
+            for rule in firewallRules.reversed() { _ = try? commandRunner(Self.removeFirewallRule(rule), true) }
             recordFailure(stage: "apply_network", error: error.localizedDescription)
             throw error
         }
-        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; lock.unlock()
+        lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; appliedDNSServers = dnsServers; appliedFirewallRules = firewallRules; lock.unlock()
         emitEvent("network applied interface=\(ifname)")
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
     public func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] {
-        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; let dnsServers = appliedDNSServers; lock.unlock()
+        lock.lock(); let ifname = appliedInterface; let routes = appliedRoutes; let addresses = appliedAddresses; let excluded = excludedRoutes; let dnsServers = appliedDNSServers; let firewall = appliedFirewallRules; lock.unlock()
         guard !ifname.isEmpty else { return ["removed": true, "backend": "linux-swift-native"] }
         for (family, route) in routes.reversed() { _ = try commandRunner(["ip", family, "route", "del", route, "dev", ifname], true) }
         for (family, route) in excluded.reversed() { _ = try commandRunner(["ip", family, "route", "del", route], true) }
         if !dnsServers.isEmpty { _ = try commandRunner(["resolvectl", "revert", ifname], true) }
+        for rule in firewall.reversed() { _ = try commandRunner(Self.removeFirewallRule(rule), true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
-        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; lock.unlock()
+        lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; appliedDNSServers = []; appliedFirewallRules = []; lock.unlock()
         emitEvent("network removed interface=\(ifname)")
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
     }
@@ -204,6 +221,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             "applied_routes": appliedRoutes.map { "\($0.0) \($0.1)" },
             "excluded_routes": excludedRoutes.map { "\($0.0) \($0.1)" },
             "underlay": underlay, "dns_servers": appliedDNSServers,
+            "firewall_rules": appliedFirewallRules,
         ]) { _, new in new }
     }
 
@@ -213,6 +231,8 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         switch command {
         case "ip": paths = ["/usr/sbin/ip", "/sbin/ip"]
         case "resolvectl": paths = ["/usr/bin/resolvectl", "/bin/resolvectl"]
+        case "iptables": paths = ["/usr/sbin/iptables", "/sbin/iptables"]
+        case "ip6tables": paths = ["/usr/sbin/ip6tables", "/sbin/ip6tables"]
         default: paths = []
         }
         guard let executable = paths.first(where: FileManager.default.isExecutableFile(atPath:)) else {
@@ -225,5 +245,9 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         if process.terminationStatus != 0 && !allowFailure { throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux helper command failed: \(arguments.joined(separator: " "))") }
         return output
+    }
+    private static func removeFirewallRule(_ rule: [String]) -> [String] {
+        guard let index = rule.firstIndex(of: "-A") else { return rule }
+        var result = rule; result[index] = "-D"; return result
     }
 }

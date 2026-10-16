@@ -172,6 +172,15 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(snapshot["dns_servers"] as? [String] == ["1.1.1.1"])
         #expect(snapshot["applied_routes"] as? [String] == ["-4 10.0.0.0/8"])
     }
+
+    @Test func nativeSwiftHelperAppliesAndRemovesExplicitFirewallRules() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in commands.append(arguments); return arguments.contains("-j") ? "[]" : "" })
+        _ = try backend.applyNetwork(["ifname": "obtest0", "listener_hook_env": ["WAN_IF": "eth0"], "tun_routing": ["tunnel_address": "198.18.0.1", "tunnel_prefix": 24]])
+        _ = try backend.removeNetwork([:])
+        #expect(commands.contains(["iptables", "-t", "nat", "-A", "POSTROUTING", "-s", "198.18.0.1/24", "-o", "eth0", "-j", "MASQUERADE"]))
+        #expect(commands.contains(["iptables", "-t", "nat", "-D", "POSTROUTING", "-s", "198.18.0.1/24", "-o", "eth0", "-j", "MASQUERADE"]))
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
