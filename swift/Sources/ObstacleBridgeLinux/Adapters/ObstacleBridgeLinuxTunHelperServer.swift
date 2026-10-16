@@ -9,6 +9,7 @@ import Glibc
 /// the Unix-socket parser.
 public protocol ObstacleBridgeLinuxTunHelperServerBackend: AnyObject {
     func setPacketSink(_ sink: @escaping (Data) -> Void)
+    func setEventSink(_ sink: @escaping (String) -> Void)
     func openTun(_ payload: [String: Any]) throws -> [String: Any]
     func applyNetwork(_ payload: [String: Any]) throws -> [String: Any]
     func removeNetwork(_ payload: [String: Any]) throws -> [String: Any]
@@ -21,6 +22,7 @@ public protocol ObstacleBridgeLinuxTunHelperServerBackend: AnyObject {
 
 public extension ObstacleBridgeLinuxTunHelperServerBackend {
     func setPacketSink(_ sink: @escaping (Data) -> Void) { _ = sink }
+    func setEventSink(_ sink: @escaping (String) -> Void) { _ = sink }
     func recordFailure(stage: String, error: String) { _ = (stage, error) }
 }
 
@@ -56,6 +58,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0.5)
         self.backend = backend
         backend.setPacketSink { [weak self] packet in self?.emitPacket(packet) }
+        backend.setEventSink { [weak self] detail in self?.emitEvent(detail) }
     }
 
     public func start() throws {

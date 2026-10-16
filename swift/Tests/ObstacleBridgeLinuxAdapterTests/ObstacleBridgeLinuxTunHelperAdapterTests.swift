@@ -138,6 +138,16 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         _ = try backend.removeNetwork([:])
         #expect(commands.contains(["ip", "-4", "route", "del", "203.0.113.9/32"]))
     }
+
+    @Test func nativeSwiftHelperEmitsLifecycleEvents() throws {
+        var events: [String] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in arguments.contains("-j") ? "[]" : "" })
+        backend.setEventSink { events.append($0) }
+        _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": [:]])
+        _ = try backend.setTunEnabled(["enabled": false])
+        _ = try backend.removeNetwork([:])
+        #expect(events == ["network applied interface=obtest0", "tun enabled=false", "network removed interface=obtest0"])
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

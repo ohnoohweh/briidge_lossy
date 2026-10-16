@@ -11,6 +11,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     public typealias CommandRunner = (_ arguments: [String], _ allowFailure: Bool) throws -> String
     private let lock = NSLock()
     private var packetSink: PacketSink
+    private var eventSink: (String) -> Void = { _ in }
     private var device: ObstacleBridgeLinuxTunDevice?
     private var packetsFromRuntime = 0
     private var packetsToRuntime = 0
@@ -29,6 +30,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
     }
 
     public func setPacketSink(_ sink: @escaping PacketSink) { lock.lock(); packetSink = sink; lock.unlock() }
+    public func setEventSink(_ sink: @escaping (String) -> Void) { lock.lock(); eventSink = sink; lock.unlock() }
 
     public func openTun(_ payload: [String: Any]) throws -> [String: Any] {
         guard let requested = payload["ifname"] as? String, !requested.isEmpty else {
@@ -107,6 +109,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             throw error
         }
         lock.lock(); appliedInterface = ifname; appliedAddresses = addresses; configuredRoutes = routes; appliedRoutes = tunEnabled ? routes : []; excludedRoutes = excluded; underlay = savedUnderlay; lock.unlock()
+        emitEvent("network applied interface=\(ifname)")
         return ["applied": true, "backend": "linux-swift-native", "ifname": ifname, "routes_active": tunEnabled]
     }
 
@@ -117,6 +120,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         for (family, route) in excluded.reversed() { _ = try commandRunner(["ip", family, "route", "del", route], true) }
         for (family, cidr) in addresses.reversed() { _ = try commandRunner(["ip", family, "addr", "del", cidr, "dev", ifname], true) }
         lock.lock(); appliedInterface = ""; appliedAddresses = []; appliedRoutes = []; configuredRoutes = []; excludedRoutes = []; underlay = [:]; lock.unlock()
+        emitEvent("network removed interface=\(ifname)")
         return ["removed": true, "backend": "linux-swift-native", "ifname": ifname]
     }
 
@@ -147,6 +151,7 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             }
         }
         lock.lock(); tunEnabled = enabled; let snapshot = self.device.map(snapshotLocked) ?? closedSnapshotLocked(); lock.unlock()
+        emitEvent("tun enabled=\(enabled)")
         return snapshot.merging(["tun_enabled": enabled]) { _, new in new }
     }
 
@@ -173,7 +178,10 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
 
     public func recordFailure(stage: String, error: String) {
         lock.lock(); lastFailure = ["stage": stage, "error": error]; lock.unlock()
+        emitEvent("failure stage=\(stage)")
     }
+
+    private func emitEvent(_ detail: String) { lock.lock(); let sink = eventSink; lock.unlock(); sink(detail) }
 
     private func snapshotLocked(device: ObstacleBridgeLinuxTunDevice) -> [String: Any] {
         ["backend": "linux-swift-native", "opened": true, "ifname": device.actualInterfaceName, "mtu": device.mtu, "packets_from_runtime": packetsFromRuntime, "packets_to_runtime": packetsToRuntime, "last_failure": lastFailure, "tun_enabled": tunEnabled]
