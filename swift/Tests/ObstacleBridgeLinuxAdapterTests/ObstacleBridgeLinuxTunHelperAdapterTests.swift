@@ -229,7 +229,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))
     func privilegedNativeSwiftHelperAppliesAndRemovesKernelTunPolicy() throws {
         #if os(Linux)
-        let name = "obq\(getpid() % 100_000)"
+        let name = "obqr\(getpid() % 10_000)"
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
         defer { backend.stop() }
         _ = try backend.openTun(["ifname": name, "mtu": 1400])
@@ -247,7 +247,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))
     func privilegedNativeSwiftHelperQualifiesTunRouteDNSAndHookLifecycle() throws {
         #if os(Linux)
-        let name = "obq\(getpid() % 100_000)"
+        let name = "obqh\(getpid() % 10_000)"
         let directory = URL(fileURLWithPath: "/tmp/obstaclebridge-swift-hook-\(UUID().uuidString)", isDirectory: true)
         let hook = directory.appendingPathComponent("hook.sh")
         let marker = directory.appendingPathComponent("events")
