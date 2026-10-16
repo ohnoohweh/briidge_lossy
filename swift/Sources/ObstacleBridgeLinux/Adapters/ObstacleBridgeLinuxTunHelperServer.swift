@@ -151,6 +151,13 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         lock.lock(); let clients = authenticatedClients; lock.unlock()
         for client in clients { try? writeFrame(kind: .packetFromHelper, body: packet, to: client) }
     }
+    /// Emits the same compact JSON EVENT shape as the Python helper. Event
+    /// delivery is best-effort and only reaches authenticated local clients.
+    public func emitEvent(_ detail: String) {
+        guard let body = try? JSONSerialization.data(withJSONObject: ["detail": detail], options: [.sortedKeys]) else { return }
+        lock.lock(); let clients = authenticatedClients; lock.unlock()
+        for client in clients { try? writeFrame(kind: .event, body: body, to: client) }
+    }
     private func writeFrame(kind: FrameKind, body: Data, to fd: Int32) throws {
         guard body.count <= Self.maximumFrameBytes else { throw ObstacleBridgeLinuxTunHelperAdapterError.frameTooLarge }
         var length = UInt32(body.count).bigEndian; var frame = Data([kind.rawValue]); frame.append(Data(bytes: &length, count: 4)); frame.append(body)
