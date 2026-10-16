@@ -392,6 +392,30 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         return Array(runtimeHealthRing.records.suffix(16))
     }
 
+    /// Redacted correlation of foreground-owned resource state with lifecycle
+    /// health. Resource locators and helper authentication material stay in
+    /// their owners and never reach Admin.
+    public func resourceHealthForAdmin() -> [String: Any] {
+        queue.sync {
+            let configured = configuredRuntime.configuration
+            return [
+                "packet_tunnel": [
+                    "configured": configured.packetTunnelEnabled,
+                    "helper_configured": configured.tunHelperSocketPath != nil,
+                    "managed_helper": configured.launchSwiftTunHelper,
+                    "managed_helper_running": managedTunHelper?.isRunning ?? false,
+                    "device_open": tunDevice != nil,
+                    "network_policy_applied": tunNetworkApplied,
+                ],
+                "service_sockets": [
+                    "configured_local": configured.ownServices.count,
+                    "active_local": serviceOwners.count,
+                    "active_remote": remoteServiceOwners.count,
+                ],
+            ]
+        }
+    }
+
     /// Delivers one authenticated ChannelMux frame from the overlay reader.
     /// The current lower transport supplies replies synchronously; this API is
     /// also the receive-side handoff used by a future duplex reader.

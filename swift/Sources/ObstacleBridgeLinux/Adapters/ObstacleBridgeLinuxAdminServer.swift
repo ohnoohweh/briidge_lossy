@@ -27,6 +27,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
+    private let resourceHealthProvider: () -> [String: Any]
     private let adminConfigurationProvider: () -> [String: Any]
     private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
@@ -39,6 +40,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
+        self.resourceHealthProvider = { [:] }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
     }
 
@@ -47,6 +49,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
+        self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
     }
 
@@ -57,6 +60,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
+        self.resourceHealthProvider = { [:] }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
     }
 
@@ -222,6 +226,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,
+            "resource_health": resourceHealthProvider(),
             "operator_capabilities": operatorCapabilities(),
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],

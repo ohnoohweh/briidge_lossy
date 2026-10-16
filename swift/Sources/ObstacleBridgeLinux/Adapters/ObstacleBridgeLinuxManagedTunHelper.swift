@@ -22,6 +22,10 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         self.executable = selected
     }
 
+    /// Redacted process liveness for the foreground runtime's Admin surface.
+    /// The socket path and authentication token remain private to this owner.
+    public var isRunning: Bool { process.isRunning }
+
     public func start(timeout: TimeInterval = 2) throws {
         guard !process.isRunning else { return }
         if FileManager.default.fileExists(atPath: socketPath) {

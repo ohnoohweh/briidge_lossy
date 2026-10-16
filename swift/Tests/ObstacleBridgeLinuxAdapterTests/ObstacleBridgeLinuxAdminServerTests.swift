@@ -167,6 +167,27 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(disconnected["app_ready"] as? Bool == false)
     }
 
+    @Test func liveStatusCorrelatesRedactedResourceHealth() async throws {
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: 1
+        ))
+        let server = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime)
+        try server.start()
+        defer { server.stop() }
+        let status = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/status") as? [String: Any])
+        let resources = try #require(status["resource_health"] as? [String: Any])
+        let packetTunnel = try #require(resources["packet_tunnel"] as? [String: Any])
+        let serviceSockets = try #require(resources["service_sockets"] as? [String: Any])
+        #expect(packetTunnel["configured"] as? Bool == false)
+        #expect(packetTunnel["helper_configured"] as? Bool == false)
+        #expect(packetTunnel["managed_helper_running"] as? Bool == false)
+        #expect(packetTunnel["device_open"] as? Bool == false)
+        #expect(packetTunnel["network_policy_applied"] as? Bool == false)
+        #expect(serviceSockets["configured_local"] as? Int == 0)
+        #expect(serviceSockets["active_local"] as? Int == 0)
+        #expect(serviceSockets["active_remote"] as? Int == 0)
+    }
+
     @Test func peerProjectionUsesCoreCountersAndNeverSerializesPSK() async throws {
         let peer = try PythonOverlayPeer(mode: "tcp-securelink")
         defer { peer.stop() }
