@@ -51,11 +51,11 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         _ = try adapter.rollback(packetTunnelPlan: plan, interfaceName: "obtest0")
         #expect(peer.operations == ["APPLY_NETWORK", "REMOVE_NETWORK"])
         let apply = try #require(peer.payloads.first)
-        let environment = try #require(apply["env"] as? [String: Any])
-        #expect(environment["TUN_IFNAME"] as? String == "obtest0")
-        #expect(environment["TUN_MTU"] as? String == "1400")
-        #expect(environment["TUN_INCLUDED_ROUTES"] as? String == "0.0.0.0/0")
-        #expect(environment["TUN_DNS_SERVERS"] as? String == "1.1.1.1")
+        #expect(apply["ifname"] as? String == "obtest0")
+        let routing = try #require(apply["tun_routing"] as? [String: Any])
+        #expect(routing["mtu"] as? Int == 1400)
+        #expect(routing["included_routes"] as? [String] == ["0.0.0.0/0"])
+        #expect(routing["dns_servers"] as? [String] == ["1.1.1.1"])
     }
 
     @Test func helperApplyFailureRequestsRollbackOnFreshExchange() throws {

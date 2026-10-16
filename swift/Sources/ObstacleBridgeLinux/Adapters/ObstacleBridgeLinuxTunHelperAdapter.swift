@@ -75,9 +75,7 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
         guard plan.enabledOnStartup else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("disabled packet-tunnel plan cannot be applied")
         }
-        return try send(command: .applyNetwork, payload: [
-            "action": "up", "argv": [], "env": Self.planEnvironment(plan, interfaceName: interfaceName),
-        ])
+        return try send(command: .applyNetwork, payload: Self.planPayload(plan, interfaceName: interfaceName))
     }
 
     /// If an apply reply is lost after helper-side partial work, request the
@@ -92,13 +90,20 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     }
 
     public func rollback(packetTunnelPlan plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) throws -> [String: Any] {
-        try send(command: .removeNetwork, payload: [
-            "action": "down", "argv": [], "env": Self.planEnvironment(plan, interfaceName: interfaceName),
-        ])
+        try send(command: .removeNetwork, payload: Self.planPayload(plan, interfaceName: interfaceName))
     }
 
-    private static func planEnvironment(_ plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) -> [String: String] {
-        ["TUN_IFNAME": interfaceName, "TUN_ADDR": "\(plan.tunnelAddress)/\(plan.tunnelPrefix)", "TUN_ADDR6": "\(plan.tunnelAddress6)/\(plan.tunnelPrefix6)", "TUN_MTU": "\(plan.mtu)", "TUN_INCLUDED_ROUTES": plan.includedRoutes.joined(separator: ","), "TUN_EXCLUDED_ROUTES": plan.excludedRoutes.joined(separator: ","), "TUN_INCLUDED_ROUTES6": plan.includedRoutes6.joined(separator: ","), "TUN_EXCLUDED_ROUTES6": plan.excludedRoutes6.joined(separator: ","), "TUN_DNS_SERVERS": plan.dnsServers.joined(separator: ",")]
+    /// Matches the Python Linux-native helper contract. The helper derives its
+    /// hook environment, captures underlay routes, and owns apply/remove.
+    private static func planPayload(_ plan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan, interfaceName: String) -> [String: Any] {
+        ["ifname": interfaceName, "tun_routing": [
+            "enabled_on_startup": plan.enabledOnStartup,
+            "tunnel_address": plan.tunnelAddress, "tunnel_prefix": plan.tunnelPrefix,
+            "tunnel_address6": plan.tunnelAddress6, "tunnel_prefix6": plan.tunnelPrefix6,
+            "included_routes": plan.includedRoutes, "excluded_routes": plan.excludedRoutes,
+            "included_routes6": plan.includedRoutes6, "excluded_routes6": plan.excludedRoutes6,
+            "dns_servers": plan.dnsServers, "mtu": plan.mtu,
+        ]]
     }
 
     private func exchange(kind: String, envelope: [String: Any]) throws -> [String: Any] {
