@@ -2,10 +2,10 @@
 
 ## Current runtime
 
-`ObstacleBridgeLinux` is a foreground SwiftPM client. It reads the sectioned
-runtime configuration, owns Linux resources and exposes a local redacted Admin
-projection. It has no Python runtime dependency; the Linux product build is
-`./scripts/build_linux_app.sh`.
+`ObstacleBridgeLinux` is a foreground SwiftPM client. Normal invocation reads
+`ObstacleBridge.cfg`, while `--config <path>` selects another sectioned runtime
+configuration; each starts the admitted Linux stack without a Python runtime
+dependency. The Linux product build is `./scripts/build_linux_app.sh`.
 
 `ObstacleBridgeCore` owns portable codecs, SecureLink and myudp state,
 compression policy, ChannelMux service transitions, service-catalog replacement,
@@ -128,6 +128,10 @@ adjacent field is the known gap that keeps the package open.
 
 - Linux has no separate local `proxy_provider`; this is intentionally distinct
   from the delivered outbound WebSocket HTTP proxy client.
+- Linux has no native logging/telemetry producer or local HTTP/SOCKS proxy
+  provider yet. The foreground CLI starts its admitted Admin, overlay,
+  ChannelMux, and authenticated-helper TUN stack, but these two Python product
+  surfaces remain explicit parity gaps rather than being silently ignored.
 - Listener-mode myudp rejects `own_servers` and `remote_servers`: a listener
   does not infer a target peer or bind a competing service map per child.
 - Packet policy does not admit IPv6 jumbograms or encrypted payloads, and its

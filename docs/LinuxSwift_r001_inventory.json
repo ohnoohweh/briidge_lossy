@@ -126,6 +126,7 @@
       "disposition": "retain-or-thin",
       "files": [
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdapters.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxForegroundOptions.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminConfigurationStore.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminServer.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperAdapter.swift",
@@ -218,9 +219,9 @@
       "id": "runtime-packaging",
       "requirements": ["REQ-RUN-001", "REQ-RUN-002"],
       "python_implementations": ["pyproject.toml", "scripts/build_synology_spk.py", "src/obstacle_bridge/launcher.py"],
-      "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/main.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/main.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxForegroundOptions.swift"],
       "python_tests": ["tests/unit/test_build_synology_spk.py::test_build_spk_emits_info_and_payload_archive"],
-      "swift_tests": [],
+      "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxForegroundOptionsTests.swift::defaultsToPythonConfigurationName", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxForegroundOptionsTests.swift::configStartsForegroundWithoutRunVerb"],
       "parity_tests": [],
       "linux_swift": {"applicability": "not-applicable", "status": "not-applicable", "reason": "Python-version and Synology-SPK requirements define the Python package product, not the foreground Swift executable."}
     },
