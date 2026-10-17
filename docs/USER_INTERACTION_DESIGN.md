@@ -16,9 +16,9 @@ The main goals are:
 
 This document complements:
 
-- [SERVICE_DEFINITION_DESIGN.md](/home/ohnoohweh/quic_br/docs/SERVICE_DEFINITION_DESIGN.md) for structured service configuration
-- [WEBADMIN_DESIGN.md](/home/ohnoohweh/quic_br/docs/WEBADMIN_DESIGN.md) for the current delivered admin surface
-- [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md) for secure-link trust and transport protection concepts
+- [SERVICE_DEFINITION_DESIGN.md](SERVICE_DEFINITION_DESIGN.md) for structured service configuration
+- [WEBADMIN_DESIGN.md](WEBADMIN_DESIGN.md) for the current delivered admin surface
+- [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md) for secure-link trust and transport protection concepts
 
 ## Product stance
 

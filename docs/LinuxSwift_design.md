@@ -115,7 +115,8 @@ graph.
 
 Only incomplete packages appear below. The DoD column records the present
 design/evidence boundary rather than restating product requirements; the
-adjacent field is the known gap that keeps the package open.
+adjacent field is the known gap that keeps the package open. The R007 evidence
+packages are consecutive: each produces the entry evidence for the next.
 
 | Package | DoD / current design | Known gap |
 | --- | --- | --- |
@@ -125,8 +126,9 @@ adjacent field is the known gap that keeps the package open.
 | `LSW-SC.2L-F` | Implement separate Linux TCP, QUIC, and WebSocket lifecycle owners for the Core runtime contracts. **DoD:** each owner translates its own Core connect/send/receive/close/timer effects into POSIX/NIO operations and reports completion, EOF, TLS/proxy/QUIC failure, and monotonic time back as typed inputs; each has independent cancellation and epoch fencing; tests prove no owner wraps or delegates lifecycle to `ObstacleBridgeLinuxReconnectSupervisor`, and Python-peer qualification covers reconnect plus stale-completion rejection for all three transports. | The live runtime selects TCP/QUIC/WebSocket lifecycle owners that construct their lower POSIX/NIO sessions and retain independent candidate rotation, authenticated-session, cancellation, epoch admission, receive-worker, and retry-timer state; `ObstacleBridgeLinuxConfiguredRuntime` publishes only the active redacted projection. TCP connection-failure retry, WebSocket HTTP-upgrade rejection, and TCP/WebSocket immediate-EOF close handling are qualified, and the live-owner Python-peer test directly qualifies retired protected-frame rejection after reconnect for TCP and WebSocket. A Python `aioquic` peer proves the QUIC owner can reconnect. QUIC protected stale-frame qualification is explicitly deferred: the attempted SwiftNIO/aioquic SecureLink exchange fails in lower QUIC packet parsing before the SecureLink callback runs. |
 | `LSW-SC.2L-G` | Qualify the admitted Linux SC.2 composition after `LSW-SC.2L-C` through `LSW-SC.2L-F`. **DoD:** the Linux-host suite runs Admin, service-catalog, SecureLink, UDP, TCP, QUIC, and WebSocket caller evidence against a Python peer; the inventory maps every Core contract to caller and test; unsupported TUN, proxy-provider, and persisted-secret capabilities remain fail-closed with explicit diagnostics. | The inventory maps each admitted lifecycle caller and current evidence. TCP/WebSocket direct protected stale-frame rejection and immediate-EOF close handling are qualified; TCP connection-failure retry and WebSocket HTTP-upgrade rejection are also qualified, with receive/retry effects owned by the selected lifecycle-owner instance. QUIC is deferred because its SwiftNIO/aioquic SecureLink test fails below the SecureLink callback during QUIC packet parsing. The full overlay matrix is workflow-dispatch-only; final G qualification cannot be claimed until the deferred QUIC lifecycle condition is complete. |
 | `LSW-005B.2` | QUIC remains a bounded outbound reliable-stream client boundary. | No safe Linux listener, custom-trust-root interoperability, peer-family mapping, or ChannelMux service-flow qualification exists on the pinned backend. |
-| `LSW-R007.5` | Bounded admission and retained redacted health records are implemented across runtime owners. | Signed physical iPhone and released-host sustained-load evidence, including external termination correlation, is unavailable. |
-| `LSW-R007.6` | Runtime owners provide bounded controlled-stop and prior-lifetime state. | Linux privileged TUN, signed macOS, and physical iOS common-path restart qualification remains unavailable; server shutdown can still leave a bridge child alive. |
+| `LSW-R007.5b` | A signed physical iPhone carries sustained bidirectional tunnel traffic at a selected operating threshold; evidence includes redacted Admin snapshots, retained health, queue and inflight high-water, drops, slow writes, and correlated termination or no-termination reports. | Physical iPhone load evidence is unavailable. |
+| `LSW-R007.5c` | Each released host owner carries sustained traffic at its selected threshold; evidence includes retained health, bounded-admission measurements, packet directions, and process or termination reports. | Released-host load evidence is unavailable. |
+| `LSW-R007.6` | Linux privileged TUN, signed macOS, and physical iOS qualify common paths and supervised restart with bounded shutdown, child-process results, replacement readiness, and pre/post health classification. | Common-path restart qualification remains unavailable; server shutdown can still leave a bridge child alive. |
 | `LSW-009` | Python helper mode selects `linux-swift` and `darwin-swift`. Both artifacts expose embedded commit, dirty flag, and diff digest through `--helper-build-info`; startup rebuilds an absent, mismatched, or dirty checkout before launching the authenticated protocol-v1 Unix-socket server. The Linux native helper places each full-tunnel default in an isolated policy table and keeps every kernel-connected local subnet, including bridge and host-only interfaces, on the main table; persisted policy records support crash recovery. Core owns the shared frame and JSON-control codec. The macOS server forwards authenticated helper-originated packet and event frames and translates Python routing payloads, including the omitted-gateway subnet-peer default, into its bundled Darwin hook contract. | Signed macOS qualification remains required for real `utun` packet carry and route/DNS cleanup. The Linux host cannot compile or exercise the Darwin-only server and privileged hook path. |
 
 ## Known product limitations
@@ -148,6 +150,14 @@ adjacent field is the known gap that keeps the package open.
   capabilities explicitly.
 
 ## Evidence and inventory
+
+`scripts/capture_runtime_qualification.py` captures a version-pinned Admin
+evidence bundle without generating traffic or retaining packet contents. It
+requires build, authenticated endpoint, sampling, traffic-source, output, and
+platform termination-report provenance. It records redacted status, peer and
+TUN/routing projections and packet-direction deltas, rejecting missing health,
+packet counters, or authenticated ready SecureLink. Traffic-generator and
+termination evidence remain externally correlated inputs.
 
 `LinuxSwift_r001_inventory.json` and `LinuxSwift_source_map.md` remain the
 machine-readable and reviewable source-ownership maps. The focused Linux

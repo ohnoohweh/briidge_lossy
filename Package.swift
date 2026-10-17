@@ -3,9 +3,19 @@ import PackageDescription
 
 var products: [Product] = [
     .library(name: "ObstacleBridgeCore", targets: ["ObstacleBridgeCore"]),
+    .executable(name: "ObstacleBridgeLogCollector", targets: ["ObstacleBridgeLogCollector"]),
+    .executable(name: "ObstacleBridgeProxyWorker", targets: ["ObstacleBridgeProxyWorker"]),
 ]
 
 var targets: [Target] = [
+    .executableTarget(
+        name: "ObstacleBridgeProxyWorker",
+        path: "swift/Sources/ObstacleBridgeProxyWorker"
+    ),
+    .executableTarget(
+        name: "ObstacleBridgeLogCollector",
+        path: "swift/Sources/ObstacleBridgeLogCollector"
+    ),
     .systemLibrary(
         name: "CZlib",
         pkgConfig: "zlib",

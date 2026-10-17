@@ -685,7 +685,19 @@ REQ-WSP-013:
 REQ-PRX-001:
   integration_tests:
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
+    - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
+    - tests/unit/test_proxy_worker.py::test_runner_proxy_child_owns_http_socks_and_snapshots
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth
+    - tests/unit/test_proxy_worker.py::test_runner_reports_lost_proxy_worker_without_in_process_fallback
+    - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
+    - tests/unit/test_proxy_worker.py::test_runner_rejects_unknown_proxy_worker_selection
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions
+    - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
+    - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
+    - tests/unit/test_proxy_worker.py::test_native_proxy_idle_clients_do_not_starve_new_connections
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser
@@ -957,6 +969,9 @@ REQ-LIFE-010:
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
     - tests/unit/test_tun_helper_protocol.py::test_packet_frame_preserves_binary_boundaries
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
+    - tests/unit/test_tun_helper_protocol.py::test_frame_size_bound_matches_native_and_rejects_oversized_header
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1EnforcesPythonCompatibleFrameLimit
+    - tests/unit/test_tun_helper_client_server.py::test_oversized_header_closes_only_offending_connection
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_uses_client_when_backend_is_external
@@ -1525,6 +1540,15 @@ REQ-ADM-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
   unit_tests:
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_oversized_frame_before_body
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_embedded_restart_callback
+    - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
+    - tests/unit/test_admin_worker.py::test_admin_worker_failed_listener_start_leaves_no_child
+    - tests/unit/test_admin_worker.py::test_runner_selects_and_stops_admin_worker
+    - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
     - tests/unit/test_admin_web_payloads.py::test_setup_build_stages_admin_web_assets_from_repo_root
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
@@ -1536,6 +1560,24 @@ REQ-ADM-001:
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
+    - tests/unit/test_native_log_collector.py::test_native_collector_accepts_python_records_and_queries
+    - tests/unit/test_native_log_collector.py::test_native_collector_refuses_non_loopback_bind
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes
+    - tests/unit/test_managed_logging_worker.py::test_private_query_lock_has_a_bounded_wait
+    - tests/unit/test_managed_logging_worker.py::test_python_runner_admin_queries_managed_worker_and_restores_sinks
+    - tests/unit/test_managed_logging_worker.py::test_child_record_relay_survives_collector_restart_and_rejects_queries
+    - tests/unit/test_managed_logging_worker.py::test_proxy_child_sends_logs_to_selected_collector
+    - tests/unit/test_managed_logging_worker.py::test_failed_relay_allocation_does_not_prevent_proxy_start
+    - tests/unit/test_managed_logging_worker.py::test_child_producer_drops_records_when_relay_is_stalled
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_restarts_selected_worker_after_crash
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_retries_failed_restart_without_fallback
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_discards_reply_from_retired_generation
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_drops_records_when_collector_is_stalled
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_rejects_unsupported_sinks
+    - tests/unit/test_managed_logging_worker.py::test_private_native_worker_start_failure_does_not_replace_handlers
+    - tests/unit/test_managed_logging_worker.py::test_runner_main_activates_private_worker_around_runtime
+    - tests/unit/test_managed_logging_worker.py::test_unsupported_file_is_rejected_before_logging_configuration
     - tests/unit/test_debug_logging_aliases.py::test_udp_log_sender_drops_transport_failure_without_raising
     - tests/unit/test_debug_logging_aliases.py::test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call
     - tests/unit/test_debug_logging_aliases.py::test_admin_telemetry_status_is_redacted_and_reports_worker_liveness
@@ -1567,6 +1609,8 @@ REQ-ADM-001:
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
     - tests/unit/test_runtime_health.py::test_ring_is_bounded_and_classifies_only_the_last_lifecycle_marker
     - tests/unit/test_runtime_health.py::test_runner_lifecycle_persists_and_reports_redacted_health
+    - tests/unit/test_runtime_qualification_capture.py::test_preflight_requires_health_counters_and_ready_secure_link
+    - tests/unit/test_runtime_qualification_capture.py::test_capture_writes_redacted_admin_snapshots_and_delta
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_runner_persists_portable_runtime_health_evidence
     - ios/tests/test_m3_native_sources.py::test_ipserver_packet_tunnel_provider_source_exists

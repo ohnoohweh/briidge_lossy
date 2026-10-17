@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
+import shutil
 import socket
+import subprocess
 import sys
 
 import pytest
@@ -11,6 +13,17 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+@pytest.fixture(scope="session")
+def native_proxy_worker_executable(tmp_path_factory: pytest.TempPathFactory) -> str:
+    swiftc = shutil.which("swiftc")
+    if not swiftc or sys.platform not in {"darwin", "linux"}:
+        pytest.skip("native proxy worker requires swiftc on macOS or Linux")
+    source = ROOT / "swift/Sources/ObstacleBridgeProxyWorker/main.swift"
+    binary = tmp_path_factory.mktemp("native-proxy") / "proxy-worker"
+    subprocess.run([swiftc, str(source), "-o", str(binary)], check=True, capture_output=True, text=True)
+    return str(binary)
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:

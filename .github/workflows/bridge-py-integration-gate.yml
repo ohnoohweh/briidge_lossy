@@ -71,7 +71,7 @@ jobs:
 
           changed_files="$(git diff --name-only "$base" "$head")"
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker)/|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -124,6 +124,15 @@ jobs:
 
       - name: Run Linux Swift live-runtime closure tests
         run: swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+
+      - name: Test native log collector interoperability
+        run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
+
+      - name: Test private proxy worker
+        run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test private Admin worker
+        run: pytest -q tests/unit/test_admin_worker.py
 
       - name: Run Linux Swift integration subset
         # These tests own multiple peers and network processes. Four workers
@@ -337,6 +346,15 @@ jobs:
         # The remaining probes each invoke swiftc.  Three workers use the
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
+
+      - name: Test native log collector interoperability
+        run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
+
+      - name: Test private proxy worker
+        run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test private Admin worker
+        run: pytest -q tests/unit/test_admin_worker.py
 
   bridge-py-integration-macos-host-runner:
     name: Integration Gate (macOS host-runner qualification)

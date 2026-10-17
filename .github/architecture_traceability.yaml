@@ -21,6 +21,7 @@ ARC-CMP-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_survives_delayed_reply
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_composed_faults_and_control_idle
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
+    - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeOverlayConnectionPolicyTests.swift::projectsAndUpdatesConnectionState
     - tests/unit/test_connection_lifecycle.py::test_event_snapshot_round_trip_preserves_state_epoch_and_reason
@@ -39,6 +40,17 @@ ARC-CMP-001:
     - tests/unit/test_embeddable_core.py::test_runner_schema_snapshot_includes_proxy_provider_fields
     - tests/unit/test_embeddable_core.py::test_runner_starts_proxy_provider_and_exposes_status_snapshot
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_egress_mode_is_system
+    - tests/unit/test_proxy_worker.py::test_runner_proxy_child_owns_http_socks_and_snapshots
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth
+    - tests/unit/test_proxy_worker.py::test_runner_reports_lost_proxy_worker_without_in_process_fallback
+    - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
+    - tests/unit/test_proxy_worker.py::test_runner_rejects_unknown_proxy_worker_selection
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions
+    - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
+    - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
+    - tests/unit/test_proxy_worker.py::test_native_proxy_idle_clients_do_not_starve_new_connections
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
     - tests/unit/test_proxy_server.py::test_python_proxy_server_system_egress_uses_upstream_connect_proxy
@@ -397,6 +409,8 @@ ARC-CMP-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
 
 ARC-CMP-004:
+  # Desktop worker isolation and Python/native exchangeability remain planned;
+  # the existing process evidence below does not by itself qualify that plan.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve
@@ -524,6 +538,9 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
     - tests/unit/test_tun_helper_protocol.py::test_packet_frame_preserves_binary_boundaries
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
+    - tests/unit/test_tun_helper_protocol.py::test_frame_size_bound_matches_native_and_rejects_oversized_header
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1EnforcesPythonCompatibleFrameLimit
+    - tests/unit/test_tun_helper_client_server.py::test_oversized_header_closes_only_offending_connection
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot
@@ -703,12 +720,23 @@ ARC-CMP-005:
   # The shared Telemetry tab retains only bounded delivery and collector
   # summaries; it never reflects telemetry event payloads or credentials.
   unit_tests:
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_oversized_frame_before_body
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_embedded_restart_callback
+    - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
+    - tests/unit/test_admin_worker.py::test_admin_worker_failed_listener_start_leaves_no_child
+    - tests/unit/test_admin_worker.py::test_runner_selects_and_stops_admin_worker
+    - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status
     - tests/unit/test_runtime_health.py::test_record_uses_portable_redacted_schema
     - tests/unit/test_runtime_health.py::test_ring_is_bounded_and_classifies_only_the_last_lifecycle_marker
     - tests/unit/test_runtime_health.py::test_runner_lifecycle_persists_and_reports_redacted_health
+    - tests/unit/test_runtime_qualification_capture.py::test_preflight_requires_health_counters_and_ready_secure_link
+    - tests/unit/test_runtime_qualification_capture.py::test_capture_writes_redacted_admin_snapshots_and_delta
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::recordUsesPortableRedactedSchema
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::ringIsBoundedAndClassifiesOnlyTheLastLifecycleMarker
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeHealthTests.swift::persistenceKeepsOnlyCompleteRedactedRing
@@ -744,6 +772,24 @@ ARC-CMP-005:
     - tests/unit/test_runner_events.py::test_get_debug_logs_falls_back_to_log_file_when_ring_is_empty
     - tests/unit/test_debug_logging_aliases.py::test_log_file_moves_previous_session_to_lastsession_on_start
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
+    - tests/unit/test_native_log_collector.py::test_native_collector_accepts_python_records_and_queries
+    - tests/unit/test_native_log_collector.py::test_native_collector_refuses_non_loopback_bind
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes
+    - tests/unit/test_managed_logging_worker.py::test_private_query_lock_has_a_bounded_wait
+    - tests/unit/test_managed_logging_worker.py::test_python_runner_admin_queries_managed_worker_and_restores_sinks
+    - tests/unit/test_managed_logging_worker.py::test_child_record_relay_survives_collector_restart_and_rejects_queries
+    - tests/unit/test_managed_logging_worker.py::test_proxy_child_sends_logs_to_selected_collector
+    - tests/unit/test_managed_logging_worker.py::test_failed_relay_allocation_does_not_prevent_proxy_start
+    - tests/unit/test_managed_logging_worker.py::test_child_producer_drops_records_when_relay_is_stalled
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_restarts_selected_worker_after_crash
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_retries_failed_restart_without_fallback
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_discards_reply_from_retired_generation
+    - tests/unit/test_managed_logging_worker.py::test_supervisor_drops_records_when_collector_is_stalled
+    - tests/unit/test_managed_logging_worker.py::test_private_worker_rejects_unsupported_sinks
+    - tests/unit/test_managed_logging_worker.py::test_private_native_worker_start_failure_does_not_replace_handlers
+    - tests/unit/test_managed_logging_worker.py::test_runner_main_activates_private_worker_around_runtime
+    - tests/unit/test_managed_logging_worker.py::test_unsupported_file_is_rejected_before_logging_configuration
     - tests/unit/test_debug_logging_aliases.py::test_udp_log_sender_drops_transport_failure_without_raising
     - tests/unit/test_debug_logging_aliases.py::test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call
     - tests/unit/test_debug_logging_aliases.py::test_admin_telemetry_status_is_redacted_and_reports_worker_liveness

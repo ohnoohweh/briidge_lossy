@@ -19,8 +19,11 @@ The project currently targets six platform families:
 
 ## For Users
 
+Desktop process ownership and the remaining Python/native worker
+exchangeability plan are described in [Architecture](docs/ARCHITECTURE.md#desktop-process-isolation-and-exchangeability).
+
 ### Whitepaper
-The complete whitepaper is available as a rendered preview at [`docs/WHITEPAPER.html`](https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html). It covers:
+The complete whitepaper is available in [`docs/WHITEPAPER.html`](docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
 - Transport-level behavior for IP, ICMP, UDP, TCP, QUIC, DNS, HTTP/HTTPS, and WebSockets.
 - The layered overlay architecture used here: RTT/liveness, reliable DATA/CONTROL framing, and ChannelMux OPEN/DATA/CLOSE multiplexing.
@@ -45,11 +48,11 @@ For new users, the simplest path is to download the project from GitHub, install
 1. Download the source from GitHub:
 
 ```bash
-git clone https://github.com/ohnoohweh/briidge_lossy.git
+git clone https://github.com/<account>/<repository>.git
 cd briidge_lossy
 ```
 
-If you do not use `git`, download the ZIP from `https://github.com/ohnoohweh/briidge_lossy`, extract it, and open a terminal in the extracted project directory.
+If you do not use `git`, download the ZIP from the repository's GitHub page, extract it, and open a terminal in the extracted project directory.
 
 2. Create and activate a local Python virtual environment:
 
@@ -272,7 +275,7 @@ Solution with an ObstacleBridge WebSocket bridge:
 ```json
 {
   "overlay_transport": "ws",
-  "ws_peer": "ohnoohweh.synology.me",
+  "ws_peer": "peer.example.net",
   "ws_peer_addresses": ["203.0.113.20", "2001:db8::20"],
   "ws_peer_port": 443,
   "ws_tls": true,
@@ -924,18 +927,22 @@ Operational notes:
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--proxy-provider-enabled`, `--no-proxy-provider-enabled` | `False` | Enable the local explicit proxy provider. |
+| `--proxy-provider-worker` | `off` | Desktop Python runner: select `python` or `native` to isolate the provider in a child process. Both require the explicitly unrestricted destination policy described below. |
+| `--proxy-provider-worker-native-executable` | unset | Path to the `ObstacleBridgeProxyWorker` executable; if unset, it must be on `PATH`. |
 | `--proxy-provider-bind` | `127.0.0.1` | Local bind address for proxy listeners. Keep this on loopback unless you intentionally want LAN clients to use this proxy. |
 | `--proxy-provider-http-port` | `13881` | Local HTTP and HTTPS `CONNECT` proxy listener port. |
 | `--proxy-provider-socks5-port` | `13882` | Local SOCKS5 TCP `CONNECT` proxy listener port. |
 | `--proxy-provider-protocols` | `http-connect socks5-connect` | Enabled proxy protocol families. Supported values are `http-connect`, `socks5-connect`, `http`, and `socks5`. |
 | `--proxy-provider-auth` | `{"mode":"none","username":"","token":""}` | JSON auth object. Use `mode` `token`, `basic`, or `password` plus `username` and `token` or `password` to require proxy authentication. |
 | `--proxy-provider-egress` | `{"mode":"system","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX. |
-| `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. |
+| `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. The Python proxy does not enforce restrictions; the worker refuses restricted or unspecified policies rather than silently ignoring them. |
 | `--log-proxy-provider` | inherited | Override the proxy provider logger level, for example `INFO` or `DEBUG`. |
 
 #### Browser setup for HTTP, HTTPS, and SOCKS
 
 ObstacleBridge can expose a first-party local proxy provider for browser or application traffic. The provider is separate from the overlay peer connection: it listens on local loopback ports, accepts explicit proxy clients, and then opens direct outbound connections from the ObstacleBridge runtime.
+
+To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--proxy-provider-worker native` and `--proxy-provider-policy '{"allow_private_destinations":true,"blocked_host_patterns":[]}'`. This explicitly allows private destinations and provides no destination blocklist; use it only where that policy is appropriate. Build the native executable with `swift build --product ObstacleBridgeProxyWorker` and supply its path with `--proxy-provider-worker-native-executable`. The native child currently requires a `127.0.0.1` bind and `--proxy-provider-egress '{"mode":"direct"}'`; unsupported settings fail startup. Neither child restarts automatically yet.
 
 The default local ports are:
 
@@ -1579,7 +1586,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `65` | `1019` |
+| Python CLI/runtime, including macOS Python | `70` | `1064` |
 | macOS Swift app | `1` | `72` |
 | iOS app/extension | `32` | `209` |
 
@@ -1718,6 +1725,6 @@ For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime 
 - `docs/SECURE_LINK_DESIGN.md` — Phase 0 design baseline for transport-independent tunnel authentication and encryption.
 - `docs/refered_docs/` — referenced examples, diagrams, images, and the smoke-test cheat sheet.
 - `.github/requirements_traceability.yaml` — product-requirement to test traceability manifest used by the requirements guard and coverage report.
-- `docs/WHITEPAPER.html` — full whitepaper requested for this repository update. Rendered preview: `https://htmlpreview.github.io/?https://raw.githubusercontent.com/ohnoohweh/briidge_lossy/main/docs/WHITEPAPER.html`
+- `docs/WHITEPAPER.html` — full project whitepaper.
 - `docs/README_TESTING.md` — consolidated testing catalog, execution commands, and regression coverage notes.
 - `wireshark/` — Wireshark dissectors grouped by framing/version.

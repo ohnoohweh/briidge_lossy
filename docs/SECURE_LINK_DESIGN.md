@@ -713,15 +713,15 @@ Current state:
 
 Evidence:
 
-- [SECURE_LINK_DESIGN.md](/home/ohnoohweh/quic_br/docs/SECURE_LINK_DESIGN.md):
+- [SECURE_LINK_DESIGN.md](SECURE_LINK_DESIGN.md):
   - `Current State Summary`
   - trust model, dependency policy, and certificate-profile sections
-- [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md):
+- [ARCHITECTURE.md](ARCHITECTURE.md):
   - `2. Secure-link layer`
   - component decomposition and ownership boundary
-- [SYSTEM_BOUNDARY.md](/home/ohnoohweh/quic_br/docs/SYSTEM_BOUNDARY.md):
+- [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md):
   - secure-link certificate input profile and external responsibility split
-- [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md):
+- [REQUIREMENTS.md](REQUIREMENTS.md):
   - active `REQ-AUT-*` secure-link requirement set
 
 ### PSK Runtime Slice
@@ -734,26 +734,26 @@ Current state:
 Evidence:
 
 - runtime:
-  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+  - [bridge.py](../src/obstacle_bridge/bridge.py)
     `SecureLinkPskSession`
 - architecture:
-  - [ARCHITECTURE.md](/home/ohnoohweh/quic_br/docs/ARCHITECTURE.md)
+  - [ARCHITECTURE.md](ARCHITECTURE.md)
     `2. Secure-link layer`
 - requirements:
-  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+  - [REQUIREMENTS.md](REQUIREMENTS.md)
     `REQ-AUT-001` to `REQ-AUT-005`
 - unit evidence:
-  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
-  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
-  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
+  - [test_runner_overlay_transports.py](../tests/unit/test_runner_overlay_transports.py)
+  - [test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
 - integration evidence:
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py):
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py):
     - `test_overlay_e2e_tcp_secure_link_psk_happy_path`
     - `test_overlay_e2e_secure_link_psk_happy_path_other_transports`
     - `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
     - listener multi-peer secure-link cases
 - traceability:
-  - [.github/requirements_traceability.yaml](/home/ohnoohweh/quic_br/.github/requirements_traceability.yaml)
+  - [.github/requirements_traceability.yaml](../.github/requirements_traceability.yaml)
     `REQ-AUT-001` to `REQ-AUT-005`
 
 ### PSK Hardening State
@@ -788,26 +788,26 @@ Current status:
 Evidence:
 
 - runtime:
-  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+  - [bridge.py](../src/obstacle_bridge/bridge.py)
     rekey hello/reply/commit/done handling, `secure_link_rekey_after_frames`, `secure_link_rekey_after_seconds`, and `/api/secure-link/rekey`
 - requirements:
-  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+  - [REQUIREMENTS.md](REQUIREMENTS.md)
     `REQ-AUT-006` and `REQ-AUT-010`
 - unit evidence:
-  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_psk_rekey_rotates_session_id_and_keeps_data_flowing`
-  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_time_based_rekey_rotates_session_without_extra_data_frames`
-  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_operator_forced_rekey_rotates_session_and_reports_trigger`
 - integration evidence:
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_channel_healthy`
 
 #### Nonce and counter lifecycle
@@ -845,17 +845,17 @@ Current status:
 Evidence:
 
 - runtime:
-  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+  - [bridge.py](../src/obstacle_bridge/bridge.py)
     counter validation, session-id rotation, and exhaustion fail-closed behavior
 - requirements:
-  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+  - [REQUIREMENTS.md](REQUIREMENTS.md)
     `REQ-AUT-006`
 - unit evidence:
-  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py):
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py):
     - `test_data_counter_zero_is_rejected_as_lifecycle_violation`
     - `test_counter_exhaustion_fails_closed_before_nonce_wrap`
 - integration evidence:
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
 - remaining gap:
   - the planned reconnect/replay hardening tests listed below are not all implemented yet
@@ -928,96 +928,96 @@ Current status:
 Evidence:
 
 - runtime:
-  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+  - [bridge.py](../src/obstacle_bridge/bridge.py)
     malformed-frame rejection, auth-failure handling, retry throttling, recovery reconnect scheduling, and admin/API snapshot fields
 - requirements:
-  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+  - [REQUIREMENTS.md](REQUIREMENTS.md)
     `REQ-AUT-007`, `REQ-AUT-008`, and `REQ-AUT-009`
 - unit evidence:
-  - [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py):
+  - [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py):
     - malformed/out-of-order fail-closed tests
     - wrong-PSK retry/backoff tests
     - authenticated failure recovery reconnect tests
     - `test_client_local_secure_link_auth_times_out_without_peer_confirmation`
     - operational diagnostics assertions
-  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+  - [test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
 - integration evidence:
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py):
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py):
     - `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
     - `test_overlay_e2e_tcp_secure_link_psk_happy_path`
     - `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
 - supporting contract:
-  - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+  - [README_TESTING.md](README_TESTING.md)
     secure-link coverage tables and criteria notes
 
 #### Delivered Hardening Coverage
 
 - integration test for rekey under live traffic
   - evidence:
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
 - unit and integration tests for time-based rekey
   - evidence:
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_time_based_rekey_rotates_session_without_extra_data_frames`
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_after_time_threshold`
 - unit and integration tests for operator-forced rekey
   - evidence:
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_operator_forced_rekey_rotates_session_and_reports_trigger`
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_operator_forced_rekey`
 - integration test for the delayed-`REKEY_DONE` cutover window on a single live myudp UDP channel
   - evidence:
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_myudp_secure_link_psk_rekey_done_delay_keeps_same_udp_channel_healthy`
 - unit tests for counter overflow handling
   - evidence:
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_counter_exhaustion_fails_closed_before_nonce_wrap`
 - unit tests for reserved/invalid counter lifecycle handling
   - evidence:
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_data_counter_zero_is_rejected_as_lifecycle_violation`
 - unit tests for malformed-frame fail-closed behavior
   - evidence:
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_malformed_frame_after_authentication_fails_closed`
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_unexpected_rekey_commit_fails_closed`
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_auth_failure_unregisters_server_mux_routes`
 - integration test for persistent wrong-PSK failure throttling and observability
   - evidence:
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
 - unit tests for wrong-PSK retry/backoff behavior
   - evidence:
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_wrong_psk_retries_with_bounded_backoff_and_reports_retry_window`
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
     `test_reconnect_respects_remaining_retry_backoff_after_auth_failure`
 - unit and integration checks for stronger operational diagnostics
   - evidence:
-    [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
-    [test_secure_link_psk.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_psk.py)
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
+    [test_secure_link_psk.py](../tests/unit/test_secure_link_psk.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_happy_path`
     `test_overlay_e2e_tcp_secure_link_psk_wrong_secret_rejected`
     `test_overlay_e2e_tcp_secure_link_psk_rekeys_under_live_traffic`
 - integration test for reconnect without nonce reuse
   - evidence:
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_reconnects_with_fresh_session`
 - integration tests for replay rejection after reconnect and after rekey
   - evidence:
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_replay_after_reconnect_is_rejected`
     `test_overlay_e2e_tcp_secure_link_psk_replay_after_rekey_is_rejected`
 - integration test for malformed-frame fail-closed behavior as a full subprocess case
   - evidence:
-    [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+    [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_psk_malformed_frame_fails_closed_subprocess`
 
 ### Certificate-Based Mutual Authentication
@@ -1029,29 +1029,29 @@ Current state:
 Evidence:
 
 - runtime/config:
-  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+  - [bridge.py](../src/obstacle_bridge/bridge.py)
     `secure_link_mode=cert`, file-path material loading, detached-signature/root verification, certificate handshake path, cert-mode rekey reuse of the shared secure-link data plane, and peer-scoped trust diagnostics
 - generated test material:
-  - [tests/fixtures/secure_link_cert/__init__.py](/home/ohnoohweh/quic_br/tests/fixtures/secure_link_cert/__init__.py)
+  - [tests/fixtures/secure_link_cert/__init__.py](../tests/fixtures/secure_link_cert/__init__.py)
     runtime generation of the trust anchors, signed cert bodies, detached signatures, private keys, and revoked-serial fixtures used by the certificate-mode unit and integration suites
 - unit evidence:
-  - [test_secure_link_cert.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_cert.py)
+  - [test_secure_link_cert.py](../tests/unit/test_secure_link_cert.py)
     happy path, trust-anchor mismatch, wrong-role rejection, expired/not-yet-valid/deployment-mismatch rejection, revoked-serial rejection, and cert-mode operator rekey
-  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
+  - [test_runner_overlay_transports.py](../tests/unit/test_runner_overlay_transports.py)
     cert-mode wrapping and required startup material validation
-  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+  - [test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
     peer-scoped cert identity/trust payload shaping
 - integration evidence:
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_secure_link_cert_happy_path_transports`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_rejection_matrix`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_operator_forced_rekey`
 - requirements/testing references:
-  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+  - [REQUIREMENTS.md](REQUIREMENTS.md)
     `REQ-AUT-011` to `REQ-AUT-014`
-  - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+  - [README_TESTING.md](README_TESTING.md)
     `Current certificate-mode secure-link coverage`
 
 ### Operational Controls
@@ -1063,30 +1063,30 @@ Current state:
 Evidence:
 
 - runtime/config:
-  - [bridge.py](/home/ohnoohweh/quic_br/src/obstacle_bridge/bridge.py)
+  - [bridge.py](../src/obstacle_bridge/bridge.py)
     `POST /api/secure-link/reload`, live revocation/local-identity/all apply, aggregate reload summaries, peer-scoped disconnect/trust-enforcement metadata, and atomic cert-bundle validation before activation
 - unit evidence:
-  - [test_secure_link_cert.py](/home/ohnoohweh/quic_br/tests/unit/test_secure_link_cert.py)
+  - [test_secure_link_cert.py](../tests/unit/test_secure_link_cert.py)
     revocation reload drop, atomic local-identity reload rejection, and successful local-identity apply with new material generation
-  - [test_runner_overlay_transports.py](/home/ohnoohweh/quic_br/tests/unit/test_runner_overlay_transports.py)
+  - [test_runner_overlay_transports.py](../tests/unit/test_runner_overlay_transports.py)
     peer-targeted secure-link reload dispatch and unknown-peer rejection
-  - [test_admin_web_payloads.py](/home/ohnoohweh/quic_br/tests/unit/test_admin_web_payloads.py)
+  - [test_admin_web_payloads.py](../tests/unit/test_admin_web_payloads.py)
     aggregate reload-result shaping on `/api/status` and peer-scoped reload/disconnect fields on `/api/peers`
 - integration evidence:
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_revocation_reload_happy_path`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_revocation_reload_noop`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_happy_path`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_local_identity_reload_rejected`
-  - [test_overlay_e2e.py](/home/ohnoohweh/quic_br/tests/integration/test_overlay_e2e.py)
+  - [test_overlay_e2e.py](../tests/integration/test_overlay_e2e.py)
     `test_overlay_e2e_tcp_secure_link_cert_full_reload_applies_atomically`
 - requirements/testing references:
-  - [REQUIREMENTS.md](/home/ohnoohweh/quic_br/docs/REQUIREMENTS.md)
+  - [REQUIREMENTS.md](REQUIREMENTS.md)
     `REQ-AUT-015` to `REQ-AUT-019`
-  - [README_TESTING.md](/home/ohnoohweh/quic_br/docs/README_TESTING.md)
+  - [README_TESTING.md](README_TESTING.md)
     `Current certificate-mode secure-link coverage`
 
 ## Minimal operational model
