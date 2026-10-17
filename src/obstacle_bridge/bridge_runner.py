@@ -204,6 +204,7 @@ class Runner:
         self._session_labels: List[str] = []
         self._proxy_provider_servers: Dict[str, ObstacleBridgeProxyServer] = {}
         self._proxy_provider_last_error: str = ""
+        self._proxy_provider_worker = None
         self._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
         self._tun_helper_client: Optional[TunHelperClient] = None
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
@@ -753,6 +754,9 @@ class Runner:
     async def _start_proxy_provider(self) -> None:
         cfg = self._proxy_provider_config_snapshot()
         log = logging.getLogger("proxy_provider")
+        worker_mode = str(getattr(self.args, "proxy_provider_worker", "off") or "off")
+        if worker_mode not in {"off", "python", "native"}:
+            raise ValueError("unsupported proxy worker implementation")
         log.info(
             "[PROXY] provider config enabled=%s bind=%s http_port=%s socks5_port=%s protocols=%r auth_mode=%s",
             cfg["enabled"],
@@ -771,6 +775,23 @@ class Runner:
         if not http_enabled and not socks_enabled:
             self._proxy_provider_last_error = "no proxy protocols enabled"
             log.warning("[PROXY] provider enabled but no supported protocols are configured")
+            return
+        if worker_mode in {"python", "native"}:
+            from .bridge_proxy_worker import ProxyWorker, validate_worker_policy
+
+            try:
+                validate_worker_policy(cfg)
+            except ValueError:
+                self._proxy_provider_last_error = "proxy worker destination policy unsupported"
+                raise
+            worker = ProxyWorker(worker_mode, getattr(self.args, "proxy_provider_worker_native_executable", None))
+            try:
+                await self._await_with_async_diag("proxy_provider.worker.start", worker.start(cfg))
+            except Exception:
+                self._proxy_provider_last_error = "proxy worker failed to start"
+                raise
+            self._proxy_provider_worker = worker
+            self._proxy_provider_last_error = ""
             return
         credentials = self._proxy_provider_credentials(cfg.get("auth") or {})
         if (cfg.get("auth") or {}).get("mode") not in (None, "", "none") and credentials is None:
@@ -803,6 +824,9 @@ class Runner:
 
     async def _stop_proxy_provider(self) -> None:
         log = logging.getLogger("proxy_provider")
+        if self._proxy_provider_worker is not None:
+            worker, self._proxy_provider_worker = self._proxy_provider_worker, None
+            await self._await_with_async_diag("proxy_provider.worker.stop", worker.stop())
         for name, server in list(self._proxy_provider_servers.items()):
             try:
                 await self._await_with_async_diag(f"proxy_provider.{name}.stop", server.stop())
@@ -813,14 +837,16 @@ class Runner:
 
     def _proxy_provider_snapshot(self) -> dict:
         cfg = self._proxy_provider_config_snapshot()
+        worker = self._proxy_provider_worker
         return {
             "enabled": bool(cfg["enabled"]),
             "configured": cfg,
-            "listeners": {
+            "listeners": worker.listeners if worker is not None else {
                 name: server.snapshot()
                 for name, server in sorted(self._proxy_provider_servers.items())
             },
-            "last_error": self._proxy_provider_last_error,
+            "last_error": worker.last_error if worker is not None else self._proxy_provider_last_error,
+            **({"worker": {"implementation": worker.implementation, "state": "unavailable" if worker.last_error else "running"}} if worker is not None else {}),
         }
 
     async def _start_tun_helper(self) -> None:
@@ -4096,6 +4122,9 @@ def parse_runtime_args(
     args = cli.parse_args(argv, default_runtime_registrars())
     _attach_runtime_cli_metadata(args, cli)
     if apply_logging:
+        from .bridge_logging_worker import validate_managed_logging_args
+
+        validate_managed_logging_args(args)
         DebugLoggingConfigurator.from_args(args).apply()
     return args
 
@@ -4648,12 +4677,7 @@ def _maybe_reexec_with_windows_tun_privileges(
     raise SystemExit(0)
 
 
-def main(argv: Optional[List[str]] = None) -> None:
-    args = parse_runtime_args(argv, apply_logging=True)
-    log = logging.getLogger("runner")
-    _maybe_reexec_with_linux_tun_privileges(args, argv=argv, log=log)
-    _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
-    _maybe_reexec_with_windows_tun_privileges(args, argv=argv, log=log)
+def _run_configured_main(args, argv, log) -> None:
     r = Runner(args)
     installed_signal_handlers = _install_process_signal_handlers(r, log)
     log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])
@@ -4702,6 +4726,18 @@ def main(argv: Optional[List[str]] = None) -> None:
             r._restart_exit_code,
             r._restart_reason,
         )
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    args = parse_runtime_args(argv, apply_logging=True)
+    log = logging.getLogger("runner")
+    _maybe_reexec_with_linux_tun_privileges(args, argv=argv, log=log)
+    _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
+    _maybe_reexec_with_windows_tun_privileges(args, argv=argv, log=log)
+    from .bridge_logging_worker import activate_managed_logging
+
+    with activate_managed_logging(args):
+        _run_configured_main(args, argv, log)
 
 if __name__ == '__main__':
     main()

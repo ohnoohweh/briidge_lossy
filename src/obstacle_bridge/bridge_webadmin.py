@@ -1907,7 +1907,8 @@ class AdminWebUI:
                     if k == "limit":
                         limit = int(v)
                         break
-        if bool(getattr(self.args, "log_udp_only", False)):
+        private_worker = str(getattr(self.args, "log_worker", "off") or "off") != "off"
+        if private_worker or bool(getattr(self.args, "log_udp_only", False)):
             try:
                 from .bridge_logging_ipc import fetch_remote_log_lines
 
@@ -1919,7 +1920,7 @@ class AdminWebUI:
             remote = remote or {"available": False, "lines": [], "error": "logger unavailable"}
             result = {
                 "lines": list(remote.get("lines", [])),
-                "source": "remote_udp",
+                "source": "private_worker" if private_worker else "remote_udp",
                 "logger_available": bool(remote.get("available", False)),
                 "logger_error": str(remote.get("error", "") or ""),
             }
@@ -1933,6 +1934,8 @@ class AdminWebUI:
         payload = {"ok": True, "lines": result["lines"], "count": len(result["lines"]),
                    "source": result["source"], "logger_available": result["logger_available"],
                    "logger_error": result["logger_error"]}
+        if private_worker and isinstance(remote.get("worker_status"), dict):
+            payload["logger_worker"] = remote["worker_status"]
         self._log_api_response("/api/logs", 200, payload, summary=f"count={len(result['lines'])}")
         await self._send_json(writer, 200, payload)
 

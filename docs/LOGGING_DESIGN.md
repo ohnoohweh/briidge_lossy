@@ -62,9 +62,56 @@ The receiver is intentionally an independent process. Its output and rotation
 configuration use the established logging options, so a failed or restarted
 receiver does not require a bridge restart.
 
+The native `ObstacleBridgeLogCollector` executable can also be launched
+manually for the same v1 Python producer and query messages:
+
+```bash
+swift run ObstacleBridgeLogCollector --bind 127.0.0.1:15140
+```
+
+It binds IPv4 loopback only, keeps a ring bounded by 1,200 lines and 1 MiB,
+caps query replies at 8 KiB for Darwin's UDP limits, and writes to stdout; it
+does not yet provide file rotation, native producers, or a complete
+configuration/status surface. UDP v1 has no authentication or
+confidentiality, including on loopback: other local users can inject and read
+logs. Use it only on a trusted host. The authenticated desktop worker boundary
+and its remaining work are described in [ARCHITECTURE.md](ARCHITECTURE.md#desktop-process-isolation-and-exchangeability).
+
+### Private supervised logging (desktop Python runtime)
+
+The Python runner can launch either implementation as its logging child:
+
+```bash
+python -m obstacle_bridge --no-redirect --log-worker python
+python -m obstacle_bridge --no-redirect --log-worker native --log-worker-native-executable /path/to/ObstacleBridgeLogCollector
+```
+
+If the native path is omitted, the executable must be on `PATH`. This mode
+uses an inherited Unix datagram socket for records and correlated Admin queries
+and a separate lifetime socket; no UDP endpoint or socket path is exposed.
+Records and replies are bounded to 8 KiB, writes are nonblocking, and failed
+queries return unavailable without falling back to runtime logging. The child
+exits when its owner's lifetime socket closes. The runner reports initial
+startup failure rather than substituting another implementation. A monitor
+restarts a lost child using the same implementation with bounded backoff, fresh
+socket pairs, and a new generation. Logs and the recent-log ring can be lost
+during recovery; the bridge continues without waiting for the collector. The
+Admin log response includes a payload-free `logger_worker` status with state,
+implementation, generation, restart, failed-start, and dropped-record counts.
+The child writes to inherited stdout; the normal
+launcher redirects that output unless `--no-redirect` is supplied. Persistent
+file output, UDP sinks and `--debug-stderr` cannot be combined with this mode;
+such configurations are rejected before sinks are opened. Native host
+supervision, native producers, cross-worker delivery, and complete output and
+configuration parity remain future work. Like other inherited descriptors,
+the channel is not a defense against a hostile debugger running as the same
+user.
+
 ### Admin Web log view
 
-When `--log-udp-only` is enabled, `/api/logs` uses a separate bounded UDP
+When `--log-worker` is enabled, `/api/logs` uses the private worker channel and
+reports `source: "private_worker"`. When `--log-udp-only` is enabled,
+`/api/logs` uses a separate bounded UDP
 request/reply exchange with the receiver instead of the bridge's local ring.
 The Admin-side query target defaults to `--log-udp-target`; use
 `--log-admin-udp-target HOST:PORT` when the receiver's query endpoint differs.

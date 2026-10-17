@@ -17,6 +17,100 @@ The current runtime can be understood in eight layers:
 
 The peer-address protocol is a delivered transport-adjacent layer. It obtains the address observed by the connected peer before optional SecureLink processing, and does not change connection readiness. SecureLink remains a delivered runtime slice above it and below the compression/reliability path.
 
+## Desktop process isolation and exchangeability
+
+### Current ownership and gaps
+
+On macOS and Linux, the Python runner and native hosts presently compose the
+peer stack, Admin Web, proxy listeners by default, and most shared-TUN
+coordination in the runtime process. A TUN helper can own privileged device and host-policy work
+across a local IPC boundary; Python and native protocol-v1 helper servers exist,
+but the Apple native app also has an XPC helper path and an in-process fallback.
+These are not yet interchangeable shared-TUN routing workers. A standalone
+Python UDP log receiver and nonblocking Python sender are available by
+configuration. A separately launched native loopback-only collector accepts
+the same Python UDP records and log queries. UDP is unauthenticated even on
+loopback. The Python desktop runtime can instead select a Python or native
+logging child through `--log-worker`: inherited Unix socket pairs provide a
+private capability for bounded, nonblocking records and correlated Admin
+queries, and a lifetime socket causes the child to exit on owner loss. A
+Python monitor restarts the selected implementation with bounded backoff;
+replacement sockets fence old queries, while the recent-log ring is lost on
+restart. Admin reports the logging worker's generation, restart and drop
+counts. The native collector keeps a 1,200-line / 1 MiB bounded ring and writes
+to stdout. This is a logging-specific slice, not the common worker protocol:
+native supervisors and producers are not wired and file rotation is unavailable
+in this mode. The capability
+protects against unprivileged processes without the inherited descriptors, not
+a hostile debugger acting as the same user.
+
+The Python runner can select `--proxy-provider-worker python` or `native`. The
+selected child owns the HTTP and SOCKS listeners and client connections; the parent receives
+periodic snapshots over a bounded inherited Unix stream and observes control
+socket loss. Proxy credentials are handed over that socket, not command-line
+arguments or the environment. Parent loss closes the child and listeners;
+child loss is reported without falling back to an in-process proxy. The child
+does not yet restart automatically or use the managed logging child. The native
+worker currently accepts only IPv4 loopback listener binds and direct egress,
+caps each listener at 128 concurrent clients, and uses 30-second socket I/O
+timeouts; it fails startup for unsupported settings. Native hosts do not yet
+supervise either implementation, and Linux mixed-process qualification remains
+to be verified. The Python proxy provider
+does not enforce destination-policy restrictions, so the worker refuses to
+start unless the operator explicitly chooses unrestricted destinations and no
+blocked patterns. Complete native/Python parity is not claimed by this process slice. Admin Web, peer-stack,
+and shared-TUN routing processes are not yet implemented.
+
+The existing TUN-helper protocol-v1 framing has a 1 MiB payload ceiling in
+both Python and Swift, checked from the header before waiting for the body.
+This protects that existing IPC boundary but does not implement the common
+worker protocol, generation fencing, or worker supervision in `IPC-1`.
+
+### Target ownership decisions
+
+The desktop supervisor owns configuration, worker selection, identities,
+startup order, restart policy, and aggregation, but not the workers' I/O or
+protocol state. Admin Web, logging, each peer's complete transport / peer-address
+protocol / SecureLink / compression / ChannelMux stack, the shared-TUN router,
+and the proxy provider each have an independent process lifetime. Listener
+acceptance may use a separate listener owner, but each admitted peer has an
+isolated stack and explicit peer identity. The shared-TUN worker is distinct
+from the privileged TUN helper: it owns peer/channel routing and packet
+arbitration; the helper retains device and host-policy privilege.
+
+Python and native workers implement the same versioned, language-neutral local
+IPC contracts and can be selected independently on macOS and Linux. The
+protocol must negotiate role, version, capabilities, and generation before
+accepting operations. Control requests have bounded frames, correlation IDs,
+explicit success/error replies and deadlines; asynchronous events identify
+their worker and generation. Data-plane frames are bounded and preserve packet
+boundaries or ordered stream semantics as appropriate. Local IPC endpoints and
+credentials are restricted to the intended principals; secrets and payloads
+are excluded from logs and status. Peer state from a retired generation cannot
+be admitted after a restart. TCP backpressure, UDP/TUN shedding, authentication
+gating, and existing per-peer routing remain enforced across process boundaries.
+Each worker has bounded startup, health, shutdown and recovery behavior;
+failure is reported without silently replacing the selected implementation.
+iOS extensions and Windows retain their existing execution boundaries; this
+desktop plan does not assert they can spawn these workers.
+
+### Remaining work packages
+
+Packages are removed when all their criteria are evidenced, not merely when a
+protocol type or test harness exists. Mixed-runtime evidence must cover Python
+and native implementations on both macOS and Linux, including both directions
+of supervisor/worker selection where applicable.
+
+| Package | Remaining work and definition of done |
+| --- | --- |
+| `IPC-1` — common transport and supervision | Define and implement the bounded authenticated local control/data protocol, capability negotiation, worker generation fencing, startup handoff, and supervised teardown in Python and Swift. DoD: Python/native peers exchange requests, responses, events and binary data in both directions; malformed, oversized, unauthenticated, timed-out and stale-generation input fails closed; parent/child loss and restart do not leak workers, credentials or sockets on macOS and Linux. |
+| `IPC-2` — logging worker | Give logging a supervised process with independently selectable Python/native receivers and bounded nonblocking producer delivery. DoD: all desktop workers feed either receiver, Admin reads bounded status/recent logs, storage and collector loss cannot block data paths, and restart, malformed input, saturation and mixed implementations are tested on both hosts. |
+| `IPC-3` — Admin Web worker | Move HTTP/UI/auth/session ownership to an exchangeable process connected to supervisor and workers through IPC. DoD: existing APIs, live subscriptions, config confirmation/secrets, logs, restart and reconnect operations retain their security and semantics; worker failures and concurrent clients remain bounded and observable; Python/native Admin works with either supervisor on both hosts. |
+| `IPC-4` — per-peer stack workers | Isolate each peer's full transport-through-ChannelMux stack and provide explicit listener/accepted-peer ownership. DoD: all supported desktop transports, security modes, compression and TCP/UDP/TUN services interoperate with existing peers; peer-specific operations, snapshots, epochs, backpressure and reconnect survive independent worker failures without cross-peer state or plaintext leakage, for each Python/native pairing on both hosts. |
+| `IPC-5` — shared TUN worker | Move shared-interface routing, ownership and peer/channel arbitration into a separate exchangeable worker while retaining the privileged helper boundary. DoD: real bidirectional TUN traffic, simultaneous peers, route/DNS lifecycle, authenticated readiness, restart fencing, helper loss and cleanup are verified with Python/native worker and helper combinations on authorized macOS and Linux hosts. |
+| `IPC-6` — proxy worker | Move the explicit HTTP/SOCKS proxy listeners and connection owners into an exchangeable process. DoD: listener/auth/destination policy, egress, stream backpressure, status and cleanup match existing behavior; either desktop supervisor can run Python or native proxy workers, with failed starts and worker loss isolated and tested on both hosts. |
+| `IPC-7` — integrated qualification and migration | Wire configuration, packaging, installation, process health and operator diagnostics into both desktop products. DoD: all supported Python/native worker combinations pass automated cross-process and mixed-overlay traffic, kill/restart, shutdown and resource-leak tests; privileged and signed-host evidence is recorded, existing deployments have a documented migration/rollback path, and no production path silently falls back to in-process ownership. |
+
 ## Connection lifecycle propagation and rotation
 
 ### Connection lifecycle contract

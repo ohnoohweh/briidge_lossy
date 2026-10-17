@@ -14,6 +14,14 @@ ObstacleBridge is expected to:
 - expose runtime state and configuration through the admin web interface
 - remain testable under reconnect, restart, concurrency, and lossy-path scenarios
 
+Desktop process isolation and independently selectable Python/native workers
+are a planned compatibility target; current delivery and remaining evidence
+are tracked in [ARCHITECTURE.md](ARCHITECTURE.md#desktop-process-isolation-and-exchangeability).
+The existing Python and native TUN-helper protocol-v1 implementations reject
+frames with declared or encoded payloads over 1 MiB.
+The standalone native loopback log collector accepts the Python UDP v1 sender
+and bounded log-query format; authenticated supervision remains pending.
+
 The motivating user use-cases and the external assumptions around them are documented separately in [SYSTEM_BOUNDARY.md](SYSTEM_BOUNDARY.md) and the user-facing sections of [README.md](../README.md). The requirement IDs below describe what the project itself is expected to do inside that broader system context.
 
 Secure-link authentication and encryption work now has three delivered requirement slices in this document:
@@ -100,6 +108,7 @@ keeping credentials out of endpoint diagnostics and persisted status.
 ## Explicit proxy-provider requirements
 
 - `REQ-PRX-001`: On iOS packet-tunnel providers, ObstacleBridge may run a first-party Swift local proxy provider for explicit proxy clients without embedding a Python proxy runtime in the Network Extension. The same proxy protocol behavior shall have a Python runtime equivalent for parity validation and non-extension use. The initial proxy provider shall support HTTP absolute-form requests, HTTP `CONNECT`, optional HTTP Basic proxy authentication, SOCKS5 method negotiation, SOCKS5 username/password authentication, SOCKS5 TCP `CONNECT`, IPv4/IPv6/domain SOCKS5 destination forms, bidirectional byte tunneling after connect, lifecycle start/stop ownership by the active runtime, and operator-visible listener/counter/error snapshots. On Python runtimes, the proxy-provider egress policy defaults to system proxy resolution for outbound provider traffic, reusing the same CONNECT tunnel path as the WebSocket peer-client proxy bootstrap; system mode uses WinHTTP/PAC/manual endpoint resolution on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` environment resolution on Linux/POSIX. When that resolver returns no proxy endpoint, provider egress falls back to direct connection for that destination. SOCKS4, SOCKS5 `UDP ASSOCIATE`, transparent TCP interception, PAC serving, HTTP caching, content rewriting, and HTTP/2 or HTTP/3 proxy semantics are outside the first provider slice.
+- Implementation note (desktop proxy worker): the Python runner can select a Python or native child that owns proxy listeners and connections, receives credentials over an inherited local socket, and returns bounded status snapshots. Incomplete requested credentials or any destination policy other than explicitly unrestricted fail startup in this mode. The native child currently accepts loopback listener binds and direct egress only; native supervisors, full configuration parity, automatic child recovery and destination-policy enforcement remain open.
 
 Implementation note: shared Swift Core owns HTTP/SOCKS request parsing,
 authority normalization, proxy-header rewriting, and credential validation.
@@ -194,6 +203,7 @@ Current implementation note:
 - Implementation note (telemetry qualification): `scripts/qualify_telemetry.py` measures saturated producer p99 latency and explicit drops against a caller-provided threshold. It is local pre-qualification evidence only and cannot approve public production deployment.
 - Implementation note (telemetry configuration): Python separates `telemetry_client` from `telemetry_server`. The client section contains enablement, endpoint, spool location, certificate-directory, and address-family settings. Its defaults are `https://127.0.0.1:18443/v1/telemetry/batches` and `/var/lib/obstaclebridge/telemetry-client`; a remote client replaces the loopback endpoint with its collector address. The server section contains the isolated HTTPS collector's enablement, bind/family/port, durable state, TLS identity, trusted client CA, and revocation settings. The client installation ID is derived from the client certificate common name. A normal Python bridge startup supervises an enabled collector child, preflights TLS material, and reports collector failures to stdout without failing bridge startup. Credential contents remain outside Admin snapshots.
 - Implementation note (UDP logging configuration): `log_udp_target` and `log_admin_udp_target` are editable endpoint strings, not logging-level fields. WebAdmin preserves their `host:port` values or allows them to be cleared; it does not substitute a level such as `CRITICAL`.
+- Implementation note (private logging child): the desktop Python runner can explicitly select a Python or native logging child with bounded inherited Unix-socket delivery and Admin queries; unsupported sink combinations fail before logging setup. A crashed child is replaced with the same implementation and a fresh generation, and Admin exposes bounded recovery and drop counts. Native-host supervision and persistent file output are not yet implemented for this mode.
 - Implementation note (testability): The delivered integration harness now generates localhost TLS fixture material at runtime and allocates loopback port blocks by probing host availability before selecting a case slot. This keeps localhost private keys out of version control and preserves stable Linux shared integration coverage even when unrelated host daemons already bind uncommon local ports.
 
 - `REQ-AUT-001`: The project shall provide one transport-independent PSK secure-link capability for overlay authentication and protected data carriage across `myudp`, `tcp`, `ws`, and `quic`.

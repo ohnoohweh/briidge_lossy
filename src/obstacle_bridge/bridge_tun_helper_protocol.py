@@ -8,6 +8,7 @@ from typing import Any, Optional
 
 
 TUN_HELPER_PROTOCOL_VERSION = 1
+TUN_HELPER_MAX_FRAME_BYTES = 1_048_576
 _FRAME_HEADER = struct.Struct(">BI")
 
 
@@ -28,6 +29,8 @@ class TunHelperControlMessage:
 
 def encode_frame(kind: TunHelperFrameKind, payload: bytes) -> bytes:
     body = bytes(payload)
+    if len(body) > TUN_HELPER_MAX_FRAME_BYTES:
+        raise ValueError("TUN helper frame exceeds maximum payload size")
     return _FRAME_HEADER.pack(int(kind), len(body)) + body
 
 
@@ -39,6 +42,8 @@ def try_decode_frame(data: bytes) -> Optional[tuple[TunHelperFrameKind, bytes, b
         kind = TunHelperFrameKind(kind_raw)
     except ValueError as exc:
         raise ValueError(f"unknown TUN helper frame kind: {kind_raw}") from exc
+    if length > TUN_HELPER_MAX_FRAME_BYTES:
+        raise ValueError("TUN helper frame exceeds maximum payload size")
     frame_total = _FRAME_HEADER.size + int(length)
     if len(data) < frame_total:
         return None

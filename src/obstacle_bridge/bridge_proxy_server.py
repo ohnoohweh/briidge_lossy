@@ -200,6 +200,14 @@ class ObstacleBridgeProxyProviderSettings:
     @staticmethod
     def register_cli(parser: argparse.ArgumentParser) -> None:
         parser.add_argument(
+            "--proxy-provider-worker", choices=["off", "python", "native"], default="off",
+            help="Run the desktop proxy in a private worker; destination policy must explicitly allow private destinations with no blocked patterns.",
+        )
+        parser.add_argument(
+            "--proxy-provider-worker-native-executable", default=None,
+            help="Path to ObstacleBridgeProxyWorker for --proxy-provider-worker native.",
+        )
+        parser.add_argument(
             "--proxy-provider-enabled",
             dest="proxy_provider_enabled",
             action=argparse.BooleanOptionalAction,
