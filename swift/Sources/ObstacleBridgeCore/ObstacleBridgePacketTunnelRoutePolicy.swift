@@ -47,14 +47,16 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
     }
 
     static func ipv6RouteContains(host: String, network: String, prefix: Int) -> Bool {
-        guard (0...128).contains(prefix), let hostBytes = ipv6Bytes(host), let networkBytes = ipv6Bytes(network) else {
+        guard (0...128).contains(prefix), let hostBytes = ipv6Bytes(host), let networkBytes = ipv6Bytes(network),
+              hostBytes.count == 16, networkBytes.count == 16 else {
             return false
         }
         if prefix == 0 { return true }
         let fullBytes = prefix / 8
         let remainingBits = prefix % 8
-        if fullBytes > 0 && hostBytes[0..<fullBytes] != networkBytes[0..<fullBytes] { return false }
+        for index in 0..<fullBytes where hostBytes[index] != networkBytes[index] { return false }
         if remainingBits == 0 { return true }
+        guard fullBytes < hostBytes.count else { return false }
         let mask = UInt8(0xff << UInt8(8 - remainingBits))
         return (hostBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask)
     }

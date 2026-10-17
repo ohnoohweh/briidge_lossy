@@ -355,6 +355,21 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(routing.excludedRoutes6 == ["::1/128"])
     }
 
+    @Test func linuxAdmissionAcceptsIPv6DefaultRouteAndHostExclusions() throws {
+        let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "192.0.2.44", "tcp_peer_port": 443],
+            "TUN_routing": [
+                "included_routes6": ["::/0"],
+                "excluded_routes6": ["::1/128", "fe80::/10"],
+            ],
+        ]))
+
+        let plan = try #require(configuration.packetTunnelPlan)
+        #expect(plan.includedRoutes6 == ["::/0"])
+        #expect(plan.excludedRoutes6 == ["::1/128", "fe80::/10", "::ffff:192.0.2.44/128"])
+    }
+
     @Test func coreTunnelRoutingRecordRejectsInvalidCIDR() throws {
         let routing = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: [
             "TUN_routing": ["included_routes": ["not-an-address/24"]],
