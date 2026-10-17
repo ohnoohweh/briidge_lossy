@@ -119,6 +119,33 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
     }
 
+    @Test func metaAndOnboardingRoutesMatchTheShippedAdminWebContract() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let configuration: [String: Any] = [
+            "admin_web": ["admin_web_name": "Linux Admin"],
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "198.51.100.10", "tcp_peer_port": 4433],
+        ]
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: configuration)
+        try server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let meta = try #require(try await getJSON(base + "/api/meta") as? [String: Any])
+        #expect(meta["admin_web_name"] as? String == "Linux Admin")
+        #expect((meta["build"] as? [String: Any])?["available"] as? Bool == false)
+        let profiles = try #require(try await getJSON(base + "/api/onboarding/connection-profiles") as? [String: Any])
+        let profile = try #require((profiles["profiles"] as? [[String: Any]])?.first)
+        #expect(profile["transport"] as? String == "tcp")
+        #expect(profile["peer_host"] as? String == "198.51.100.10")
+        let blueprints = try #require(try await getJSON(base + "/api/onboarding/blueprints") as? [String: Any])
+        #expect(blueprints["blueprints"] as? [[String: Any]] != nil)
+
+        let generated = try #require(try await requestJSON(base + "/api/onboarding/invite/generate", method: "POST", body: ["connection_id": profile["id"] as? String ?? ""]).body as? [String: Any])
+        let token = try #require(generated["invite_token"] as? String)
+        let preview = try #require(try await requestJSON(base + "/api/onboarding/invite/preview", method: "POST", body: ["invite_token": token]).body as? [String: Any])
+        #expect(preview["ok"] as? Bool == true)
+    }
+
     @Test func statusAndPeersAreRedactedAndDescribeLayeredState() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(
             transport: .tcp,

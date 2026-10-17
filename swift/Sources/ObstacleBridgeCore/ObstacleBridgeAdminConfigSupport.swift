@@ -30,9 +30,19 @@ public enum ObstacleBridgeAdminConfigUpdatePort {
 /// Public onboarding HTTP-effect port. Linux owns routing; Core owns token
 /// shape, validation, and preview redaction.
 public enum ObstacleBridgeAdminOnboardingPort {
+    public static func connectionProfiles(runtimeConfig: [String: Any]) -> [[String: Any]] {
+        ObstacleBridgeOnboarding.connectionProfiles(runtimeConfig: ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig))
+    }
+
+    /// A disconnected node has no peer-derived service blueprint.  Keep the
+    /// response envelope stable so the shared Admin Web can render an empty
+    /// selector instead of treating Linux native as an unsupported backend.
+    public static func blueprints() -> [[String: Any]] { [] }
+
     public static func generate(body: Data?, runtimeConfig: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
-        linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
-            method: "POST", body: body, runtimeConfig: runtimeConfig, profiles: [],
+        let flattened = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig)
+        return linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
+            method: "POST", body: body, runtimeConfig: flattened, profiles: connectionProfiles(runtimeConfig: flattened),
             encryptSecrets: { payload in
                 guard !containsSecret(payload) else { throw NSError(domain: "ObstacleBridgeLinux", code: 1, userInfo: [NSLocalizedDescriptionKey: "Linux onboarding secrets are unavailable"]) }
                 return payload

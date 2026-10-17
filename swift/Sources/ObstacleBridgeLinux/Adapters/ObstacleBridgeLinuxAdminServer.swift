@@ -34,6 +34,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let reconnectHandler: (@Sendable () -> Void)?
     private let shutdownHandler: (@Sendable () -> Void)?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
+    private let startedAt = Date()
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
@@ -151,13 +152,14 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         let response: ObstacleBridgeAdminLinuxResponse
         var controlAction: (@Sendable () -> Void)?
-        if method != "GET" && !(method == "POST" && ["/api/config", "/api/config/challenge", "/api/onboarding/invite", "/api/onboarding/preview", "/api/reconnect", "/api/shutdown"].contains(path)) {
+        if method != "GET" && !(method == "POST" && ["/api/config", "/api/config/challenge", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/reconnect", "/api/shutdown"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
             response = staticResponse(path) ?? .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/meta": response = ObstacleBridgeAdminAPI.linuxJSONResponse(metaPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
             let requestedTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
                 .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
@@ -196,9 +198,15 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             }
             controlAction = shutdownHandler
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "shutdown_requested": true]) ?? .init(statusCode: 500, body: Data("{}".utf8))
-        case "/api/onboarding/invite":
+        case "/api/onboarding/connection-profiles":
+            let profiles = ObstacleBridgeAdminOnboardingPort.connectionProfiles(runtimeConfig: adminConfigurationProvider())
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": profiles.count, "profiles": profiles]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/onboarding/blueprints":
+            let blueprints = ObstacleBridgeAdminOnboardingPort.blueprints()
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": blueprints.count, "blueprints": blueprints]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/onboarding/invite", "/api/onboarding/invite/generate":
             response = ObstacleBridgeAdminOnboardingPort.generate(body: body, runtimeConfig: adminConfigurationProvider())
-        case "/api/onboarding/preview":
+        case "/api/onboarding/preview", "/api/onboarding/invite/preview":
             response = ObstacleBridgeAdminOnboardingPort.preview(body: body)
         case "/api/admin-ui":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.uiPayload(runtimeConfig: adminConfigurationProvider(), platform: "linux-swift")) ?? .init(statusCode: 500, body: Data("{}".utf8))
@@ -285,6 +293,23 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "ok": true,
             "config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(flattened),
             "schema": ObstacleBridgeLinuxAdminConfigurationStore.schemaSnapshot(),
+        ]
+    }
+
+    private func metaPayload() -> [String: Any] {
+        let configuration = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())
+        return [
+            "app": "ObstacleBridgeLinux",
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "uptime_sec": max(0, Int(Date().timeIntervalSince(startedAt))),
+            "admin_web_name": configuration["admin_web_name"] as? String ?? "",
+            "overlay_transport": statusProvider().transport,
+            "dashboard_enabled": true,
+            "milestone": "C",
+            // Build identity belongs to the executable target.  The adapter
+            // must not invent it when embedded by tests or another host.
+            "build": ["available": false],
+            "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
         ]
     }
 
