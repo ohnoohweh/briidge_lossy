@@ -4,6 +4,19 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func observabilityWritesLifecycleLogAndBoundedTelemetrySpool() throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-observability-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let log = directory.appendingPathComponent("runtime.log")
+        let producer = ObstacleBridgeLinuxObservability(configuration: [
+            "debug_logging": ["log_file": log.path],
+            "telemetry_client": ["telemetry_enabled": true, "telemetry_spool_directory": directory.appendingPathComponent("spool").path],
+        ], sessionID: "test-session")
+        producer.record("runtime.starting")
+        #expect(String(decoding: try Data(contentsOf: log), as: UTF8.self).contains("runtime.starting"))
+        #expect(producer.telemetryStatus()["pending_events"] as? Int == 1)
+    }
+
     @Test func admitsExplicitHelperControlSocketWithoutAdmittingTunStartup() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
             "runner": ["overlay_transport": "tcp"],

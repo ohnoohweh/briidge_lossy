@@ -133,10 +133,10 @@ adjacent field is the known gap that keeps the package open.
 
 - Linux has no separate local `proxy_provider`; this is intentionally distinct
   from the delivered outbound WebSocket HTTP proxy client.
-- Linux has no native logging/telemetry producer or local HTTP/SOCKS proxy
-  provider yet. The foreground CLI starts its admitted Admin, overlay,
-  ChannelMux, and authenticated-helper TUN stack, but these two Python product
-  surfaces remain explicit parity gaps rather than being silently ignored.
+- Linux records foreground lifecycle events to the configured local log file
+  and, when `telemetry_client.telemetry_enabled` is set, to the shared bounded
+  private telemetry spool. A Linux HTTPS uploader and the local HTTP/SOCKS
+  proxy provider remain parity gaps.
 - Listener-mode myudp rejects `own_servers` and `remote_servers`: a listener
   does not infer a target peer or bind a competing service map per child.
 - Packet policy does not admit IPv6 jumbograms or encrypted payloads, and its
