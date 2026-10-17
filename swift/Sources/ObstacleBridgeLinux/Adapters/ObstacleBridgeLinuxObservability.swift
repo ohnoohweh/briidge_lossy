@@ -63,9 +63,17 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         let data = Data(line.utf8)
         let manager = FileManager.default
         try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if !manager.fileExists(atPath: fileURL.path) { manager.createFile(atPath: fileURL.path, contents: nil) }
+        if !manager.fileExists(atPath: fileURL.path) {
+            _ = manager.createFile(atPath: fileURL.path, contents: nil)
+        }
         if let handle = try? FileHandle(forWritingTo: fileURL) {
-            try? handle.seekToEnd(); try? handle.write(contentsOf: data); try? handle.close()
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                // Logging is best effort; the runtime must remain available if the log cannot be written.
+            }
+            _ = try? handle.close()
         }
     }
 }
