@@ -234,8 +234,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let live = liveSnapshotProjection
         statusLock.unlock()
         return .init(
-            transport: base.transport, state: base.state, attempts: base.attempts,
-            failureReason: base.failureReason, configuredCandidates: base.configuredCandidates,
+            // The configured transport is deliberately reset during failed
+            // epoch cleanup.  The coordinator remains the authority for the
+            // live lifecycle, retry count, and actionable failure reason;
+            // publishing the reset projection here hid a terminal connect
+            // failure from the Admin Web UI.
+            transport: base.transport, state: live.state, attempts: live.attempts,
+            failureReason: live.failureReason, configuredCandidates: base.configuredCandidates,
             activeHost: base.activeHost, port: base.port, secureLinkMode: base.secureLinkMode,
             secureLinkState: base.secureLinkState, appReady: base.appReady,
             activeTCPChannels: activeTCPChannels, activeUDPChannels: activeUDPChannels,

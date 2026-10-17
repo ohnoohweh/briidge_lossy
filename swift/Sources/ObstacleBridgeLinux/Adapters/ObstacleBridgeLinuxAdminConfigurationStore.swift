@@ -13,6 +13,13 @@ public final class ObstacleBridgeLinuxAdminConfigurationStore: @unchecked Sendab
 
     public func snapshot() -> [String: Any] { lock.lock(); defer { lock.unlock() }; return configuration }
 
+    /// The Admin Web client consumes Core's grouped schema together with a
+    /// flattened configuration snapshot.  Keep the schema owned by Core so
+    /// the Linux persistence adapter cannot drift from the Python UI contract.
+    public static func schemaSnapshot() -> [String: Any] {
+        ObstacleBridgeRuntimeConfigPort.schemaSnapshot()
+    }
+
     public func apply(updates: [String: Any]) throws -> (configuration: [String: Any], normalizedKeys: [String]) {
         lock.lock(); defer { lock.unlock() }
         let result = try ObstacleBridgeAdminConfigUpdatePort.validatedNextConfiguration(

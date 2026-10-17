@@ -191,7 +191,7 @@ enum ObstacleBridgeLinuxMain {
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, shutdownHandler: requestForegroundShutdown)
                 try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
@@ -203,7 +203,14 @@ enum ObstacleBridgeLinuxMain {
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
-            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory)
+            let admin = ObstacleBridgeLinuxAdminServer(
+                liveRuntime: runtime,
+                adminConfiguration: adminConfiguration,
+                configurationStore: adminConfigurationStore,
+                staticDirectory: staticDirectory,
+                reconnectHandler: runtime.reconnect,
+                shutdownHandler: requestForegroundShutdown
+            )
             try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
             var resources: [Any] = [observability]
             if configuration.listenerMode {
@@ -301,6 +308,14 @@ enum ObstacleBridgeLinuxMain {
             resources.append(timer)
         }
         return resources
+    }
+
+    private static func requestForegroundShutdown() {
+        #if os(Linux)
+        _ = kill(getpid(), SIGTERM)
+        #else
+        exit(0)
+        #endif
     }
 
     private static func writeError(_ message: String) {

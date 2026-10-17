@@ -57,6 +57,45 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
     }
 
+    @Test func adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "admin_web": ["admin_web_auth_disable": true, "admin_web_name": "Linux native"],
+        ])
+        let reconnected = DispatchSemaphore(value: 0)
+        let shutdownRequested = DispatchSemaphore(value: 0)
+        let server = ObstacleBridgeLinuxAdminServer(
+            runtime: runtime,
+            configurationStore: store,
+            reconnectHandler: { reconnected.signal() },
+            shutdownHandler: { shutdownRequested.signal() }
+        )
+        try server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let configuration = try #require(try await getJSON(base + "/api/config") as? [String: Any])
+        #expect(configuration["ok"] as? Bool == true)
+        let values = try #require(configuration["config"] as? [String: Any])
+        #expect(values["admin_web_name"] as? String == "Linux native")
+        let schema = try #require(configuration["schema"] as? [String: Any])
+        #expect(schema["admin_web"] as? [[String: Any]] != nil)
+
+        let challenge = try #require(try await requestJSON(base + "/api/config/challenge", method: "POST", body: ["updates": ["admin_web_name": "Updated"]]).body as? [String: Any])
+        #expect(challenge["ok"] as? Bool == true)
+        #expect(challenge["auth_required"] as? Bool == false)
+        let saved = try #require(try await requestJSON(base + "/api/config", method: "POST", body: ["updates": ["admin_web_name": "Updated"]]).body as? [String: Any])
+        #expect((saved["config"] as? [String: Any])?["admin_web_name"] as? String == "Updated")
+
+        let reconnect = try await requestJSON(base + "/api/reconnect", method: "POST", body: [:])
+        #expect(reconnect.status == 200)
+        #expect((reconnect.body as? [String: Any])?["ok"] as? Bool == true)
+        #expect(reconnected.wait(timeout: .now() + 1) == .success)
+        let shutdown = try await requestJSON(base + "/api/shutdown", method: "POST", body: [:])
+        #expect(shutdown.status == 200)
+        #expect((shutdown.body as? [String: Any])?["shutdown_requested"] as? Bool == true)
+        #expect(shutdownRequested.wait(timeout: .now() + 1) == .success)
+    }
+
     @Test func onboardingHTTPUsesCoreTokenPolicyAndFailsClosedForSecrets() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
@@ -142,9 +181,9 @@ struct ObstacleBridgeLinuxAdminServerTests {
         }
         let config = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/config") as? [String: Any])
         let exported = try #require(config["config"] as? [String: Any])
-        let secure = try #require(exported["secure_link"] as? [String: Any])
-        #expect(secure["secure_link_psk"] as? String == "***hidden***")
-        #expect(secure["secure_link_psk_present"] as? Bool == true)
+        #expect(exported["secure_link_psk"] as? String == "***hidden***")
+        #expect(exported["secure_link_psk_present"] as? Bool == true)
+        #expect(config["schema"] as? [String: Any] != nil)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self).contains("never-expose-this"))
         let advisor = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/security-advisor") as? [String: Any])
         #expect(advisor["highest_severity"] as? String == "recommended")
