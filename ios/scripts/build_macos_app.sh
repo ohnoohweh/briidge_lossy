@@ -224,6 +224,7 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeTunPrivilegedHelperMain.swift"
 
 echo "[build_macos_app] preparing macOS app bundle"

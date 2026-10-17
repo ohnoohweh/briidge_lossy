@@ -493,6 +493,9 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "compiling macOS TUN privileged helper skeleton" in build_script
     assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
     assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
+    helper_build = build_script[build_script.index('echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"'):build_script.index('echo "[build_macos_app] preparing macOS app bundle"')]
+    assert "ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" in helper_build
+    assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in helper_build
     assert 'cp "${HELPER_BINARY_PATH}" "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"' in build_script
     assert 'cat > "${HELPER_PLIST}" <<EOF' in build_script
     assert "<key>AssociatedBundleIdentifiers</key>" in build_script
