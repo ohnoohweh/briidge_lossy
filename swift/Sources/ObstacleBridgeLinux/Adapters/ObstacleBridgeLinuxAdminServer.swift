@@ -29,31 +29,34 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
     private let adminConfigurationProvider: () -> [String: Any]
+    private let staticDirectory: URL?
     private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.staticDirectory = staticDirectory
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.staticDirectory = staticDirectory
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil) {
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
@@ -62,6 +65,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.staticDirectory = staticDirectory
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -142,7 +146,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
-            response = .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
+            response = staticResponse(path) ?? .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
@@ -167,7 +171,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.uiPayload(runtimeConfig: adminConfigurationProvider(), platform: "linux-swift")) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/security-advisor":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.securityAdvisorPayload(runtimeConfig: adminConfigurationProvider(), bindHostFallback: "127.0.0.1")) ?? .init(statusCode: 500, body: Data("{}".utf8))
-        default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))
+        default:
+            if method == "GET", let static = staticResponse(path) { response = static }
+            else { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8)) }
         } }
         let statusText = response.statusCode == 200 ? "200 OK" : response.statusCode == 400 ? "400 Bad Request" : response.statusCode == 404 ? "404 Not Found" : response.statusCode == 405 ? "405 Method Not Allowed" : response.statusCode == 409 ? "409 Conflict" : "500 Internal Server Error"
         let header = "HTTP/1.1 \(statusText)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
@@ -179,6 +185,31 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         """
         <!doctype html><html><head><meta charset="utf-8"><title>ObstacleBridge Linux</title><style>body{font-family:system-ui;margin:2rem;max-width:72rem}pre{background:#111;color:#ddd;padding:1rem;overflow:auto}a{margin-right:1rem}</style></head><body><h1>ObstacleBridge Linux</h1><p>Native runtime Admin dashboard.</p><p><a href="/api/status">Status JSON</a><a href="/api/peers">Peers JSON</a><a href="/api/config">Redacted config</a></p><pre id="status">Loading…</pre><script>const view=document.getElementById('status');async function refresh(){try{view.textContent=JSON.stringify(await (await fetch('/api/status')).json(),null,2)}catch(e){view.textContent='Admin status unavailable: '+e}}refresh();setInterval(refresh,1000)</script></body></html>
         """
+    }
+
+    private func staticResponse(_ requestPath: String) -> ObstacleBridgeAdminLinuxResponse? {
+        guard let base = resolvedStaticDirectory() else { return nil }
+        let relative = (requestPath.isEmpty || requestPath == "/") ? "index.html" : String(requestPath.drop(while: { $0 == "/" }))
+        guard !relative.contains("..") else { return .init(statusCode: 404, body: Data("not found".utf8), contentType: "text/plain; charset=utf-8") }
+        let file = base.appendingPathComponent(relative).standardizedFileURL
+        guard file.path.hasPrefix(base.standardizedFileURL.path + "/"), let body = try? Data(contentsOf: file) else { return nil }
+        let contentType: String
+        switch file.pathExtension.lowercased() {
+        case "html": contentType = "text/html; charset=utf-8"
+        case "css": contentType = "text/css; charset=utf-8"
+        case "js": contentType = "application/javascript; charset=utf-8"
+        case "json": contentType = "application/json; charset=utf-8"
+        case "svg": contentType = "image/svg+xml"
+        case "png": contentType = "image/png"
+        default: contentType = "application/octet-stream"
+        }
+        return .init(statusCode: 200, body: body, contentType: contentType)
+    }
+
+    private func resolvedStaticDirectory() -> URL? {
+        let manager = FileManager.default
+        let candidates = [staticDirectory, URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("admin_web"), CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent().appendingPathComponent("admin_web") }].compactMap { $0 }
+        return candidates.first { manager.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
     }
 
     /// A reconnectable, snapshot-first WebSocket subscription. The Linux

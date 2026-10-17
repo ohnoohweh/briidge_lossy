@@ -120,7 +120,10 @@ fi
 
 BINARY_PATH="${OUTPUT_DIR}/ObstacleBridgeLinux"
 BUILD_INFO_PATH="${OUTPUT_DIR}/ObstacleBridgeLinux.build-info.json"
+ADMIN_WEB_OUTPUT_DIR="${OUTPUT_DIR}/admin_web"
 cp "${BINARY_SOURCE}" "${BINARY_PATH}"
+mkdir -p "${ADMIN_WEB_OUTPUT_DIR}"
+cp -R "${REPO_ROOT}/admin_web/." "${ADMIN_WEB_OUTPUT_DIR}/"
 
 cat > "${BUILD_INFO_PATH}" <<EOF
 {"artifact":"ObstacleBridgeLinux","build_configuration":"${CONFIGURATION}","build_timestamp_utc":"${BUILD_TIMESTAMP_UTC}","commit":"${COMMIT}","diff_sha":"${DIFF_SHA}","dirty":${DIRTY},"source":"swift-package"}
@@ -128,3 +131,4 @@ EOF
 
 echo "[build_linux_app] wrote ${BINARY_PATH}"
 echo "[build_linux_app] wrote ${BUILD_INFO_PATH}"
+echo "[build_linux_app] staged ${ADMIN_WEB_OUTPUT_DIR}"

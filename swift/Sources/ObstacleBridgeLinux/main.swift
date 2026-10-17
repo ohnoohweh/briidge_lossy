@@ -183,13 +183,16 @@ enum ObstacleBridgeLinuxMain {
         do {
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configurationPath)
             let adminConfiguration = try ObstacleBridgeLinuxRuntimeConfiguration.rawConfiguration(path: options.configurationPath)
+            let adminWeb = ObstacleBridgeLinuxAdminWebConfiguration(rawConfiguration: adminConfiguration, portOverride: options.adminPort)
+            guard adminWeb.enabled else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("admin_web.admin_web is disabled; enable it to start the Linux native Admin Web server") }
+            let staticDirectory = URL(fileURLWithPath: adminWeb.staticDirectory)
             let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration)
             observability.record("runtime.starting")
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore)
-                try admin.start(port: options.adminPort)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory)
+                try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
                 let resources: [Any] = [runtime, admin, observability]
@@ -200,8 +203,8 @@ enum ObstacleBridgeLinuxMain {
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
-            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore)
-            try admin.start(port: options.adminPort)
+            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory)
+            try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
             var resources: [Any] = [observability]
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }

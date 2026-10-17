@@ -302,6 +302,25 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(String(decoding: data, as: UTF8.self).contains("Native runtime Admin dashboard"))
     }
 
+    @Test func configuredAdminWebAssetsAreServedAlongsideTheNativeAPI() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-admin-web-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("<html><body>configured admin page</body></html>".utf8).write(to: directory.appendingPathComponent("index.html"))
+        try Data("body{color:green}".utf8).write(to: directory.appendingPathComponent("style.css"))
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, staticDirectory: directory)
+        try server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+        let (page, pageResponse) = try await URLSession.shared.data(from: try #require(URL(string: base + "/")))
+        #expect((pageResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(decoding: page, as: UTF8.self).contains("configured admin page"))
+        let (style, styleResponse) = try await URLSession.shared.data(from: try #require(URL(string: base + "/style.css")))
+        #expect((styleResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("text/css") == true)
+        #expect(String(decoding: style, as: UTF8.self).contains("green"))
+        _ = try #require(try await getJSON(base + "/api/status") as? [String: Any])
+    }
+
     private func getJSON(_ text: String) async throws -> Any {
         let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: text)))
         #expect((response as? HTTPURLResponse)?.statusCode == 200)

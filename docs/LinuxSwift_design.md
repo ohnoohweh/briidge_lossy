@@ -6,9 +6,12 @@
 `ObstacleBridge.cfg`, while `--config <path>` selects another sectioned runtime
 configuration; each starts the admitted Linux stack without a Python runtime
 dependency. The Linux product build is `./scripts/build_linux_app.sh`.
-The startup record includes the loopback Admin URL; `GET /` serves its native
-dashboard and `GET /api/status` remains available while an overlay attempt is
-in progress.
+The Admin listener uses `admin_web.admin_web_bind` and
+`admin_web.admin_web_port` from the selected configuration unless the explicit
+`--admin-port` override is supplied. The product build stages the shared
+`admin_web` assets beside the executable; `GET /` and static assets are served
+from `admin_web.admin_web_dir` or that staged directory, while the native API
+remains available during an overlay attempt.
 
 `ObstacleBridgeCore` owns portable codecs, SecureLink and myudp state,
 compression policy, ChannelMux service transitions, service-catalog replacement,
