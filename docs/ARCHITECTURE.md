@@ -127,6 +127,9 @@ Each worker has bounded startup, health, shutdown and recovery behavior;
 failure is reported without silently replacing the selected implementation.
 iOS extensions and Windows retain their existing execution boundaries; this
 desktop plan does not assert they can spawn these workers.
+The Swift parity gate treats the desktop proxy supervisor and its macOS/Linux
+host adapters as one desktop-specific boundary; iOS changes still require
+their own shared-Apple or macOS parity evidence.
 
 ### Remaining work packages
 

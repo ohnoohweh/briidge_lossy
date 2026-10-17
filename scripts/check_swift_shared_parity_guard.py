@@ -9,6 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SHARED_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeAppleShared/"
 IOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeiOS/"
 MACOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeMacOS/"
+DESKTOP_PROXY_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"
+LINUX_DESKTOP_HOST = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift"
+MACOS_DESKTOP_HOST = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"
 SWIFT_SUFFIX = ".swift"
 PARITY_TEST_FILES = {
     "ios/tests/test_m3_native_sources.py",
@@ -51,6 +54,14 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
     ios_swift = classified["ios_swift"]
     macos_swift = classified["macos_swift"]
     parity_tests = classified["parity_tests"]
+    # Process spawning is a desktop-only boundary: iOS extensions cannot
+    # inherit these workers. Admit this specific macOS host integration only
+    # when the corresponding Linux host and their shared owner also change.
+    desktop_proxy_pair = (
+        set(macos_swift) == {MACOS_DESKTOP_HOST}
+        and DESKTOP_PROXY_SUPERVISOR in _normalize(changed)
+        and LINUX_DESKTOP_HOST in _normalize(changed)
+    )
     errors: list[str] = []
 
     if ios_swift and not (shared_swift or macos_swift):
@@ -60,7 +71,7 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
             f"Expected one of: files under {SHARED_SWIFT_PREFIX} or files under {MACOS_SWIFT_PREFIX}"
         )
 
-    if macos_swift and not (shared_swift or ios_swift):
+    if macos_swift and not (shared_swift or ios_swift or desktop_proxy_pair):
         errors.append(
             "macOS-specific Swift runtime files changed without a shared Swift update or a mirrored iOS Swift update.\n"
             f"Changed macOS files: {', '.join(macos_swift)}\n"

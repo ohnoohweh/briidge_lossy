@@ -699,6 +699,9 @@ REQ-PRX-001:
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
+    - ios/tests/test_swift_shared_parity_guard.py::test_macos_only_swift_change_requires_shared_or_ios_peer_update
+    - ios/tests/test_swift_shared_parity_guard.py::test_both_platform_specific_swift_changes_with_one_parity_test_pass
+    - ios/tests/test_swift_shared_parity_guard.py::test_ios_only_swift_change_requires_shared_or_macos_peer_update
     - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
     - tests/unit/test_native_proxy_supervisor.py::test_owner_loss_closes_proxy_listener
     - tests/unit/test_native_proxy_supervisor.py::test_restricted_policy_fails_closed

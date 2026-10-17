@@ -1626,6 +1626,7 @@ This top-level section is intentionally compact and honest. Keep the detailed be
 Current snapshot from `python3 scripts/report_python_swift_drift.py`:
 
 This section is intentionally narrower than product coverage. It shows the evidence we have that Python and Swift are functionally aligned, not a claim that the two implementations are fully equivalent.
+Desktop-only process ownership is reviewed across macOS and Linux; iOS extensions retain their separate execution boundary.
 
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |
