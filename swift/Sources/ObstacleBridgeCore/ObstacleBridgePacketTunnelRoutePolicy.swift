@@ -57,7 +57,7 @@ enum ObstacleBridgePacketTunnelRoutePolicy {
         for index in 0..<fullBytes where hostBytes[index] != networkBytes[index] { return false }
         if remainingBits == 0 { return true }
         guard fullBytes < hostBytes.count else { return false }
-        let mask = UInt8(0xff << UInt8(8 - remainingBits))
+        let mask = UInt8.max << UInt8(8 - remainingBits)
         return (hostBytes[fullBytes] & mask) == (networkBytes[fullBytes] & mask)
     }
 
