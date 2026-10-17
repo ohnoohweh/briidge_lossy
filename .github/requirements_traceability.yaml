@@ -668,6 +668,8 @@ REQ-WSP-012:
 REQ-WSP-013:
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_tcp_ownserver_proxies_mixed_python_peer_for_ws_and_quic
+  # The portable route-exclusion probe compiles RuntimeConfig with its Core
+  # service catalog and ChannelMux codec dependencies before checking literals.
   unit_tests:
     - ios/tests/test_ios_runtime_config_policy.py::test_runtime_config_peer_exclusions_are_portable_and_dual_stack
     - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists

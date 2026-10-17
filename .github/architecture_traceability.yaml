@@ -184,6 +184,8 @@ ARC-CMP-003:
   # TUN-helper protocol/state/loopback semantics, TUN state/effect policy, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting, plus the remote-service
   # catalog facade required by TCP and UDP owners alongside the Core crypto module, then runs
   # in a bounded, test-name-reporting CI lane.
+  # The separate RuntimeConfig policy probe compiles its Core service and
+  # ChannelMux codec dependencies for portable route and schema checks.
   unit_tests:
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_repairs_stale_six_level_swift_source_paths
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target

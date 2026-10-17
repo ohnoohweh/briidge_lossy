@@ -59,6 +59,7 @@ The active testing focus on this branch is:
   state; its retired SessionCodec companion is absent from all compile lists
 - the iOS TUN helper probe compiles RuntimeConfig with its Core RuntimeConfig schema/scalar policy, packet-tunnel route policy, and NativeService
   and Admin-config dependencies, while the focused RuntimeConfig-policy probe
+  compiles the Core service catalog and ChannelMux codec dependencies and
   verifies portable canonical-schema sections/secret metadata, WebSocket literal-peer exclusions, IPv4-mapped IPv6 route
   derivation, and resolve-family suppression separately from Darwin resolution
   and the portable TUN-probe state owner
