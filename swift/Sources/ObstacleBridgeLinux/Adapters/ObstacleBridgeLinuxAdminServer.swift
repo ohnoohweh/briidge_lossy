@@ -172,7 +172,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         case "/api/security-advisor":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.securityAdvisorPayload(runtimeConfig: adminConfigurationProvider(), bindHostFallback: "127.0.0.1")) ?? .init(statusCode: 500, body: Data("{}".utf8))
         default:
-            if method == "GET", let static = staticResponse(path) { response = static }
+            if method == "GET", let staticAsset = staticResponse(path) { response = staticAsset }
             else { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8)) }
         } }
         let statusText = response.statusCode == 200 ? "200 OK" : response.statusCode == 400 ? "400 Bad Request" : response.statusCode == 404 ? "404 Not Found" : response.statusCode == 405 ? "405 Method Not Allowed" : response.statusCode == 409 ? "409 Conflict" : "500 Internal Server Error"
