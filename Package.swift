@@ -8,7 +8,10 @@ var products: [Product] = [
 var targets: [Target] = [
     .systemLibrary(
         name: "CZlib",
-        pkgConfig: "zlib",
+        // The checked-in module map declares the standard zlib header and
+        // linker flag. Avoid pkg-config here: some distributions publish the
+        // unsupported -DWITH_GZFILEOP C flag, which SwiftPM reports as a
+        // build warning despite the flag being unnecessary for this target.
         providers: [.apt(["zlib1g-dev"]), .brew(["zlib"])]
     ),
     .target(
