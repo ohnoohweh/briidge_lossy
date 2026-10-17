@@ -203,13 +203,17 @@ enum ObstacleBridgeLinuxMain {
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
+            runtime.onDiagnostic = { event, fields in
+                observability.recordDiagnostic(event, fields: fields)
+            }
             let admin = ObstacleBridgeLinuxAdminServer(
                 liveRuntime: runtime,
                 adminConfiguration: adminConfiguration,
                 configurationStore: adminConfigurationStore,
                 staticDirectory: staticDirectory,
                 reconnectHandler: runtime.reconnect,
-                shutdownHandler: requestForegroundShutdown
+                shutdownHandler: requestForegroundShutdown,
+                debugLogsProvider: observability.recentLogLines
             )
             try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
             var resources: [Any] = [observability]

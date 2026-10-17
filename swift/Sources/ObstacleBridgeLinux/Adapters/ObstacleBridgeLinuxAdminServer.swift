@@ -33,13 +33,14 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
     private let reconnectHandler: (@Sendable () -> Void)?
     private let shutdownHandler: (@Sendable () -> Void)?
+    private let debugLogsProvider: ((Int) -> [String])?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private let startedAt = Date()
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.runtimeHealthProvider = { (0, nil) }
@@ -49,9 +50,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
         self.shutdownHandler = shutdownHandler
+        self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
@@ -61,9 +63,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
         self.shutdownHandler = shutdownHandler
+        self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
@@ -75,6 +78,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
         self.shutdownHandler = shutdownHandler
+        self.debugLogsProvider = debugLogsProvider
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -158,6 +162,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         case "/", "/index.html":
             response = staticResponse(path) ?? .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/logs":
+            let limit = Int(target.split(separator: "?", maxSplits: 1).dropFirst().first?
+                .split(separator: "&").first(where: { $0.hasPrefix("limit=") })?
+                .dropFirst("limit=".count) ?? "400") ?? 400
+            let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "lines": lines, "count": lines.count, "source": "linux-swift", "logger_available": debugLogsProvider != nil, "logger_error": debugLogsProvider == nil ? "native observability unavailable" : ""]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/meta": response = ObstacleBridgeAdminAPI.linuxJSONResponse(metaPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":

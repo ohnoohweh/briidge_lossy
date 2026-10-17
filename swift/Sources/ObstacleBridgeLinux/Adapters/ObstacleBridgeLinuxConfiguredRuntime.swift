@@ -369,6 +369,10 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     private let defaultAdmission: ObstacleBridgeLinuxConnectionAdmission
     private var publishedAdmission: ObstacleBridgeLinuxConnectionAdmission
     let compressionTelemetry: ObstacleBridgeMuxCompressionTelemetry
+    /// Redacted connection-attempt evidence supplied by the foreground owner.
+    /// Values are restricted to transport metadata and error text; no key or
+    /// packet data crosses this callback.
+    public var onDiagnostic: ((String, [String: String]) -> Void)?
 
     public var snapshot: ObstacleBridgeLinuxOverlaySnapshot { publishedAdmission.snapshot }
     public var connectionEpoch: UInt64 { publishedAdmission.connectionEpoch }
@@ -416,6 +420,12 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
         for offset in configuration.peerCandidates.indices {
             let index = (admission.candidateStartIndex + offset) % configuration.peerCandidates.count
             let host = configuration.peerCandidates[index]
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            onDiagnostic?("overlay.connect.attempt", [
+                "transport": configuration.transport.rawValue,
+                "candidate_index": String(index), "candidate": host,
+                "port": String(configuration.port),
+            ])
             do {
                 let (lower, lowerSession) = try openLowerSession(host)
                 let session: ObstacleBridgeLinuxConfiguredSession
@@ -437,6 +447,11 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 admission.activeHost = host
                 admission.candidateStartIndex = index
                 admission.activeSession = session
+                onDiagnostic?("overlay.connect.authenticated", [
+                    "transport": configuration.transport.rawValue,
+                    "candidate_index": String(index), "candidate": host,
+                    "elapsed_ms": String(Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)),
+                ])
                 return session
             } catch {
                 if admission.isInFlightConnectionCancelled {
@@ -447,6 +462,12 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 admission.activeHost = nil
                 admission.secureLinkState = configuration.secureLinkPSK == nil ? "off" : "failed"
                 admission.snapshot = .init(transport: configuration.transport.rawValue, state: "failed", attempts: index + 1, failureReason: error.localizedDescription)
+                onDiagnostic?("overlay.connect.failed", [
+                    "transport": configuration.transport.rawValue,
+                    "candidate_index": String(index), "candidate": host,
+                    "elapsed_ms": String(Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000)),
+                    "reason": error.localizedDescription,
+                ])
             }
         }
         throw lastError ?? ObstacleBridgeLinuxOverlayTransportError.invalidFrame

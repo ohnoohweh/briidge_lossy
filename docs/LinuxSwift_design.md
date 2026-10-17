@@ -88,8 +88,8 @@ always returns an explicit build-availability value; executable build identity
 is not fabricated by the reusable Admin adapter.
 
 The remaining route-parity gaps are explicit: Admin authentication/session
-routes; restart; SecureLink rekey/reload and PSK reveal; connection and log
-snapshots; TUN routing/control and helper repair; and connected-peer
+routes; restart; SecureLink rekey/reload and PSK reveal; TUN routing/control
+and helper repair; and connected-peer
 blueprints. Secret-bearing onboarding tokens remain fail-closed because Linux
 has no persisted key-material owner; non-secret token generation and preview
 use the shared Core token format. Each gap must gain a route-level regression
@@ -107,12 +107,18 @@ socket state with the bounded health tail; helper socket paths and session
 tokens are never projected. Foreground `SIGINT` and `SIGTERM` are recorded as
 fixed health origins before controlled shutdown.
 
+`GET /api/logs?limit=<n>` returns a bounded, redacted in-memory Linux runtime
+diagnostic tail. It records candidate attempts, authentication, post-auth
+startup phase failures, listener bind failures, and retry scheduling without
+including packet bytes, secrets, keys, or nonces. IPv6 URI-bracketed peer
+literals are normalized before POSIX resolution so a configured IPv6 fallback
+is admitted as a literal address.
+
 The Linux configuration reader uses the same machine-ID HKDF and
 ChaCha20-Poly1305 `enc:v1:` envelope contract as Python for its read-only
 secret fields. This prevents a stored encrypted SecureLink PSK from being
 mistaken for the wire PSK during native peer authentication; it does not add
 secret export, reveal, or configuration-encryption ownership to Linux.
-
 The authenticated Swift TUN helper is the Linux owner of `/dev/net/tun` and
 the complete packet-policy lifecycle. It applies and rolls back address,
 route, underlay-preserving exclusion, `resolvectl` DNS, optional WAN-scoped

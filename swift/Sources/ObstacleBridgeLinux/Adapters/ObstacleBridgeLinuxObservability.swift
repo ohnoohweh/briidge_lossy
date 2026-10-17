@@ -11,11 +11,14 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     private let spool: ObstacleBridgeTelemetrySpool?
     private let uploader: ObstacleBridgeLinuxTelemetryUploader?
     private var uploadTimer: DispatchSourceTimer?
+    private let maximumRecentLines: Int
+    private var recentLines: [String] = []
 
     public init(configuration: [String: Any], sessionID: String = UUID().uuidString.lowercased()) {
         let logging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: configuration)
         let logPath = (logging["log_file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         fileURL = logPath.isEmpty ? nil : URL(fileURLWithPath: logPath)
+        maximumRecentLines = max(1, min(logging["admin_web_log_max_lines"] as? Int ?? 1_200, 10_000))
         let telemetry = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("telemetry_client", from: configuration)
         let enabled = telemetry["telemetry_enabled"] as? Bool ?? false
         guard enabled,
@@ -48,18 +51,37 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
         uploader?.uploadOnce()
     }
 
+    /// Stores local runtime diagnostics without converting them to telemetry
+    /// field wrappers. This keeps Admin log lines operator-readable and avoids
+    /// sending connection-attempt detail through the telemetry pipeline.
+    public func recordDiagnostic(_ event: String, fields: [String: String]) {
+        writeLog("\(event) \(fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
+    }
+
     public func telemetryStatus() -> [String: Any] {
         var status = spool?.statusSnapshot() ?? ["enabled": false]
         status["uploader"] = uploader?.statusSnapshot() ?? ["available": false]
         return status
     }
 
+    /// Redacted, bounded lines for the shared Admin Web log view.  These are
+    /// lifecycle diagnostics only; packet bytes, key material, and secrets
+    /// never enter this producer.
+    public func recentLogLines(limit: Int = 400) -> [String] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(recentLines.suffix(max(1, min(limit, maximumRecentLines))))
+    }
+
     public func stop() { uploadTimer?.cancel(); uploadTimer = nil; uploader?.uploadOnce(); uploader?.cancel() }
 
     private func writeLog(_ message: String) {
-        guard let fileURL else { return }
         lock.lock(); defer { lock.unlock() }
         let line = "\(ISO8601DateFormatter().string(from: Date())) [linux-swift] \(message)\n"
+        recentLines.append(line.trimmingCharacters(in: .newlines))
+        if recentLines.count > maximumRecentLines {
+            recentLines.removeFirst(recentLines.count - maximumRecentLines)
+        }
+        guard let fileURL else { return }
         let data = Data(line.utf8)
         let manager = FileManager.default
         try? manager.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)

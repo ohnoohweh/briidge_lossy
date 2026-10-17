@@ -7,6 +7,19 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxAdminServerTests {
+    @Test func logsEndpointReturnsBoundedRedactedNativeDiagnostics() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let server = ObstacleBridgeLinuxAdminServer(
+            runtime: runtime,
+            debugLogsProvider: { limit in Array(["attempt candidate=example.test", "failed reason=timeout"].suffix(limit)) }
+        )
+        try server.start(); defer { server.stop() }
+        let payload = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/logs?limit=1") as? [String: Any])
+        #expect(payload["ok"] as? Bool == true)
+        #expect(payload["logger_available"] as? Bool == true)
+        #expect(payload["lines"] as? [String] == ["failed reason=timeout"])
+    }
+
     @Test func configurationStoreUsesCoreValidationAndPersistsOnlyAcceptedUpdates() throws {
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
             "admin_web": ["admin_web_auth_disable": false, "admin_web_first_tab": "home"],

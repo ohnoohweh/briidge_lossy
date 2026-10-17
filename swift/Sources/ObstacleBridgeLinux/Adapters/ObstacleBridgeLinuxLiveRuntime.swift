@@ -161,6 +161,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
+    public var onDiagnostic: ((String, [String: String]) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
     private let transportLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner
@@ -214,6 +215,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.runtimeHealthURL = runtimeHealthURL
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
+        runtime.onDiagnostic = { [weak self] event, fields in self?.onDiagnostic?(event, fields) }
     }
 
     /// A redacted snapshot that Admin workers may read without touching the
@@ -454,6 +456,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
 
     private func openTransport(epoch: UInt64) {
         guard !stopped, coordinator.snapshot.epoch == epoch else { return }
+        var phase = "transport"
         do {
             let sessionID = freshSessionID()
             let nonce = freshNonce()
@@ -486,19 +489,27 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             }
             apply(coordinator.handle(.transportConnected(epoch: epoch)))
             apply(coordinator.handle(.authenticated(epoch: epoch)))
+            phase = "remote_catalog"
             try publishRemoteCatalog()
+            phase = "service_owners"
             try startOwnServiceOwners()
+            phase = "packet_tunnel"
             try startPacketDeviceIfNeeded()
+            onDiagnostic?("overlay.post_auth.ready", ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
             // Do not publish a retry that could briefly outlive shutdown.
             return
         } catch {
+            onDiagnostic?("overlay.post_auth.failed", [
+                "epoch": String(epoch), "phase": phase, "reason": error.localizedDescription,
+            ])
             apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
         }
     }
 
     private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
+        onDiagnostic?("overlay.retry.scheduled", ["delay_ms": String(delay)])
         transportLifecycleOwner.scheduleRetry(on: queue, token: token, afterMilliseconds: delay) { [weak self] in
             guard let self else { return }
             self.apply(self.coordinator.handle(.retryTimerFired(token: token)))
@@ -586,7 +597,21 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
-            try owner.start()
+            do {
+                try owner.start()
+            } catch {
+                let protocolName: String = spec.listenProtocol == .tcp ? "tcp" : "udp"
+                let fields: [String: String] = [
+                    "service_id": String(spec.serviceID),
+                    "name": spec.name ?? "unnamed",
+                    "host": spec.listenHost,
+                    "port": String(spec.listenPort),
+                    "protocol": protocolName,
+                    "reason": error.localizedDescription,
+                ]
+                onDiagnostic?("service.listener.failed", fields)
+                throw error
+            }
             serviceOwners.append(owner)
         }
     }

@@ -8,6 +8,21 @@ import Glibc
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxServiceSocketOwnerTests {
+    @Test func duplicateListenerReportsBindErrno() throws {
+        let first = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp)) { _, _ in }
+        try first.start()
+        defer { first.stop() }
+        let second = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(
+            serviceID: 11, name: "duplicate", listenProtocol: .tcp,
+            listenHost: "127.0.0.1", listenPort: first.port,
+            targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7
+        )) { _, _ in }
+        #expect(throws: ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EADDRINUSE)) {
+            try second.start()
+        }
+        #expect(ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EADDRINUSE).localizedDescription.contains("Address already in use"))
+    }
+
     @Test func coreServerRuntimeEffectsArePublicToLinuxAdapters() throws {
         let service = ObstacleBridgeNativeServiceSpec(
             svcID: 9,

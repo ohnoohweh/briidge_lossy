@@ -5,12 +5,27 @@ import Glibc
 #endif
 import ObstacleBridgeCore
 
-public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable {
+public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable, LocalizedError {
     case unsupportedProtocol
     case socketFailure(Int32)
     case bindFailure(Int32)
     case listenFailure(Int32)
     case targetConnectFailure(Int32)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedProtocol:
+            return "service socket uses an unsupported protocol pairing"
+        case .socketFailure(let code):
+            return "service socket creation failed (errno=\(code): \(String(cString: strerror(code)))"
+        case .bindFailure(let code):
+            return "service listener bind failed (errno=\(code): \(String(cString: strerror(code)))"
+        case .listenFailure(let code):
+            return "service listener listen failed (errno=\(code): \(String(cString: strerror(code)))"
+        case .targetConnectFailure(let code):
+            return "service target connect failed (errno=\(code): \(String(cString: strerror(code)))"
+        }
+    }
 }
 
 /// The Linux resource-owner result of replacing an overlay transport epoch.

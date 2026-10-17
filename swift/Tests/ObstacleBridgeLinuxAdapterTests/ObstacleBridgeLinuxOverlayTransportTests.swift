@@ -167,6 +167,11 @@ struct ObstacleBridgeLinuxOverlayTransportTests {
         #expect(try session.exchange(Data("wrapped".utf8)) == Data("python:1:wrapped".utf8))
     }
 
+    @Test func myudpTransportAcceptsBracketedIPv6Literal() throws {
+        let session = try ObstacleBridgeLinuxMyUDPTransportSession(host: "[::1]", port: 9)
+        session.close()
+    }
+
     @Test func myudpTransportExchangeRecoversDroppedDataThroughCoreTimerEffect() throws {
         let peer = try PythonOverlayPeer(mode: "myudp-drop-first-data")
         defer { peer.stop() }

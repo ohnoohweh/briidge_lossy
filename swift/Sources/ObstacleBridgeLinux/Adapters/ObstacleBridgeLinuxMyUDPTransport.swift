@@ -35,12 +35,20 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// rollover qualification; normal runtime construction uses `1`.
     public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000, nextDataCounter: UInt16 = 1) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
+        // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
+        // accepts the literal itself, not its URI presentation.
+        let resolvedHost: String
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            resolvedHost = String(host.dropFirst().dropLast())
+        } else {
+            resolvedHost = host
+        }
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         hints.ai_socktype = Int32(SOCK_DGRAM.rawValue)
         hints.ai_protocol = Int32(IPPROTO_UDP)
         var addresses: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, String(port), &hints, &addresses) == 0, let first = addresses else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
+        guard getaddrinfo(resolvedHost, String(port), &hints, &addresses) == 0, let first = addresses else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
         defer { freeaddrinfo(first) }
         var candidate: UnsafeMutablePointer<addrinfo>? = first
         var failure: Error = ObstacleBridgeLinuxMyUDPError.resolutionFailed
