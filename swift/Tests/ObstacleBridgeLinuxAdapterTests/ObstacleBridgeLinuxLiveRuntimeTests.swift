@@ -75,6 +75,24 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.stop()
     }
 
+    @Test func adminDiagnosticObserverDoesNotReplacePersistentRuntimeHealth() {
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 1)
+        )
+        let observed = DispatchSemaphore(value: 0)
+        runtime.onDiagnostic = { event, _ in
+            if event == "overlay.connect.attempt" { observed.signal() }
+        }
+
+        runtime.start()
+        #expect(observed.wait(timeout: .now() + 3) == .success)
+        #expect(runtime.runtimeHealthRecentRecordsForAdmin().contains(where: {
+            $0.event.hasPrefix("overlay.connect.attempt")
+        }))
+        runtime.stop()
+    }
+
     /// Pins the subset of Python's peer lifecycle contract supported by the
     /// Linux Swift foreground runtime.  In particular, transport lifecycle
     /// and SecureLink protocol state are separate fields: an authenticated

@@ -216,10 +216,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
         runtime.onDiagnostic = { [weak self] event, fields in
-            guard let self else { return }
-            self.onDiagnostic?(event, fields)
-            let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
-            self.appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
+            self?.emitDiagnostic(event, fields: fields)
         }
     }
 
@@ -500,13 +497,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             try startOwnServiceOwners()
             phase = "packet_tunnel"
             try startPacketDeviceIfNeeded()
-            onDiagnostic?("overlay.post_auth.ready", ["epoch": String(epoch)])
+            emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
             // Do not publish a retry that could briefly outlive shutdown.
             return
         } catch {
-            onDiagnostic?("overlay.post_auth.failed", [
+            emitDiagnostic("overlay.post_auth.failed", fields: [
                 "epoch": String(epoch), "phase": phase, "reason": error.localizedDescription,
             ])
             apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
@@ -514,7 +511,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     }
 
     private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
-        onDiagnostic?("overlay.retry.scheduled", ["delay_ms": String(delay)])
+        emitDiagnostic("overlay.retry.scheduled", fields: ["delay_ms": String(delay)])
         transportLifecycleOwner.scheduleRetry(on: queue, token: token, afterMilliseconds: delay) { [weak self] in
             guard let self else { return }
             self.apply(self.coordinator.handle(.retryTimerFired(token: token)))
@@ -594,6 +591,16 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         statusLock.unlock()
     }
 
+    /// Fans a diagnostic out to both the public Admin/log observer and the
+    /// durable runtime-health journal.  The journal must not depend on the
+    /// public callback: the foreground runner installs that callback for the
+    /// Admin log view after this runtime has been constructed.
+    private func emitDiagnostic(_ event: String, fields: [String: String]) {
+        let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+        appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
+        onDiagnostic?(event, fields)
+    }
+
     private func startOwnServiceOwners() throws {
         stopServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
@@ -614,7 +621,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                     "protocol": protocolName,
                     "reason": error.localizedDescription,
                 ]
-                onDiagnostic?("service.listener.failed", fields)
+                emitDiagnostic("service.listener.failed", fields: fields)
                 throw error
             }
             serviceOwners.append(owner)

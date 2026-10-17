@@ -114,6 +114,9 @@ including packet bytes, secrets, keys, or nonces. The same diagnostic events
 are retained in the bounded runtime-health record after Admin shutdown, so an
 operator can distinguish authenticated-peer success from a later local startup
 failure even when another runtime subsequently reuses the configured log file.
+The foreground Admin-log observer is a second sink, never a replacement for
+that persisted diagnostic sink; this preserves the post-auth failure evidence
+needed to distinguish a local service or TUN startup error from peer loss.
 `GET /api/peers` returns the shared Admin `{ "peers": [...] }` envelope, so
 configured, connecting, authenticated, and failed peer state remains visible
 in the common page. IPv6 URI-bracketed peer literals are normalized before
