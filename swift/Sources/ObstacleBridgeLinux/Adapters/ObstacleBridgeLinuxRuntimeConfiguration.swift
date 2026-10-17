@@ -72,14 +72,15 @@ public struct ObstacleBridgeLinuxProxyProviderConfiguration: Equatable, Sendable
     public let httpEnabled: Bool
     public let socks5Enabled: Bool
     public let credentials: (username: String, password: String)?
+    public let allowPrivateDestinations: Bool
 
-    public init(enabled: Bool = false, bindHost: String = "127.0.0.1", httpPort: Int = 13_881, socks5Port: Int = 13_882, httpEnabled: Bool = true, socks5Enabled: Bool = true, credentials: (username: String, password: String)? = nil) {
+    public init(enabled: Bool = false, bindHost: String = "127.0.0.1", httpPort: Int = 13_881, socks5Port: Int = 13_882, httpEnabled: Bool = true, socks5Enabled: Bool = true, credentials: (username: String, password: String)? = nil, allowPrivateDestinations: Bool = false) {
         self.enabled = enabled; self.bindHost = bindHost; self.httpPort = httpPort; self.socks5Port = socks5Port
-        self.httpEnabled = httpEnabled; self.socks5Enabled = socks5Enabled; self.credentials = credentials
+        self.httpEnabled = httpEnabled; self.socks5Enabled = socks5Enabled; self.credentials = credentials; self.allowPrivateDestinations = allowPrivateDestinations
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.enabled == rhs.enabled && lhs.bindHost == rhs.bindHost && lhs.httpPort == rhs.httpPort && lhs.socks5Port == rhs.socks5Port && lhs.httpEnabled == rhs.httpEnabled && lhs.socks5Enabled == rhs.socks5Enabled && lhs.credentials?.username == rhs.credentials?.username && lhs.credentials?.password == rhs.credentials?.password
+        lhs.enabled == rhs.enabled && lhs.bindHost == rhs.bindHost && lhs.httpPort == rhs.httpPort && lhs.socks5Port == rhs.socks5Port && lhs.httpEnabled == rhs.httpEnabled && lhs.socks5Enabled == rhs.socks5Enabled && lhs.credentials?.username == rhs.credentials?.username && lhs.credentials?.password == rhs.credentials?.password && lhs.allowPrivateDestinations == rhs.allowPrivateDestinations
     }
 }
 
@@ -272,7 +273,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         if proxyEnabled, proxyCredentials != nil, (authUser.isEmpty || authPassword.isEmpty) {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("proxy_provider authentication requires username and token/password")
         }
-        let proxyProvider = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: proxyEnabled, bindHost: string(proxy["proxy_provider_bind"] ?? proxy["bind_host"]) ?? "127.0.0.1", httpPort: proxyHTTPPort, socks5Port: proxySOCKSPort, httpEnabled: protocols.contains("http-connect") || protocols.contains("http"), socks5Enabled: protocols.contains("socks5-connect") || protocols.contains("socks5"), credentials: proxyCredentials)
+        let policy = proxy["proxy_provider_policy"] as? [String: Any] ?? proxy["policy"] as? [String: Any] ?? [:]
+        let proxyProvider = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: proxyEnabled, bindHost: string(proxy["proxy_provider_bind"] ?? proxy["bind_host"]) ?? "127.0.0.1", httpPort: proxyHTTPPort, socks5Port: proxySOCKSPort, httpEnabled: protocols.contains("http-connect") || protocols.contains("http"), socks5Enabled: protocols.contains("socks5-connect") || protocols.contains("socks5"), credentials: proxyCredentials, allowPrivateDestinations: boolean(policy["allow_private_destinations"]) ?? false)
         let listenerMode = boolean(runner["listener_mode"]) == true
         guard let transportText = string(runner["overlay_transport"] ?? flat["overlay_transport"]),
               let transport = ObstacleBridgeLinuxTransport(rawValue: transportText.lowercased()) else {
