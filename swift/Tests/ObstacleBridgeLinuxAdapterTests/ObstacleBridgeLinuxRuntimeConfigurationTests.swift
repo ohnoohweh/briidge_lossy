@@ -348,13 +348,14 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
                 "TUN_routing": ["enabled_on_startup": true],
             ]))
         }
-        #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift local proxy_provider mode is unavailable; outbound WebSocket proxy configuration remains supported")) {
-            try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
-                "runner": ["overlay_transport": "tcp"],
-                "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
-                "proxy_provider": ["enabled": true],
-            ]))
-        }
+        let proxyProvider = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],
+            "proxy_provider": ["enabled": true, "proxy_provider_http_port": 13881, "proxy_provider_socks5_port": 13882],
+        ]))
+        #expect(proxyProvider.proxyProvider.enabled)
+        #expect(proxyProvider.proxyProvider.httpPort == 13881)
+        #expect(proxyProvider.proxyProvider.socks5Port == 13882)
         let operatorSupervised = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "tcp", "service_mode": true],
             "tcp_session": ["tcp_peer": "peer.example", "tcp_peer_port": 443],

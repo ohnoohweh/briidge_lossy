@@ -130,6 +130,7 @@
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminConfigurationStore.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminServer.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxProxyProvider.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperAdapter.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxManagedTunHelper.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxTunHelperServer.swift",

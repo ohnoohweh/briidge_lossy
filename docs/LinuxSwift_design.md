@@ -36,7 +36,7 @@ portable selection or topic policy.
 | Configured peer candidates | `ObstacleBridgePeerAddressPort` | `corePeerAddressPortNormalizesLinuxCandidateLists` |
 | Admin snapshot envelopes | `ObstacleBridgeAdminSnapshotSupport` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
 | Admin live topics | `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
-| Local proxy provider | Not admitted; configuration fails closed. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
+| Local proxy provider | Native HTTP CONNECT and SOCKS5 CONNECT listeners use system egress and start before overlay authentication. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
 | TUN diagnostics | Not admitted; no Linux probe-packet injection scheduler is selected. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
 | Persisted secret envelopes | Not admitted; the Linux foreground runtime has no configuration-write/key-material owner. | Read-only Admin routes and redaction coverage above. |
 
@@ -131,12 +131,9 @@ adjacent field is the known gap that keeps the package open.
 
 ## Known product limitations
 
-- Linux has no separate local `proxy_provider`; this is intentionally distinct
-  from the delivered outbound WebSocket HTTP proxy client.
 - Linux records foreground lifecycle events to the configured local log file
   and, when `telemetry_client.telemetry_enabled` is set, to the shared bounded
-  private telemetry spool. A Linux HTTPS uploader and the local HTTP/SOCKS
-  proxy provider remain parity gaps.
+  private telemetry spool. A Linux HTTPS uploader remains a parity gap.
 - Listener-mode myudp rejects `own_servers` and `remote_servers`: a listener
   does not infer a target peer or bind a competing service map per child.
 - Packet policy does not admit IPv6 jumbograms or encrypted payloads, and its

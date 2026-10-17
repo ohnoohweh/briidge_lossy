@@ -178,6 +178,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var serviceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var remoteServiceOwners: [ObstacleBridgeLinuxServiceSocketOwner] = []
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
+    private var proxyProvider: ObstacleBridgeLinuxProxyProvider?
     private let remoteCatalogStore = ObstacleBridgeLinuxServiceCatalogStore()
     private let catalogInstanceID: UInt64
     private var stopped = true
@@ -278,6 +279,15 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             guard let self else { return }
             self.beginRuntimeHealthLifetime()
             self.stopped = false
+            do {
+                let provider = ObstacleBridgeLinuxProxyProvider(configuration: self.configuredRuntime.configuration.proxyProvider)
+                try provider.start()
+                self.proxyProvider = provider
+            } catch {
+                self.stopped = true
+                self.publish(state: "failed", attempts: 0, nextRetryMilliseconds: nil, failureReason: "proxy provider: \(error.localizedDescription)")
+                return
+            }
             self.apply(self.coordinator.handle(.start))
             self.startRuntimeHealthHeartbeat()
             self.startLivenessProbes()
@@ -324,6 +334,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             stopped = true
             apply(coordinator.handle(.stop))
             stopRuntimeHealthHeartbeat()
+            proxyProvider?.stop(); proxyProvider = nil
             appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
         }
     }
@@ -415,6 +426,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 "configured_local": configured.ownServices.count,
                 "active_local": current.appReady ? configured.ownServices.count : 0,
                 "active_remote": current.appReady ? current.activeTCPChannels + current.activeUDPChannels : 0,
+            ],
+            "proxy_provider": [
+                "configured": configured.proxyProvider.enabled,
+                "http_port": configured.proxyProvider.httpEnabled ? configured.proxyProvider.httpPort : 0,
+                "socks5_port": configured.proxyProvider.socks5Enabled ? configured.proxyProvider.socks5Port : 0,
+                "starts_before_overlay": configured.proxyProvider.enabled,
             ],
         ]
     }

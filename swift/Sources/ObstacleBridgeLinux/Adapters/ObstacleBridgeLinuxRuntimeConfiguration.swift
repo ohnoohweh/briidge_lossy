@@ -64,6 +64,25 @@ public struct ObstacleBridgeLinuxServiceSpec: Equatable, Sendable {
     }
 }
 
+public struct ObstacleBridgeLinuxProxyProviderConfiguration: Equatable, Sendable {
+    public let enabled: Bool
+    public let bindHost: String
+    public let httpPort: Int
+    public let socks5Port: Int
+    public let httpEnabled: Bool
+    public let socks5Enabled: Bool
+    public let credentials: (username: String, password: String)?
+
+    public init(enabled: Bool = false, bindHost: String = "127.0.0.1", httpPort: Int = 13_881, socks5Port: Int = 13_882, httpEnabled: Bool = true, socks5Enabled: Bool = true, credentials: (username: String, password: String)? = nil) {
+        self.enabled = enabled; self.bindHost = bindHost; self.httpPort = httpPort; self.socks5Port = socks5Port
+        self.httpEnabled = httpEnabled; self.socks5Enabled = socks5Enabled; self.credentials = credentials
+    }
+
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.enabled == rhs.enabled && lhs.bindHost == rhs.bindHost && lhs.httpPort == rhs.httpPort && lhs.socks5Port == rhs.socks5Port && lhs.httpEnabled == rhs.httpEnabled && lhs.socks5Enabled == rhs.socks5Enabled && lhs.credentials?.username == rhs.credentials?.username && lhs.credentials?.password == rhs.credentials?.password
+    }
+}
+
 /// The Linux admission view of the existing sectioned runtime configuration.
 /// It intentionally accepts only fields that the current Linux Swift runtime
 /// owns; all other sections remain preserved by the source configuration and
@@ -114,8 +133,11 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// Core-derived packet-tunnel policy delegated only to the authenticated
     /// privileged helper; foreground Linux never owns route or DNS mutation.
     public let packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan?
+    /// Local explicit-proxy provider; unlike overlay services it is available
+    /// before the remote peer authenticates.
+    public let proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -144,6 +166,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.tunInterfaceName = tunInterfaceName
         self.packetTunnelEnabled = packetTunnelEnabled
         self.packetTunnelPlan = packetTunnelPlan
+        self.proxyProvider = proxyProvider
     }
 
     public func makeTunHelperAdapter(timeoutMilliseconds: Int = 2_000) throws -> ObstacleBridgeLinuxTunHelperAdapter? {
@@ -234,9 +257,22 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         }
         let packetTunnelPlan = ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: root)
         let proxy = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("proxy_provider", from: root)
-        if !proxy.isEmpty, boolean(proxy["proxy_provider_enabled"] ?? proxy["enabled"]) == true {
-            throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift local proxy_provider mode is unavailable; outbound WebSocket proxy configuration remains supported")
+        let protocols = (proxy["proxy_provider_protocols"] as? [String] ?? ["http-connect", "socks5-connect"]).map { $0.lowercased() }
+        let proxyEnabled = boolean(proxy["proxy_provider_enabled"] ?? proxy["enabled"]) ?? false
+        let proxyHTTPPort = integer(proxy["proxy_provider_http_port"] ?? proxy["http_port"]) ?? 13_881
+        let proxySOCKSPort = integer(proxy["proxy_provider_socks5_port"] ?? proxy["socks5_port"]) ?? 13_882
+        guard (0...65_535).contains(proxyHTTPPort), (0...65_535).contains(proxySOCKSPort) else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("proxy_provider ports must be between 0 and 65535")
         }
+        let auth = proxy["proxy_provider_auth"] as? [String: Any] ?? proxy["auth"] as? [String: Any] ?? [:]
+        let authMode = (string(auth["mode"]) ?? "none").lowercased()
+        let authUser = string(auth["username"]) ?? ""
+        let authPassword = string(auth["token"] ?? auth["password"]) ?? ""
+        let proxyCredentials = authMode == "none" ? nil : (username: authUser, password: authPassword)
+        if proxyEnabled, proxyCredentials != nil, (authUser.isEmpty || authPassword.isEmpty) {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("proxy_provider authentication requires username and token/password")
+        }
+        let proxyProvider = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: proxyEnabled, bindHost: string(proxy["proxy_provider_bind"] ?? proxy["bind_host"]) ?? "127.0.0.1", httpPort: proxyHTTPPort, socks5Port: proxySOCKSPort, httpEnabled: protocols.contains("http-connect") || protocols.contains("http"), socks5Enabled: protocols.contains("socks5-connect") || protocols.contains("socks5"), credentials: proxyCredentials)
         let listenerMode = boolean(runner["listener_mode"]) == true
         guard let transportText = string(runner["overlay_transport"] ?? flat["overlay_transport"]),
               let transport = ObstacleBridgeLinuxTransport(rawValue: transportText.lowercased()) else {
@@ -350,7 +386,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             remoteServices: try serviceSpecs(root, key: "remote_servers"),
             tunHelperSocketPath: tunHelperSocket, tunHelperSessionToken: tunHelperSessionToken,
             launchSwiftTunHelper: launchSwiftTunHelper, tunHelperExecutable: tunHelperExecutable,
-            tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan
+            tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan, proxyProvider: proxyProvider
         )
     }
 
