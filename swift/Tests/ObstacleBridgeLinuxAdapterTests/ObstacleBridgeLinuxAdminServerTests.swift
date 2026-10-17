@@ -196,8 +196,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(capabilities["guidance"] as? [String] != nil)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: status), as: UTF8.self).contains("never-expose-this"))
 
-        let peers = try await getJSON("http://127.0.0.1:\(server.port)/api/peers")
-        let rows = peers as? [[String: Any]]
+        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let rows = peers["peers"] as? [[String: Any]]
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
         let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
@@ -288,7 +288,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
 
         let session = try runtime.connect(sessionID: 77, clientNonce: Data(repeating: 7, count: 32))
         #expect(try session.send(Data("projection".utf8)) == Data("python:projection".utf8))
-        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let peers = try #require(peersDocument["peers"] as? [[String: Any]])
         let row = try #require(peers.first)
         let secureLink = try #require(row["secure_link"] as? [String: Any])
         let compression = try #require(row["compression_layer"] as? [String: Any])
@@ -328,7 +329,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let frame = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
         #expect(try mux.exchange(frame) == frame)
 
-        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let peers = try #require(peersDocument["peers"] as? [[String: Any]])
         let row = try #require(peers.first)
         let compression = try #require(row["compression_layer"] as? [String: Any])
         #expect(compression["enabled"] as? Bool == true)
@@ -363,7 +365,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(connected.wait(timeout: .now() + 3) == .success)
         let deadline = Date().addingTimeInterval(3)
         while listener.peers().count != 2, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        let rows = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let rows = try #require(peersDocument["peers"] as? [[String: Any]])
         #expect(rows.count == 2)
         #expect(Set(rows.compactMap { $0["peer_id"] as? String }).count == 2)
         #expect(rows.allSatisfy { ($0["secure_link"] as? [String: Any])?["authenticated"] as? Bool == true })

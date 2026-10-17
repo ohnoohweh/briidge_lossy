@@ -168,7 +168,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 .dropFirst("limit=".count) ?? "400") ?? 400
             let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "lines": lines, "count": lines.count, "source": "linux-swift", "logger_available": debugLogsProvider != nil, "logger_error": debugLogsProvider == nil ? "native observability unavailable" : ""]) ?? .init(statusCode: 500, body: Data("{}".utf8))
-        case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(["peers": peersPayload()]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/meta": response = ObstacleBridgeAdminAPI.linuxJSONResponse(metaPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
             let requestedTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?

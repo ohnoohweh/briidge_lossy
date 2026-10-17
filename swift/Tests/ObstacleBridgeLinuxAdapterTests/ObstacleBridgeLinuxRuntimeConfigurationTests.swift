@@ -22,6 +22,8 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         )
         #expect(direct.path == "/opt/obstaclebridge/ObstacleBridgeLinux")
         #expect(direct.arguments.first == "--tun-helper-server")
+        #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: true) == 60)
+        #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: false) == 2)
     }
 
     @Test func observabilityWritesLifecycleLogAndBoundedTelemetrySpool() throws {

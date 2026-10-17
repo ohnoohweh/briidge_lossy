@@ -110,9 +110,15 @@ fixed health origins before controlled shutdown.
 `GET /api/logs?limit=<n>` returns a bounded, redacted in-memory Linux runtime
 diagnostic tail. It records candidate attempts, authentication, post-auth
 startup phase failures, listener bind failures, and retry scheduling without
-including packet bytes, secrets, keys, or nonces. IPv6 URI-bracketed peer
-literals are normalized before POSIX resolution so a configured IPv6 fallback
-is admitted as a literal address.
+including packet bytes, secrets, keys, or nonces. The same diagnostic events
+are retained in the bounded runtime-health record after Admin shutdown, so an
+operator can distinguish authenticated-peer success from a later local startup
+failure even when another runtime subsequently reuses the configured log file.
+`GET /api/peers` returns the shared Admin `{ "peers": [...] }` envelope, so
+configured, connecting, authenticated, and failed peer state remains visible
+in the common page. IPv6 URI-bracketed peer literals are normalized before
+POSIX resolution so a configured IPv6 fallback is admitted as a literal
+address.
 
 The Linux configuration reader uses the same machine-ID HKDF and
 ChaCha20-Poly1305 `enc:v1:` envelope contract as Python for its read-only
@@ -131,7 +137,9 @@ Swift helper child. When the foreground client is unprivileged, only that
 separate child is launched through `sudo`; the foreground client, Admin Web,
 logging, overlay, and ChannelMux remain under the invoking user. The helper
 uses `SUDO_UID`/`SUDO_GID` to hand its authenticated Unix socket back to that
-user. It retains one authenticated packet/event channel. The
+user. An interactive helper elevation has a bounded socket-readiness wait so
+the password prompt is not mistaken for a failed direct child launch. It
+retains one authenticated packet/event channel. The
 privileged Linux product qualification runs with
 `OBSTACLEBRIDGE_PRIVILEGED_TUN=1` on an authorized host and verifies real
 TUN address/route, `resolvectl` DNS, and absolute-hook apply/remove cleanup.

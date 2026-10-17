@@ -215,7 +215,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.runtimeHealthURL = runtimeHealthURL
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
-        runtime.onDiagnostic = { [weak self] event, fields in self?.onDiagnostic?(event, fields) }
+        runtime.onDiagnostic = { [weak self] event, fields in
+            guard let self else { return }
+            self.onDiagnostic?(event, fields)
+            let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+            self.appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
+        }
     }
 
     /// A redacted snapshot that Admin workers may read without touching the

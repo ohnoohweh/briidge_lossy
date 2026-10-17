@@ -44,7 +44,14 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         return (executable, helperArguments)
     }
 
-    public func start(timeout: TimeInterval = 2) throws {
+    /// An interactive sudo prompt needs materially longer than a direct child
+    /// launch to create its private socket. The foreground stays responsive
+    /// while this bounded wait is in progress.
+    static func socketReadyTimeout(elevated: Bool) -> TimeInterval {
+        elevated ? 60 : 2
+    }
+
+    public func start(timeout: TimeInterval? = nil) throws {
         guard !process.isRunning else { return }
         if FileManager.default.fileExists(atPath: socketPath) {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper refuses an existing socket path")
@@ -60,6 +67,7 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
             sessionToken: sessionToken,
             elevated: requiresElevation
         )
+        let readyTimeout = timeout ?? Self.socketReadyTimeout(elevated: requiresElevation)
         guard FileManager.default.isExecutableFile(atPath: command.path) else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("sudo is required to launch the privileged Linux TUN helper")
         }
@@ -68,7 +76,7 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         process.standardOutput = Pipe()
         process.standardError = Pipe()
         try process.run()
-        let deadline = Date().addingTimeInterval(timeout)
+        let deadline = Date().addingTimeInterval(readyTimeout)
         while !FileManager.default.fileExists(atPath: socketPath), process.isRunning, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.02)
         }
