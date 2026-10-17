@@ -1761,6 +1761,36 @@ function applyProxyDoc() {
   setText('proxyLastError', totals.lastError || 'n/a');
 }
 
+function applyTelemetryDoc(statusDoc) {
+  const telemetry = statusDoc?.telemetry || {};
+  const client = telemetry.client || telemetry;
+  const collector = telemetry.collector || {};
+  const clientSpool = client.spool || {};
+  const clientUploader = client.uploader || {};
+  const clientEndpoint = client.endpoint_host
+    ? `${client.endpoint_scheme || 'https'}://${client.endpoint_host}`
+    : 'n/a';
+  const pendingEvents = clientSpool.pending_events ?? client.emitter?.pending_events;
+  setText('telemetryClientConfigured', fmtBool(client.configured ?? client.enabled));
+  setText('telemetryClientRuntime', fmtText(client.runtime_state || client.worker_state));
+  setText('telemetryClientIdentity', fmtBool(client.identity_available));
+  setText('telemetryClientEndpoint', clientEndpoint);
+  setText('telemetryClientPending', `${fmtInteger(pendingEvents)} / ${fmtBytes(clientSpool.pending_bytes)}`);
+  setText('telemetryClientAccepted', fmtInteger(clientUploader.accepted_batches ?? 0));
+  setText('telemetryClientRejected', fmtInteger(clientUploader.rejected_batches ?? 0));
+  setText('telemetryClientLastSuccess', fmtDateTime(clientUploader.last_success_unix_ts));
+  setText('telemetryClientBackoff', fmtAgeSeconds(clientUploader.backoff_remaining_sec));
+  setText('telemetryClientError', fmtText(clientUploader.last_error || client.last_error));
+
+  const collectorSpool = collector.spool || {};
+  setText('telemetryCollectorRuntime', fmtText(collector.runtime_state));
+  setText('telemetryCollectorAccepted', fmtInteger(collector.accepted_batches));
+  setText('telemetryCollectorRejected', fmtInteger(collector.rejected_batches));
+  setText('telemetryCollectorPending', `${fmtInteger(collectorSpool.pending_events)} / ${fmtBytes(collectorSpool.pending_bytes)}`);
+  setText('telemetryCollectorLastAccepted', fmtDateTime(collector.last_accepted_unix_ts));
+  setText('telemetryCollectorError', fmtText(collector.ingest_last_error || collector.last_error));
+}
+
 function renderPeerRateMetric(label, bytesPerSec, percent, kind) {
   return `
     <div class="peer-detail-metric peer-rate-metric">
@@ -3263,6 +3293,7 @@ function applyStatusDoc(j) {
   setText('secureLinkLastReloadDetail', fmtText(j.secure_link_last_reload_detail));
   setText('secureLinkPeersDroppedTotal', fmtInteger(j.secure_link_peers_dropped_total));
   applyProxyDoc();
+  applyTelemetryDoc(j);
 }
 
 function applyConnectionsDoc(j) {
@@ -3968,7 +3999,11 @@ function isLogFileConfigSetting(key) {
 
 function isDirectEntryConfigSetting(key) {
   const normalizedKey = String(key || '').toLowerCase();
-  return normalizedKey === 'log_file_backup_count'
+  return normalizedKey === 'log_udp_target'
+    || normalizedKey === 'log_admin_udp_target'
+    || normalizedKey.endsWith('.log_udp_target')
+    || normalizedKey.endsWith('.log_admin_udp_target')
+    || normalizedKey === 'log_file_backup_count'
     || normalizedKey === 'log_file_max_bytes'
     || normalizedKey.endsWith('.log_file_backup_count')
     || normalizedKey.endsWith('.log_file_max_bytes');
@@ -4551,6 +4586,9 @@ function initTabs() {
       if (target === 'proxy') {
         loadProxy();
       }
+      if (target === 'telemetry') {
+        loadStatus();
+      }
       if (target === 'tun-routing' && !liveState.connected) {
         loadTunRouting();
       }
@@ -4575,6 +4613,9 @@ function currentLiveTopics() {
     topics.push('connections');
   }
   if (isTabActive('proxy')) {
+    topics.push('status');
+  }
+  if (isTabActive('telemetry')) {
     topics.push('status');
   }
   if (isTabActive('tun-routing')) {
@@ -4631,6 +4672,10 @@ function startHttpPollingFallback() {
     startPolling(async () => {
       if (!isTabActive('proxy')) return;
       await loadProxy();
+    }, 1000),
+    startPolling(async () => {
+      if (!isTabActive('telemetry')) return;
+      await loadStatus();
     }, 1000),
     startPolling(async () => {
       if (!isTabActive('status')) return;

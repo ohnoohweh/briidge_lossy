@@ -14,13 +14,24 @@ from obstacle_bridge.bridge import AdminWebUI
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SWIFT_CHANNELMUX_CODEC_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeChannelMuxCodec.swift"
-SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeOverlayStackPlanner.swift"
-SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeRuntimeConfig.swift"
-SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminWebSupport.swift"
-SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminSnapshotSupport.swift"
-SWIFT_ADMIN_API_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeAdminAPI.swift"
-SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgeWebAdminServer.swift"
+SWIFT_CHANNELMUX_CORE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCodec.swift"
+SWIFT_CHANNELMUX_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"
+SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"
+SWIFT_BINARY_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"
+SWIFT_CONTROL_CHUNK_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"
+SWIFT_SERVICE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"
+SWIFT_OVERLAY_STACK_PLANNER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayStackPlanner.swift"
+SWIFT_RUNTIME_CONFIG_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeRuntimeConfig.swift"
+SWIFT_PEER_ADDRESS_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePeerAddressPolicy.swift"
+SWIFT_PEER_ADDRESS_RESOLVER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgePeerAddressResolver.swift"
+SWIFT_ADMIN_WEB_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminWebSupport.swift"
+SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminSnapshotSupport.swift"
+SWIFT_ADMIN_API_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminAPI.swift"
+SWIFT_ADMIN_CONFIG_SUPPORT_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeAdminConfigSupport.swift"
+SWIFT_NATIVE_SERVICE_SPEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeNativeServiceSpec.swift"
+SWIFT_ONBOARDING_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOnboarding.swift"
+SWIFT_ADMIN_LIVE_TOPIC_POLICY_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebAdminLiveTopicPolicy.swift"
+SWIFT_ADMIN_WEBSERVER_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeWebAdminServer.swift"
 SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE = ROOT / "tests" / "fixtures" / "admin_web_component_runner.swift"
 
 
@@ -155,12 +166,23 @@ def swift_admin_web_component_runner(tmp_path_factory: pytest.TempPathFactory) -
         swiftc,
         "-o",
         str(binary),
+        str(SWIFT_BINARY_CODEC_SOURCE),
+        str(SWIFT_CHANNELMUX_FRAME_CODEC_SOURCE),
+        str(SWIFT_CONTROL_CHUNK_CODEC_SOURCE),
+        str(SWIFT_SERVICE_CODEC_SOURCE),
+        str(SWIFT_CHANNELMUX_CORE_CODEC_SOURCE),
         str(SWIFT_CHANNELMUX_CODEC_SOURCE),
         str(SWIFT_OVERLAY_STACK_PLANNER_SOURCE),
+        str(SWIFT_PEER_ADDRESS_POLICY_SOURCE),
+        str(SWIFT_PEER_ADDRESS_RESOLVER_SOURCE),
         str(SWIFT_RUNTIME_CONFIG_SOURCE),
         str(SWIFT_ADMIN_WEB_SUPPORT_SOURCE),
         str(SWIFT_ADMIN_SNAPSHOT_SUPPORT_SOURCE),
         str(SWIFT_ADMIN_API_SOURCE),
+        str(SWIFT_ADMIN_CONFIG_SUPPORT_SOURCE),
+        str(SWIFT_NATIVE_SERVICE_SPEC_SOURCE),
+        str(SWIFT_ONBOARDING_SOURCE),
+        str(SWIFT_ADMIN_LIVE_TOPIC_POLICY_SOURCE),
         str(SWIFT_ADMIN_WEBSERVER_SOURCE),
         str(SWIFT_ADMIN_COMPONENT_RUNNER_SOURCE),
     ]

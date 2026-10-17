@@ -85,6 +85,7 @@
           <button class="nav-tab active" data-tab="status" type="button">Peers</button>
           <button class="nav-tab" data-tab="connections" type="button">UDP / TCP</button>
           <button class="nav-tab" data-tab="proxy" type="button">Proxy</button>
+          <button class="nav-tab" data-tab="telemetry" type="button">Telemetry</button>
           <button class="nav-tab" data-tab="tun-routing" type="button">TUN / Routing</button>
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
@@ -349,6 +350,45 @@
             </div>
             <div id="proxyListenersGrid" class="proxy-listener-grid">
               <div class="empty-state card"><p>No proxy listeners</p></div>
+            </div>
+          </section>
+        </section>
+
+        <section id="tab-telemetry" class="tab-panel">
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Telemetry client</h2>
+                <p>Bounded HTTPS delivery status. Telemetry never blocks bridge or packet processing.</p>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>Configured</span><strong id="telemetryClientConfigured">n/a</strong></div>
+              <div class="kv-row"><span>Runtime</span><strong id="telemetryClientRuntime">n/a</strong></div>
+              <div class="kv-row"><span>Identity available</span><strong id="telemetryClientIdentity">n/a</strong></div>
+              <div class="kv-row"><span>Endpoint</span><strong id="telemetryClientEndpoint" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Pending events / bytes</span><strong id="telemetryClientPending" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Accepted batches</span><strong id="telemetryClientAccepted">0</strong></div>
+              <div class="kv-row"><span>Rejected batches</span><strong id="telemetryClientRejected">0</strong></div>
+              <div class="kv-row"><span>Last successful delivery</span><strong id="telemetryClientLastSuccess">n/a</strong></div>
+              <div class="kv-row"><span>Retry backoff</span><strong id="telemetryClientBackoff">n/a</strong></div>
+              <div class="kv-row"><span>Last error</span><strong id="telemetryClientError" class="mono">n/a</strong></div>
+            </div>
+          </section>
+          <section class="section-block card">
+            <div class="section-header">
+              <div>
+                <h2>Telemetry collector</h2>
+                <p>Visible only on a Python node configured to host the collector.</p>
+              </div>
+            </div>
+            <div class="kv-list">
+              <div class="kv-row"><span>Runtime</span><strong id="telemetryCollectorRuntime">not hosted</strong></div>
+              <div class="kv-row"><span>Accepted batches</span><strong id="telemetryCollectorAccepted">0</strong></div>
+              <div class="kv-row"><span>Rejected batches</span><strong id="telemetryCollectorRejected">0</strong></div>
+              <div class="kv-row"><span>Pending events / bytes</span><strong id="telemetryCollectorPending" class="mono">n/a</strong></div>
+              <div class="kv-row"><span>Last accepted batch</span><strong id="telemetryCollectorLastAccepted">n/a</strong></div>
+              <div class="kv-row"><span>Last error</span><strong id="telemetryCollectorError" class="mono">n/a</strong></div>
             </div>
           </section>
         </section>

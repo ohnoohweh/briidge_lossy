@@ -16,7 +16,7 @@ Goal and current scope:
 - Admin Web config display, config change, config save, restart, and statistics are in scope
 - connection statistics are working, including live `/api/connections`, `/api/peers`, and `/api/meta` data from the Swift runtime
 
-The current macOS runtime owner is implemented in [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift), with the thin CLI entrypoint in [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift).
+The current macOS runtime owner is implemented in [swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift](swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift), with the thin CLI entrypoint in [swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunnerMain.swift](swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunnerMain.swift).
 
 ## Prerequisites
 
@@ -48,9 +48,9 @@ From repository root:
 
 This is the checked-in build path we use today. It compiles:
 
-- shared Swift runtime sources from `ios/native/ObstacleBridgeShared/`
-- the app-owned host-runner implementation from [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift)
-- the tiny macOS CLI entrypoint from [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunnerMain.swift)
+- shared Swift runtime sources from `swift/Sources/ObstacleBridgeAppleShared/`
+- the app-owned host-runner implementation from [swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift](swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift)
+- the tiny macOS CLI entrypoint from [swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunnerMain.swift](swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunnerMain.swift)
 
 The script now produces both:
 
@@ -100,7 +100,7 @@ OBSTACLEBRIDGE_CODESIGN_IDENTITY=off ./ios/scripts/build_macos_app.sh
 
 ### Build the app-owned macOS source surface
 
-The host-runner implementation is now owned by `ObstacleBridgeApp`, and [ObstacleBridgeTunnelControl.swift](ios/native/ObstacleBridgeApp/ObstacleBridgeTunnelControl.swift) understands a macOS-only runtime mode named `swift_host_runner`.
+The host-runner implementation is now owned by `ObstacleBridgeApp`, and [ObstacleBridgeTunnelControl.swift](swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift) understands a macOS-only runtime mode named `swift_host_runner`.
 
 That mode means:
 
@@ -275,9 +275,9 @@ This repo now has the shared packet-tunnel configuration building blocks needed 
 
 Current status:
 
-- available today: the macOS host runner in [ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift)
-- available today: the shared packet-tunnel network-settings helper in [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift)
-- available today: reference packet-tunnel provider in [ios/native/IPServer/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/ios/native/IPServer/PacketTunnelProvider.swift)
+- available today: the macOS host runner in [swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift](/Users/ohnoohweh/briidge_lossy/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift)
+- available today: the shared packet-tunnel network-settings helper in [swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift)
+- available today: reference packet-tunnel provider in [swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift](/Users/ohnoohweh/briidge_lossy/swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift)
 - not checked in yet: a macOS containing app plus macOS packet-tunnel extension bundle wired for signing, installation, and `NETunnelProviderManager` lifecycle on macOS
 
 The practical consequence is that macOS packet-tunnel work should currently be understood as an architecture and integration path, not as a finished one-command installer like the host runner.
@@ -295,9 +295,9 @@ The containing app should install and control the tunnel through `NETunnelProvid
 
 Shared runtime responsibilities are already factored so the macOS packet-tunnel target can reuse them:
 
-- grouped and flat `ObstacleBridge.cfg` parsing from [ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift)
-- packet-tunnel route, address, DNS, and MTU derivation from [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift)
-- overlay bootstrap planning, SecureLink, compression, and transport helpers from the `ios/native/ObstacleBridgeShared/` sources
+- grouped and flat `ObstacleBridge.cfg` parsing from [swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift](/Users/ohnoohweh/briidge_lossy/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift)
+- packet-tunnel route, address, DNS, and MTU derivation from [swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift)
+- overlay bootstrap planning, SecureLink, compression, and transport helpers from the `swift/Sources/ObstacleBridgeAppleShared/` sources
 
 ## Install requirements
 
@@ -330,7 +330,7 @@ The intended runtime flow for the macOS packet-tunnel architecture is:
 1. The containing app writes or syncs `ObstacleBridge.cfg` into the shared App Group container.
 2. The containing app creates a minimal `NETunnelProviderProtocol` profile and starts the tunnel through `NETunnelProviderManager`.
 3. The macOS packet-tunnel extension reads `providerConfiguration` plus the shared App Group config.
-4. The extension resolves effective tunnel settings through [ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/ios/native/ObstacleBridgeShared/ObstacleBridgePacketTunnelConfiguration.swift) with this precedence:
+4. The extension resolves effective tunnel settings through [swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift](/Users/ohnoohweh/briidge_lossy/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgePacketTunnelConfiguration.swift) with this precedence:
   `providerConfiguration.network_settings` -> `runtime_config.TUN_routing` -> built-in defaults.
 5. The extension applies `NEPacketTunnelNetworkSettings`, starts the packet I/O bridge, and boots the shared ObstacleBridge runtime layers.
 6. The containing app reads status, peer, connection, and resolved tunnel-setting snapshots back through app-to-extension messaging and App Group files.

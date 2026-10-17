@@ -31,7 +31,8 @@ pytestmark = pytest.mark.slow
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
+CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 IPSERVER_NATIVE_DIR = ROOT / "ios" / "native" / "IPServer"
 
 
@@ -159,49 +160,66 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         "-DOB_IPSERVER_SWIFT_PROBE",
         "-o",
         str(binary_path),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminAuth.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigChallenge.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAuth.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAuthPolicy.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigChallenge.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigChallengePolicy.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeConfigSecretPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeConfigSecretCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAdminWebSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompression.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeCrypto.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOnboarding.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOnboarding.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayConnectionPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayConnectionSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeAppleOverlayChannelAdapter.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgePeerAddressPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeAppleServiceCatalog.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAppleServiceCatalog.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketModel.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunPing.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxUdpRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeTunPing.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeCompressLayerRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgePacketTunnelRoutePolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePacketTunnelConfiguration.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeWebAdminLiveTopicPolicy.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeProxyProtocolPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeProxyServer.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCore.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeHealth.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeTelemetry.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeTelemetrySpool.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeTelemetryUploadPolicy.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayFrameCodec.swift"),
@@ -213,11 +231,11 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayEnvelope.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeWebSocketPayloadCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeTcpOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeQuicOverlayRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift"),
         str(IPSERVER_NATIVE_DIR / "ObstacleBridgePacketFlowBridge.swift"),
         str(IPSERVER_NATIVE_DIR / "PacketTunnelProvider.swift"),
@@ -2155,11 +2173,17 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                             "ws_peer": "",
                             "ws_peer_port": 8080,
                         ] as [String: Any],
+                        "telemetry_client": [
+                            "telemetry_enabled": true,
+                            "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
+                            "telemetry_spool_directory": "/private/telemetry-spool",
+                        ] as [String: Any],
                     ]
                     let saved = try ObstacleBridgeAdminConfigSupport.validatedNextRawConfig(
                         currentRawConfig: freshRawConfig,
                         currentRuntimeConfig: ObstacleBridgeRuntimeConfig.flatten(freshRawConfig),
-                        updates: updates
+                        updates: updates,
+                        configurationPolicy: ObstacleBridgeRuntimeConfig.adminConfigPolicy()
                     )
                     let persisted = try ObstacleBridgeConfigSecretCodec.encryptPayload(saved.nextRawConfig)
                     let restored = try ObstacleBridgeConfigSecretCodec.decryptPayload(persisted)
@@ -2170,6 +2194,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                     let adminSection = restored["admin_web"] as? [String: Any] ?? [:]
                     let channelMuxSection = restored["channel_mux"] as? [String: Any] ?? [:]
                     let proxySection = restored["proxy_provider"] as? [String: Any] ?? [:]
+                    let telemetrySection = persisted["telemetry_client"] as? [String: Any] ?? [:]
                     let output: [String: Any] = [
                         "suggested_updates": updates,
                         "secure_section": secureSection,
@@ -2177,6 +2202,7 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
                         "admin_section": adminSection,
                         "channel_mux_section": channelMuxSection,
                         "proxy_section": proxySection,
+                        "telemetry_section": telemetrySection,
                         "masked": masked,
                         "normalized_keys": saved.normalizedKeys,
                     ]
@@ -2235,9 +2261,14 @@ def test_ios_packet_tunnel_provider_probe_invite_import_persists_secure_link_and
     assert payload["proxy_section"]["proxy_provider_auth"]["username"] == "obproxy"
     assert payload["proxy_section"]["proxy_provider_auth"]["token"] == "local-token"
     assert payload["proxy_section"]["log_proxy_provider"] == "INFO"
+    assert payload["telemetry_section"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+    assert payload["telemetry_section"]["telemetry_spool_directory"] == "/private/telemetry-spool"
     assert payload["masked"]["secure_link"] is True
     assert payload["masked"]["secure_link_mode"] == "psk"
     assert payload["masked"]["secure_link_psk"] == ""
+    assert payload["masked"]["telemetry_enabled"] is True
+    assert payload["masked"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+    assert payload["masked"]["telemetry_spool_directory"] == "/private/telemetry-spool"
     assert payload["masked"]["compress_layer"] is True
     assert payload["masked"]["compress_layer_level"] == 5
 

@@ -1434,8 +1434,10 @@ pipeline concern rather than an uncovered helper behavior.
 
 Done in this branch:
 
-- `ObstacleBridgeTunHelperContract.swift` defines the Swift helper
-  command/request model and Python-shaped runtime snapshot fields.
+- Core `ObstacleBridgeTunHelperContract.swift` defines the Swift helper
+  command/request model, Python-shaped runtime snapshot fields, command
+  server, and loopback transport; the Shared macOS helper client owns utun and
+  hook-process effects.
 - The macOS host runner publishes a Python-shaped `tun_helper` status block
   with backend, lifecycle, realized interface, MTU, hook result, failure, and
   packet counters for the current privileged host-runner TUN path.

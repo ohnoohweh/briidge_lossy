@@ -10,7 +10,11 @@ import unittest
 from unittest import mock
 
 from obstacle_bridge.bridge import WebSocketSession
-from obstacle_bridge.bridge_proxy_common import resolve_proxy_endpoint
+from obstacle_bridge.bridge_proxy_common import (
+    parse_proxy_authority,
+    proxy_basic_auth_from_spec,
+    resolve_proxy_endpoint,
+)
 
 
 def _args(ws_payload_mode: str) -> argparse.Namespace:
@@ -1179,6 +1183,20 @@ class WebSocketProxyHelpersTests(unittest.TestCase):
             endpoint = session._get_ws_proxy_endpoint("overlay.example", 54321)
 
         self.assertEqual(endpoint, ("proxy.example", 8080))
+
+    def test_proxy_uri_credentials_are_separated_from_endpoint_and_encoded_for_basic_auth(self):
+        self.assertEqual(parse_proxy_authority("user:passw@proxy.example:8081"), ("proxy.example", 8081))
+        self.assertEqual(proxy_basic_auth_from_spec("http://user%40name:pa%3Ass@proxy.example:8081"), "Basic dXNlckBuYW1lOnBhOnNz")
+
+    def test_manual_proxy_uri_credentials_are_forwarded_as_basic_authorization(self):
+        args = _args("binary")
+        args.ws_peer = "127.0.0.1"; args.ws_peer_port = 54321
+        args.ws_proxy_mode = "manual"; args.ws_proxy_host = "user:passw@proxy.example"; args.ws_proxy_port = 8080
+        session = WebSocketSession(args); session._peer_tuple = ("127.0.0.1", 54321)
+        with mock.patch("obstacle_bridge.bridge_transport_ws.open_http_connect_tunnel") as tunnel:
+            session._open_ws_proxy_socket_blocking("overlay.example", 443)
+        self.assertEqual(tunnel.call_args.kwargs["proxy"], ("proxy.example", 8080))
+        self.assertEqual(tunnel.call_args.kwargs["basic_auth"], "Basic dXNlcjpwYXNzdw==")
 
     def test_system_proxy_mode_falls_back_to_direct_when_no_endpoint_is_found(self):
         args = _args("binary")

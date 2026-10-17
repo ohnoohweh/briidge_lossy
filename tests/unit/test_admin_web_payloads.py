@@ -572,10 +572,30 @@ def _http_json_body(writer: _WriterStub) -> dict:
 
 
 class AdminWebPayloadTests(unittest.TestCase):
+
+    def test_telemetry_tab_renders_client_and_collector_status(self):
+        repo_root = pathlib.Path(__file__).resolve().parents[2]
+        index_html = (repo_root / "admin_web" / "index.html").read_text(encoding="utf-8")
+        app_js = (repo_root / "admin_web" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('data-tab="telemetry"', index_html)
+        self.assertIn('id="tab-telemetry"', index_html)
+        self.assertIn("Telemetry collector", index_html)
+        self.assertIn("function applyTelemetryDoc", app_js)
+        self.assertIn("telemetry.collector", app_js)
+
     @staticmethod
     def _canonical_webadmin_paths() -> list[pathlib.Path]:
         repo_root = pathlib.Path(__file__).resolve().parents[2]
         return [repo_root / "admin_web" / "app.js"]
+
+    def test_udp_log_targets_are_direct_text_configuration_fields(self):
+        app_js = self._canonical_webadmin_paths()[0].read_text(encoding="utf-8")
+
+        self.assertIn("function isDirectEntryConfigSetting(key)", app_js)
+        self.assertIn("normalizedKey === 'log_udp_target'", app_js)
+        self.assertIn("normalizedKey === 'log_admin_udp_target'", app_js)
+        self.assertIn("if (isDirectEntryConfigSetting(normalizedKey)) return false;", app_js)
 
     def test_runner_mux_aggregate_preserves_tun_counter_maps(self):
         class _MuxStub:
@@ -2269,9 +2289,21 @@ class AdminWebPayloadTests(unittest.TestCase):
             ws_bind="0.0.0.0",
             ws_own_port=8080,
             ws_peer="peer.example.net",
+            ws_peer_addresses=["198.51.100.50", "2001:db8::50"],
             ws_peer_port=8443,
             ws_path="/bridge",
+            ws_payload_mode="binary",
+            ws_peer_resolve_family="prefer-ipv6",
+            ws_proxy_auth="none",
+            ws_proxy_host="",
+            ws_proxy_mode="off",
+            ws_proxy_port=8080,
+            ws_reconnect_grace=3.0,
+            ws_send_timeout=3.0,
+            ws_subprotocol=None,
+            ws_tcp_user_timeout_ms=10000,
             ws_tls=True,
+            ws_max_size=65535,
         )
         ui = AdminWebUI(args, _RunnerStub())
         profiles = ui._build_onboarding_connection_profiles()
@@ -2283,14 +2315,36 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(ws_profiles[0]["role"], "client")
         self.assertEqual(ws_profiles[0]["endpoint_host"], "peer.example.net")
         self.assertEqual(ws_profiles[0]["endpoint_port"], 8443)
+        self.assertEqual(
+            ws_profiles[0]["transport_options"]["ws_peer_addresses"],
+            ["198.51.100.50", "2001:db8::50"],
+        )
+        self.assertEqual(ws_profiles[0]["transport_options"]["ws_bind"], "0.0.0.0")
+        self.assertEqual(ws_profiles[0]["transport_options"]["ws_own_port"], 8080)
 
     def test_onboarding_invite_roundtrip_and_suggested_updates(self):
         payload = {
             "version": 1,
             "connection": {
-                "transport": "tcp",
+                "transport": "ws",
                 "endpoint_host": "bridge.example.net",
                 "endpoint_port": 4433,
+                "transport_options": {
+                    "ws_peer_addresses": ["198.51.100.44", "2001:db8::44"],
+                    "ws_path": "/bridge",
+                    "ws_payload_mode": "binary",
+                    "ws_peer_resolve_family": "prefer-ipv6",
+                    "ws_proxy_auth": "none",
+                    "ws_proxy_host": "proxy.example.net",
+                    "ws_proxy_mode": "manual",
+                    "ws_proxy_port": 8443,
+                    "ws_reconnect_grace": 4.5,
+                    "ws_send_timeout": 5.5,
+                    "ws_subprotocol": "obstaclebridge-v1",
+                    "ws_tcp_user_timeout_ms": 12000,
+                    "ws_tls": True,
+                    "ws_max_size": 32768,
+                },
             },
             "admin_web_name": "Bridge Peer",
             "admin_web_port": 18090,
@@ -2325,11 +2379,18 @@ class AdminWebPayloadTests(unittest.TestCase):
         token = AdminWebUI._encode_onboarding_token(payload)
         self.assertTrue(token.startswith(AdminWebUI.ONBOARDING_TOKEN_PREFIX))
         parsed = AdminWebUI._decode_onboarding_token(token)
-        self.assertEqual(parsed["connection"]["transport"], "tcp")
+        self.assertEqual(parsed["connection"]["transport"], "ws")
         updates = AdminWebUI._onboarding_updates_from_invite(parsed)
-        self.assertEqual(updates["overlay_transport"], "tcp")
-        self.assertEqual(updates["tcp_peer"], "bridge.example.net")
-        self.assertEqual(updates["tcp_peer_port"], 4433)
+        self.assertEqual(updates["overlay_transport"], "ws")
+        self.assertEqual(updates["ws_peer"], "bridge.example.net")
+        self.assertEqual(updates["ws_peer_port"], 4433)
+        self.assertEqual(updates["ws_peer_addresses"], ["198.51.100.44", "2001:db8::44"])
+        self.assertEqual(updates["ws_path"], "/bridge")
+        self.assertTrue(updates["ws_tls"])
+        self.assertEqual(updates["ws_proxy_host"], "proxy.example.net")
+        self.assertEqual(updates["ws_proxy_port"], 8443)
+        self.assertEqual(updates["ws_subprotocol"], "obstaclebridge-v1")
+        self.assertEqual(updates["ws_max_size"], 32768)
         self.assertEqual(updates["secure_link_mode"], "psk")
         self.assertEqual(updates["admin_web_name"], "Bridge Peer")
         self.assertEqual(updates["admin_web_port"], 18090)
@@ -2347,6 +2408,77 @@ class AdminWebPayloadTests(unittest.TestCase):
         self.assertEqual(updates["proxy_provider"]["socks5_port"], 18182)
         self.assertEqual(updates["proxy_provider"]["auth"]["username"], "obproxy")
         self.assertIn("own_servers", updates)
+
+    def test_onboarding_invite_applies_client_options_for_every_transport(self):
+        cases = {
+            "myudp": (
+                {
+                    "udp_bind": "::",
+                    "udp_own_port": 0,
+                    "udp_peer_resolve_family": "ipv4",
+                    "max_inflight": 31,
+                },
+                "udp",
+            ),
+            "tcp": (
+                {
+                    "tcp_bind": "::",
+                    "tcp_own_port": 8081,
+                    "tcp_peer_resolve_family": "ipv6",
+                    "tcp_bp_wbuf_threshold": 65536,
+                },
+                "tcp",
+            ),
+            "quic": (
+                {
+                    "quic_bind": "::",
+                    "quic_own_port": 0,
+                    "quic_peer_resolve_family": "ipv4",
+                    "quic_alpn": "obstaclebridge-v1",
+                    "quic_insecure": True,
+                    "quic_max_size": 32768,
+                },
+                "quic",
+            ),
+            "ws": (
+                {
+                    "ws_bind": "::",
+                    "ws_own_port": 0,
+                    "ws_peer_addresses": ["198.51.100.55", "2001:db8::55"],
+                    "ws_path": "/bridge",
+                    "ws_payload_mode": "binary",
+                    "ws_peer_resolve_family": "prefer-ipv6",
+                    "ws_proxy_auth": "none",
+                    "ws_proxy_host": "proxy.example.net",
+                    "ws_proxy_mode": "manual",
+                    "ws_proxy_port": 8443,
+                    "ws_reconnect_grace": 4.5,
+                    "ws_send_timeout": 5.5,
+                    "ws_subprotocol": "obstaclebridge-v1",
+                    "ws_tcp_user_timeout_ms": 12000,
+                    "ws_tls": True,
+                    "ws_max_size": 32768,
+                },
+                "ws",
+            ),
+        }
+        for transport, (options, prefix) in cases.items():
+            with self.subTest(transport=transport):
+                updates = AdminWebUI._onboarding_updates_from_invite(
+                    {
+                        "connection": {
+                            "transport": transport,
+                            "endpoint_host": "bridge.example.net",
+                            "endpoint_port": 4433,
+                            "transport_options": options,
+                        }
+                    }
+                )
+                self.assertEqual(updates["overlay_transport"], transport)
+                self.assertEqual(updates[f"{prefix}_peer"], "bridge.example.net")
+                self.assertEqual(updates[f"{prefix}_peer_port"], 4433)
+                for key, value in options.items():
+                    self.assertEqual(updates[key], value)
 
     def test_onboarding_blueprints_group_active_peer_connections(self):
         args = argparse.Namespace(

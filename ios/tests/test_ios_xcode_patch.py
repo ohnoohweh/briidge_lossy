@@ -206,23 +206,32 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert patched.count("IPHONEOS_DEPLOYMENT_TARGET = 15.0;") == 2
     assert 'PBXNativeTarget "IPServer"' in patched
     assert "NetworkExtension.framework" in patched
+    assert "NetworkExtension.framework in Sources" not in patched
+    assert "71C400000000000000000003 /* NetworkExtension.framework in App Frameworks */" in patched
     assert "Embed App Extensions" in patched
     assert "GeneratedSources/IPServer/PacketTunnelProvider.swift" in patched
     assert "native/IPServer/IPServer.entitlements" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeNativeCrypto.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeNativeServiceSpec.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeNativeProxyConnections.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayConnectionSupport.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayChannelCore.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxTunRuntime.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeTunHelperContract.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeTunHelperXPCTransport.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeTunPing.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeTunProbeDiagnosticsSupport.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeAdminAPI.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeChannelMuxCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAuth.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminConfigChallenge.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeNativeServiceSpec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeProxyConnections.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxUdpRuntime.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxTunRuntime.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunHelperContract.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunHelperXPCTransport.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunPing.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeTunProbeDiagnosticsSupport.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTunProbeAddressResolver.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminAPI.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeAdminWebSupport.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCompatibilityCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeChannelMuxCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeWebSocketPayloadCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgePacketModel.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeRuntimeHealth.swift" in patched
@@ -232,17 +241,18 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeMyUDPCodec.swift" in patched
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeSecureLinkFrameCodec.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeRuntimeConfig.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOverlayStackPlanner.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeUdpOverlayTransportOwner.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeTcpOverlayTransportOwner.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeWebAdminServer.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeProxyServer.swift" in patched
-    assert "native/ObstacleBridgeShared/ObstacleBridgeOnboarding.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeRuntimeConfig.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayStackPlanner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeUdpOverlayCodec.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeUdpOverlayTransportOwner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeTcpOverlayTransportOwner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketOverlayTransportOwner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebAdminServer.swift" in patched
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift" in patched
+    assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOnboarding.swift" in patched
     assert "ObstacleBridgeNativeCrypto.swift in Sources" in patched
     assert "ObstacleBridgeNativeCrypto.swift in IPServer Sources" in patched
     assert 'repositoryURL = "https://github.com/apple/swift-crypto.git";' in patched
@@ -253,6 +263,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeUdpOverlaySessionCodec.swift" not in patched
     assert "ObstacleBridgeAdminAPI.swift in Sources" in patched
     assert "ObstacleBridgeChannelMuxCodec.swift in Sources" in patched
+    assert "ObstacleBridgeChannelMuxCompatibilityCodec.swift in Sources" in patched
     assert "ObstacleBridgeRuntimeConfig.swift in Sources" in patched
     assert "ObstacleBridgeOverlayStackPlanner.swift in Sources" in patched
     assert "ObstacleBridgeWebAdminServer.swift in Sources" in patched
@@ -261,7 +272,10 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeQuicOverlayTransportOwner.swift in Sources" in patched
     assert "ObstacleBridgeProxyServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
-    assert "native/ObstacleBridgeApp/ObstacleBridgeHostRunner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" in patched
+    assert "../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift" in patched
+    assert "../../../../../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" in patched
+    assert 'path = "../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' not in patched
 
 
 def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
@@ -291,6 +305,8 @@ def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
     assert "app_packages/bin" in patched
     assert "_testcapi _testclinic" in patched
     assert "_remote_debugging xxlimited" in patched
+    assert "Repair stale Python extension frameworks missing required bundle metadata." in patched
+    assert 'PYTHON_DYLIB_INFO_TEMPLATE="$PROJECT_DIR/Support/Python.xcframework/build/iOS-dylib-Info-template.plist"' in patched
     assert "org.python.$(echo $FULL_MODULE_NAME" not in patched
     assert "Process Python libraries for IPServer" not in patched
     assert "ObstacleBridgePythonBridge.m" not in patched
@@ -303,6 +319,18 @@ def test_patch_pbxproj_text_is_idempotent() -> None:
     twice = patch_pbxproj_text(once)
 
     assert once == twice
+
+
+def test_patch_pbxproj_text_repairs_stale_six_level_swift_source_paths() -> None:
+    stale = BASELINE_PROJECT.replace(
+        "/* End PBXFileReference section */",
+        '\t\tDEADBEEFDEADBEEFDEADBEEF /* ObstacleBridgePacketFlowBridge.swift */ = {isa = PBXFileReference; path = "../../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift"; sourceTree = SOURCE_ROOT; };\n/* End PBXFileReference section */',
+    )
+
+    patched = patch_pbxproj_text(stale)
+
+    assert 'path = "../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' in patched
+    assert 'path = "../../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' not in patched
 
 
 def test_patch_pbxproj_text_gives_app_and_extension_matching_bundle_defaults() -> None:

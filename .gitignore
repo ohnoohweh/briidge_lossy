@@ -14,6 +14,7 @@ Cert_SecureLink/
 /ios/build/
 /build/
 /.build/
+/swift/Sources/ObstacleBridgeLinux/Generated/
 /src/obstacle_bridge/_generated/
 /ios/logs/
 /.tmp-home/
@@ -25,3 +26,4 @@ Cert_SecureLink/
 /logs/
 /ObstacleBridge*.log
 /dist/
+tests/unit/test_logging_ipc.py

@@ -34,6 +34,15 @@ def parse_proxy_authority(value: str, default_port: int = 8080) -> Optional[Prox
     text = str(value or "").strip()
     if not text:
         return None
+    # URL parsing is required before the legacy authority fallback so proxy
+    # credentials never become part of the DNS host name.
+    if "://" in text or "@" in text:
+        parsed = urllib.parse.urlsplit(text if "://" in text else f"http://{text}")
+        if parsed.hostname:
+            try:
+                return strip_host_brackets(parsed.hostname), int(parsed.port or default_port)
+            except ValueError:
+                return None
     if "://" in text:
         text = text.split("://", 1)[1]
     text = text.split("/", 1)[0].strip()
@@ -55,6 +64,20 @@ def parse_proxy_authority(value: str, default_port: int = 8080) -> Optional[Prox
             host = base
             port = int(maybe_port)
     return (strip_host_brackets(host), int(port)) if host else None
+
+
+def proxy_basic_auth_from_spec(value: str) -> Optional[str]:
+    """Return an HTTP Basic value from a proxy URI without logging secrets."""
+    text = str(value or "").strip()
+    if not text or "@" not in text:
+        return None
+    parsed = urllib.parse.urlsplit(text if "://" in text else f"http://{text}")
+    if parsed.username is None:
+        return None
+    username = urllib.parse.unquote(parsed.username)
+    password = urllib.parse.unquote(parsed.password or "")
+    token = base64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+    return f"Basic {token}"
 
 
 def parse_proxy_spec(spec: str, secure: bool = False) -> Optional[ProxyEndpoint]:
@@ -107,6 +130,14 @@ def env_get_proxy_for_target(
     if parsed.hostname:
         return strip_host_brackets(parsed.hostname), int(parsed.port or 8080)
     return parse_proxy_authority(proxy_url)
+
+
+def env_proxy_basic_auth_for_target(target_host: str, *, secure: bool = False) -> Optional[str]:
+    host = strip_host_brackets(str(target_host or "")).strip()
+    if not host or urllib.request.proxy_bypass(host):
+        return None
+    proxy_url = urllib.request.getproxies().get("https" if secure else "http")
+    return proxy_basic_auth_from_spec(proxy_url or "")
 
 
 def test_system_proxy_override(
@@ -304,7 +335,8 @@ def resolve_proxy_endpoint(
             log.debug("%s env proxy selected endpoint=%s:%d", log_prefix, endpoint[0], int(endpoint[1]))
         return endpoint
     if normalized_mode == "manual":
-        host = strip_host_brackets(str(manual_host or "")).strip()
+        parsed_manual = parse_proxy_authority(manual_host, default_port=int(manual_port or 8080))
+        host = parsed_manual[0] if parsed_manual else ""
         port = int(manual_port or 0)
         if not host or port <= 0:
             if log:
@@ -493,6 +525,7 @@ def open_http_connect_tunnel(
     target_port: int,
     proxy: ProxyEndpoint,
     auth_mode: str = "none",
+    basic_auth: Optional[str] = None,
     timeout: float = 5.0,
     log: Optional[logging.Logger] = None,
     log_prefix: str = "[PROXY]",
@@ -517,7 +550,7 @@ def open_http_connect_tunnel(
             log.debug("%s CONNECT attempt=%d proxy=%s:%d", log_prefix, attempts, proxy_host, int(proxy_port))
         sock = socket.create_connection((proxy_host, int(proxy_port)), timeout=timeout)
         try:
-            auth_header = None
+            auth_header = basic_auth
             if normalized_auth == "negotiate" and attempts > 1:
                 if log:
                     log.debug("%s building Negotiate token challenge_present=%s", log_prefix, challenge_blob is not None)

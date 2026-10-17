@@ -63,6 +63,48 @@ fi
 
 mkdir -p "${OUTPUT_DIR}" "${SCRATCH_DIR}"
 
+# This file is intentionally ignored: it is an input to the executable, not
+# source state.  Python verifies this embedded identity before it reuses a
+# helper, so a copied sidecar cannot make an old binary appear current.
+COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
+if git -C "${REPO_ROOT}" status --porcelain | grep -q .; then
+  DIRTY=true
+else
+  DIRTY=false
+fi
+DIFF_SHA="$(git -C "${REPO_ROOT}" diff --binary HEAD 2>/dev/null | sha256sum | awk '{print substr($1, 1, 12)}')"
+if [ "${DIFF_SHA}" = "e3b0c44298fc" ]; then
+  DIFF_SHA=""
+fi
+BUILD_TIMESTAMP_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+GENERATED_BUILD_INFO_DIR="${REPO_ROOT}/swift/Sources/ObstacleBridgeLinux/Generated"
+GENERATED_BUILD_INFO_PATH="${GENERATED_BUILD_INFO_DIR}/ObstacleBridgeLinuxBuildInfo.swift"
+mkdir -p "${GENERATED_BUILD_INFO_DIR}"
+cat > "${GENERATED_BUILD_INFO_PATH}" <<EOF
+import Foundation
+
+enum ObstacleBridgeLinuxBuildInfo {
+    static let commit = "${COMMIT}"
+    static let dirty = ${DIRTY}
+    static let diffSHA = "${DIFF_SHA}"
+    static let buildTimestampUTC = "${BUILD_TIMESTAMP_UTC}"
+
+    static func json() -> String {
+        let value: [String: Any] = [
+            "artifact": "ObstacleBridgeLinux",
+            "build_configuration": "${CONFIGURATION}",
+            "build_timestamp_utc": buildTimestampUTC,
+            "commit": commit,
+            "diff_sha": diffSHA,
+            "dirty": dirty,
+            "source": "embedded-build-info",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return "{}" }
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+EOF
+
 echo "[build_linux_app] compiling ${CONFIGURATION} Linux Swift artifact"
 swift build \
   --package-path "${REPO_ROOT}" \
@@ -79,18 +121,6 @@ fi
 BINARY_PATH="${OUTPUT_DIR}/ObstacleBridgeLinux"
 BUILD_INFO_PATH="${OUTPUT_DIR}/ObstacleBridgeLinux.build-info.json"
 cp "${BINARY_SOURCE}" "${BINARY_PATH}"
-
-COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short=12 HEAD 2>/dev/null || printf 'unknown')"
-if git -C "${REPO_ROOT}" status --porcelain | grep -q .; then
-  DIRTY=true
-else
-  DIRTY=false
-fi
-DIFF_SHA="$(git -C "${REPO_ROOT}" diff --binary HEAD 2>/dev/null | sha256sum | awk '{print substr($1, 1, 12)}')"
-if [ "${DIFF_SHA}" = "e3b0c44298fc" ]; then
-  DIFF_SHA=""
-fi
-BUILD_TIMESTAMP_UTC="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 cat > "${BUILD_INFO_PATH}" <<EOF
 {"artifact":"ObstacleBridgeLinux","build_configuration":"${CONFIGURATION}","build_timestamp_utc":"${BUILD_TIMESTAMP_UTC}","commit":"${COMMIT}","diff_sha":"${DIFF_SHA}","dirty":${DIRTY},"source":"swift-package"}

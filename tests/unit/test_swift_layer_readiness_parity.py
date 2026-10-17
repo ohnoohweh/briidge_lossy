@@ -4,7 +4,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SWIFT_ROOT = ROOT / "ios" / "native"
+SWIFT_ROOT = ROOT / "swift" / "Sources"
+CORE_ROOT = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 
 
 def _read(*parts: str) -> str:
@@ -13,10 +14,10 @@ def _read(*parts: str) -> str:
 
 def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
     owner_paths = [
-        ("ObstacleBridgeShared", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
-        ("ObstacleBridgeShared", "ObstacleBridgeTcpOverlayTransportOwner.swift"),
-        ("ObstacleBridgeShared", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
-        ("ObstacleBridgeShared", "ObstacleBridgeQuicOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeUdpOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeTcpOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeWebSocketOverlayTransportOwner.swift"),
+        ("ObstacleBridgeAppleShared", "ObstacleBridgeQuicOverlayTransportOwner.swift"),
     ]
     for path in owner_paths:
         source = _read(*path)
@@ -33,7 +34,7 @@ def test_swift_overlay_transport_owners_publish_layered_readiness() -> None:
 
 
 def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
-    adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
+    adapter = (CORE_ROOT / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "static func appReady(from layers: [[String: Any]]) -> Bool" in adapter
     assert "static func inflowAllowed(from layers: [[String: Any]]) -> Bool" in adapter
@@ -51,7 +52,7 @@ def test_swift_layered_readiness_gates_inflow_on_outer_app_ready() -> None:
 
 
 def test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect() -> None:
-    adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
+    adapter = (CORE_ROOT / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     python_secure_link = (ROOT / "src" / "obstacle_bridge" / "bridge_securelink.py").read_text(encoding="utf-8")
 
     # Both runtimes fail closed after a missed normal disconnect callback:
@@ -66,10 +67,10 @@ def test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disco
 
 
 def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_policy() -> None:
-    adapter = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayLayerTransportAdapter.swift")
+    adapter = (CORE_ROOT / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     python_mux = (ROOT / "src" / "obstacle_bridge" / "bridge_channelmux.py").read_text(encoding="utf-8")
     owners = [
-        _read("ObstacleBridgeShared", name)
+        _read("ObstacleBridgeAppleShared", name)
         for name in (
             "ObstacleBridgeUdpOverlayTransportOwner.swift",
             "ObstacleBridgeTcpOverlayTransportOwner.swift",
@@ -100,7 +101,7 @@ def test_swift_sustained_transport_delay_rotation_matches_python_channelmux_poli
 
 
 def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic() -> None:
-    channel_core = _read("ObstacleBridgeShared", "ObstacleBridgeOverlayChannelCore.swift")
+    channel_core = (CORE_ROOT / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     provider = _read("IPServer", "PacketTunnelProvider.swift")
 
     assert "guard overlayConnected else" in channel_core
@@ -118,7 +119,7 @@ def test_swift_channelmux_and_tun_probe_boundaries_reject_pre_connected_traffic(
 def test_swift_admin_surfaces_consume_layered_readiness() -> None:
     host_runner = _read("ObstacleBridgeApp", "ObstacleBridgeHostRunner.swift")
     packet_tunnel = _read("IPServer", "PacketTunnelProvider.swift")
-    admin_support = _read("ObstacleBridgeShared", "ObstacleBridgeAdminSnapshotSupport.swift")
+    admin_support = (CORE_ROOT / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "func connectionLayersSnapshot() -> [[String: Any]]" in host_runner
     assert "func appReady() -> Bool" in host_runner

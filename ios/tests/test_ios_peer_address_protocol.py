@@ -10,7 +10,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / "ios" / "native" / "ObstacleBridgeShared" / "ObstacleBridgePeerAddressProtocolRuntime.swift"
+SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePeerAddressProtocolRuntime.swift"
 
 
 def test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control(tmp_path: Path) -> None:

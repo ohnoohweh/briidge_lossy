@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      run_linux_swift_privileged_tun:
+        description: Run the Linux Swift privileged TUN qualification on an authorized self-hosted runner.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -26,7 +32,7 @@ jobs:
       macos_host_runner_changed: ${{ steps.changed.outputs.macos_host_runner_changed }}
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -97,12 +103,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -134,12 +140,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -154,6 +160,21 @@ jobs:
       - name: Run full Linux overlay qualification suite
         run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only"
 
+  bridge-py-integration-linux-swift-privileged-tun:
+    name: Integration Gate (Linux Swift privileged TUN)
+    timeout-minutes: 15
+    needs: detect-bridge-change
+    if: github.event_name == 'workflow_dispatch' && inputs.run_linux_swift_privileged_tun && needs.detect-bridge-change.outputs.changed == 'true'
+    runs-on: [self-hosted, linux, obstaclebridge-privileged]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Run Linux Swift privileged TUN qualification
+        env:
+          OBSTACLEBRIDGE_PRIVILEGED_TUN: "1"
+        run: ./scripts/run_linux_swift_privileged_tun_tests.sh
+
   bridge-py-integration-windows:
     name: Integration Gate (Windows-specific)
     needs: detect-bridge-change
@@ -161,10 +182,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -199,10 +220,10 @@ jobs:
             target: tests/integration/test_macos_elevated.py::test_overlay_e2e_macos_elevated_tun_helper_native_reports_helper_death_with_route_dns_warning
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -226,7 +247,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Verify Swift toolchain
         run: |
@@ -269,10 +290,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -329,10 +350,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -348,7 +369,10 @@ jobs:
 
       - name: Run macOS host-runner qualification suite
         env:
-          PYTHONPATH: src:ios/src
+          # ios/tests imports shared test fixtures from the repository-level
+          # tests namespace; retain the checkout root when pytest imports this
+          # standalone qualification module.
+          PYTHONPATH: .:src:ios/src
         run: pytest -vv --timeout=120 -m "not slow" ios/tests/test_macos_swift_host_runner.py
 
   bridge-py-integration-macos-swift-elevated:
@@ -364,10 +388,10 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
