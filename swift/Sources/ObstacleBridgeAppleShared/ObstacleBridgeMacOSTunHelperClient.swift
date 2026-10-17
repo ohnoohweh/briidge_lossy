@@ -126,7 +126,7 @@ final class ObstacleBridgeInProcessMacOSTunHelperClient: ObstacleBridgeTunHelper
         let family: Int32 = ipv6 ? AF_INET6 : AF_INET
         var input = in6_addr()
         guard inet_pton(family, address, &input) == 1 else { return "" }
-        var local = withUnsafeBytes(of: input) { Array($0.prefix(width)) }
+        let local = withUnsafeBytes(of: input) { Array($0.prefix(width)) }
         var candidate = local
         for index in 0..<width {
             let bitsBefore = index * 8
