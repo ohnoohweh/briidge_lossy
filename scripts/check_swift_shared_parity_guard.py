@@ -6,9 +6,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SHARED_SWIFT_PREFIX = "ios/native/ObstacleBridgeShared/"
-IOS_SWIFT_PREFIX = "ios/native/IPServer/"
-MACOS_SWIFT_PREFIX = "ios/native/ObstacleBridgeApp/"
+SHARED_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeAppleShared/"
+IOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeiOS/"
+MACOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeMacOS/"
 SWIFT_SUFFIX = ".swift"
 PARITY_TEST_FILES = {
     "ios/tests/test_m3_native_sources.py",

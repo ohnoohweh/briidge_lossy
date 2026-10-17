@@ -24,7 +24,10 @@ if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
   if [[ "$INTERACTIVE_ELEVATION" -eq 1 ]]; then
     exec sudo "$0" "$@"
   fi
-  exec sudo -n "$0" "$@"
+  # sudo clears GitHub's environment by default. Preserve this single
+  # capability flag so the test can skip hosted-runner-only packet injection
+  # while retaining the routine helper lifecycle qualification.
+  exec sudo -n OBSTACLEBRIDGE_GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" "$0" "$@"
 fi
 
 export OBSTACLEBRIDGE_RUN_MACOS_ELEVATED=1

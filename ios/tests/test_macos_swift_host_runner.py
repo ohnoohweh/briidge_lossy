@@ -16,6 +16,7 @@ import threading
 import time
 import contextlib
 import textwrap
+import uuid
 import urllib.error
 import urllib.request
 import zlib
@@ -49,7 +50,18 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in build_script
-    assert "ios/native/ObstacleBridgeShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
+    assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
+
+
+def test_macos_build_includes_mtls_telemetry_transport() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")
+    assert "ObstacleBridgeTelemetryMTLSUploader.swift" in build_script
+    assert "NSURLAuthenticationMethodClientCertificate" in source
+    assert "connectionProxyDictionary = [:]" in source
+    assert "SecItemCopyMatching" in source
+    assert "return telemetryIdentities.count == 1 ? telemetryIdentities[0] : nil" in source
+    assert "session.invalidateAndCancel()" in source
 
 
 def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
@@ -64,16 +76,66 @@ def test_macos_host_runner_persists_portable_runtime_health_evidence() -> None:
     assert '"previous_runtime_lifetime_ended_cleanly"' in source
 
 
+def test_macos_host_runner_converts_portable_runtime_service_specs_at_the_host_boundary() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    native_service_spec = (CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift").read_text(encoding="utf-8")
+
+    assert "func nativeServiceSpec() -> ObstacleBridgeNativeServiceSpec" in native_service_spec
+    assert "channelMuxSpec: .init(" in native_service_spec
+    assert "lifecycleHooks: lifecycleHooks" in native_service_spec
+    assert "options: options" in native_service_spec
+    assert ".map { $0.nativeServiceSpec() }" in source
+
+
+def test_macos_host_runner_exposes_only_redacted_telemetry_status() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    runtime_config_policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
+    app_main = (APP_NATIVE_DIR / "ObstacleBridgeMacAppMain.swift").read_text(encoding="utf-8")
+    assert '"telemetry": telemetryStatusSnapshot()' in source
+    assert "ObstacleBridgeTelemetryAdminStatus.snapshot(" in source
+    assert "uploader: telemetryUploader" in source
+    assert '"telemetry_client": [' in runtime_config_policy
+    assert 'schemaItem(key: "telemetry_enabled"' in runtime_config_policy
+    assert 'defaultValue: "https://127.0.0.1:18443/v1/telemetry/batches"' in runtime_config_policy
+    assert 'defaultValue: "/var/lib/obstaclebridge/telemetry-client"' in runtime_config_policy
+    assert '"telemetry_client": ObstacleBridgeRuntimeConfig.defaultTelemetryConfig()' in app_main
+
+
+def test_macos_host_runner_schedules_telemetry_off_the_service_queue() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    assert 'DispatchQueue(label: "ObstacleBridgeHostRunner.Telemetry")' in source
+    assert "startTelemetryIfConfigured()" in source
+    assert "private func flushTelemetry(startUpload: Bool = true)" in source
+    assert "private func enqueueTelemetryHealth(state: String, counter: UInt64)" in source
+    assert 'event: "runtime.health"' in source
+    assert '"counter": .integer(Int64(clamping: counter))' in source
+    assert "enqueueTelemetryHealth(state: event, counter: sequence)" in source
+    assert 'enqueueTelemetryHealth(state: "startup_failed", counter: 0)' in source
+    assert "flushTelemetry(startUpload: false)" in source
+    assert "telemetryUploader?.cancel()" in source
+
+
 def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift").read_text(encoding="utf-8")
 
     assert "(0...Int(UInt16.max)).contains(value.svcID)" in codec
-SHARED_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeShared"
-APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"
+SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
+CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
+APP_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS"
+IOS_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeiOS"
+
+
+def test_macos_build_uses_shared_peer_address_resolver() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgePeerAddressResolver.swift" in build_script
+    assert "import Darwin" in resolver
+    assert "import Glibc" not in resolver
 
 
 def test_macos_swift_host_runner_uses_shared_pending_rekey_timeout_guard() -> None:
-    source = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
+    source = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskRuntime.swift").read_text(encoding="utf-8")
 
     # The timeout belongs to the portable Core lifecycle, not to the Apple
     # transport adapter.  Keep this guard aligned with that ownership boundary.
@@ -117,7 +179,8 @@ def test_macos_swift_host_runner_passes_python_parity_hook_env() -> None:
 
 def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    helper_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+    helper_source = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift").read_text(encoding="utf-8")
+    macos_helper_client = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
 
     assert "private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?" in source
     assert 'private var macOSTunHelperTransportKind = "none"' in source
@@ -196,19 +259,19 @@ def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> No
     assert "try helperClient.writePacket(packet)" in source
     assert "let helperEnvSnapshot = Self.macOSTunHelperHookEnvSnapshot(from: env)" in source
     assert "try process.run()" not in source[source.index("private func runMacOSTunLifecycleHook"):]
-    assert "self.emitPacketFromHelper(packet)" in helper_source
-    assert "ObstacleBridgeTunHelperPacketEnvelope.packetFromHelper(packet)" in helper_source
+    assert "self?.emitPacketFromHelper(packet)" in macos_helper_client
+    assert "ObstacleBridgeTunHelperPacketEnvelope.packetFromHelper(packet)" in macos_helper_client
     assert "transport.sendPacketToHelper(packet)" in helper_source
     assert "ObstacleBridgeTunHelperPacketEnvelope.packetToHelper(packet)" in helper_source
-    assert "self?.emitEventFromHelper(event: event, payload: payload)" in helper_source
-    assert "ObstacleBridgeTunHelperEventEnvelope(event: event, payload: payload)" in helper_source
-    assert "private func runHook(action: String, argv: [String], env: [String: String], removing: Bool)" in helper_source
-    assert "#if os(macOS)\n        let process = Process()" in helper_source
-    assert "try process.run()" in helper_source
-    assert "macOS TUN hook execution is not available on iOS" in helper_source
-    assert 'emitEventFromHelper(event: "macos_tun_hook_completed"' in helper_source
-    assert "runtimeSnapshot.markNetworkApplied(action: action, argv: argv, env: env)" in helper_source
-    assert 'stage: "macos_tun_hook_\\(action)"' in helper_source
+    assert "self?.emitEventFromHelper(event: event, payload: payload)" in macos_helper_client
+    assert "ObstacleBridgeTunHelperEventEnvelope(event: event, payload: payload)" in macos_helper_client
+    assert "private func runHook(action: String, argv: [String], env: [String: String], removing: Bool)" in macos_helper_client
+    assert "#if os(macOS)\n        let process = Process()" in macos_helper_client
+    assert "try process.run()" in macos_helper_client
+    assert "macOS TUN hook execution is not available on iOS" in macos_helper_client
+    assert 'emitEventFromHelper(event: "macos_tun_hook_completed"' in macos_helper_client
+    assert "runtimeSnapshot.markNetworkApplied(action: action, argv: argv, env: env)" in macos_helper_client
+    assert 'stage: "macos_tun_hook_\\(action)"' in macos_helper_client
     assert 'DispatchQueue(label: "ObstacleBridgeTunHelperClient.Operations")' in helper_source
     assert "var transportKind: String { get }" in helper_source
     assert "var applyCalls = 0" in helper_source
@@ -225,7 +288,7 @@ def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> No
     assert '"stopped": stopped' in helper_source
     assert '"cleanup_attempted": cleanupAttempted' in helper_source
     assert '"cleanup_ok": cleanupOK' in helper_source
-    assert 'var transportKind: String {\n        "in_process"\n    }' in helper_source
+    assert 'var transportKind: String { "in_process" }' in macos_helper_client
     assert 'init(transport: ObstacleBridgeTunHelperCommandTransport, transportKind: String = "loopback")' in helper_source
     assert 'recordFailureUnlocked(stage: "apply_network", error: "TUN helper is not open")' in helper_source
     assert 'recordFailureUnlocked(stage: "write_packet", error: "TUN helper is not open")' in helper_source
@@ -246,13 +309,9 @@ def test_macos_swift_host_runner_exposes_python_shaped_tun_helper_status() -> No
 def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     service = (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift").read_text(encoding="utf-8")
     xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
-    helper_main = (
-        ROOT
-        / "ios"
-        / "native"
-        / "ObstacleBridgePrivilegedHelper"
-        / "ObstacleBridgeTunPrivilegedHelperMain.swift"
-    ).read_text(encoding="utf-8")
+    helper_main = (APP_NATIVE_DIR / "ObstacleBridgeTunPrivilegedHelperMain.swift").read_text(encoding="utf-8")
+    protocol_server = (APP_NATIVE_DIR / "ObstacleBridgeMacOSProtocolV1TunHelperServer.swift").read_text(encoding="utf-8")
+    protocol_v1 = (CORE_SWIFT_DIR / "ObstacleBridgeTunHelperProtocolV1.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
 
     assert 'helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"' in service
@@ -293,6 +352,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'result["xpc_runtime"] = runtime' in service
     assert "ObstacleBridgeTunHelperXPC.ping(machServiceName: xpcMachServiceName)" in service
     assert '"helper_pid": ProcessInfo.processInfo.processIdentifier' in xpc_source
+    assert '"python_helper_protocol_version": ObstacleBridgeMacOSTunHelperService.pythonHelperProtocolVersion' in xpc_source
     assert "registerSkeletonResult(appBundleURL:" in service
     assert "startSkeletonResult(appBundleURL:" in service
     assert "stopSkeletonResult(appBundleURL:" in service
@@ -301,7 +361,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "stopResult(appBundleURL:" in service
     assert "smAppServiceAvailable" in service
 
-    admin_api = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
+    admin_api = (CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift").read_text(encoding="utf-8")
     assert "func adminTunHelperStatus(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in admin_api
     assert "func adminTunHelperAction(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in admin_api
     assert "func adminTunHelperRepair(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse" in admin_api
@@ -316,10 +376,34 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeMacOSTunHelperService.expectedHelperVersion" in helper_main
     assert "ObstacleBridgeTunHelperCommand.allCases.map" in helper_main
     assert "ObstacleBridgeTunHelperFrameKind.allCases.map" in helper_main
+    assert '"python_helper_protocol_version": ObstacleBridgeMacOSTunHelperService.pythonHelperProtocolVersion' in helper_main
     assert "runXPCListener()" in helper_main
     assert "NSXPCListener(machServiceName: ObstacleBridgeMacOSTunHelperService.xpcMachServiceName)" in helper_main
     assert "ObstacleBridgeTunHelperXPCListenerDelegate()" in helper_main
     assert "dispatchMain()" in helper_main
+    assert 'values[0] == "--tun-helper-server"' in helper_main
+    assert 'args.contains("--helper-build-info")' in helper_main
+    assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in helper_main
+    assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
+    assert "ObstacleBridgeTunHelperProtocolV1.decodeControl" in protocol_server
+    assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
+    assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server
+    assert "destination.update(from: path, count: path.count)" in protocol_server
+    assert 'control.operation == "HELLO"' in protocol_server
+    assert 'case "APPLY_NETWORK"' in protocol_server
+    assert "applyPythonNetwork" in protocol_server
+    assert "backend.setPacketSink" in protocol_server
+    assert "backend.setEventSink" in protocol_server
+    assert ".packetFromHelper" in protocol_server
+    assert ".event" in protocol_server
+    assert "authenticatedClients" in protocol_server
+    assert "writerLock" in protocol_server
+    assert "expireIfIdle" in protocol_server
+    assert 'values[3] == "--idle-sec"' in helper_main
+    assert "defaultGateway(address: address, prefix: prefix, ipv6: false)" in (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
+    assert "func obstacleBridgeUnixSocketPathBytes(_ path: String, capacity: Int) -> [UInt8]?" in (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
+    assert "public enum ObstacleBridgeTunHelperProtocolV1" in protocol_v1
+    assert "case controlRequest = 1" in protocol_v1
 
     assert "@objc protocol ObstacleBridgeTunHelperXPCServicing" in xpc_source
     assert "@objc protocol ObstacleBridgeTunHelperXPCClientCallbacks" in xpc_source
@@ -352,7 +436,7 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     elevated = (ROOT / "tests" / "integration" / "test_macos_swift_elevated.py").read_text(encoding="utf-8")
     xpc_source = (SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift").read_text(encoding="utf-8")
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
-    tunnel_control = (APP_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
+    tunnel_control = (IOS_NATIVE_DIR / "ObstacleBridgeTunnelControl.swift").read_text(encoding="utf-8")
 
     # The strict packet-carry lane starts the built app bundle and requires an
     # actual XPC transport. The separate HostRunner functional lane starts the
@@ -370,7 +454,7 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "--run-packaged-xpc-qualification" in elevated_wrapper
     assert 'MARK_EXPRESSION="macos_elevated and not macos_xpc_qualification"' in elevated_wrapper
     assert "exec sudo \"$0\" \"$@\"" in elevated_wrapper
-    assert "exec sudo -n \"$0\" \"$@\"" in elevated_wrapper
+    assert 'OBSTACLEBRIDGE_GITHUB_ACTIONS="${GITHUB_ACTIONS:-}"' in elevated_wrapper
     assert "OBSTACLEBRIDGE_MACOS_APP_BUNDLE" in elevated_wrapper
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
     assert "OBSTACLEBRIDGE_APP_RUNTIME_CONFIG" in elevated
@@ -409,6 +493,9 @@ def test_macos_packaged_xpc_btm_rejection_is_a_qualification_failure() -> None:
     assert "compiling macOS TUN privileged helper skeleton" in build_script
     assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in build_script
     assert "ObstacleBridgeTunHelperXPCTransport.swift" in build_script
+    helper_build = build_script[build_script.index('echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"'):build_script.index('echo "[build_macos_app] preparing macOS app bundle"')]
+    assert "ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" in helper_build
+    assert "ObstacleBridgeTunPrivilegedHelperMain.swift" in helper_build
     assert 'cp "${HELPER_BINARY_PATH}" "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"' in build_script
     assert 'cat > "${HELPER_PLIST}" <<EOF' in build_script
     assert "<key>AssociatedBundleIdentifiers</key>" in build_script
@@ -601,7 +688,8 @@ def test_macos_swift_host_runner_uses_shared_overlay_peer_endpoint_lookup() -> N
 
 
 def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
-    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeAppleOverlayChannelAdapter.swift").read_text(encoding="utf-8")
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
@@ -616,7 +704,7 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
         assert "setCoreEffectSink" in owner
         assert "startCoreLifecycle" in owner
         assert "func applyCoreEffects(_ effects: [ObstacleBridgeOverlayCoordinatorEffect])" in owner
-    assert "static func handleTCPTransportEvent(" in core
+    assert "static func handleTCPTransportEvent(" in adapter
 
     for source in (tcp_owner, udp_owner, ws_owner, quic_owner):
         assert "ObstacleBridgeOverlayChannelCore.tunRows(" in source
@@ -626,8 +714,8 @@ def test_swift_overlay_owners_share_channelmux_tun_core() -> None:
 
 
 def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
-    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
-    tun_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    tun_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTunRuntime.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
 
     assert "bufferedFrames: Int = 0" in core
@@ -648,9 +736,9 @@ def test_swift_tun_rows_include_throttle_snapshot_like_python() -> None:
 
 
 def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_python() -> None:
-    peer_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+    peer_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    secure_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
+    secure_adapter = (CORE_SWIFT_DIR / "ObstacleBridgeSecureLinkPskTransportAdapter.swift").read_text(encoding="utf-8")
 
     assert "ObstacleBridgeMyUDPHeartbeatPolicy.isConnected" in peer_runtime
     assert "lastRTTOkNanoseconds != 0" in (
@@ -667,7 +755,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "private static let secureLinkHandshakeStaleNS" in udp_owner
     assert "private static let lowerLayerUnavailableFallbackNS" in udp_owner
     assert "static let outerReadinessGrace: TimeInterval = 15.0" in (
-        (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+        (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     )
     assert "maybeRecoverUnavailableAppReady(nowNS:" in udp_owner
     assert "private func appReadinessRecoveryInSeconds" in udp_owner
@@ -680,7 +768,7 @@ def test_swift_udp_overlay_reconnect_uses_rtt_and_securelink_epoch_reset_like_py
     assert "overlayRuntime.resetTransportEpoch()" in udp_owner
     assert "overlayLayerTransportAdapter?.beginTransportEpoch(reason: reason)" in udp_owner
     assert "runtime.handleTransportDisconnected()" in secure_adapter
-    overlay_adapter = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
+    overlay_adapter = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     assert "enforceAuthenticatedTransportReadiness(transportConnected: transportConnected)" in overlay_adapter
     assert "secureLinkAdapter?.statusSnapshot().authenticated == true" in overlay_adapter
     assert "handleTransportDisconnected()" in overlay_adapter
@@ -705,9 +793,9 @@ def test_swift_websocket_reconnect_resets_tun_state_before_transport_generation(
 
 
 def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
-    core = (SHARED_NATIVE_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
+    core = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayChannelCore.swift").read_text(encoding="utf-8")
     backpressure = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift").read_text(encoding="utf-8")
-    snapshot_support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
+    snapshot_support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
     tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeTcpOverlayTransportOwner.swift").read_text(encoding="utf-8")
     ws_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayTransportOwner.swift").read_text(encoding="utf-8")
     quic_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeQuicOverlayTransportOwner.swift").read_text(encoding="utf-8")
@@ -745,7 +833,7 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
         assert "ObstacleBridgeOverlayChannelCore.recordOverlayEgress(" in source
     assert "private var rttEstMS: Double?" in ws_owner
     assert "func encodeClientPing(txNS: UInt64, echoNS: UInt64)" in (
-        SHARED_NATIVE_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"
+        CORE_SWIFT_DIR / "ObstacleBridgeWebSocketOverlayRuntime.swift"
     ).read_text(encoding="utf-8")
     assert "scheduleNextRTTPing(generation: generation)" in ws_owner
     assert '"rtt_est_ms": rttEstMS ?? NSNull()' in ws_owner
@@ -754,9 +842,10 @@ def test_swift_stream_transports_report_throttle_metrics_like_python() -> None:
 
 def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> None:
     host_runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    packet_tunnel = (ROOT / "ios" / "native" / "IPServer" / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
-    udp_runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
+    packet_tunnel = (IOS_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    udp_runtime = (CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift").read_text(encoding="utf-8")
     runtime_config = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    runtime_config_policy = (CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift").read_text(encoding="utf-8")
 
     assert '"inflight": protocolStats["inflight"] ?? 0' in host_runner
     assert '"inflight": protocolStats["inflight"] ?? 0' in packet_tunnel
@@ -764,14 +853,14 @@ def test_swift_udp_status_reports_inflight_separately_from_buffered_frames() -> 
     assert '"waiting_count": core.waitingRecordCount' in udp_runtime
     assert '"inflight": core.outstandingCounters.count' in udp_runtime
     assert '"max_inflight": core.maximumInFlight' in udp_runtime
-    assert 'schemaItem(key: "max_inflight"' in runtime_config
+    assert 'schemaItem(key: "max_inflight"' in runtime_config_policy
     assert "static func overlayMaxInflight(from payload: [String: Any]) -> Int" in runtime_config
     assert "maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: settings.runtimeConfig)" in packet_tunnel
     assert "maxInFlight: ObstacleBridgeRuntimeConfig.overlayMaxInflight(from: runtimeConfig)" in host_runner
 
 
 def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -> None:
-    support = (SHARED_NATIVE_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
+    support = (CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift").read_text(encoding="utf-8")
 
     assert "rowMatchesPeer(row, peerID: peerID, protocolKey: key)" in support
     assert 'protocolKey == "tun"' in support
@@ -781,7 +870,9 @@ def test_swift_peer_status_includes_direct_tun_throttle_for_single_peer_mode() -
 
 def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
-    shared_probe_support = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    shared_probe_support = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift").read_text(encoding="utf-8")
+    probe_resolver = (SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift").read_text(encoding="utf-8")
+    core_probe_policy = (CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsPolicy.swift").read_text(encoding="utf-8")
 
     assert "private let adminSnapshotQueue = DispatchQueue(label: \"ObstacleBridgeHostRunner.AdminSnapshots\")" in source
     assert "private var adminSnapshotTimer: DispatchSourceTimer?" in source
@@ -804,11 +895,11 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert 'target: peerTarget' in source
     assert 'target: globalHost' in source
     assert 'private func macOSInternalTunVerification(probeKind: String, target: String, ifname: String, timeoutSeconds: TimeInterval) -> [String: Any]' in source
-    assert '"method": "internal_icmp_echo"' in shared_probe_support
-    assert '"resolved_target": resolvedTarget' in shared_probe_support
-    assert '"name_resolution": nameResolution' in shared_probe_support
+    assert '"method": "internal_icmp_echo"' in core_probe_policy
+    assert '"resolved_target": resolvedTarget' in core_probe_policy
+    assert '"name_resolution": nameResolution' in core_probe_policy
     assert 'private func tunProbeNameResolution(status: String, resolvedIP: String = "", detail: String = "") -> [String: Any]' not in source
-    assert '"last_success_ago_s": NSNull()' in shared_probe_support
+    assert '"last_success_ago_s": NSNull()' in core_probe_policy
     assert "let payload = ObstacleBridgeTunPing.probePayload(" in source
     assert 'private var tunICMPStageCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunICMPStageCounts()' in source
     assert 'private var tunProbeBoundaryCounts = ObstacleBridgeTunProbeDiagnosticsSupport.makeTunProbeBoundaryCounts()' in source
@@ -840,6 +931,8 @@ def test_macos_swift_host_runner_serves_admin_from_snapshot_cache() -> None:
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceProbeFamilies(' in source
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.sourceAddressForProbeFamily(' in source
     assert 'ObstacleBridgeTunProbeDiagnosticsSupport.resolveTunProbeTarget(' in source
+    assert 'resolver: ObstacleBridgeTunProbeAddressResolver.resolveHost' in source
+    assert 'getaddrinfo' in probe_resolver
     assert 'private func sourceProbeFamilies() -> [Int32]' not in source
     assert 'private func sourceAddressForProbeFamily(_ family: Int32) -> String' not in source
     assert 'private func resolveTunProbeTarget(_ target: String, candidateFamilies: [Int32]) -> (target: String?, family: Int32, error: String)' not in source
@@ -917,7 +1010,7 @@ def test_macos_swift_host_runner_keeps_secure_link_connection_time_stable() -> N
 def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -> None:
     resolver = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift").read_text(encoding="utf-8")
     udp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    packet_tunnel = (ROOT / "ios" / "native" / "IPServer" / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    packet_tunnel = (IOS_NATIVE_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
 
     assert "resolveMode: ResolveMode" in resolver
     assert "guard resolveMode == .ipv6 else {" not in resolver
@@ -930,11 +1023,11 @@ def test_swift_peer_resolution_maps_ipv4_fallback_on_ipv6_socket_like_python() -
 
 
 def test_swift_peer_address_protocol_normalizes_ipv4_mapped_ipv6() -> None:
-    runtime = (SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
+    runtime = (CORE_SWIFT_DIR / "ObstacleBridgePeerAddressProtocolRuntime.swift").read_text(encoding="utf-8")
 
-    assert "bytes.prefix(10).allSatisfy({ $0 == 0 })" in runtime
-    assert "bytes[10] == 0xff, bytes[11] == 0xff" in runtime
-    assert "return (4, Data(bytes.suffix(4)))" in runtime
+    assert "ipv6.prefix(10).allSatisfy({ $0 == 0 })" in runtime
+    assert "ipv6[10] == 0xff, ipv6[11] == 0xff" in runtime
+    assert "return (4, Data(ipv6.suffix(4)))" in runtime
     assert "private(set) var observedPublicPort: Int?" in runtime
     assert "private static func encodePort(_ port: Int) -> Data" in runtime
 
@@ -1347,13 +1440,24 @@ def _compile_swift_runtime_probe(source_path: Path, binary_path: Path) -> None:
         swiftc,
         "-o",
         str(binary_path),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxSession.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOverlayStackPlanner.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminSnapshotSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminAPI.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminConfigSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeAdminWebSupport.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeNativeServiceSpec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeOnboarding.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgePeerAddressPolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgePeerAddressResolver.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeRuntimeConfigPolicy.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgePacketTunnelRoutePolicy.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift"),
         str(source_path),
     ]
@@ -1370,14 +1474,15 @@ def _compile_swift_udp_overlay_peer_probe(source_path: Path, binary_path: Path) 
         swiftc,
         "-o",
         str(binary_path),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(source_path),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -1386,7 +1491,7 @@ def _compile_swift_udp_overlay_peer_probe(source_path: Path, binary_path: Path) 
 
 
 def test_macos_udp_overlay_codec_uses_core_layout_constants() -> None:
-    codec = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
+    codec = (CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift").read_text(encoding="utf-8")
 
     assert "batchHeaderSize = ObstacleBridgeMyUDPCodec.batchHeaderSize" in codec
     assert "batchRecordLengthSize = ObstacleBridgeMyUDPCodec.batchRecordLengthSize" in codec
@@ -1419,8 +1524,10 @@ def _compile_swift_tun_helper_contract_probe(source_path: Path, binary_path: Pat
         str(binary_path),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunAdapter.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperService.swift"),
-        str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperContract.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeTunHelperContract.swift"),
+            str(CORE_SWIFT_DIR / "ObstacleBridgeTunHelperProtocolV1.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTunHelperXPCTransport.swift"),
+        str(SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift"),
         str(source_path),
     ]
     completed = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -3004,6 +3111,7 @@ def test_macos_swift_host_runner_reports_python_style_build_payload(tmp_path: Pa
             "untracked_changes": build_info_payload["untracked_changes"],
             "available": build_info_payload["available"],
             "diff_sha": build_info_payload["diff_sha"],
+            "build_timestamp_utc": build_info_payload["build_timestamp_utc"],
         }
         assert status["build"] == expected_build
         assert meta["build"] == expected_build
@@ -4095,7 +4203,7 @@ def test_macos_swift_host_runner_generates_invite_token_with_override_name_and_e
         assert payload["compress_layer_level"] == 4
         assert payload["compress_layer_types"] == "data,data_ack"
         assert payload["TUN_routing"]["dns_servers"] == ["9.9.9.9"]
-        assert payload["TUN_routing"]["tunnel_address"] == "192.168.250.1"
+        assert payload["TUN_routing"]["tunnel_address"] == ["192.168.250.1"]
         assert payload["TUN_routing"]["tunnel_gateway"] == "192.168.250.2"
     finally:
         process.terminate()
@@ -5984,6 +6092,76 @@ def test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python
                 f"Python bridge peer exited unexpectedly with code {python_peer_proc.returncode}. "
                 f"Log file: {python_peer_log_path}\n{python_peer_log_path.read_text(encoding='utf-8', errors='replace')}"
             )
+        if process.returncode not in (0, -15):
+            raise AssertionError(
+                f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+            )
+
+
+def test_macos_swift_host_runner_exposes_redacted_telemetry_configuration(tmp_path: Path) -> None:
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    runtime_config_path = tmp_path / "runtime_telemetry_configuration.json"
+    runtime_config_path.write_text(
+        json.dumps(
+            {
+                "runner": {"overlay_transport": "myudp"},
+                "udp_session": {"udp_bind": "127.0.0.1", "udp_own_port": 0},
+                "admin_web": {
+                    "admin_web": True,
+                    "admin_web_bind": "127.0.0.1",
+                    "admin_web_port": status_port,
+                    "admin_web_dir": str((ROOT / "admin_web").resolve()),
+                    "admin_web_auth_disable": True,
+                },
+                "telemetry_client": {
+                    "telemetry_enabled": True,
+                    "telemetry_endpoint": "https://collector.example.invalid/telemetry/v1",
+                    "telemetry_spool_directory": str(tmp_path / "private-spool"),
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    process = subprocess.Popen(
+        [str(artifact.binary_path), "--runtime-config", str(runtime_config_path), "--hold-sec", "20"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        status = _wait_http_json(f"http://127.0.0.1:{status_port}/api/status", timeout_sec=20.0)
+        config = _http_json(f"http://127.0.0.1:{status_port}/api/config")
+        telemetry = status["telemetry"]
+        assert telemetry == {
+            "enabled": True,
+            "configured": False,
+            "runtime_state": "not_running",
+            "endpoint_scheme": "https",
+            "endpoint_host": "collector.example.invalid",
+            "identity_available": False,
+            "emitter": {"available": False},
+            "spool": {"available": False},
+            "uploader": {"available": False},
+        }
+        telemetry_keys = {str(item["key"]) for item in config["schema"]["telemetry_client"]}
+        assert telemetry_keys == {
+            "telemetry_enabled",
+            "telemetry_endpoint",
+            "telemetry_spool_directory",
+        }
+        assert config["config"]["telemetry_enabled"] is True
+        assert config["config"]["telemetry_endpoint"] == "https://collector.example.invalid/telemetry/v1"
+        assert config["config"]["telemetry_spool_directory"] == str(tmp_path / "private-spool")
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
         if process.returncode not in (0, -15):
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"

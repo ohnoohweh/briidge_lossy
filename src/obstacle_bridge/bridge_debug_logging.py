@@ -126,6 +126,25 @@ class DebugLoggingConfigurator:
                 default=DEFAULT_ADMIN_WEB_LOG_MAX_LINES,
                 help="maximum number of debug log lines kept in memory for the admin web log view",
             )
+        if not _has("--log-udp-target"):
+            p.add_argument(
+                "--log-udp-target",
+                default=None,
+                help="best-effort UDP log receiver host:port; send failures drop records",
+            )
+        if not _has("--log-udp-only"):
+            p.add_argument(
+                "--log-udp-only",
+                action="store_true",
+                default=False,
+                help="send logs only to --log-udp-target, keeping logging off the runtime I/O path",
+            )
+        if not _has("--log-admin-udp-target"):
+            p.add_argument(
+                "--log-admin-udp-target",
+                default=None,
+                help="UDP log receiver queried by Admin Web in --log-udp-only mode (default: --log-udp-target)",
+            )
 
     @staticmethod
     def from_args(args: argparse.Namespace) -> "DebugLoggingConfigurator":
@@ -143,6 +162,9 @@ class DebugLoggingConfigurator:
                 "admin_web_log_max_lines",
                 DEFAULT_ADMIN_WEB_LOG_MAX_LINES,
             ),
+            udp_target=getattr(args, "log_udp_target", None),
+            udp_only=bool(getattr(args, "log_udp_only", False)),
+            admin_udp_target=getattr(args, "log_admin_udp_target", None),
         )
         for key, value in vars(args).items():
             if key.startswith("log_"):
@@ -179,6 +201,9 @@ class DebugLoggingConfigurator:
         truncate_on_start: bool = False,
         debug_to_stderr: bool = False,
         admin_web_log_max_lines: int = DEFAULT_ADMIN_WEB_LOG_MAX_LINES,
+        udp_target: Optional[str] = None,
+        udp_only: bool = False,
+        admin_udp_target: Optional[str] = None,
     ):
         self.level_name = (level_name or "WARNING").upper()
         self.console_level_name = (console_level_name or "INFO").upper()
@@ -189,12 +214,15 @@ class DebugLoggingConfigurator:
         self.truncate_on_start = bool(truncate_on_start)
         self.debug_to_stderr = debug_to_stderr
         self.admin_web_log_max_lines = max(1, int(admin_web_log_max_lines))
+        self.udp_target = str(udp_target or "").strip() or None
+        self.udp_only = bool(udp_only)
+        self.admin_udp_target = str(admin_udp_target or "").strip() or None
 
     def apply(self) -> logging.Logger:
         root = logging.getLogger()
         while root.handlers:
             try:
-                root.handlers.pop()
+                root.handlers.pop().close()
             except Exception:
                 break
 
@@ -204,6 +232,30 @@ class DebugLoggingConfigurator:
         root.setLevel(root_level)
         fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
         configure_debug_log_ring(self.admin_web_log_max_lines)
+
+        try:
+            from .bridge_logging_ipc import configure_admin_log_query
+
+            configure_admin_log_query(self.admin_udp_target or self.udp_target)
+        except Exception:
+            pass
+
+        udp_handler_installed = False
+        if self.udp_target:
+            try:
+                from .bridge_logging_ipc import NonBlockingUdpLogHandler
+
+                udp_handler = NonBlockingUdpLogHandler(self.udp_target)
+                udp_handler.setLevel(logging.DEBUG)
+                root.addHandler(udp_handler)
+                udp_handler_installed = True
+            except Exception as exc:
+                # Configuration failure must not prevent the runtime from starting.
+                sys.stderr.write(f"Failed to configure UDP log target {self.udp_target}: {exc}\n")
+                sys.stderr.flush()
+
+        if self.udp_only and udp_handler_installed:
+            return root
 
         if self.file_path:
             try:

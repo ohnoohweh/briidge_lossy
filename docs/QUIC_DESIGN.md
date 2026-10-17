@@ -53,7 +53,7 @@ The shared QUIC session framing is stream-oriented:
 This is the same broad model used by the Python QUIC transport and the Swift QUIC runtime:
 
 - [bridge_transport_quic.py](../src/obstacle_bridge/bridge_transport_quic.py)
-- [ObstacleBridgeQuicOverlayRuntime.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayRuntime.swift)
+- [ObstacleBridgeQuicOverlayRuntime.swift](../swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift)
 
 At the `ChannelMux` layer, the transport carries already-packed mux frames:
 
@@ -82,7 +82,7 @@ Relevant implementation points:
   - `quic_key`
   - `quic_insecure`
 - Swift:
-  - [ObstacleBridgeQuicOverlayTransportOwner.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
+  - [ObstacleBridgeQuicOverlayTransportOwner.swift](../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
   - `sec_protocol_options_set_verify_block(...)`
 
 What `quic_insecure` means on the Swift/native side:
@@ -126,7 +126,7 @@ That narrowed the issue to the Swift QUIC transport interface rather than:
 
 The current Swift workaround lives in:
 
-- [ObstacleBridgeQuicOverlayTransportOwner.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
+- [ObstacleBridgeQuicOverlayTransportOwner.swift](../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift)
 
 Two defensive measures are now in place on the outbound Swift QUIC path:
 

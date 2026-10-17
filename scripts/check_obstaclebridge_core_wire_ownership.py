@@ -9,11 +9,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ADAPTER_FILES = (
-    "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceCatalog.swift",
-    "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxServiceDataPlane.swift",
+    "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxServiceCatalog.swift",
+    "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxServiceDataPlane.swift",
 )
-OVERLAY_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxOverlayTransport.swift"
-MYUDP_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinuxAdapters/ObstacleBridgeLinuxMyUDPTransport.swift"
+OVERLAY_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxOverlayTransport.swift"
+MYUDP_ADAPTER_FILE = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxMyUDPTransport.swift"
 FORBIDDEN_FRAGMENTS = (
     'Data("O5"',
     'Data("O4"',
@@ -55,7 +55,7 @@ def validate() -> list[str]:
         if fragment in overlay_text:
             errors.append(f"{OVERLAY_ADAPTER_FILE} retains Core overlay serializer fragment {fragment!r}")
     myudp_text = (ROOT / MYUDP_ADAPTER_FILE).read_text(encoding="utf-8")
-    if "ObstacleBridgeMyUDPPeerEngine" not in myudp_text:
+    if "ObstacleBridgeUdpOverlayPeerRuntime" not in myudp_text:
         errors.append(f"{MYUDP_ADAPTER_FILE} does not delegate myudp peer state and effects to Core")
     for fragment in MYUDP_FORBIDDEN_FRAGMENTS:
         if fragment in myudp_text:

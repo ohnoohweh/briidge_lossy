@@ -9,7 +9,8 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
-SHARED = ROOT / "ios" / "native" / "ObstacleBridgeShared"
+SHARED = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
+CORE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 
 
 def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> None:
@@ -151,14 +152,15 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
         swiftc,
         "-o",
         str(binary),
-        str(SHARED / "ObstacleBridgeChannelMuxCodec.swift"),
+        str(CORE / "ObstacleBridgeChannelMuxCompatibilityCodec.swift"),
+        str(CORE / "ObstacleBridgeChannelMuxCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeBinaryCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxFrameCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeControlChunkCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
-        str(SHARED / "ObstacleBridgeUdpOverlayCodec.swift"),
-        str(SHARED / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
+        str(CORE / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(CORE / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(source),
     ]
     compiled = subprocess.run(command, capture_output=True, text=True, check=False)

@@ -14,6 +14,17 @@ struct ObstacleBridgeLinuxServiceCatalogTests {
         #expect(decoded.services == [service])
     }
 
+    @Test func coreDerivedFramesCarryLinuxRemoteCatalog() throws {
+        let service = ObstacleBridgeLinuxServiceSpec(serviceID: 1, name: "echo", listenProtocol: .tcp, listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7002)
+        let frames = try ObstacleBridgeLinuxServiceCatalog.frames(instanceID: 9, connectionSequence: 3, services: [service])
+        #expect(frames.count == 1)
+        #expect(frames.first?.messageType == .remoteServicesSetV2)
+        let decoded = try ObstacleBridgeLinuxServiceCatalog.decode(try #require(frames.first?.body))
+        #expect(decoded.instanceID == 9)
+        #expect(decoded.connectionSequence == 3)
+        #expect(decoded.services == [service])
+    }
+
     @Test func rs3CatalogRejectsMalformedOrMismatchedService() {
         #expect(throws: ObstacleBridgeLinuxServiceCatalogError.invalidPayload) {
             try ObstacleBridgeLinuxServiceCatalog.decode(Data("RS3".utf8))

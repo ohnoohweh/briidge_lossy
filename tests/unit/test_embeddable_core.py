@@ -223,6 +223,80 @@ class EmbeddableRuntimeArgsTests(unittest.TestCase):
             ["", "udp", "direct", "simple_udp_peer", "swift_udp", "swift_udp_peer", "swift_host_runner"],
         )
 
+    def test_runner_schema_snapshot_separates_telemetry_client_and_server_fields(self) -> None:
+        configured_telemetry = {
+            "telemetry_enabled": True,
+            "telemetry_endpoint": "https://collector.example.test/v1/telemetry",
+            "telemetry_spool_directory": "/var/lib/obstaclebridge/telemetry",
+            "telemetry_client_certificate_directory": "/etc/obstaclebridge/telemetry-client",
+            "telemetry_client_address_family": "prefer-ipv6",
+            "telemetry_collector_enabled": True,
+            "telemetry_collector_bind": "0.0.0.0",
+            "telemetry_collector_address_family": "ipv4",
+            "telemetry_collector_port": 18443,
+            "telemetry_collector_spool_directory": "/var/lib/obstaclebridge/telemetry-ingest",
+            "telemetry_collector_tls_cert": "/etc/obstaclebridge/telemetry/server.cert.pem",
+            "telemetry_collector_tls_key": "/etc/obstaclebridge/telemetry/server.key.pem",
+            "telemetry_collector_client_ca": "/etc/obstaclebridge/telemetry/client-ca.cert.pem",
+            "telemetry_collector_revocations": "/var/lib/obstaclebridge/telemetry-ingest/revocations.json",
+        }
+        client_keys = {
+            "telemetry_enabled", "telemetry_endpoint", "telemetry_spool_directory",
+            "telemetry_client_certificate_directory", "telemetry_client_address_family",
+        }
+        args = build_runtime_args_from_config({
+            "telemetry_client": {key: value for key, value in configured_telemetry.items() if key in client_keys},
+            "telemetry_server": {key: value for key, value in configured_telemetry.items() if key not in client_keys},
+        })
+        runner = Runner.__new__(Runner)
+        runner.args = args
+
+        schema = runner.get_config_schema_snapshot()
+        client_rows = {row["key"]: row for row in schema["telemetry_client"]}
+        server_rows = {row["key"]: row for row in schema["telemetry_server"]}
+
+        self.assertEqual(
+            set(client_rows),
+            {
+                "telemetry_enabled",
+                "telemetry_endpoint",
+                "telemetry_spool_directory",
+                "telemetry_client_certificate_directory",
+                "telemetry_client_address_family",
+            },
+        )
+        self.assertEqual(
+            set(server_rows),
+            {
+                "telemetry_collector_enabled",
+                "telemetry_collector_bind",
+                "telemetry_collector_address_family",
+                "telemetry_collector_port",
+                "telemetry_collector_spool_directory",
+                "telemetry_collector_tls_cert",
+                "telemetry_collector_tls_key",
+                "telemetry_collector_client_ca",
+                "telemetry_collector_revocations",
+            },
+        )
+        self.assertFalse(client_rows["telemetry_enabled"]["default"])
+        self.assertEqual(
+            client_rows["telemetry_endpoint"]["default"],
+            "https://127.0.0.1:18443/v1/telemetry/batches",
+        )
+        self.assertEqual(
+            client_rows["telemetry_spool_directory"]["default"],
+            "/var/lib/obstaclebridge/telemetry-client",
+        )
+        self.assertFalse(server_rows["telemetry_collector_enabled"]["default"])
+        for row in [*client_rows.values(), *server_rows.values()]:
+            self.assertFalse(row.get("secret", False))
+        config = runner.get_config_snapshot()
+        self.assertEqual(
+            {key: config[key] for key in configured_telemetry},
+            configured_telemetry,
+        )
+
     def test_runner_schema_snapshot_includes_proxy_provider_fields(self) -> None:
         args = build_runtime_args_from_config(
             {

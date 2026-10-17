@@ -245,6 +245,46 @@ class RunnerTunHelperTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["log_level"], str(args.tun_helper_log_level or "INFO"))
         runner._cleanup_tun_helper_launch_config()
 
+    async def test_launch_tun_helper_process_builds_and_launches_swift_protocol_v1_helper(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "linux-swift"
+        runner = Runner(args)
+        runner._tun_helper_socket_path = "/tmp/obstaclebridge-swift-helper.sock"
+        runner._tun_helper_session_token = "swift-secret-token"
+        fake_proc = mock.Mock()
+
+        with mock.patch.object(bridge_runner.sys, "platform", "linux"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=0, create=True), \
+             mock.patch.object(bridge_runner, "ensure_linux_swift_tun_helper", return_value="/opt/ObstacleBridgeLinux") as ensure_helper, \
+             mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
+            proc = await runner._launch_tun_helper_process()
+
+        self.assertIs(proc, fake_proc)
+        ensure_helper.assert_called_once_with()
+        self.assertEqual(
+            list(create_exec.await_args.args),
+            [
+                "/opt/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/obstaclebridge-swift-helper.sock",
+                "swift-secret-token", "--idle-sec", "5",
+            ],
+        )
+        self.assertEqual(runner._tun_helper_config_path, "")
+
+    async def test_launch_tun_helper_process_builds_and_launches_macos_swift_protocol_v1_helper(self):
+        args = self._helper_args()
+        args.tun_helper_backend = "darwin-swift"
+        runner = Runner(args)
+        runner._tun_helper_socket_path = "/tmp/obstaclebridge-macos-swift-helper.sock"
+        runner._tun_helper_session_token = "macos-swift-token"
+        fake_proc = mock.Mock()
+        with mock.patch.object(bridge_runner.sys, "platform", "darwin"), \
+             mock.patch.object(bridge_runner.os, "geteuid", return_value=0, create=True), \
+             mock.patch.object(bridge_runner, "ensure_darwin_swift_tun_helper", return_value="/Applications/ObstacleBridge.app/Contents/MacOS/ObstacleBridgeTunHelper") as ensure_helper, \
+             mock.patch.object(bridge_runner.asyncio, "create_subprocess_exec", new=mock.AsyncMock(return_value=fake_proc)) as create_exec:
+            self.assertIs(await runner._launch_tun_helper_process(), fake_proc)
+        ensure_helper.assert_called_once_with()
+        self.assertEqual(list(create_exec.await_args.args)[0:2], ["/Applications/ObstacleBridge.app/Contents/MacOS/ObstacleBridgeTunHelper", "--tun-helper-server"])
+
     async def test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability(self):
         args = self._helper_args()
         args.tun_helper_backend = "linux-native"

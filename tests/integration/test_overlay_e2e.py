@@ -37,7 +37,7 @@ SRC = ROOT / 'src'
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
-SWIFT_SHARED_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeShared'
+SWIFT_SHARED_NATIVE_DIR = ROOT / 'swift' / 'Sources' / 'ObstacleBridgeAppleShared'
 SWIFT_APP_NATIVE_DIR = ROOT / 'ios' / 'native' / 'ObstacleBridgeApp'
 SWIFT_HOST_RUNNER_MAIN_SOURCE = SWIFT_APP_NATIVE_DIR / 'ObstacleBridgeHostRunnerMain.swift'
 SWIFT_APP_MAC_RUNNER_SOURCE = SWIFT_APP_NATIVE_DIR / 'ObstacleBridgeHostRunner.swift'
@@ -2261,43 +2261,55 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         swiftc,
         '-o',
         str(binary_path),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminAPI.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminAuth.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminConfigChallenge.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminConfigSupport.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminAPI.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminAuth.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminAuthPolicy.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminConfigChallenge.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminConfigChallengePolicy.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminConfigSupport.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeConfigSecretPolicy.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeConfigSecretCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminSnapshotSupport.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAdminWebSupport.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminSnapshotSupport.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeAdminWebSupport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeCrypto.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskRuntime.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressProtocolRuntime.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxCompatibilityCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkPskCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkPskRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkPskTransportAdapter.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgePeerAddressProtocolRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayLayerTransportAdapter.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunHelperService.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperContract.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTunHelperContract.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunHelperXPCTransport.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunAdapter.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunPing.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunProbeDiagnosticsSupport.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeMacOSTunHelperClient.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTunPing.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTunProbeDiagnosticsPolicy.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTunProbeDiagnosticsSupport.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTunProbeAddressResolver.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeRuntimeConfig.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOnboarding.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeRuntimeConfigPolicy.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOnboarding.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebAdminServer.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxUdpRuntime.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTcpRuntime.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTunRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeWebAdminLiveTopicPolicy.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxUdpRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxTcpRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeChannelMuxTunRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeChannelMuxTCPTransportOwner.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeUdpOverlayCodec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeUdpOverlayPeerRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeUdpOverlayTransportOwner.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeCompressLayerRuntime.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeServiceSpec.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeCompressLayerRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeNativeServiceSpec.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeNativeProxyConnections.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayConnectionPolicy.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeProxyProtocolPolicy.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeProxyServer.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayChannelCore.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayChannelCore.swift'),
+        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeAppleOverlayChannelAdapter.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayConnectionSupport.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeOverlayStackPlanner.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeOverlayStackPlanner.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgePeerAddressPolicy.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgePeerAddressResolver.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeBinaryCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgePacketModel.swift'),
@@ -2308,11 +2320,11 @@ def _compile_mac_host_runner(binary_path: Path) -> None:
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeMyUDPCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeSecureLinkFrameCodec.swift'),
         str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeWebSocketPayloadCodec.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeWebSocketOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeWebSocketOverlayTransportOwner.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeTcpOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeTcpOverlayTransportOwner.swift'),
-        str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeQuicOverlayRuntime.swift'),
+        str(ROOT / 'swift' / 'Sources' / 'ObstacleBridgeCore' / 'ObstacleBridgeQuicOverlayRuntime.swift'),
         str(SWIFT_SHARED_NATIVE_DIR / 'ObstacleBridgeQuicOverlayTransportOwner.swift'),
         str(SWIFT_APP_MAC_RUNNER_SOURCE),
         str(SWIFT_HOST_RUNNER_MAIN_SOURCE),
@@ -7768,27 +7780,32 @@ def test_overlay_e2e_python_runtime_linux_swift_service_round_trip(tmp_path: Pat
         else:
             raise AssertionError(f'Linux Swift client did not authenticate against Python runtime: {last_status}')
         socket_type = socket.SOCK_STREAM if service_protocol == 'tcp' else socket.SOCK_DGRAM
-        with socket.socket(socket.AF_INET, socket_type) as client:
+        # App readiness confirms the protected overlay.  The accepted catalog
+        # is applied asynchronously, so a TCP listener may bind shortly
+        # afterwards.  Linux can also report ECONNABORTED while that listener
+        # is transitioning.  A failed connect leaves its socket unusable, so
+        # every readiness attempt needs a fresh client socket.
+        listener_deadline = time.time() + 8.0
+        while True:
+            client = socket.socket(socket.AF_INET, socket_type)
             client.settimeout(4.0)
-            # App readiness confirms the protected overlay.  The accepted
-            # catalog is applied asynchronously, so a TCP listener may bind
-            # shortly afterwards.  Do not mistake that bounded publication
-            # window for a failed data plane, and never retry after sending.
-            listener_deadline = time.time() + 8.0
-            while True:
-                try:
-                    client.connect(('127.0.0.1', service_port))
-                    break
-                except ConnectionRefusedError:
-                    if time.time() >= listener_deadline:
-                        raise
-                    time.sleep(0.1)
+            try:
+                client.connect(('127.0.0.1', service_port))
+                break
+            except (ConnectionRefusedError, ConnectionAbortedError):
+                client.close()
+                if time.time() >= listener_deadline:
+                    raise
+                time.sleep(0.1)
+        try:
             payload = b'linux-swift-to-python-runtime'
             if service_protocol == 'tcp':
                 client.sendall(payload)
             else:
                 client.send(payload)
             assert client.recv(len(payload)) == response_payload(payload)
+        finally:
+            client.close()
 
         # The real Python listener publishes an opt-in remote catalog. Swift
         # installs its listener and drives the reverse-direction service OPEN

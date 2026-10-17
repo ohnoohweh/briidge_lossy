@@ -450,7 +450,7 @@ the shared Swift layer whenever the behavior is not inherently bound to one OS.
 
 Policy:
 
-- prefer `ios/native/ObstacleBridgeShared/` for runtime logic, payload
+- prefer `swift/Sources/ObstacleBridgeAppleShared/` for runtime logic, payload
   vocabulary, counters, state naming, helper structs, and Admin/API field shape
 - keep `ios/native/ObstacleBridgeApp/` focused on macOS-specific wiring such as
   helper/XPC packaging, `utun` host integration, lifecycle ownership, and other

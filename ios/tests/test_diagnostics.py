@@ -24,3 +24,12 @@ def test_update_component_state_and_snapshot_paths(tmp_path) -> None:
     assert snapshot["component_state_files"]["python_runtime"] == str(state_path)
     assert snapshot["component_state_files"]["native_provider"].endswith("ipserver-native-provider-state.json")
     assert snapshot["component_state_files"]["udp_connector"].endswith("ipserver-udp-connector-state.json")
+
+
+def test_build_diagnostics_use_package_metadata_without_server_runtime() -> None:
+    source = (ROOT / "ios" / "src" / "obstacle_bridge_ios" / "diagnostics.py").read_text(encoding="utf-8")
+
+    assert "from obstacle_bridge.bridge import _detect_build_info" not in source
+    build = diagnostics._detect_build_info()
+    assert build["repo_root"] == ""
+    assert "commit" in build

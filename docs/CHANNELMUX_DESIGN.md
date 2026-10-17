@@ -1546,7 +1546,7 @@ The following delivery rules still apply to all future work on this feature:
   - [client-tun-hook-macos.sh](../scripts/client-tun-hook-macos.sh)
   - [server-tun-hook-macos.sh](../scripts/server-tun-hook-macos.sh)
 - Swift now has a native macOS `utun` adapter in
-  [ObstacleBridgeMacOSTunAdapter.swift](../ios/native/ObstacleBridgeShared/ObstacleBridgeMacOSTunAdapter.swift)
+  [ObstacleBridgeMacOSTunAdapter.swift](../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift)
 - those additions mean both the Python and Swift stacks can now own real macOS
   TUN interfaces rather than only simulating the control plane
 - the Swift macOS app now proves more than raw device creation:
