@@ -117,6 +117,10 @@ failure even when another runtime subsequently reuses the configured log file.
 The foreground Admin-log observer is a second sink, never a replacement for
 that persisted diagnostic sink; this preserves the post-auth failure evidence
 needed to distinguish a local service or TUN startup error from peer loss.
+When the native client starts its managed privileged TUN helper, only that
+child inherits the invoking terminal for `sudo`/PAM authentication; the main
+client stays unprivileged and no password is accepted through a pipe or command
+line. Non-interactive launches fail closed with an explicit helper diagnostic.
 `GET /api/peers` returns the shared Admin `{ "peers": [...] }` envelope, so
 configured, connecting, authenticated, and failed peer state remains visible
 in the common page. IPv6 URI-bracketed peer literals are normalized before

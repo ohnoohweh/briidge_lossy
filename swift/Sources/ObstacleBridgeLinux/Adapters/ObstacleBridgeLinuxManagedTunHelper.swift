@@ -51,6 +51,13 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         elevated ? 60 : 2
     }
 
+    /// `sudo` must own the invoking terminal while it authenticates. Routing
+    /// its diagnostic stream through a Pipe makes PAM's prompt path unreliable
+    /// and, on some terminals, loses the terminal's no-echo password mode.
+    static func inheritsTerminalStreams(elevated: Bool) -> Bool {
+        elevated
+    }
+
     public func start(timeout: TimeInterval? = nil) throws {
         guard !process.isRunning else { return }
         if FileManager.default.fileExists(atPath: socketPath) {
@@ -71,10 +78,23 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         guard FileManager.default.isExecutableFile(atPath: command.path) else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("sudo is required to launch the privileged Linux TUN helper")
         }
+        #if os(Linux)
+        guard !requiresElevation || isatty(STDIN_FILENO) == 1 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires an interactive terminal for sudo authentication")
+        }
+        #endif
         process.executableURL = URL(fileURLWithPath: command.path)
         process.arguments = command.arguments
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
+        if Self.inheritsTerminalStreams(elevated: requiresElevation) {
+            // Keep the password prompt and its no-echo terminal handling in
+            // sudo/PAM. Never feed a password through a pipe or command line.
+            process.standardInput = FileHandle.standardInput
+            process.standardOutput = FileHandle.standardOutput
+            process.standardError = FileHandle.standardError
+        } else {
+            process.standardOutput = Pipe()
+            process.standardError = Pipe()
+        }
         try process.run()
         let deadline = Date().addingTimeInterval(readyTimeout)
         while !FileManager.default.fileExists(atPath: socketPath), process.isRunning, Date() < deadline {
