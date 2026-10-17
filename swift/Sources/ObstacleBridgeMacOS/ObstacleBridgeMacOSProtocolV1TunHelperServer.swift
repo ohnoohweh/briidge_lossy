@@ -28,10 +28,13 @@ final class ObstacleBridgeMacOSProtocolV1TunHelperServer {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0); guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         defer { lock.lock(); listener = -1; let watchdog = self.watchdog; self.watchdog = nil; lock.unlock(); watchdog?.cancel(); _ = close(fd); _ = unlink(socketPath); backend.stop() }
         var address = sockaddr_un(); address.sun_family = sa_family_t(AF_UNIX)
-        let path = Array(socketPath.utf8) + [0]
-        guard path.count <= MemoryLayout.size(ofValue: address.sun_path) else { throw ObstacleBridgeTunHelperProtocolV1.Error.malformedFrame }
+        guard let path = obstacleBridgeUnixSocketPathBytes(socketPath, capacity: MemoryLayout.size(ofValue: address.sun_path)) else { throw ObstacleBridgeTunHelperProtocolV1.Error.malformedFrame }
         _ = unlink(socketPath)
-        withUnsafeMutableBytes(of: &address.sun_path) { $0.baseAddress!.assumingMemoryBound(to: UInt8.self).initialize(repeating: 0); $0.baseAddress!.assumingMemoryBound(to: UInt8.self).update(from: path, count: path.count) }
+        withUnsafeMutableBytes(of: &address.sun_path) { bytes in
+            let destination = bytes.baseAddress!.assumingMemoryBound(to: UInt8.self)
+            destination.initialize(repeating: 0, count: bytes.count)
+            destination.update(from: path, count: path.count)
+        }
         let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
         guard bound == 0, listen(fd, 16) == 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         _ = chmod(socketPath, 0o600)

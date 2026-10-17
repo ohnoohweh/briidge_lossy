@@ -386,6 +386,9 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in helper_main
     assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
     assert "ObstacleBridgeTunHelperProtocolV1.decodeControl" in protocol_server
+    assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
+    assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server
+    assert "destination.update(from: path, count: path.count)" in protocol_server
     assert 'control.operation == "HELLO"' in protocol_server
     assert 'case "APPLY_NETWORK"' in protocol_server
     assert "applyPythonNetwork" in protocol_server
@@ -398,6 +401,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "expireIfIdle" in protocol_server
     assert 'values[3] == "--idle-sec"' in helper_main
     assert "defaultGateway(address: address, prefix: prefix, ipv6: false)" in (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
+    assert "func obstacleBridgeUnixSocketPathBytes(_ path: String, capacity: Int) -> [UInt8]?" in (SHARED_NATIVE_DIR / "ObstacleBridgeMacOSTunHelperClient.swift").read_text(encoding="utf-8")
     assert "public enum ObstacleBridgeTunHelperProtocolV1" in protocol_v1
     assert "case controlRequest = 1" in protocol_v1
 

@@ -3,6 +3,14 @@ import Foundation
 import Darwin
 #endif
 
+/// Produces a NUL-terminated Unix-domain socket path only when it fits the
+/// platform-provided `sun_path` storage.  The byte contract is portable even
+/// though the macOS helper owns the actual Unix socket.
+func obstacleBridgeUnixSocketPathBytes(_ path: String, capacity: Int) -> [UInt8]? {
+    let bytes = Array(path.utf8) + [0]
+    return bytes.count <= capacity ? bytes : nil
+}
+
 /// macOS resource owner for the portable TUN-helper contract. It owns utun
 /// descriptor lifecycle and hook-process execution; Core owns all envelopes,
 /// command validation, state snapshots, and loopback transport semantics.
