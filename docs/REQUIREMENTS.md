@@ -332,6 +332,9 @@ Current implementation note:
   the main routing table before the helper default, including host-only and
   bridge networks such as `vmnet8` and libvirt; the helper persists and
   recovers those policy rules and tables during cleanup.
+  Neither native helper replaces an existing kernel-connected local route
+  through the captured Internet underlay when that subnet is also listed as
+  an exclusion; the main-table policy rule preserves the direct interface.
   Core owns that protocol-v1 frame and versioned JSON-control codec; Linux
   socket and Apple helper transports shall consume it rather than reimplement
   the binary framing or control serialization.

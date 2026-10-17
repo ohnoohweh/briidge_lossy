@@ -534,10 +534,22 @@ class LinuxTunHelperBackend:
         self._applied_excluded_ipv4_routes = []
         self._applied_excluded_ipv6_routes = []
 
+        def is_kernel_connected(route_spec: str, family_flag: str) -> bool:
+            """Do not overwrite a directly attached LAN with an underlay route.
+
+            Full-tunnel policy rules already select `main` for these
+            destinations. Replacing the main-table kernel route would make
+            that rule actively send vmnet/libvirt traffic to the Internet.
+            """
+            connected = self._main_table_connected_routes(family_flag, scope_link=family_flag == "-4")
+            return route_spec in connected
+
         underlay4 = dict(self._saved_underlay4)
         if underlay4.get("dev"):
             for route_spec in routes4:
                 if self._route_spec_matches_loopback(route_spec, family=4):
+                    continue
+                if is_kernel_connected(route_spec, "-4"):
                     continue
                 if underlay4.get("via"):
                     args = ["-4", "route", "replace", route_spec, "via", underlay4["via"], "dev", underlay4["dev"]]
@@ -555,6 +567,8 @@ class LinuxTunHelperBackend:
         if underlay6.get("dev"):
             for route_spec in routes6:
                 if self._route_spec_matches_loopback(route_spec, family=6):
+                    continue
+                if is_kernel_connected(route_spec, "-6"):
                     continue
                 if underlay6.get("via"):
                     self._run_ip("-6", "route", "replace", route_spec, "via", underlay6["via"], "dev", underlay6["dev"])

@@ -1001,3 +1001,6 @@ ARC-CMP-008:
     - tests/unit/test_runner_overlay_transports.py::test_build_sessions_from_overlay_wraps_all_transports_with_peer_address_protocol_without_secure_link
     - ios/tests/test_ios_peer_address_protocol.py::test_ios_peer_address_protocol_reflects_ipv4_and_ipv6_without_delivering_control
     - ios/tests/test_ios_overlay_layer_transport_adapter.py::test_ios_overlay_layer_transport_adapter_wraps_compress_then_secure_link
+# Full-tunnel TUN policy keeps kernel-connected local exclusions on their
+# direct main-table device; the matching Python and Swift helper regressions
+# are tracked under the lifecycle/runtime architecture links below.

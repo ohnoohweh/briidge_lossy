@@ -146,15 +146,20 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
             if arguments == ["ip", "-j", "-4", "route", "show", "proto", "kernel", "scope", "link"] {
                 return "[{\"dst\":\"10.0.0.0/24\"},{\"dst\":\"192.168.122.0/24\"},{\"dst\":\"192.168.179.0/24\"}]"
             }
+            if arguments == ["ip", "-j", "-4", "route", "show", "default"] {
+                return "[{\"gateway\":\"10.0.0.1\",\"dev\":\"eth0\"}]"
+            }
             return arguments.contains("-j") ? "[]" : ""
         })
         _ = try backend.applyNetwork(["ifname": "obtest0", "tun_routing": [
             "tunnel_address": "198.18.70.2", "tunnel_prefix": 24, "tunnel_gateway": "198.18.70.1",
             "included_routes": ["0.0.0.0/0"],
+            "excluded_routes": ["192.168.179.0/24"],
         ]])
         let snapshot = try backend.snapshot()
         #expect(commands.contains(["ip", "-4", "rule", "add", "pref", "10001", "to", "192.168.122.0/24", "lookup", "main"]))
         #expect(commands.contains(["ip", "-4", "rule", "add", "pref", "10002", "to", "192.168.179.0/24", "lookup", "main"]))
+        #expect(!commands.contains(["ip", "-4", "route", "replace", "192.168.179.0/24", "via", "198.18.70.1", "dev", "obtest0"]))
         #expect(commands.contains(["ip", "-4", "route", "replace", "table", "20205", "default", "via", "198.18.70.1", "dev", "obtest0", "onlink"]))
         let policyRules = snapshot["policy_rules"] as? [String] ?? []
         #expect(policyRules.contains(where: { $0.contains("192.168.179.0/24 lookup main") }))

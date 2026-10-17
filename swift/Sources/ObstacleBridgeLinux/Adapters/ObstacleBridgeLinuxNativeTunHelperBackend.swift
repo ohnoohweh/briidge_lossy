@@ -155,6 +155,10 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             _ = try commandRunner(["ip", "link", "set", "dev", ifname, "up", "mtu", String(mtu)], false)
             for (family, cidr) in addresses { _ = try commandRunner(["ip", family, "addr", "replace", cidr, "dev", ifname], false) }
             for (family, route) in excluded {
+                // A directly attached LAN must remain a kernel main-table
+                // route. Full-tunnel policy selects main for it; replacing it
+                // via the Internet underlay breaks vmnet/libvirt reachability.
+                if try connectedMainRoutes(family: family).contains(route) { continue }
                 let priorText = try commandRunner(["ip", "-j", family, "route", "show", route], false)
                 if let values = try? JSONSerialization.jsonObject(with: Data(priorText.utf8)) as? [[String: Any]], let prior = values.first {
                     previousExcluded["\(family) \(route)"] = prior

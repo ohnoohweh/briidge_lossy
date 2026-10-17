@@ -866,6 +866,8 @@ REQ-LIFE-009:
     - tests/unit/test_launcher_entrypoint.py::test_launcher_continues_when_dependency_install_declined
 
 REQ-LIFE-010:
+  # Kernel-connected excluded LANs remain on their direct main-table device;
+  # full-tunnel policy rules must not rewrite them through an Internet underlay.
   # Elevated route/DNS verification is host-local and deterministic; the
   # paired packet-carry tests cover overlay delivery independently of ICMP policy.
   # Swift macOS packet carry waits for the configured peer route to resolve
