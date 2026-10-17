@@ -695,9 +695,15 @@ REQ-WSP-013:
 
 REQ-PRX-001:
   integration_tests:
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_worker_e2e_python_http_https_and_socks5
   unit_tests:
+    - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
+    - tests/unit/test_native_proxy_supervisor.py::test_owner_loss_closes_proxy_listener
+    - tests/unit/test_native_proxy_supervisor.py::test_restricted_policy_fails_closed
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::proxyWorkerConfigurationPreservesPolicyAndSelection
     - tests/unit/test_proxy_worker.py::test_runner_proxy_child_owns_http_socks_and_snapshots
     - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
     - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth

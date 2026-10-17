@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import signal
 import shutil
 import socket
 import struct
@@ -50,6 +51,7 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in build_script
+    assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift") == 2
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
@@ -3529,6 +3531,48 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
             )
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    proxy_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "proxy_provider": {
+            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "socks5_port": 0, "protocols": ["http-connect"], "worker": implementation,
+            "worker_python_executable": sys.executable,
+            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+            "egress": {"mode": "direct"},
+            "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
+        },
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = f"http://127.0.0.1:{status_port}/api/status"
+        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        proxy = status["proxy_provider"]
+        assert proxy["worker"]["implementation"] == implementation
+        assert proxy["worker"]["pid"] != process.pid
+        assert proxy["listeners"]["http"]["bound_port"] == proxy_port
+        assert "private-proxy-token" not in json.dumps(status)
+        os.kill(proxy["worker"]["pid"], signal.SIGKILL)
+        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "unavailable", timeout_sec=20)
+        assert status["proxy_provider"]["listeners"] == {}
+        with pytest.raises(OSError), socket.create_connection(("127.0.0.1", proxy_port), timeout=1):
+            pass
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
 
 
 def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:

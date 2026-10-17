@@ -53,7 +53,11 @@ children; congestion or collector loss drops records. Native-host producers,
 other future workers, producer-side drop aggregation, file sinks and cross-host
 qualification remain open.
 
-The Python runner can select `--proxy-provider-worker python` or `native`. The
+The Python runner can select `--proxy-provider-worker python` or `native`; the
+macOS and Linux native hosts accept `proxy_provider.worker` (`python`, `native`,
+or `off`) and optional `worker_python_executable` / `worker_native_executable`
+paths. The Python executable must provide the installed ObstacleBridge module;
+the packaged native worker is next to the host executable. The
 selected child owns the HTTP and SOCKS listeners and client connections; the parent receives
 periodic snapshots over a bounded inherited Unix stream and observes control
 socket loss. Proxy credentials are handed over that socket, not command-line
@@ -64,9 +68,10 @@ worker currently accepts only IPv4 loopback listener binds and direct egress,
 caps each listener at 128 concurrent clients, and uses 30-second socket I/O
 timeouts. Each native session has independent scheduling and a bounded duplex
 poll buffer; half-closes propagate after pending data is delivered. The worker
-fails startup for unsupported settings. Native hosts do not yet
-supervise either implementation, and Linux mixed-process qualification remains
-to be verified. The Python proxy provider
+fails startup for unsupported settings. Native host supervision uses a
+private inherited stream, bounds startup and health reads, reports child loss
+without fallback, and does not restart the worker. Linux native-host and
+mixed-process qualification remains to be verified in CI. The Python proxy provider
 does not enforce destination-policy restrictions, so the worker refuses to
 start unless the operator explicitly chooses unrestricted destinations and no
 blocked patterns. Complete native/Python parity is not claimed by this process slice.

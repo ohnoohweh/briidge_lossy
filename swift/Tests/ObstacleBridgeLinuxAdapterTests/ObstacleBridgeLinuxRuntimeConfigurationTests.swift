@@ -4,6 +4,21 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func proxyWorkerConfigurationPreservesPolicyAndSelection() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4433],
+            "proxy_provider": ["enabled": true, "worker": "python", "worker_python_executable": "/opt/python", "bind": "127.0.0.1", "http_port": 0, "protocols": ["http-connect"], "auth": ["mode": "basic", "username": "user", "token": "secret"], "egress": ["mode": "direct"], "policy": ["allow_private_destinations": false, "blocked_host_patterns": ["blocked.example"]]],
+        ]))
+        #expect(config.proxyProvider.worker == "python")
+        #expect(config.proxyProvider.workerExecutable == "/opt/python")
+        let bootstrap = try #require(config.proxyProvider.workerBootstrap)
+        let payload = try #require(try JSONSerialization.jsonObject(with: bootstrap) as? [String: Any])
+        let policy = try #require(payload["policy"] as? [String: Any])
+        #expect(policy["allow_private_destinations"] as? Bool == false)
+        #expect(policy["blocked_host_patterns"] as? [String] == ["blocked.example"])
+    }
+
     @Test func debugLoggingIsOptInFromTheGroupedConfiguration() throws {
         let base: [String: Any] = [
             "runner": ["overlay_transport": "myudp"],

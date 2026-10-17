@@ -11,6 +11,39 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss() throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let python = environment["OBSTACLEBRIDGE_TEST_PYTHON"], let native = environment["OBSTACLEBRIDGE_TEST_PROXY_WORKER"] else { return }
+        for (implementation, executable) in [("python", python), ("native", native)] {
+            let bootstrap: [String: Any] = ["bind": "127.0.0.1", "http_port": 0, "socks5_port": 0, "protocols": ["http-connect"], "auth": ["mode": "none"], "egress": ["mode": "direct"], "policy": ["allow_private_destinations": true, "blocked_host_patterns": [String]()]]
+            let config = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: true, httpPort: 0, socks5Enabled: false, worker: implementation, workerExecutable: executable, workerBootstrap: try JSONSerialization.data(withJSONObject: bootstrap))
+            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1, proxyProvider: config), policy: .init(initialDelayMilliseconds: 50, maximumDelayMilliseconds: 50, maximumAttempts: 1))
+            runtime.start()
+            defer { runtime.stop() }
+            let deadline = Date().addingTimeInterval(10)
+            var proxy: [String: Any] = [:]
+            while Date() < deadline {
+                proxy = runtime.resourceHealthForAdmin()["proxy_provider"] as? [String: Any] ?? [:]
+                if (proxy["worker"] as? [String: Any])?["state"] as? String == "running" { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            let worker = try #require(proxy["worker"] as? [String: Any])
+            #expect(worker["state"] as? String == "running")
+            #expect(worker["implementation"] as? String == implementation)
+            let pid = try #require(worker["pid"] as? Int)
+            try #require(pid > 1)
+            #expect(kill(Int32(pid), SIGKILL) == 0)
+            while Date() < deadline {
+                proxy = runtime.resourceHealthForAdmin()["proxy_provider"] as? [String: Any] ?? [:]
+                if (proxy["worker"] as? [String: Any])?["state"] as? String == "unavailable" { break }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            #expect((proxy["worker"] as? [String: Any])?["state"] as? String == "unavailable")
+            #expect((proxy["listeners"] as? [String: Any])?.isEmpty == true)
+            runtime.stop()
+        }
+    }
+
     @Test func adminRekeyCompletesAgainstPythonPeerAndKeepsForegroundRuntimeReady() async throws {
         let peer = try PythonOverlayPeer(mode: "tcp-securelink-admin-rekey")
         defer { peer.stop() }

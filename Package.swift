@@ -8,6 +8,10 @@ var products: [Product] = [
 ]
 
 var targets: [Target] = [
+    .target(
+        name: "ObstacleBridgeDesktopShared",
+        path: "swift/Sources/ObstacleBridgeDesktopShared"
+    ),
     .executableTarget(
         name: "ObstacleBridgeProxyWorker",
         path: "swift/Sources/ObstacleBridgeProxyWorker"
@@ -69,6 +73,7 @@ targets += [
         name: "ObstacleBridgeLinuxAdapters",
         dependencies: [
             "ObstacleBridgeCore",
+            "ObstacleBridgeDesktopShared",
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Logging", package: "swift-log"),
             .product(name: "NIOCore", package: "swift-nio"),

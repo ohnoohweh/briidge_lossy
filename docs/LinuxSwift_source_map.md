@@ -30,13 +30,14 @@ behavior is in parity.
 
 | Target owner | Disposition | Files | Meaning |
 | --- | --- | ---: | --- |
-| `ObstacleBridgeCore` | `extract` | 51 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
-| `ObstacleBridgeCore` | `split-contract` | 26 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
+| `ObstacleBridgeCore` | `extract` | 50 | Move platform-neutral values, codecs, state machines, models, and orchestration out of the flat Apple source bucket and Linux adapter target. |
+| `ObstacleBridgeCore` | `split-contract` | 29 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
 | `ObstacleBridgeAppleAdapters` | `retain-or-split` | 16 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, Objective-C bridge mechanisms, and the package import probe Apple-specific. |
-| `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 16 | Keep POSIX descriptors, listener/server I/O, timers, Linux HTTP serving, and foreground CLI resource selection; remove common protocol policy as its core owner lands. |
+| `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 24 | Keep POSIX descriptors, listener/server I/O, timers, Linux HTTP serving, and foreground CLI resource selection; remove common protocol policy as its core owner lands. |
+| `ObstacleBridgeDesktopShared` | `retain-or-thin` | 1 | Share desktop process supervision and POSIX socket ownership between macOS and Linux without importing OS APIs into Core. |
 | `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |
 
-The checked inventory currently contains 117 Swift files. Its file-level entries
+The checked inventory currently contains 121 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 

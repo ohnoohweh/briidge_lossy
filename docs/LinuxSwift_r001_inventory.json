@@ -3,11 +3,19 @@
   "reference_product": "python",
   "source_roots": [
     "swift/Sources/ObstacleBridgeCore",
+    "swift/Sources/ObstacleBridgeDesktopShared",
     "swift/Sources/ObstacleBridgeLinux/Adapters",
     "swift/Probes/ObstacleBridgeApplePackageProbe",
     "swift/Sources/ObstacleBridgeAppleShared"
   ],
   "source_ownership": [
+    {
+      "owner": "ObstacleBridgeDesktopShared",
+      "disposition": "retain-or-thin",
+      "files": [
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"
+      ]
+    },
     {
       "owner": "ObstacleBridgeCore",
       "disposition": "extract",

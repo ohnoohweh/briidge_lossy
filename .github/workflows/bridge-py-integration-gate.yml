@@ -71,7 +71,7 @@ jobs:
 
           changed_files="$(git diff --name-only "$base" "$head")"
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker)/|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker|DesktopShared|Linux)/|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -89,7 +89,7 @@ jobs:
             echo "macos_tun_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^ios/tests/test_macos_swift_host_runner\.py$|^ios/tests/swift_test_support\.py$|^ios/native/ObstacleBridge(App|PrivilegedHelper)/(ObstacleBridgeHostRunner|ObstacleBridgeTunPrivilegedHelperMain).*\.swift$|^ios/native/ObstacleBridgeShared/ObstacleBridge(TunHelper|TunHelperXPCTransport|MacOSTun|ChannelMuxTun|PacketTunnelConfiguration).*\.swift$|^ios/scripts/build_macos_app\.sh$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^ios/tests/test_macos_swift_host_runner\.py$|^ios/tests/swift_test_support\.py$|^ios/native/ObstacleBridge(App|PrivilegedHelper)/(ObstacleBridgeHostRunner|ObstacleBridgeTunPrivilegedHelperMain).*\.swift$|^ios/native/ObstacleBridgeShared/ObstacleBridge(TunHelper|TunHelperXPCTransport|MacOSTun|ChannelMuxTun|PacketTunnelConfiguration).*\.swift$|^swift/Sources/ObstacleBridgeDesktopShared/|^swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.*\.swift$|^ios/scripts/build_macos_app\.sh$)'; then
             echo "macos_host_runner_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos_host_runner_changed=false" >> "$GITHUB_OUTPUT"
@@ -123,13 +123,18 @@ jobs:
         run: ./scripts/build_linux_app.sh
 
       - name: Run Linux Swift live-runtime closure tests
-        run: swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+        run: |
+          OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+          swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
 
       - name: Test native log collector interoperability
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test private proxy worker
         run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test native proxy supervision
+        run: pytest -q tests/unit/test_native_proxy_supervisor.py
 
       - name: Test private Admin worker
         run: pytest -q tests/unit/test_admin_worker.py
@@ -408,6 +413,15 @@ jobs:
 
       - name: Test private proxy worker
         run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test native proxy supervision
+        run: pytest -q tests/unit/test_native_proxy_supervisor.py
+
+      - name: Test macOS host proxy worker selection
+        env:
+          PYTHONPATH: .:src:ios/src
+          OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
+        run: pytest -q ios/tests/test_macos_swift_host_runner.py -k 'macos_host_supervises_proxy_worker or macos_build_uses_core_websocket_payload_source'
 
       - name: Test private Admin worker
         run: pytest -q tests/unit/test_admin_worker.py

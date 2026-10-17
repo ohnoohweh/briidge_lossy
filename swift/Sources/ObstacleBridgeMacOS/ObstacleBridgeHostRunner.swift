@@ -173,6 +173,7 @@ final class ObstacleBridgeHostRunner {
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
+    private var proxyWorker: ObstacleBridgeProxyWorkerSupervisor?
     private var proxyProviderLastError = ""
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
     private var macOSTunHelperRuntimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
@@ -625,6 +626,32 @@ final class ObstacleBridgeHostRunner {
             return
         }
 
+        if config.worker != "off" {
+            let executable: String
+            switch config.worker {
+            case "python":
+                executable = config.pythonExecutable
+            case "native":
+                executable = config.nativeExecutable ?? (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+                    .deletingLastPathComponent().appendingPathComponent("ObstacleBridgeProxyWorker").path
+            default:
+                throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
+            }
+            let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: config.worker, executable: executable)
+            do {
+                try worker.start(config: ["bind": config.bindHost, "http_port": config.httpPort,
+                                          "socks5_port": config.socks5Port, "protocols": config.protocols,
+                                          "auth": config.auth, "egress": config.egress, "policy": config.policy])
+            } catch {
+                proxyProviderLastError = "proxy worker startup failed"
+                throw error
+            }
+            proxyWorker = worker
+            proxyProviderLastError = ""
+            bootstrapState["proxy_provider"] = "ready"
+            return
+        }
+
         var started: [String: ObstacleBridgeProxyServer] = [:]
         do {
             if config.httpEnabled {
@@ -669,9 +696,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func stopProxyProvider() {
-        guard !proxyServers.isEmpty else {
-            return
-        }
+        proxyWorker?.stop()
+        proxyWorker = nil
         for server in proxyServers.values {
             server.stop()
         }
@@ -680,6 +706,13 @@ final class ObstacleBridgeHostRunner {
 
     private func proxyProviderSnapshot() -> [String: Any] {
         let config = proxyProviderConfiguration()
+        if let worker = proxyWorker {
+            let snapshot = worker.snapshot()
+            let state = snapshot["worker"] as? [String: Any] ?? [:]
+            return ["enabled": state["state"] as? String == "running", "configured": config.configuredPayload(),
+                    "listeners": snapshot["listeners"] ?? [:], "last_error": snapshot["last_error"] ?? "",
+                    "worker": state]
+        }
         var listeners: [String: Any] = [:]
         for key in proxyServers.keys.sorted() {
             if let server = proxyServers[key] {
@@ -704,6 +737,9 @@ final class ObstacleBridgeHostRunner {
         let egress: [String: Any]
         let policy: [String: Any]
         let credentials: ObstacleBridgeProxyServer.Credentials?
+        let worker: String
+        let nativeExecutable: String?
+        let pythonExecutable: String
 
         var httpEnabled: Bool {
             protocols.contains("http-connect") || protocols.contains("http")
@@ -720,9 +756,10 @@ final class ObstacleBridgeHostRunner {
                 "http_port": httpPort,
                 "socks5_port": socks5Port,
                 "protocols": protocols,
-                "auth": auth,
-                "egress": egress,
-                "policy": policy,
+                "auth": auth.filter { ["mode", "username"].contains($0.key) },
+                "egress": egress.filter { ["mode", "address_families"].contains($0.key) },
+                "policy": policy.filter { ["allow_private_destinations", "blocked_host_patterns"].contains($0.key) },
+                "worker": worker,
             ]
         }
     }
@@ -765,7 +802,10 @@ final class ObstacleBridgeHostRunner {
             auth: auth,
             egress: egress,
             policy: policy,
-            credentials: credentials
+            credentials: credentials,
+            worker: (ObstacleBridgeRuntimeConfig.stringValue(from: section?["worker"] ?? section?["proxy_provider_worker"] ?? runtimeConfig["proxy_provider_worker"]) ?? "off").lowercased(),
+            nativeExecutable: ObstacleBridgeRuntimeConfig.stringValue(from: section?["worker_native_executable"] ?? section?["proxy_provider_worker_native_executable"] ?? runtimeConfig["proxy_provider_worker_native_executable"]),
+            pythonExecutable: ObstacleBridgeRuntimeConfig.stringValue(from: section?["worker_python_executable"] ?? section?["proxy_provider_worker_python_executable"] ?? runtimeConfig["proxy_provider_worker_python_executable"]) ?? "/usr/bin/python3"
         )
     }
 

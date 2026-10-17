@@ -130,6 +130,7 @@ cp "${BINARY_SOURCE}" "${BINARY_STAGING_PATH}"
 chmod 755 "${BINARY_STAGING_PATH}"
 mv -f "${BINARY_STAGING_PATH}" "${BINARY_PATH}"
 trap - EXIT
+cp "${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeProxyWorker" "${OUTPUT_DIR}/ObstacleBridgeProxyWorker"
 mkdir -p "${ADMIN_WEB_OUTPUT_DIR}"
 cp -R "${REPO_ROOT}/admin_web/." "${ADMIN_WEB_OUTPUT_DIR}/"
 
