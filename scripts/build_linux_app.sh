@@ -121,7 +121,15 @@ fi
 BINARY_PATH="${OUTPUT_DIR}/ObstacleBridgeLinux"
 BUILD_INFO_PATH="${OUTPUT_DIR}/ObstacleBridgeLinux.build-info.json"
 ADMIN_WEB_OUTPUT_DIR="${OUTPUT_DIR}/admin_web"
-cp "${BINARY_SOURCE}" "${BINARY_PATH}"
+# A running Linux executable cannot be overwritten in place (`ETXTBSY`). Stage
+# the new image and atomically rename it instead, so an existing client keeps
+# running its old inode while the next launch receives the rebuilt artifact.
+BINARY_STAGING_PATH="$(mktemp "${OUTPUT_DIR}/.ObstacleBridgeLinux.XXXXXX")"
+trap 'rm -f "${BINARY_STAGING_PATH}"' EXIT
+cp "${BINARY_SOURCE}" "${BINARY_STAGING_PATH}"
+chmod 755 "${BINARY_STAGING_PATH}"
+mv -f "${BINARY_STAGING_PATH}" "${BINARY_PATH}"
+trap - EXIT
 mkdir -p "${ADMIN_WEB_OUTPUT_DIR}"
 cp -R "${REPO_ROOT}/admin_web/." "${ADMIN_WEB_OUTPUT_DIR}/"
 
