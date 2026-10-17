@@ -258,3 +258,67 @@ def test_proxy_worker_ipv6_socks_and_password_fallback(backend):
             target.close()
             await target.wait_closed()
     asyncio.run(exercise())
+
+
+def test_native_proxy_concurrent_half_close_with_large_replies(native_proxy_worker_executable):
+    async def exercise():
+        reply = b"large-response" * 20_000
+
+        async def target_handler(reader, writer):
+            try:
+                request = await reader.read()
+                assert request == b"request-after-connect"
+                writer.write(reply)
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        target = await asyncio.start_server(target_handler, "127.0.0.1", 0)
+        worker = ProxyWorker("native", native_proxy_worker_executable)
+        await worker.start(_config())
+        try:
+            async def client():
+                reader, writer = await asyncio.open_connection("127.0.0.1", worker.listeners["http"]["bound_port"])
+                try:
+                    auth = base64.b64encode(b"user:private-token").decode()
+                    port = target.sockets[0].getsockname()[1]
+                    writer.write(f"CONNECT 127.0.0.1:{port} HTTP/1.1\r\nProxy-Authorization: Basic {auth}\r\n\r\n".encode())
+                    await writer.drain()
+                    assert (await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 10)).startswith(b"HTTP/1.1 200")
+                    writer.write(b"request-after-connect")
+                    await writer.drain()
+                    writer.write_eof()
+                    assert await asyncio.wait_for(reader.readexactly(len(reply)), 20) == reply
+                    assert await asyncio.wait_for(reader.read(), 10) == b""
+                finally:
+                    writer.close()
+                    await writer.wait_closed()
+            await asyncio.gather(*(client() for _ in range(24)))
+        finally:
+            await worker.stop()
+            target.close()
+            await target.wait_closed()
+    asyncio.run(exercise())
+
+
+def test_native_proxy_idle_clients_do_not_starve_new_connections(native_proxy_worker_executable):
+    async def exercise():
+        target = await asyncio.start_server(_echo, "127.0.0.1", 0)
+        worker = ProxyWorker("native", native_proxy_worker_executable)
+        await worker.start(_config())
+        idle = []
+        try:
+            port = worker.listeners["http"]["bound_port"]
+            for _ in range(24):
+                idle.append(await asyncio.open_connection("127.0.0.1", port))
+            await asyncio.sleep(0.2)
+            await asyncio.wait_for(_http_tunnel(port, target.sockets[0].getsockname()[1], True), 10)
+        finally:
+            for _, writer in idle:
+                writer.close()
+            await asyncio.gather(*(writer.wait_closed() for _, writer in idle))
+            await worker.stop()
+            target.close()
+            await target.wait_closed()
+    asyncio.run(exercise())

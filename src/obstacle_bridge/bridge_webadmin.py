@@ -1818,7 +1818,9 @@ class AdminWebUI:
             except concurrent.futures.TimeoutError:
                 await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
                 return
-            self._log_api_response("/api/config", 200, payload, summary="config snapshot")
+            # Configuration contains nested credentials beyond the dedicated
+            # write-only fields; never replicate the snapshot into logs.
+            self._log_api_response("/api/config", 200, {"ok": True}, summary="config snapshot")
             await self._send_json(writer, 200, payload)
             return
 
@@ -1892,7 +1894,7 @@ class AdminWebUI:
         self._log_api_response(
             "/api/config",
             200,
-            payload,
+            {"ok": True, "restart_requested": bool(restart_after_save)},
             summary=f"updated keys={list(updates.keys())} restart_after_save={restart_after_save}",
         )
         await self._send_json(writer, 200, payload)
@@ -1940,7 +1942,12 @@ class AdminWebUI:
                    "logger_error": result["logger_error"]}
         if private_worker and isinstance(remote.get("worker_status"), dict):
             payload["logger_worker"] = remote["worker_status"]
-        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(result['lines'])}")
+        # Logging the returned lines recursively republishes the log buffer,
+        # potentially including sensitive application messages, as a new log.
+        self._log_api_response("/api/logs", 200,
+                               {"ok": True, "count": payload["count"], "source": payload["source"],
+                                "logger_available": payload["logger_available"]},
+                               summary=f"count={len(result['lines'])}")
         await self._send_json(writer, 200, payload)
 
     async def _handle_telemetry(self, writer):

@@ -3,9 +3,11 @@ import Foundation
 #if canImport(Darwin)
 import Darwin
 private let streamType = SOCK_STREAM
+private let datagramType = SOCK_DGRAM
 #else
 import Glibc
 private let streamType = Int32(SOCK_STREAM.rawValue)
+private let datagramType = Int32(SOCK_DGRAM.rawValue)
 #endif
 
 private let maximumControlFrame = 65_536
@@ -51,16 +53,37 @@ private func writeFrame(_ fd: Int32, _ message: [String: Any]) throws {
     try writeAll(fd, frame)
 }
 
-private func validateControlSocket(_ fd: Int32) -> Bool {
+private func validateSocket(_ fd: Int32, type: Int32) -> Bool {
     var kind: Int32 = 0
     var size = socklen_t(MemoryLayout<Int32>.size)
-    guard fd > 2, getsockopt(fd, SOL_SOCKET, SO_TYPE, &kind, &size) == 0, kind == streamType else { return false }
+    guard fd > 2, getsockopt(fd, SOL_SOCKET, SO_TYPE, &kind, &size) == 0, kind == type else { return false }
     var address = sockaddr_storage()
     var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
     let result = withUnsafeMutablePointer(to: &address) { pointer in
         pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
     }
     return result == 0 && Int32(address.ss_family) == AF_UNIX
+}
+
+private final class ChildLogger: @unchecked Sendable {
+    private let fd: Int32
+    var level: Int = 30
+
+    init(fd: Int32) throws {
+        guard validateSocket(fd, type: datagramType) else { throw WorkerError.invalid }
+        let flags = fcntl(fd, F_GETFL)
+        guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { throw WorkerError.io }
+        self.fd = fd
+    }
+
+    func emit(_ level: Int, _ message: String) {
+        guard level >= self.level else { return }
+        let record: [String: Any] = ["v": 1, "created": Date().timeIntervalSince1970,
+                                     "name": "proxy_provider", "level": level >= 30 ? "WARNING" : "INFO",
+                                     "levelno": level, "message": message, "process": Int(getpid()), "thread": "native-proxy"]
+        guard let data = try? JSONSerialization.data(withJSONObject: record), data.count <= 8192 else { return }
+        _ = data.withUnsafeBytes { send(fd, $0.baseAddress, data.count, 0) }
+    }
 }
 
 private func setTimeout(_ fd: Int32, seconds: Int) {
@@ -99,6 +122,7 @@ private struct ProxySettings: Sendable {
 
 private final class ProxyListener: @unchecked Sendable {
     private let settings: ProxySettings
+    private let logger: ChildLogger?
     private let fd: Int32
     private let source: DispatchSourceRead
     private let lock = NSLock()
@@ -106,8 +130,9 @@ private final class ProxyListener: @unchecked Sendable {
     private var lastError = ""
     let boundPort: Int
 
-    init(settings: ProxySettings) throws {
+    init(settings: ProxySettings, logger: ChildLogger?) throws {
         self.settings = settings
+        self.logger = logger
         guard (0...65_535).contains(settings.configuredPort) else { throw WorkerError.invalid }
         let listener = socket(AF_INET, streamType, 0)
         guard listener >= 0 else { throw WorkerError.io }
@@ -156,7 +181,10 @@ private final class ProxyListener: @unchecked Sendable {
                 continue
             }
             setTimeout(client, seconds: 30)
-            DispatchQueue.global().async { [self] in
+            // Session I/O is allowed to wait independently of the shared
+            // dispatch pool, whose bounded worker count can otherwise let
+            // idle clients starve unrelated accepted connections.
+            Thread.detachNewThread { [self] in
                 var success = false
                 defer {
                     close(client)
@@ -164,7 +192,7 @@ private final class ProxyListener: @unchecked Sendable {
                     if success { completed += 1 } else { failed += 1; lastError = "proxy session failed" }
                     lock.unlock()
                 }
-                do { try serve(client); success = true } catch { }
+                do { try serve(client); success = true } catch { logger?.emit(30, "[PROXY] client failed") }
             }
         }
     }
@@ -257,29 +285,65 @@ private final class ProxyListener: @unchecked Sendable {
     }
 
     private func relay(_ left: Int32, _ right: Int32) {
-        let group = DispatchGroup()
-        for (from, to, inbound) in [(left, right, true), (right, left, false)] {
-            group.enter()
-            DispatchQueue.global().async { [self] in
-                defer { group.leave() }
-                var bytes = [UInt8](repeating: 0, count: 16_384)
-                while true {
-                    let n = recv(from, &bytes, bytes.count, 0)
-                    if n < 0 && errno == EINTR { continue }
-                    if n <= 0 { _ = shutdown(to, Int32(SHUT_WR)); return }
-                    do { try writeAll(to, Data(bytes.prefix(n))) } catch { _ = shutdown(from, Int32(SHUT_RDWR)); _ = shutdown(to, Int32(SHUT_RDWR)); return }
-                    lock.lock(); if inbound { rx += n } else { tx += n }; lock.unlock()
+        // A session owns one dispatch thread. Waiting on nested dispatch jobs
+        // can starve the shared pool under simultaneous proxy connections.
+        // Bounded nonblocking buffers preserve independent duplex progress and
+        // propagate half-closes only after pending bytes have been delivered.
+        for fd in [left, right] {
+            let flags = fcntl(fd, F_GETFL)
+            guard flags >= 0, fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else { return }
+        }
+        let capacity = 65_536
+        var pending = [Data(), Data()] // left -> right, right -> left
+        var eof = [false, false]
+        var closedWrite = [false, false]
+        let fds = [left, right]
+        var bytes = [UInt8](repeating: 0, count: 16_384)
+        while true {
+            for direction in 0..<2 where eof[direction] && pending[direction].isEmpty && !closedWrite[direction] {
+                _ = shutdown(fds[1 - direction], Int32(SHUT_WR))
+                closedWrite[direction] = true
+            }
+            if eof[0] && eof[1] && pending[0].isEmpty && pending[1].isEmpty { return }
+            var descriptors = (0..<2).map { direction -> pollfd in
+                var events: Int16 = 0
+                if !eof[direction] && pending[direction].count < capacity { events |= Int16(POLLIN) }
+                if !pending[1 - direction].isEmpty { events |= Int16(POLLOUT) }
+                return pollfd(fd: events == 0 ? -1 : fds[direction], events: events, revents: 0)
+            }
+            let count = poll(&descriptors, nfds_t(descriptors.count), 30_000)
+            if count < 0 && errno == EINTR { continue }
+            guard count > 0 else { return }
+            for direction in 0..<2 {
+                let events = descriptors[direction].revents
+                if events & Int16(POLLERR | POLLNVAL) != 0 { return }
+                if events & Int16(POLLOUT) != 0 && !pending[1 - direction].isEmpty {
+                    let incoming = 1 - direction
+                    let sent = pending[incoming].withUnsafeBytes { send(fds[direction], $0.baseAddress, $0.count, 0) }
+                    if sent > 0 {
+                        pending[incoming].removeFirst(sent)
+                        lock.lock(); if incoming == 0 { rx += sent } else { tx += sent }; lock.unlock()
+                    } else if sent == 0 || (errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) { return }
+                }
+                if !eof[direction] && pending[direction].count < capacity && events & Int16(POLLIN | POLLHUP) != 0 {
+                    let received = recv(fds[direction], &bytes, min(bytes.count, capacity - pending[direction].count), 0)
+                    if received > 0 { pending[direction].append(contentsOf: bytes.prefix(received)) }
+                    else if received == 0 { eof[direction] = true }
+                    else if errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK { return }
                 }
             }
         }
-        group.wait()
     }
 }
 
-private func run(_ fd: Int32) throws {
-    guard validateControlSocket(fd) else { throw WorkerError.invalid }
+private func run(_ fd: Int32, logFD: Int32?) throws {
+    guard validateSocket(fd, type: streamType), logFD != fd else { throw WorkerError.invalid }
+    let logger = try logFD.map { try ChildLogger(fd: $0) }
     setTimeout(fd, seconds: 5)
     let initial = try readFrame(fd)
+    let rootLevel = initial["log_root_level"] as? Int ?? 30
+    let loggerLevel = (initial["log_levels"] as? [String: Int])?["proxy_provider"] ?? 0
+    logger?.level = loggerLevel == 0 ? rootLevel : loggerLevel
     guard initial["kind"] as? String == "proxy.start", let config = initial["config"] as? [String: Any],
           let bindHost = config["bind"] as? String, bindHost == "127.0.0.1",
           let policy = config["policy"] as? [String: Any], policy.count == 2,
@@ -303,12 +367,14 @@ private func run(_ fd: Int32) throws {
     var listeners: [String: ProxyListener] = [:]
     defer { listeners.values.forEach { $0.stop() } }
     if !Set(protocols).isDisjoint(with: ["http", "http-connect"]) {
-        listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, socks: false, username: username, password: password))
+        listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, socks: false, username: username, password: password), logger: logger)
     }
     if !Set(protocols).isDisjoint(with: ["socks5", "socks5-connect"]) {
-        listeners["socks5"] = try ProxyListener(settings: .init(configuredPort: socksPort, socks: true, username: username, password: password))
+        listeners["socks5"] = try ProxyListener(settings: .init(configuredPort: socksPort, socks: true, username: username, password: password), logger: logger)
     }
     guard !listeners.isEmpty else { throw WorkerError.invalid }
+    logger?.emit(20, "[PROXY] listener started")
+    defer { logger?.emit(20, "[PROXY] listener stopped") }
     func snapshot() -> [String: Any] { listeners.mapValues { $0.snapshot() } }
     try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "listeners": snapshot()])
     while true {
@@ -332,5 +398,16 @@ private func run(_ fd: Int32) throws {
 
 signal(SIGPIPE, SIG_IGN)
 let args = CommandLine.arguments
-guard args.count == 3, args[1] == "--control-fd", let fd = Int32(args[2]) else { exit(1) }
-do { try run(fd); close(fd) } catch { close(fd); exit(1) }
+var controlFD: Int32?, logFD: Int32?
+var index = 1
+while index + 1 < args.count {
+    guard let value = Int32(args[index + 1]) else { exit(1) }
+    switch args[index] {
+    case "--control-fd" where controlFD == nil: controlFD = value
+    case "--log-fd" where logFD == nil: logFD = value
+    default: exit(1)
+    }
+    index += 2
+}
+guard index == args.count, let fd = controlFD else { exit(1) }
+do { try run(fd, logFD: logFD); close(fd) } catch { close(fd); exit(1) }
