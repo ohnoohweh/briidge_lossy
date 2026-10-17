@@ -22,7 +22,7 @@ The peer-address protocol is a delivered transport-adjacent layer. It obtains th
 ### Current ownership and gaps
 
 On macOS and Linux, the Python runner and native hosts presently compose the
-peer stack, Admin Web, proxy listeners by default, and most shared-TUN
+peer stack, Admin Web and proxy listeners by default, and most shared-TUN
 coordination in the runtime process. A TUN helper can own privileged device and host-policy work
 across a local IPC boundary; Python and native protocol-v1 helper servers exist,
 but the Apple native app also has an XPC helper path and an in-process fallback.
@@ -58,8 +58,26 @@ supervise either implementation, and Linux mixed-process qualification remains
 to be verified. The Python proxy provider
 does not enforce destination-policy restrictions, so the worker refuses to
 start unless the operator explicitly chooses unrestricted destinations and no
-blocked patterns. Complete native/Python parity is not claimed by this process slice. Admin Web, peer-stack,
-and shared-TUN routing processes are not yet implemented.
+blocked patterns. Complete native/Python parity is not claimed by this process slice.
+
+The Python runner can select `--admin-web-worker python` to move the existing
+HTTP listener, authentication and UI sessions into a child. A private inherited
+stream carries bounded, correlated, deadline-bearing calls to an allowlisted
+runner API; a separate inherited lifetime socket closes the listener on owner
+loss. Credentials travel in startup/config frames rather than process arguments.
+The default remains in-process. A lost child is reported by the runner without
+fallback, but is not restarted. Embedded restart callbacks are rejected in this
+mode. This is an opt-in Python-only slice: native Admin and native supervision,
+comprehensive API/security parity, managed child logging, generation fencing,
+and recovery remain open. Synchronous runner calls execute on the runner loop;
+deadlines cannot undo an operation already started. Peer-stack and shared-TUN
+routing workers are not yet implemented.
+
+The Python/Swift Admin component probe compiles against the shared runtime
+policy and currently exposes three parity gaps: TUN routing summary/control
+fields, status snapshot/UI metadata, and the live status payload shape. These
+are independent of the worker boundary and remain to be resolved before
+claiming Admin parity.
 
 The existing TUN-helper protocol-v1 framing has a 1 MiB payload ceiling in
 both Python and Swift, checked from the header before waiting for the body.

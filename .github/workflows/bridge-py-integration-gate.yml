@@ -131,6 +131,9 @@ jobs:
       - name: Test private proxy worker
         run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
+      - name: Test private Admin worker
+        run: pytest -q tests/unit/test_admin_worker.py
+
       - name: Run Linux Swift integration subset
         # These tests own multiple peers and network processes. Four workers
         # keep their lifecycle deadlines reliable on hosted Linux runners.
@@ -405,6 +408,9 @@ jobs:
 
       - name: Test private proxy worker
         run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test private Admin worker
+        run: pytest -q tests/unit/test_admin_worker.py
 
   bridge-py-integration-macos-host-runner:
     name: Integration Gate (macOS host-runner qualification)
