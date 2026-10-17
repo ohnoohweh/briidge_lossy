@@ -4,6 +4,26 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func managedTunHelperElevatesOnlyTheSeparateHelperProcess() {
+        let elevated = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
+            executable: "/opt/obstaclebridge/ObstacleBridgeLinux",
+            socketPath: "/tmp/helper.sock",
+            sessionToken: "test-token",
+            elevated: true
+        )
+        #expect(elevated.path == "/usr/bin/sudo")
+        #expect(elevated.arguments == ["--", "/opt/obstaclebridge/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/helper.sock", "test-token", "--idle-sec", "30"])
+
+        let direct = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
+            executable: "/opt/obstaclebridge/ObstacleBridgeLinux",
+            socketPath: "/tmp/helper.sock",
+            sessionToken: "test-token",
+            elevated: false
+        )
+        #expect(direct.path == "/opt/obstaclebridge/ObstacleBridgeLinux")
+        #expect(direct.arguments.first == "--tun-helper-server")
+    }
+
     @Test func observabilityWritesLifecycleLogAndBoundedTelemetrySpool() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-observability-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

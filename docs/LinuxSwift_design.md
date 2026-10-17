@@ -127,7 +127,11 @@ mode-600 redacted policy snapshot and cleans prior helper-owned state before
 accepting new ownership. The foreground runtime either attaches to an explicit
 endpoint or, when `tun_helper_backend` is `linux-native` with no supplied
 credentials, creates a one-use authenticated socket/token and launches its
-Swift helper child. It retains one authenticated packet/event channel. The
+Swift helper child. When the foreground client is unprivileged, only that
+separate child is launched through `sudo`; the foreground client, Admin Web,
+logging, overlay, and ChannelMux remain under the invoking user. The helper
+uses `SUDO_UID`/`SUDO_GID` to hand its authenticated Unix socket back to that
+user. It retains one authenticated packet/event channel. The
 privileged Linux product qualification runs with
 `OBSTACLEBRIDGE_PRIVILEGED_TUN=1` on an authorized host and verifies real
 TUN address/route, `resolvectl` DNS, and absolute-hook apply/remove cleanup.
