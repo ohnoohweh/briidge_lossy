@@ -536,6 +536,8 @@ Implementation note: [ARCHITECTURE.md](ARCHITECTURE.md) now also defines the ove
   repository revision and owner packet-counter delta, and rejects missing
   retained health evidence, owner counters, or an authenticated ready
   SecureLink. Physical-device load-threshold qualification remains open.
+- Implementation note (desktop Admin worker): the Python runner offers an opt-in Python child that owns the existing HTTP/authentication UI and communicates through a private inherited, bounded runner RPC. Its lifetime follows the owner, and worker loss is observable without silent in-process fallback. Native Admin/supervisor parity, automatic recovery, complete API/security qualification and worker log integration remain open; embedded restart callbacks are unsupported in this mode.
+
 - `REQ-ADM-002`: When admin authentication is disabled, the admin API shall remain available without login.
 - `REQ-ADM-003`: When admin authentication is enabled, protected admin APIs shall remain unavailable until correct authentication completes.
 - `REQ-ADM-004`: After correct authentication, the admin API shall become available to that authenticated client.

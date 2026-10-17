@@ -718,6 +718,15 @@ ARC-CMP-005:
   # The shared Telemetry tab retains only bounded delivery and collector
   # summaries; it never reflects telemetry event payloads or credentials.
   unit_tests:
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_oversized_frame_before_body
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_embedded_restart_callback
+    - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
+    - tests/unit/test_admin_worker.py::test_admin_worker_failed_listener_start_leaves_no_child
+    - tests/unit/test_admin_worker.py::test_runner_selects_and_stops_admin_worker
+    - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeWebAdminLiveTopicPolicyTests.swift::tabsRestrictTopicsAndUnknownSubscriptionsAreRejected
     - tests/unit/test_admin_web_payloads.py::test_build_status_payload_omits_peer_scoped_secure_link_summary
     - tests/unit/test_admin_web_payloads.py::test_telemetry_tab_renders_client_and_collector_status

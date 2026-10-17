@@ -88,6 +88,10 @@ class AdminWebUI:
     def register_cli(p):
         g = p.add_argument_group("admin_web")
         g.add_argument(
+            "--admin-web-worker", choices=["off", "python"], default="off",
+            help="Run desktop Admin Web in a private Python worker process.",
+        )
+        g.add_argument(
             "--admin-web",
             action="store_true",
             default=True,

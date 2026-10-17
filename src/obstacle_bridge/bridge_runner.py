@@ -1426,7 +1426,16 @@ class Runner:
         # block on network state. This is especially important for iOS packet
         # tunnel providers where WebAdmin is the recovery/config surface.
         if getattr(self.args, "admin_web", False) and self.admin_web is None:
-            self.admin_web = AdminWebUI(self.args, self)
+            admin_worker = str(getattr(self.args, "admin_web_worker", "off") or "off")
+            if admin_worker == "python":
+                if ios_admin_ui:
+                    raise ValueError("Admin worker is unsupported in iOS runtimes")
+                from .bridge_admin_worker import AdminWorker
+                self.admin_web = AdminWorker(self, self.args)
+            elif admin_worker == "off":
+                self.admin_web = AdminWebUI(self.args, self)
+            else:
+                raise ValueError("unsupported Admin worker implementation")
             await self._await_with_async_diag("AdminWebUI.start", self.admin_web.start())
 
         loop = asyncio.get_running_loop()
@@ -2106,6 +2115,15 @@ class Runner:
             "compression_saving_ratio": savings_ratio,
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
+        admin_worker = self.admin_web
+        implementation = getattr(admin_worker, "implementation", "") or str(getattr(self.args, "admin_web_worker", "off") or "off")
+        if implementation != "off":
+            process = getattr(admin_worker, "process", None)
+            alive = process is not None and process.returncode is None and not getattr(admin_worker, "last_error", "")
+            payload["admin_web_worker"] = {
+                "implementation": implementation,
+                "state": "running" if alive else "unavailable",
+            }
         payload["telemetry"] = {
             "client": self.get_telemetry_client_snapshot(),
             "collector": self.get_telemetry_collector_snapshot(),

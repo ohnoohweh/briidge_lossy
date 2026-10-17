@@ -1538,6 +1538,15 @@ REQ-ADM-001:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
   unit_tests:
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
+    - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
+    - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_oversized_frame_before_body
+    - tests/unit/test_admin_worker.py::test_admin_worker_rejects_embedded_restart_callback
+    - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply
+    - tests/unit/test_admin_worker.py::test_admin_worker_failed_listener_start_leaves_no_child
+    - tests/unit/test_admin_worker.py::test_runner_selects_and_stops_admin_worker
+    - tests/unit/test_admin_worker.py::test_admin_child_queries_python_logging_child
     - tests/unit/test_admin_web_payloads.py::test_resolve_static_base_falls_back_to_packaged_admin_web
     - tests/unit/test_admin_web_payloads.py::test_setup_build_stages_admin_web_assets_from_repo_root
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
