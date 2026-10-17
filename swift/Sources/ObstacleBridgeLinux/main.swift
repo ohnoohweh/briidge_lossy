@@ -240,7 +240,7 @@ enum ObstacleBridgeLinuxMain {
             } else {
                 runtime.start()
             }
-            let status = "{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
+            let status = "{\"admin_port\":\(admin.port),\"admin_url\":\"http://127.0.0.1:\(admin.port)/\",\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
             resources.append(contentsOf: installForegroundShutdown(
                 stop: { runtime.stop() },
@@ -256,25 +256,34 @@ enum ObstacleBridgeLinuxMain {
     }
 
     private static func installForegroundShutdown(
-        stop: @escaping () -> Void,
-        recordSignal: ((ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
+        stop: @escaping @Sendable () -> Void,
+        recordSignal: (@Sendable (ObstacleBridgeLinuxShutdownSignal) -> Void)? = nil,
         admin: ObstacleBridgeLinuxAdminServer?,
         holdSeconds: Int?
     ) -> [Any] {
-        func shutdown() {
-            stop()
-            admin?.stop()
-            exit(0)
+        let shutdownLock = NSLock()
+        var shutdownStarted = false
+        func shutdown(signal: ObstacleBridgeLinuxShutdownSignal? = nil) {
+            shutdownLock.lock()
+            guard !shutdownStarted else { shutdownLock.unlock(); return }
+            shutdownStarted = true
+            shutdownLock.unlock()
+            DispatchQueue.global(qos: .userInitiated).async {
+                if let signal { recordSignal?(signal) }
+                stop()
+                admin?.stop()
+                exit(0)
+            }
         }
         var resources: [Any] = []
         #if os(Linux)
         signal(SIGINT, SIG_IGN)
         signal(SIGTERM, SIG_IGN)
         let interrupt = DispatchSource.makeSignalSource(signal: SIGINT, queue: .main)
-        interrupt.setEventHandler { recordSignal?(.interrupt); shutdown() }
+        interrupt.setEventHandler { shutdown(signal: .interrupt) }
         interrupt.resume()
         let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-        terminate.setEventHandler { recordSignal?(.terminate); shutdown() }
+        terminate.setEventHandler { shutdown(signal: .terminate) }
         terminate.resume()
         resources.append(interrupt)
         resources.append(terminate)

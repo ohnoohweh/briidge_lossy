@@ -6,6 +6,9 @@
 `ObstacleBridge.cfg`, while `--config <path>` selects another sectioned runtime
 configuration; each starts the admitted Linux stack without a Python runtime
 dependency. The Linux product build is `./scripts/build_linux_app.sh`.
+The startup record includes the loopback Admin URL; `GET /` serves its native
+dashboard and `GET /api/status` remains available while an overlay attempt is
+in progress.
 
 `ObstacleBridgeCore` owns portable codecs, SecureLink and myudp state,
 compression policy, ChannelMux service transitions, service-catalog replacement,

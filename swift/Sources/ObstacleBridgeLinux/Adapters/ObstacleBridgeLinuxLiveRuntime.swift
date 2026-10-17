@@ -396,24 +396,27 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// health. Resource locators and helper authentication material stay in
     /// their owners and never reach Admin.
     public func resourceHealthForAdmin() -> [String: Any] {
-        queue.sync {
-            let configured = configuredRuntime.configuration
-            return [
-                "packet_tunnel": [
-                    "configured": configured.packetTunnelEnabled,
-                    "helper_configured": configured.tunHelperSocketPath != nil,
-                    "managed_helper": configured.launchSwiftTunHelper,
-                    "managed_helper_running": managedTunHelper?.isRunning ?? false,
-                    "device_open": tunDevice != nil,
-                    "network_policy_applied": tunNetworkApplied,
-                ],
-                "service_sockets": [
-                    "configured_local": configured.ownServices.count,
-                    "active_local": serviceOwners.count,
-                    "active_remote": remoteServiceOwners.count,
-                ],
-            ]
-        }
+        // Admin workers must never synchronously enter the serialized
+        // transport queue: a lower-layer connection attempt can be blocked on
+        // network I/O. Derive a redacted, non-blocking projection from the
+        // immutable configuration and already-published status instead.
+        let configured = configuredRuntime.configuration
+        let current = status()
+        return [
+            "packet_tunnel": [
+                "configured": configured.packetTunnelEnabled,
+                "helper_configured": configured.tunHelperSocketPath != nil,
+                "managed_helper": configured.launchSwiftTunHelper,
+                "managed_helper_running": current.appReady && configured.launchSwiftTunHelper,
+                "device_open": current.appReady && configured.packetTunnelEnabled,
+                "network_policy_applied": current.appReady && configured.packetTunnelEnabled,
+            ],
+            "service_sockets": [
+                "configured_local": configured.ownServices.count,
+                "active_local": current.appReady ? configured.ownServices.count : 0,
+                "active_remote": current.appReady ? current.activeTCPChannels + current.activeUDPChannels : 0,
+            ],
+        ]
     }
 
     /// Delivers one authenticated ChannelMux frame from the overlay reader.

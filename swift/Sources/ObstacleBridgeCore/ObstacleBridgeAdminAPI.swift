@@ -269,10 +269,12 @@ struct ObstacleBridgeAdminAPIResponse {
 public struct ObstacleBridgeAdminLinuxResponse {
     public let statusCode: Int
     public let body: Data
+    public let contentType: String
 
-    public init(statusCode: Int, body: Data) {
+    public init(statusCode: Int, body: Data, contentType: String = "application/json") {
         self.statusCode = statusCode
         self.body = body
+        self.contentType = contentType
     }
 }
 

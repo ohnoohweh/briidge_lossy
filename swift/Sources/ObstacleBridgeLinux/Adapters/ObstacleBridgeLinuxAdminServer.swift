@@ -141,6 +141,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         if method != "GET" && !(method == "POST" && ["/api/config", "/api/onboarding/invite", "/api/onboarding/preview"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
+        case "/", "/index.html":
+            response = .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
@@ -168,9 +170,15 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))
         } }
         let statusText = response.statusCode == 200 ? "200 OK" : response.statusCode == 400 ? "400 Bad Request" : response.statusCode == 404 ? "404 Not Found" : response.statusCode == 405 ? "405 Method Not Allowed" : response.statusCode == 409 ? "409 Conflict" : "500 Internal Server Error"
-        let header = "HTTP/1.1 \(statusText)\r\nContent-Type: application/json\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
+        let header = "HTTP/1.1 \(statusText)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
         var wire = Data(header.utf8); wire.append(response.body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
+    }
+
+    private var adminDashboard: String {
+        """
+        <!doctype html><html><head><meta charset="utf-8"><title>ObstacleBridge Linux</title><style>body{font-family:system-ui;margin:2rem;max-width:72rem}pre{background:#111;color:#ddd;padding:1rem;overflow:auto}a{margin-right:1rem}</style></head><body><h1>ObstacleBridge Linux</h1><p>Native runtime Admin dashboard.</p><p><a href="/api/status">Status JSON</a><a href="/api/peers">Peers JSON</a><a href="/api/config">Redacted config</a></p><pre id="status">Loading…</pre><script>const view=document.getElementById('status');async function refresh(){try{view.textContent=JSON.stringify(await (await fetch('/api/status')).json(),null,2)}catch(e){view.textContent='Admin status unavailable: '+e}}refresh();setInterval(refresh,1000)</script></body></html>
+        """
     }
 
     /// A reconnectable, snapshot-first WebSocket subscription. The Linux

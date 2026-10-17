@@ -291,6 +291,17 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: rows), as: UTF8.self).contains(secret))
     }
 
+    @Test func rootServesNativeAdminDashboard() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime)
+        try server.start()
+        defer { server.stop() }
+        let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: "http://127.0.0.1:\(server.port)/")))
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        #expect((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("text/html") == true)
+        #expect(String(decoding: data, as: UTF8.self).contains("Native runtime Admin dashboard"))
+    }
+
     private func getJSON(_ text: String) async throws -> Any {
         let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: text)))
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
