@@ -91,7 +91,9 @@ def test_python_admin_worker_updates_runner_and_serves_concurrent_requests(monke
             responses = await asyncio.gather(*[_request(worker.port, "/api/config") for _ in range(4)])
             assert all(status == 200 and data["config"]["admin_web_name"] == "Updated Node" for status, data in responses)
             status, data = await _request(worker.port, "/api/status")
-            assert status == 200 and data["admin_web_worker"] == {"implementation": "python", "state": "running"}
+            assert status == 200 and data["admin_web_worker"] == {
+                "implementation": "python", "state": "running", "generation": 1, "restarts": 0, "failed_starts": 0,
+            }
             status, data = await _request(worker.port, "/api/logs")
             assert status == 200 and data["ok"] and data["source"] == "local"
             async with websockets.connect(f"ws://127.0.0.1:{worker.port}/api/live") as ws:
@@ -129,6 +131,97 @@ def test_admin_worker_exits_on_owner_loss_and_reports_child_loss():
         assert worker.last_error == "Admin worker unavailable"
         assert runner.get_status_snapshot()["admin_web_worker"]["state"] == "unavailable"
         await worker.stop()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("loss", ["process", "control"])
+def test_supervised_admin_recovers_at_same_port_with_authentication(loss):
+    async def exercise():
+        runner = _runner(auth=True)
+        worker = AdminWorker(runner, runner.args, supervised=True)
+        runner.admin_web = worker
+        await worker.start()
+        old = worker.process
+        original_port = worker.port
+        try:
+            if loss == "process":
+                old.kill()
+            else:
+                worker.writer.close()
+            for _ in range(150):
+                if worker.generation >= 2 and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.restarts >= 1
+            assert worker.process.pid != old.pid and old.returncode is not None
+            assert worker.port == original_port
+            status, payload = await _request(original_port, "/api/config")
+            assert status == 401 and not payload["authenticated"]
+            snapshot = runner.get_status_snapshot()["admin_web_worker"]
+            assert snapshot["state"] == "running" and snapshot["generation"] >= 2 and snapshot["restarts"] >= 1
+        finally:
+            await worker.stop()
+        assert worker.process.returncode is not None
+        with pytest.raises(OSError):
+            await asyncio.open_connection("127.0.0.1", original_port)
+    asyncio.run(exercise())
+
+
+def test_supervised_admin_retries_failed_bind_and_stops_without_orphans():
+    async def exercise():
+        runner = _runner()
+        worker = AdminWorker(runner, runner.args, supervised=True)
+        await worker.start()
+        port = worker.port
+        old = worker.process
+        reserved = socket.socket()
+        reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            old.kill()
+            await old.wait()
+            reserved.bind(("127.0.0.1", port))
+            reserved.listen()
+            for _ in range(120):
+                if worker.failed_starts:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.failed_starts >= 1 and worker.generation == 1
+            reserved.close()
+            for _ in range(160):
+                if worker.generation >= 2 and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.port == port
+            status, _ = await _request(port, "/api/config")
+            assert status == 200
+        finally:
+            reserved.close()
+            await worker.stop()
+        assert worker.process.returncode is not None
+    asyncio.run(exercise())
+
+
+def test_supervised_admin_stop_cancels_pending_restart(monkeypatch):
+    async def exercise():
+        runner = _runner()
+        worker = AdminWorker(runner, runner.args, supervised=True)
+        await worker.start()
+        old = worker.process
+        entered = asyncio.Event()
+
+        async def stalled_restart():
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(worker, "_start_child", stalled_restart)
+        try:
+            old.kill()
+            await asyncio.wait_for(entered.wait(), 5)
+            await asyncio.wait_for(worker.stop(), 2)
+            assert old.returncode is not None and worker._monitor is None
+            assert worker.generation == 1 and worker.restarts == 0
+        finally:
+            await worker.stop()
     asyncio.run(exercise())
 
 
@@ -194,6 +287,16 @@ def test_runner_selects_and_stops_admin_worker(monkeypatch, tmp_path):
             assert isinstance(worker, AdminWorker)
             status, data = await _request(worker.port, "/api/config")
             assert status == 200 and data["config"]["admin_web_worker"] == "python"
+            old = worker.process
+            port = worker.port
+            old.kill()
+            for _ in range(150):
+                if worker.generation >= 2 and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and old.returncode is not None and worker.port == port
+            status, data = await _request(port, "/api/status")
+            assert status == 200 and data["admin_web_worker"]["restarts"] >= 1
         finally:
             await runner.stop()
         assert worker.process.returncode is not None

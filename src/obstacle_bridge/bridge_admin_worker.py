@@ -176,7 +176,7 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None) ->
 class AdminWorker:
     implementation = "python"
 
-    def __init__(self, runner, args):
+    def __init__(self, runner, args, *, supervised=False):
         self.runner = runner
         self.args = args
         self.process = None
@@ -187,8 +187,21 @@ class AdminWorker:
         self.last_error = ""
         self._stopping = False
         self._log_relay = None
+        self._supervised = supervised
+        self._monitor = None
+        self.generation = 0
+        self.restarts = 0
+        self.failed_starts = 0
 
     async def start(self):
+        if self._monitor is not None or self.process is not None:
+            raise RuntimeError("Admin worker already started")
+        self._stopping = False
+        await self._start_child()
+        if self._supervised:
+            self._monitor = asyncio.create_task(self._supervise(), name="admin-worker-supervisor")
+
+    async def _start_child(self):
         if sys.platform not in {"darwin", "linux"}:
             raise RuntimeError("Admin workers require macOS or Linux")
         if callable(getattr(self.runner, "_embedded_restart_callback", None)):
@@ -217,7 +230,12 @@ class AdminWorker:
                 self._log_relay.sender.close()
             control.setblocking(False)
             reader, self.writer = await asyncio.open_connection(sock=control)
-            self.writer.write(_encode({"v": 1, "kind": "admin.start", "args": _serializable_args(self.args),
+            child_args = _serializable_args(self.args)
+            # Preserve an ephemeral first bind across replacement without
+            # changing the runner's persisted configuration.
+            if self.generation and int(child_args.get("admin_web_port") or 0) == 0:
+                child_args["admin_web_port"] = self.port
+            self.writer.write(_encode({"v": 1, "kind": "admin.start", "args": child_args,
                                        "log_root_level": logging.getLogger().level,
                                        "log_levels": {"admin_web": logging.getLogger("admin_web").level}}))
             await asyncio.wait_for(self.writer.drain(), 1.0)
@@ -226,10 +244,39 @@ class AdminWorker:
                 raise ValueError("invalid Admin worker readiness")
             self.port = int(response.get("port") or 0)
             self._task = asyncio.create_task(self._dispatch(reader))
+            self.generation += 1
+            self.last_error = ""
         except BaseException:
             control.close(); child_control.close(); child_lifetime.close()
-            await self.stop()
+            await self._stop_child()
             raise
+
+    async def _supervise(self):
+        while not self._stopping:
+            waiter = asyncio.create_task(self.process.wait())
+            try:
+                await asyncio.wait((waiter, self._task), return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                if not waiter.done():
+                    waiter.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await waiter
+            if self._stopping:
+                return
+            self.last_error = "Admin worker unavailable"
+            await self._stop_child()
+            delay = 0.25
+            while not self._stopping:
+                await asyncio.sleep(delay)
+                try:
+                    await self._start_child()
+                except Exception:
+                    self.failed_starts += 1
+                    self.last_error = "Admin worker unavailable"
+                    delay = min(delay * 2, 5.0)
+                else:
+                    self.restarts += 1
+                    break
 
     async def _dispatch(self, reader: asyncio.StreamReader):
         try:
@@ -267,12 +314,20 @@ class AdminWorker:
 
     async def stop(self):
         self._stopping = True
+        if self._monitor is not None:
+            self._monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._monitor
+            self._monitor = None
+        await self._stop_child()
+
+    async def _stop_child(self):
         if self.lifetime is not None:
             self.lifetime.close()
             self.lifetime = None
         if self._task is not None:
             self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._task
             self._task = None
         if self.writer is not None:

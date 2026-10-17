@@ -1431,7 +1431,7 @@ class Runner:
                 if ios_admin_ui:
                     raise ValueError("Admin worker is unsupported in iOS runtimes")
                 from .bridge_admin_worker import AdminWorker
-                self.admin_web = AdminWorker(self, self.args)
+                self.admin_web = AdminWorker(self, self.args, supervised=True)
             elif admin_worker == "off":
                 self.admin_web = AdminWebUI(self.args, self)
             else:
@@ -2123,6 +2123,9 @@ class Runner:
             payload["admin_web_worker"] = {
                 "implementation": implementation,
                 "state": "running" if alive else "unavailable",
+                "generation": getattr(admin_worker, "generation", 0),
+                "restarts": getattr(admin_worker, "restarts", 0),
+                "failed_starts": getattr(admin_worker, "failed_starts", 0),
             }
         payload["telemetry"] = {
             "client": self.get_telemetry_client_snapshot(),

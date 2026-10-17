@@ -1576,6 +1576,9 @@ REQ-ADM-001:
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
+    - tests/unit/test_admin_worker.py::test_supervised_admin_recovers_at_same_port_with_authentication
+    - tests/unit/test_admin_worker.py::test_supervised_admin_retries_failed_bind_and_stops_without_orphans
+    - tests/unit/test_admin_worker.py::test_supervised_admin_stop_cancels_pending_restart
     - tests/unit/test_admin_worker.py::test_admin_worker_rejects_oversized_frame_before_body
     - tests/unit/test_admin_worker.py::test_admin_worker_rejects_embedded_restart_callback
     - tests/unit/test_admin_worker.py::test_admin_worker_timeout_fences_late_reply

@@ -87,11 +87,14 @@ HTTP listener, authentication and UI sessions into a child. A private inherited
 stream carries bounded, correlated, deadline-bearing calls to an allowlisted
 runner API; a separate inherited lifetime socket closes the listener on owner
 loss. Credentials travel in startup/config frames rather than process arguments.
-The default remains in-process. A lost child is reported by the runner without
-fallback, but is not restarted. Embedded restart callbacks are rejected in this
+The default remains in-process. The Python supervisor replaces a lost child
+or control stream with bounded backoff and reports generation, restarts and
+failed starts; each replacement uses fresh capabilities and retains the first
+bound port even if it was initially ephemeral. Existing browser sessions do
+not survive replacement. Embedded restart callbacks are rejected in this
 mode. This is an opt-in Python-only slice: native Admin and native supervision,
-comprehensive API/security parity, generation fencing,
-and recovery remain open. Synchronous runner calls execute on the runner loop;
+comprehensive API/security parity, and full operation-generation fencing
+remain open. Synchronous runner calls execute on the runner loop;
 deadlines cannot undo an operation already started. Peer-stack and shared-TUN
 routing workers are not yet implemented.
 
