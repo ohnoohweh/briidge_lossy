@@ -41,7 +41,7 @@ portable selection or topic policy.
 | Admin live topics | `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
 | Local proxy provider | Native HTTP CONNECT and SOCKS5 CONNECT listeners use system egress and start before overlay authentication. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
 | TUN diagnostics | Not admitted; no Linux probe-packet injection scheduler is selected. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
-| Persisted secret envelopes | Not admitted; the Linux foreground runtime has no configuration-write/key-material owner. | Read-only Admin routes and redaction coverage above. |
+| Persisted secret envelopes | Linux read-only runtime admission decrypts Python-compatible machine-bound `enc:v1:` values for `secure_link_psk` and `admin_web_password` before use; stored and Admin-projected values remain encrypted/redacted. | Linux has no configuration-write or separate persisted key-material owner; secret reveal and secret-bearing onboarding remain fail-closed. |
 
 The non-admitted rows are product capabilities, not Linux-local substitutes:
 their resource ownership remains with the authenticated helper and the
@@ -106,6 +106,12 @@ correlates the packet-tunnel helper/device/policy and local/remote service
 socket state with the bounded health tail; helper socket paths and session
 tokens are never projected. Foreground `SIGINT` and `SIGTERM` are recorded as
 fixed health origins before controlled shutdown.
+
+The Linux configuration reader uses the same machine-ID HKDF and
+ChaCha20-Poly1305 `enc:v1:` envelope contract as Python for its read-only
+secret fields. This prevents a stored encrypted SecureLink PSK from being
+mistaken for the wire PSK during native peer authentication; it does not add
+secret export, reveal, or configuration-encryption ownership to Linux.
 
 The authenticated Swift TUN helper is the Linux owner of `/dev/net/tun` and
 the complete packet-policy lifecycle. It applies and rolls back address,

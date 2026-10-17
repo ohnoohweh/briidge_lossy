@@ -1,6 +1,101 @@
 import Foundation
 import ObstacleBridgeCore
 
+/// Matches Python's machine-bound `enc:v1:` configuration-secret envelope.
+/// Secret values stay encrypted in the stored JSON but must be decrypted before
+/// they are admitted into the live transport configuration.
+enum ObstacleBridgeLinuxConfigSecretCodec {
+    private static let prefix = "enc:v1:"
+    private static let salt = Data("ObstacleBridge config secret v1".utf8)
+    private static let info = Data("ObstacleBridge config field encryption".utf8)
+    private static let authenticatedData = Data("ObstacleBridge cfg secret".utf8)
+    private static let secretFields: Set<String> = ["admin_web_password", "secure_link_psk"]
+
+    static func decryptPayload(_ root: [String: Any]) throws -> [String: Any] {
+        guard let transformed = try transform(root) as? [String: Any] else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+        }
+        return transformed
+    }
+
+    /// Internal to permit portable regression fixtures without exposing a
+    /// configuration-encryption API from the Linux runtime product.
+    static func encryptForTesting(_ value: String, nonce: Data) throws -> String {
+        let sealed = try ObstacleBridgeCrypto.chaChaPolySeal(
+            plaintext: Data(value.utf8), key: try key(), nonce: nonce,
+            authenticatedData: authenticatedData
+        )
+        return prefix + (nonce + sealed).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func transform(_ value: Any) throws -> Any {
+        if let object = value as? [String: Any] {
+            var transformed: [String: Any] = [:]
+            for (field, nestedValue) in object {
+                if secretFields.contains(field), let secret = nestedValue as? String {
+                    transformed[field] = try decrypt(secret)
+                } else {
+                    transformed[field] = try transform(nestedValue)
+                }
+            }
+            return transformed
+        }
+        if let array = value as? [Any] {
+            return try array.map(transform)
+        }
+        return value
+    }
+
+    private static func decrypt(_ value: String) throws -> String {
+        guard value.hasPrefix(prefix) else { return value }
+        let encoded = String(value.dropFirst(prefix.count))
+        let normalized = encoded
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+        guard let envelope = Data(base64Encoded: padded), envelope.count >= 12 + 16 else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("encrypted configuration secret is malformed")
+        }
+        do {
+            let plaintext = try ObstacleBridgeCrypto.chaChaPolyOpen(
+                ciphertextAndTag: Data(envelope.dropFirst(12)), key: try key(),
+                nonce: Data(envelope.prefix(12)), authenticatedData: authenticatedData
+            )
+            guard let decoded = String(data: plaintext, encoding: .utf8) else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("encrypted configuration secret is not UTF-8")
+            }
+            return decoded
+        } catch let error as ObstacleBridgeLinuxRuntimeConfigurationError {
+            throw error
+        } catch {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("encrypted configuration secret could not be authenticated on this machine")
+        }
+    }
+
+    private static func key() throws -> Data {
+        try ObstacleBridgeCrypto.hkdfSHA256(
+            salt: salt, info: info, keyMaterial: machineSeed(), outputByteCount: 32
+        )
+    }
+
+    private static func machineSeed() -> Data {
+        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+            if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return Data(trimmed.utf8) }
+            }
+        }
+        let hostname = ProcessInfo.processInfo.hostName
+        if !hostname.isEmpty {
+            return Data(hostname.utf8)
+        }
+        return Data("obstacle-bridge".utf8)
+    }
+}
+
 public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, LocalizedError {
     case unreadableFile(String)
     case malformedJSON
@@ -226,9 +321,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     }
 
     public static func parse(data: Data) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let parsedRoot = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
         }
+        let root = try ObstacleBridgeLinuxConfigSecretCodec.decryptPayload(parsedRoot)
         // Core owns grouped-versus-flat precedence and schema scalar coercion.
         // Linux contributes only JSON input and Linux-specific capability gates.
         let flat = ObstacleBridgeRuntimeConfigPort.flatten(root)

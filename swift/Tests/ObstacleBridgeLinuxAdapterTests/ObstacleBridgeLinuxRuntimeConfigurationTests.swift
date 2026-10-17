@@ -131,6 +131,18 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.secureLinkPSK == Data("test-secret".utf8))
     }
 
+    @Test func decryptsPythonCompatibleEncryptedSecureLinkPSKBeforeAdmission() throws {
+        let encrypted = try ObstacleBridgeLinuxConfigSecretCodec.encryptForTesting(
+            "native-peer-secret", nonce: Data(repeating: 7, count: 12)
+        )
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": encrypted],
+        ]))
+        #expect(config.secureLinkPSK == Data("native-peer-secret".utf8))
+    }
+
     @Test func parsesTcpListenerConfigurationWithoutOutboundPeer() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "tcp", "listener_mode": true],

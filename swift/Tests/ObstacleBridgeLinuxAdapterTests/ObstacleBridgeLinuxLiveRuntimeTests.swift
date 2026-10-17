@@ -8,6 +8,27 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func publishesConnectingBeforeMyudpHandshakeCompletes() {
+        // Nothing listens on this loopback port, so SecureLink's initial
+        // request waits for the configured receive-idle window.  Admin must
+        // still receive the coordinator's connecting transition immediately.
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .myudp, host: "127.0.0.1", port: 9,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                receiveIdleTimeoutMilliseconds: 1_000
+            ),
+            policy: .init(initialDelayMilliseconds: 1_000, maximumDelayMilliseconds: 1_000, maximumAttempts: 1)
+        )
+        let connecting = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { snapshot in
+            if snapshot.state == "connecting", snapshot.attempts == 1 { connecting.signal() }
+        }
+        runtime.start()
+        #expect(connecting.wait(timeout: .now() + 0.5) == .success)
+        runtime.stop()
+    }
+
     @Test func runtimeHealthPersistsCleanStopAndClassifiesNextLifetime() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

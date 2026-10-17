@@ -513,6 +513,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// owns epoch admission, candidate selection, retry bounds, and stale
     /// callback rejection; this adapter owns Dispatch and socket teardown.
     private func apply(_ transition: ObstacleBridgeOverlayCoordinatorTransition) {
+        // An outbound open can block while the lower transport performs its
+        // SecureLink handshake. Publish Core's transition first so Admin sees
+        // `connecting` and its attempt count instead of the stale `stopped`
+        // snapshot for the whole handshake window.
+        publishCoordinatorSnapshot()
         for effect in transition.effects {
             switch effect {
             case .openTransport(let epoch, _, _):
