@@ -88,8 +88,10 @@ route, underlay-preserving exclusion, `resolvectl` DNS, optional WAN-scoped
 firewall, and explicitly configured absolute hook effects; it persists a
 mode-600 redacted policy snapshot and cleans prior helper-owned state before
 accepting new ownership. The foreground runtime either attaches to an explicit
-endpoint or launches the configured Swift helper, and retains one authenticated
-packet/event channel. The privileged Linux product qualification runs with
+endpoint or, when `tun_helper_backend` is `linux-native` with no supplied
+credentials, creates a one-use authenticated socket/token and launches its
+Swift helper child. It retains one authenticated packet/event channel. The
+privileged Linux product qualification runs with
 `OBSTACLEBRIDGE_PRIVILEGED_TUN=1` on an authorized host and verifies real
 TUN address/route, `resolvectl` DNS, and absolute-hook apply/remove cleanup.
 

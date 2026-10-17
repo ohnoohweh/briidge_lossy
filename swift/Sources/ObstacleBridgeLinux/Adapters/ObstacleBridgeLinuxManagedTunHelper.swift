@@ -14,12 +14,16 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires socket path and token")
         }
         let selected = executable ?? CommandLine.arguments.first ?? ""
-        guard selected.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: selected) else {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper executable must be an executable absolute path")
+        let resolved = selected.hasPrefix("/")
+            ? URL(fileURLWithPath: selected).standardizedFileURL.path
+            : URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent(selected).standardizedFileURL.path
+        guard FileManager.default.isExecutableFile(atPath: resolved) else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper executable is unavailable")
         }
         self.socketPath = socketPath
         self.sessionToken = sessionToken
-        self.executable = selected
+        self.executable = resolved
     }
 
     /// Redacted process liveness for the foreground runtime's Admin surface.

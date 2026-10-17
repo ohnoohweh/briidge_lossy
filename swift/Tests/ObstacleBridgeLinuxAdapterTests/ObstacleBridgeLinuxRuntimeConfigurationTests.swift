@@ -26,6 +26,35 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.launchSwiftTunHelper)
         #expect(config.tunHelperExecutable == "/opt/obstaclebridge/ObstacleBridgeLinux")
     }
+
+    @Test func nativeHelperWithoutCredentialsGetsEphemeralManagedEndpoint() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4433],
+            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_backend": "linux-native", "tun_helper_socket": ""],
+            "TUN_routing": ["enabled_on_startup": true],
+        ]))
+        #expect(config.launchSwiftTunHelper)
+        #expect(config.tunHelperSocketPath?.hasPrefix("/tmp/obstaclebridge-tun-") == true)
+        #expect(config.tunHelperSocketPath?.hasSuffix(".sock") == true)
+        #expect(config.tunHelperSessionToken?.isEmpty == false)
+    }
+
+    @Test func nativeTunnelPlanOwnsConfiguredTunServiceInsteadOfSocketCatalog() throws {
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: try JSONSerialization.data(withJSONObject: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4433],
+            "tun_execution": ["tun_execution_mode": "helper", "tun_helper_backend": "linux-native"],
+            "TUN_routing": ["enabled_on_startup": true],
+            "channel_mux": ["own_servers": [
+                ["name": "shared tunnel", "listen": ["protocol": "tun", "ifname": "obtun0"], "target": ["protocol": "tun", "ifname": "obtun0"]],
+                ["name": "web", "listen": ["protocol": "tcp", "bind": "127.0.0.1", "port": 8080], "target": ["protocol": "tcp", "host": "127.0.0.1", "port": 8080]],
+            ]],
+        ]))
+        #expect(config.ownServices.count == 1)
+        #expect(config.ownServices[0].listenProtocol == .tcp)
+        #expect(config.packetTunnelEnabled)
+    }
     @Test func corePeerAddressPortNormalizesLinuxCandidateLists() {
         let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
             transport: .tcp,

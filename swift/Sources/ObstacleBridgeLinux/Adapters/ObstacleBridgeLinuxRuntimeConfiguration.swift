@@ -214,9 +214,15 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         guard tunMode == "inline" || tunMode == "helper" else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("tun_execution.tun_execution_mode must be inline or helper")
         }
-        let tunHelperSocket = tunMode == "helper" ? string(tunExecution["tun_helper_socket"]) : nil
-        let tunHelperSessionToken = tunMode == "helper" ? string(tunExecution["tun_helper_session_token"]) : nil
-        let launchSwiftTunHelper = tunMode == "helper" && boolean(tunExecution["launch_swift_helper"] ?? tunExecution["tun_helper_launch_swift"]) == true
+        let configuredTunHelperSocket = tunMode == "helper" ? nonEmptyString(tunExecution["tun_helper_socket"]) : nil
+        let configuredTunHelperSessionToken = tunMode == "helper" ? nonEmptyString(tunExecution["tun_helper_session_token"]) : nil
+        let helperBackend = (string(tunExecution["tun_helper_backend"]) ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let launchRequested = tunMode == "helper" && boolean(tunExecution["launch_swift_helper"] ?? tunExecution["tun_helper_launch_swift"]) == true
+        let autoManagedHelper = tunMode == "helper" && helperBackend == "linux-native" &&
+            configuredTunHelperSocket == nil && configuredTunHelperSessionToken == nil
+        let tunHelperSessionToken = autoManagedHelper ? UUID().uuidString.lowercased() : configuredTunHelperSessionToken
+        let tunHelperSocket = autoManagedHelper ? "/tmp/obstaclebridge-tun-\(tunHelperSessionToken!).sock" : configuredTunHelperSocket
+        let launchSwiftTunHelper = launchRequested || autoManagedHelper
         let tunHelperExecutable = tunMode == "helper" ? string(tunExecution["tun_helper_executable"]) : nil
         let tunInterfaceName = string(tunExecution["tun_interface_name"]) ?? "obtun0"
         let tunRouting = ObstacleBridgeRuntimeConfigPort.tunnelRouting(from: root)
@@ -349,6 +355,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     }
 
     private static func string(_ value: Any?) -> String? { value as? String }
+    private static func nonEmptyString(_ value: Any?) -> String? {
+        guard let value = string(value)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }
+        return value
+    }
     private static func integer(_ value: Any?) -> Int? { value as? Int ?? (value as? NSNumber)?.intValue }
     private static func boolean(_ value: Any?) -> Bool? { value as? Bool ?? (value as? NSNumber)?.boolValue }
 
@@ -369,7 +379,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         if let index = catalog.invalidIndex {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has invalid \(key) service at index \(index)")
         }
-        return try catalog.records.map { nativeSpec in
+        return try catalog.records.compactMap { nativeSpec in
+            // The configured shared-TUN catalog row is represented by the
+            // packet-tunnel plan and helper-owned device, not a TCP/UDP socket
+            // owner.  Keep it out of the service-socket catalog while allowing
+            // a Python-compatible mixed service configuration to start.
+            guard nativeSpec.listenProtocol.lowercased() != "tun", nativeSpec.targetProtocol.lowercased() != "tun" else {
+                return nil
+            }
             guard nativeSpec.listenProtocol == nativeSpec.targetProtocol else {
                 throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidService("runtime config has unsupported service protocol or identifier")
             }
