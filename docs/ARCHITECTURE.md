@@ -39,10 +39,19 @@ replacement sockets fence old queries, while the recent-log ring is lost on
 restart. Admin reports the logging worker's generation, restart and drop
 counts. The native collector keeps a 1,200-line / 1 MiB bounded ring and writes
 to stdout. This is a logging-specific slice, not the common worker protocol:
-native supervisors and producers are not wired and file rotation is unavailable
+native host supervisors and their runtime producers are not wired and file rotation is unavailable
 in this mode. The capability
 protects against unprivileged processes without the inherited descriptors, not
 a hostile debugger acting as the same user.
+
+Python Admin and Python/native proxy children feed the selected logging child
+through separate inherited record-only datagram capabilities. A parent relay
+thread validates frame size and rejects query messages, then forwards records
+nonblockingly to the current collector generation. Thus children cannot read
+Admin query replies, and a collector restart does not require restarting those
+children; congestion or collector loss drops records. Native-host producers,
+other future workers, producer-side drop aggregation, file sinks and cross-host
+qualification remain open.
 
 The Python runner can select `--proxy-provider-worker python` or `native`. The
 selected child owns the HTTP and SOCKS listeners and client connections; the parent receives
@@ -50,10 +59,12 @@ periodic snapshots over a bounded inherited Unix stream and observes control
 socket loss. Proxy credentials are handed over that socket, not command-line
 arguments or the environment. Parent loss closes the child and listeners;
 child loss is reported without falling back to an in-process proxy. The child
-does not yet restart automatically or use the managed logging child. The native
+does not yet restart automatically. The native
 worker currently accepts only IPv4 loopback listener binds and direct egress,
 caps each listener at 128 concurrent clients, and uses 30-second socket I/O
-timeouts; it fails startup for unsupported settings. Native hosts do not yet
+timeouts. Each native session has independent scheduling and a bounded duplex
+poll buffer; half-closes propagate after pending data is delivered. The worker
+fails startup for unsupported settings. Native hosts do not yet
 supervise either implementation, and Linux mixed-process qualification remains
 to be verified. The Python proxy provider
 does not enforce destination-policy restrictions, so the worker refuses to
@@ -68,7 +79,7 @@ loss. Credentials travel in startup/config frames rather than process arguments.
 The default remains in-process. A lost child is reported by the runner without
 fallback, but is not restarted. Embedded restart callbacks are rejected in this
 mode. This is an opt-in Python-only slice: native Admin and native supervision,
-comprehensive API/security parity, managed child logging, generation fencing,
+comprehensive API/security parity, generation fencing,
 and recovery remain open. Synchronous runner calls execute on the runner loop;
 deadlines cannot undo an operation already started. Peer-stack and shared-TUN
 routing workers are not yet implemented.

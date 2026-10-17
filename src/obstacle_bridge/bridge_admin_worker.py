@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import inspect
 import json
+import logging
 import math
 import socket
 import struct
@@ -124,7 +125,7 @@ class _RemoteRunner:
         raise AttributeError(name)
 
 
-async def _serve_child(control_fd: int, lifetime_fd: int) -> None:
+async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None) -> None:
     control = socket.socket(fileno=control_fd)
     lifetime = socket.socket(fileno=lifetime_fd)
     if (control.family != socket.AF_UNIX or control.type != socket.SOCK_STREAM
@@ -136,6 +137,11 @@ async def _serve_child(control_fd: int, lifetime_fd: int) -> None:
     if bootstrap.get("kind") != "admin.start" or not isinstance(bootstrap.get("args"), dict):
         raise ValueError("invalid Admin worker startup")
     args = argparse.Namespace(**bootstrap["args"])
+    log_socket = None
+    if log_fd is not None:
+        from .bridge_logging_worker import install_child_log_handler
+        log_socket = install_child_log_handler(log_fd, int(bootstrap.get("log_root_level", logging.WARNING)),
+                                               bootstrap.get("log_levels", {}))
     proxy = _RemoteRunner(control, args)
     from .bridge import AdminWebUI
     from .bridge_logging_ipc import swap_admin_log_query_client
@@ -163,6 +169,8 @@ async def _serve_child(control_fd: int, lifetime_fd: int) -> None:
         await ui.stop()
         lifetime.close()
         control.close()
+        if log_socket is not None:
+            log_socket.close()
 
 
 class AdminWorker:
@@ -178,6 +186,7 @@ class AdminWorker:
         self.port = 0
         self.last_error = ""
         self._stopping = False
+        self._log_relay = None
 
     async def start(self):
         if sys.platform not in {"darwin", "linux"}:
@@ -191,15 +200,26 @@ class AdminWorker:
             control.close(); child_control.close()
             raise
         try:
+            from .bridge_logging_worker import open_child_log_relay
+            self._log_relay = open_child_log_relay()
+            command = [sys.executable, "-m", "obstacle_bridge.bridge_admin_worker",
+                       "--control-fd", str(child_control.fileno()), "--lifetime-fd", str(child_lifetime.fileno())]
+            inherited = [child_control.fileno(), child_lifetime.fileno()]
+            if self._log_relay is not None:
+                log_fd = self._log_relay.sender.fileno()
+                command.extend(["--log-fd", str(log_fd)])
+                inherited.append(log_fd)
             self.process = await asyncio.create_subprocess_exec(
-                sys.executable, "-m", "obstacle_bridge.bridge_admin_worker",
-                "--control-fd", str(child_control.fileno()), "--lifetime-fd", str(child_lifetime.fileno()),
-                stdin=asyncio.subprocess.DEVNULL, pass_fds=(child_control.fileno(), child_lifetime.fileno()),
+                *command, stdin=asyncio.subprocess.DEVNULL, pass_fds=tuple(inherited),
             )
             child_control.close(); child_lifetime.close()
+            if self._log_relay is not None:
+                self._log_relay.sender.close()
             control.setblocking(False)
             reader, self.writer = await asyncio.open_connection(sock=control)
-            self.writer.write(_encode({"v": 1, "kind": "admin.start", "args": _serializable_args(self.args)}))
+            self.writer.write(_encode({"v": 1, "kind": "admin.start", "args": _serializable_args(self.args),
+                                       "log_root_level": logging.getLogger().level,
+                                       "log_levels": {"admin_web": logging.getLogger("admin_web").level}}))
             await asyncio.wait_for(self.writer.drain(), 1.0)
             response = await asyncio.wait_for(_read_frame(reader), 6.0)
             if response.get("kind") != "admin.ready" or response.get("implementation") != "python":
@@ -267,15 +287,19 @@ class AdminWorker:
                 with contextlib.suppress(ProcessLookupError):
                     self.process.kill()
                 await self.process.wait()
+        if self._log_relay is not None:
+            await asyncio.to_thread(self._log_relay.close)
+            self._log_relay = None
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-fd", required=True, type=int)
     parser.add_argument("--lifetime-fd", required=True, type=int)
+    parser.add_argument("--log-fd", type=int)
     args = parser.parse_args()
     try:
-        asyncio.run(_serve_child(args.control_fd, args.lifetime_fd))
+        asyncio.run(_serve_child(args.control_fd, args.lifetime_fd, args.log_fd))
     except Exception:
         # Startup/control frames can contain secrets and are never logged.
         raise SystemExit(1)

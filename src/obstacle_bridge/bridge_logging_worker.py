@@ -217,6 +217,17 @@ class SupervisedLoggingWorker:
         result["worker_status"] = self.status()
         return result
 
+    def forward_record(self, packet: bytes) -> None:
+        """Best-effort child record delivery to the current collector generation."""
+        child = self._active
+        if child is None or self._stop.is_set() or child.process.poll() is not None:
+            self.handler.dropped_records += 1
+            return
+        try:
+            child._data.send(packet)
+        except OSError:
+            self.handler.dropped_records += 1
+
     def _monitor(self):
         try:
             self._monitor_loop()
@@ -262,6 +273,88 @@ class SupervisedLoggingWorker:
         self._stop.set()
         self._thread.join(timeout=9.0)
         self.handler.close()
+
+
+class ChildLogRelay:
+    """A record-only inherited capability, distinct from collector queries.
+
+    One draining thread per child keeps parsing and collector sends away from
+    both the child and the runner event loops. The stable parent endpoint
+    follows collector replacement; stale workers cannot read query replies.
+    """
+
+    def __init__(self, supervisor: SupervisedLoggingWorker):
+        self.supervisor = supervisor
+        self._stop = threading.Event()
+        self.receiver, self.sender = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
+        try:
+            for endpoint in (self.receiver, self.sender):
+                endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
+                endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
+            self.receiver.settimeout(0.2)
+            self.sender.setblocking(False)
+            self._thread = threading.Thread(target=self._run, name="child-log-relay", daemon=True)
+            self._thread.start()
+        except BaseException:
+            self.receiver.close()
+            self.sender.close()
+            raise
+
+    def _run(self):
+        while not self._stop.is_set():
+            try:
+                packet = self.receiver.recv(PRIVATE_MAX_DATAGRAM + 1)
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            if not packet or len(packet) > PRIVATE_MAX_DATAGRAM:
+                continue
+            try:
+                record = json.loads(packet.decode("utf-8"))
+                if not isinstance(record, dict) or record.get("v") != LOG_WIRE_VERSION or "kind" in record:
+                    continue
+            except (UnicodeError, ValueError):
+                continue
+            self.supervisor.forward_record(packet)
+
+    def close(self):
+        self._stop.set()
+        self.sender.close()
+        self.receiver.close()
+        self._thread.join(timeout=0.4)
+
+
+def open_child_log_relay() -> Optional[ChildLogRelay]:
+    """Return a producer-only capability when private logging is active."""
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, _SupervisedLogHandler) and not handler._supervisor._stop.is_set():
+            try:
+                return ChildLogRelay(handler._supervisor)
+            except (OSError, RuntimeError):
+                # Logging is optional observability: inability to allocate a
+                # child producer channel must not prevent service startup.
+                handler.dropped_records += 1
+                return None
+    return None
+
+
+def install_child_log_handler(fd: int, root_level: int, logger_levels: dict[str, int]) -> socket.socket:
+    """Replace child sinks with its inherited nonblocking record-only socket."""
+    sock = socket.socket(fileno=fd)
+    if sock.family != socket.AF_UNIX or sock.type != socket.SOCK_DGRAM:
+        sock.close()
+        raise ValueError("invalid child logging socket")
+    sock.setblocking(False)
+    root = logging.getLogger()
+    for handler in list(root.handlers):
+        root.removeHandler(handler)
+        handler.close()
+    root.setLevel(root_level)
+    for name, level in logger_levels.items():
+        logging.getLogger(name).setLevel(level)
+    root.addHandler(_PrivateLogHandler(sock))
+    return sock
 
 
 def validate_managed_logging_args(args):

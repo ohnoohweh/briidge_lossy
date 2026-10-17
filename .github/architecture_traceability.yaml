@@ -56,6 +56,8 @@ ARC-CMP-001:
     - tests/unit/test_proxy_worker.py::test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions
     - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
+    - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
+    - tests/unit/test_proxy_worker.py::test_native_proxy_idle_clients_do_not_starve_new_connections
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
     - tests/unit/test_proxy_server.py::test_python_proxy_server_system_egress_uses_upstream_connect_proxy
@@ -792,6 +794,10 @@ ARC-CMP-005:
     - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes
     - tests/unit/test_managed_logging_worker.py::test_private_query_lock_has_a_bounded_wait
     - tests/unit/test_managed_logging_worker.py::test_python_runner_admin_queries_managed_worker_and_restores_sinks
+    - tests/unit/test_managed_logging_worker.py::test_child_record_relay_survives_collector_restart_and_rejects_queries
+    - tests/unit/test_managed_logging_worker.py::test_proxy_child_sends_logs_to_selected_collector
+    - tests/unit/test_managed_logging_worker.py::test_failed_relay_allocation_does_not_prevent_proxy_start
+    - tests/unit/test_managed_logging_worker.py::test_child_producer_drops_records_when_relay_is_stalled
     - tests/unit/test_managed_logging_worker.py::test_supervisor_restarts_selected_worker_after_crash
     - tests/unit/test_managed_logging_worker.py::test_supervisor_retries_failed_restart_without_fallback
     - tests/unit/test_managed_logging_worker.py::test_supervisor_discards_reply_from_retired_generation

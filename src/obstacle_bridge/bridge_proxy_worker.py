@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import contextlib
 import json
+import logging
 import os
 import shutil
 import socket
@@ -57,7 +58,7 @@ def _snapshot(servers: dict[str, ObstacleBridgeProxyServer]) -> dict[str, Any]:
     return result
 
 
-async def _serve(data_fd: int) -> None:
+async def _serve(data_fd: int, log_fd: int | None = None) -> None:
     data = socket.socket(fileno=data_fd)
     if data.family != socket.AF_UNIX or data.type != socket.SOCK_STREAM:
         data.close()
@@ -66,10 +67,15 @@ async def _serve(data_fd: int) -> None:
     reader, writer = await asyncio.open_connection(sock=data)
     servers: dict[str, ObstacleBridgeProxyServer] = {}
     command = None
+    log_socket = None
     try:
         init = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
         if init.get("kind") != "proxy.start" or not isinstance(init.get("config"), dict):
             raise ValueError("invalid proxy worker start")
+        if log_fd is not None:
+            from .bridge_logging_worker import install_child_log_handler
+            log_socket = install_child_log_handler(log_fd, int(init.get("log_root_level", logging.WARNING)),
+                                                   init.get("log_levels", {}))
         cfg = init["config"]
         validate_worker_policy(cfg)
         protocols = set(cfg.get("protocols") or [])
@@ -120,6 +126,8 @@ async def _serve(data_fd: int) -> None:
         writer.close()
         with contextlib.suppress(Exception):
             await writer.wait_closed()
+        if log_socket is not None:
+            log_socket.close()
 
 
 class ProxyWorker:
@@ -136,6 +144,7 @@ class ProxyWorker:
         self.listeners: dict[str, Any] = {}
         self.last_error = ""
         self._stopping = False
+        self._log_relay = None
 
     async def start(self, config: dict[str, Any]) -> None:
         if os.name != "posix":
@@ -156,14 +165,25 @@ class ProxyWorker:
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             command = ([sys.executable, "-m", "obstacle_bridge.bridge_proxy_worker"] if self.implementation == "python" else [executable])
+            inherited = [child.fileno()]
+            from .bridge_logging_worker import open_child_log_relay
+            self._log_relay = open_child_log_relay()
+            if self._log_relay is not None:
+                log_fd = self._log_relay.sender.fileno()
+                command.extend(["--log-fd", str(log_fd)])
+                inherited.append(log_fd)
             self.process = await asyncio.create_subprocess_exec(
                 *command, "--control-fd", str(child.fileno()),
-                stdin=asyncio.subprocess.DEVNULL, pass_fds=(child.fileno(),),
+                stdin=asyncio.subprocess.DEVNULL, pass_fds=tuple(inherited),
             )
             child.close()
+            if self._log_relay is not None:
+                self._log_relay.sender.close()
             parent.setblocking(False)
             reader, self.writer = await asyncio.open_connection(sock=parent)
-            await _write_frame(self.writer, {"v": 1, "kind": "proxy.start", "config": config})
+            await _write_frame(self.writer, {"v": 1, "kind": "proxy.start", "config": config,
+                                             "log_root_level": logging.getLogger().level,
+                                             "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})
             response = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
             if response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation or not isinstance(response.get("listeners"), dict):
                 raise ValueError("invalid proxy worker readiness")
@@ -207,15 +227,19 @@ class ProxyWorker:
             except asyncio.TimeoutError:
                 self.process.kill()
                 await self.process.wait()
+        if self._log_relay is not None:
+            await asyncio.to_thread(self._log_relay.close)
+            self._log_relay = None
         self.listeners = {}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--control-fd", type=int, required=True)
+    parser.add_argument("--log-fd", type=int)
     args = parser.parse_args()
     try:
-        asyncio.run(_serve(args.control_fd))
+        asyncio.run(_serve(args.control_fd, args.log_fd))
     except Exception:
         # Never log the startup frame, which can contain credentials.
         raise SystemExit(1)

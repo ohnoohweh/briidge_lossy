@@ -201,10 +201,12 @@ def test_runner_selects_and_stops_admin_worker(monkeypatch, tmp_path):
     asyncio.run(exercise())
 
 
-def test_admin_child_queries_python_logging_child():
+def test_admin_child_queries_python_logging_child(monkeypatch):
     runner = _runner()
     runner.args.log_worker = "python"
     runner.args.log_file = None
+    runner.args.proxy_provider_auth = {"mode": "basic", "username": "user", "token": "config-token-must-not-be-logged"}
+    monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
     with activate_managed_logging(runner.args) as logs:
         logs.handler.emit(logging.LogRecord("admin.ipc.test", logging.WARNING, __file__, 1, "child query marker", (), None))
 
@@ -216,6 +218,30 @@ def test_admin_child_queries_python_logging_child():
                 assert status == 200 and data["logger_available"]
                 assert data["source"] == "private_worker"
                 assert any("child query marker" in line for line in data["lines"])
+                await _request(worker.port, "/api/config")
+                await _request(worker.port, "/api/auth/state")
+                for _ in range(30):
+                    data = await asyncio.to_thread(logs.fetch, 100)
+                    if any("ADMIN REQUEST method=GET path=/api/auth/state" in line for line in data["lines"]):
+                        break
+                    await asyncio.sleep(0.05)
+                assert any("ADMIN REQUEST method=GET path=/api/auth/state" in line for line in data["lines"])
+                responses = [line for line in data["lines"] if "ADMIN RESPONSE path=/api/logs" in line]
+                assert responses and all("child query marker" not in line for line in responses)
+                assert "config-token-must-not-be-logged" not in repr(data["lines"])
+                logs.process.kill()
+                for _ in range(100):
+                    if logs.status()["generation"] >= 2 and logs.status()["state"] == "running":
+                        break
+                    await asyncio.sleep(0.05)
+                assert logs.status()["generation"] >= 2
+                await _request(worker.port, "/api/auth/state")
+                for _ in range(30):
+                    data = await asyncio.to_thread(logs.fetch, 100)
+                    if any("ADMIN REQUEST method=GET path=/api/auth/state" in line for line in data["lines"]):
+                        break
+                    await asyncio.sleep(0.05)
+                assert any("ADMIN REQUEST method=GET path=/api/auth/state" in line for line in data["lines"])
             finally:
                 await worker.stop()
         asyncio.run(exercise())
