@@ -105,13 +105,17 @@ final class ObstacleBridgeLinuxTLSWebSocketConnection: ObstacleBridgeLinuxWebSoc
     private var channel: (any Channel)?
     private var closed = false
 
-    init(host: String, port: Int, trustRootsPath: String?, proxy: (String, Int)? = nil, proxyAuthorization: String? = nil, timeoutMilliseconds: Int) throws {
+    init(host: String, port: Int, trustRootsPath: String?, clientCertificatePath: String? = nil, clientPrivateKeyPath: String? = nil, proxy: (String, Int)? = nil, proxyAuthorization: String? = nil, timeoutMilliseconds: Int) throws {
         self.timeoutMilliseconds = max(1, timeoutMilliseconds)
         var configuration = TLSConfiguration.makeClientConfiguration()
         configuration.certificateVerification = .fullVerification
         // Keep the platform roots active and add an operator bundle for
         // private deployments; neither path disables verification.
         if let trustRootsPath { configuration.additionalTrustRoots = [.file(trustRootsPath)] }
+        if let clientCertificatePath, let clientPrivateKeyPath {
+            configuration.certificateChain = try NIOSSLCertificate.fromPEMFile(clientCertificatePath).map { .certificate($0) }
+            configuration.privateKey = .privateKey(try NIOSSLPrivateKey(file: clientPrivateKeyPath, format: .pem))
+        }
         let context = try NIOSSLContext(configuration: configuration)
         do {
             let connected = try ClientBootstrap(group: eventLoopGroup).channelInitializer { channel in

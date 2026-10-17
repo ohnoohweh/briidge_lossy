@@ -133,7 +133,8 @@ adjacent field is the known gap that keeps the package open.
 
 - Linux records foreground lifecycle events to the configured local log file
   and, when `telemetry_client.telemetry_enabled` is set, to the shared bounded
-  private telemetry spool. A Linux HTTPS uploader remains a parity gap.
+  private telemetry spool and drains it through an HTTPS mTLS uploader when
+  the configured client certificate directory is present.
 - Listener-mode myudp rejects `own_servers` and `remote_servers`: a listener
   does not infer a target peer or bind a competing service map per child.
 - Packet policy does not admit IPv6 jumbograms or encrypted payloads, and its

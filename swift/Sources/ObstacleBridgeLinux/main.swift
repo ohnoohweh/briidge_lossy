@@ -193,7 +193,7 @@ enum ObstacleBridgeLinuxMain {
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
                 let resources: [Any] = [runtime, admin, observability]
-                    + installForegroundShutdown(stop: { observability.record("runtime.stopped"); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
+                    + installForegroundShutdown(stop: { observability.record("runtime.stopped"); observability.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
                 withExtendedLifetime(resources) { dispatchMain() }
             }
             let healthURL = URL(fileURLWithPath: options.configurationPath)
@@ -245,7 +245,7 @@ enum ObstacleBridgeLinuxMain {
             let status = "{\"admin_port\":\(admin.port),\"admin_url\":\"http://127.0.0.1:\(admin.port)/\",\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
             resources.append(contentsOf: installForegroundShutdown(
-                stop: { observability.record("runtime.stopped"); runtime.stop() },
+                stop: { observability.record("runtime.stopped"); observability.stop(); runtime.stop() },
                 recordSignal: runtime.recordShutdownSignal,
                 admin: admin,
                 holdSeconds: options.holdSeconds
