@@ -204,21 +204,32 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(live["overlay_transport"] as? String == "tcp")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic("unknown") == nil)
-        for _ in 0..<2 {
-            let socket = URLSession.shared.webSocketTask(with: try #require(URL(string: "ws://127.0.0.1:\(server.port)/api/live?topic=status")))
-            socket.resume()
-            for _ in 0..<2 {
-                let message = try await socket.receive()
-                let data: Data
-                switch message {
-                case .data(let value): data = value
-                case .string(let value): data = Data(value.utf8)
-                @unknown default: throw URLError(.badServerResponse)
-                }
-                #expect((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["overlay_transport"] as? String == "tcp")
+        // The shared browser opens `/api/live` without a query string, then
+        // controls topics with masked WebSocket messages.  Linux must use the
+        // same subscription protocol and `{ type, data }` envelopes as Apple
+        // and Python rather than treating this as a one-topic HTTP endpoint.
+        let socket = URLSession.shared.webSocketTask(with: try #require(URL(string: "ws://127.0.0.1:\(server.port)/api/live")))
+        socket.resume()
+        try await socket.send(.string("{\"subscribe\":[\"status\",\"peers\"],\"active_tabs\":[\"status\"],\"request\":[\"status\",\"peers\"]}"))
+        var liveTypes = Set<String>()
+        for _ in 0..<3 {
+            let message = try await socket.receive()
+            let data: Data
+            switch message {
+            case .data(let value): data = value
+            case .string(let value): data = Data(value.utf8)
+            @unknown default: throw URLError(.badServerResponse)
             }
-            socket.cancel()
+            let document = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            if let type = document["type"] as? String { liveTypes.insert(type) }
+            if document["type"] as? String == "status" {
+                #expect((document["data"] as? [String: Any])?["overlay_transport"] as? String == "tcp")
+            }
         }
+        #expect(liveTypes.contains("hello"))
+        #expect(liveTypes.contains("status"))
+        #expect(liveTypes.contains("peers"))
+        socket.cancel()
         let config = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/config") as? [String: Any])
         let exported = try #require(config["config"] as? [String: Any])
         #expect(exported["secure_link_psk"] as? String == "***hidden***")

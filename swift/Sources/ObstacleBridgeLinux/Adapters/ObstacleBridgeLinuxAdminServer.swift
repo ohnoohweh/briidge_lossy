@@ -264,16 +264,19 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         return candidates.first { manager.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
     }
 
+    private struct LinuxWebSocketFrame {
+        let opcode: UInt8
+        let payload: Data
+        let final: Bool
+        let consumed: Int
+    }
+
     /// A reconnectable, snapshot-first WebSocket subscription. The Linux
     /// socket owner intentionally keeps protocol framing local while Core
     /// decides topic admission and payload shape.
     private func serveLiveWebSocket(_ client: Int32, target: String, headerText: String) {
         guard let key = headerText.split(separator: "\r\n").first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
-            .split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces),
-              let requested = target.split(separator: "?", maxSplits: 1).dropFirst().first?
-                .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
-                .dropFirst("topic=".count).description,
-              let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requested)
+            .split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces)
         else {
             let wire = Data("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".utf8)
             _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
@@ -282,17 +285,101 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
         let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
         _ = handshake.withUnsafeBytes { write(client, $0.baseAddress, handshake.count) }
-        while let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()),
-              let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
-            var frame = Data([0x81])
-            if body.count < 126 { frame.append(UInt8(body.count)) }
-            else if body.count <= Int(UInt16.max) { frame.append(126); var length = UInt16(body.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
-            else { return }
-            frame.append(body)
-            let sent = frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) }
-            guard sent == frame.count else { return }
-            usleep(250_000)
+        var topics = Set(ObstacleBridgeAdminLiveTopicPolicyPort.allTopics)
+        var nextDue: [String: TimeInterval] = [:]
+        var intervals: [String: Any] = [:]
+        for topic in ObstacleBridgeAdminLiveTopicPolicyPort.allTopics {
+            intervals[topic] = ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
         }
+        guard sendLiveJSON(client, value: ["type": "hello", "topics": Array(topics).sorted(), "intervals_sec": intervals]) else { return }
+        let initialTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
+            .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
+            .dropFirst("topic=".count).description
+        if let initialTopic, let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(initialTopic) {
+            topics = [topic]
+        }
+        var receiveBuffer = Data()
+        while true {
+            let now = ProcessInfo.processInfo.systemUptime
+            for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
+                if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()) {
+                    guard sendLiveJSON(client, value: ["type": topic, "data": payload]) else { return }
+                }
+                nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+            }
+            var descriptor = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptor, 1, 250)
+            guard ready >= 0 else { return }
+            guard ready > 0 else { continue }
+            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+            let received = read(client, &buffer, buffer.count)
+            guard received > 0 else { return }
+            receiveBuffer.append(buffer, count: Int(received))
+            while let frame = parseLiveWebSocketFrame(receiveBuffer) {
+                receiveBuffer.removeSubrange(0..<frame.consumed)
+                guard frame.final else { return }
+                switch frame.opcode {
+                case 0x1:
+                    guard let object = try? JSONSerialization.jsonObject(with: frame.payload) as? [String: Any] else { continue }
+                    topics = ObstacleBridgeAdminLiveTopicPolicyPort.topicsForControlMessage(
+                        subscribe: object["subscribe"], activeTabs: object["active_tabs"] as? [Any], currentTopics: topics
+                    )
+                    let requested = ObstacleBridgeAdminLiveTopicPolicyPort.parseTopics(object["request"])
+                    for topic in requested.sorted() {
+                        if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()) {
+                            guard sendLiveJSON(client, value: ["type": topic, "data": payload]) else { return }
+                        }
+                        nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+                    }
+                case 0x8:
+                    _ = sendLiveFrame(client, opcode: 0x8, payload: Data())
+                    return
+                case 0x9:
+                    guard sendLiveFrame(client, opcode: 0xA, payload: frame.payload) else { return }
+                default:
+                    continue
+                }
+            }
+        }
+    }
+
+    private func sendLiveJSON(_ client: Int32, value: [String: Any]) -> Bool {
+        guard let body = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return false }
+        return sendLiveFrame(client, opcode: 0x1, payload: body)
+    }
+
+    private func sendLiveFrame(_ client: Int32, opcode: UInt8, payload: Data) -> Bool {
+        guard payload.count <= Int(UInt16.max) else { return false }
+        var frame = Data([0x80 | opcode])
+        if payload.count < 126 { frame.append(UInt8(payload.count)) }
+        else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+        frame.append(payload)
+        return frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) == frame.count }
+    }
+
+    private func parseLiveWebSocketFrame(_ data: Data) -> LinuxWebSocketFrame? {
+        guard data.count >= 2 else { return nil }
+        let first = data[data.startIndex], second = data[data.startIndex + 1]
+        let final = (first & 0x80) != 0, opcode = first & 0x0F
+        var index = 2, length = Int(second & 0x7F)
+        if length == 126 {
+            guard data.count >= index + 2 else { return nil }
+            length = (Int(data[data.startIndex + index]) << 8) | Int(data[data.startIndex + index + 1]); index += 2
+        } else if length == 127 { return nil }
+        let masked = (second & 0x80) != 0
+        var mask: [UInt8] = []
+        if masked {
+            guard data.count >= index + 4 else { return nil }
+            mask = Array(data[(data.startIndex + index)..<(data.startIndex + index + 4)]); index += 4
+        }
+        guard length <= 16 * 1024, data.count >= index + length else { return nil }
+        var payload = Data(data[(data.startIndex + index)..<(data.startIndex + index + length)])
+        if masked {
+            var bytes = Array(payload)
+            for offset in bytes.indices { bytes[offset] ^= mask[offset % 4] }
+            payload = Data(bytes)
+        }
+        return .init(opcode: opcode, payload: payload, final: final, consumed: index + length)
     }
 
     /// Matches the Python Admin API: values are flattened for form fields,

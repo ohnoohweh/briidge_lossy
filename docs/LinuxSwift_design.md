@@ -38,7 +38,7 @@ portable selection or topic policy.
 | --- | --- | --- |
 | Configured peer candidates | `ObstacleBridgePeerAddressPort` | `corePeerAddressPortNormalizesLinuxCandidateLists` |
 | Admin snapshot envelopes | `ObstacleBridgeAdminSnapshotSupport` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
-| Admin live topics | `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
+| Admin live topics | `ObstacleBridgeAdminLiveTopicPolicyPort` and `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
 | Local proxy provider | Native HTTP CONNECT and SOCKS5 CONNECT listeners use system egress and start before overlay authentication. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
 | TUN diagnostics | Not admitted; no Linux probe-packet injection scheduler is selected. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
 | Persisted secret envelopes | Linux read-only runtime admission decrypts Python-compatible machine-bound `enc:v1:` values for `secure_link_psk` and `admin_web_password` before use; stored and Admin-projected values remain encrypted/redacted. | Linux has no configuration-write or separate persisted key-material owner; secret reveal and secret-bearing onboarding remain fail-closed. |
