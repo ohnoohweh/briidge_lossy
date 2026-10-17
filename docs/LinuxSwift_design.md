@@ -76,6 +76,25 @@ Admin/product packages that own those resources.
 
 ## Present boundaries
 
+### Admin Web route-parity audit
+
+The staged shared `admin_web` page is the Linux native Admin Web contract. The
+native server currently admits its status, peer, live-topic, configuration,
+configuration-challenge, reconnect, shutdown, metadata, Admin-UI,
+security-advisor, onboarding-profile, onboarding-blueprint, and onboarding
+invite generate/preview routes. Configuration snapshots are flattened for the
+shared form fields and carry the Core-owned grouped schema. The metadata route
+always returns an explicit build-availability value; executable build identity
+is not fabricated by the reusable Admin adapter.
+
+The remaining route-parity gaps are explicit: Admin authentication/session
+routes; restart; SecureLink rekey/reload and PSK reveal; connection and log
+snapshots; TUN routing/control and helper repair; and connected-peer
+blueprints. Secret-bearing onboarding tokens remain fail-closed because Linux
+has no persisted key-material owner; non-secret token generation and preview
+use the shared Core token format. Each gap must gain a route-level regression
+test before it is removed from this list.
+
 The local Admin projection contains redacted lifecycle, readiness, retry,
 SecureLink, session, compression, and resource-ownership counters. It never
 contains secrets, keys, plaintext, nonces, or packet traffic. Runtime health
