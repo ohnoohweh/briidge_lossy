@@ -7,6 +7,7 @@ import unittest
 import uuid
 
 from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
+from obstacle_bridge.bridge_tun_helper_protocol import TUN_HELPER_MAX_FRAME_BYTES, TunHelperFrameKind
 from obstacle_bridge.bridge_tun_helper_server import TunHelperServer
 
 
@@ -175,6 +176,22 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
             await client.connect()
 
         await client.close()
+
+    @unittest.skipIf(sys.platform == "win32", "raw Unix socket test")
+    async def test_oversized_header_closes_only_offending_connection(self) -> None:
+        reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        writer.write(bytes([TunHelperFrameKind.CONTROL_REQUEST]) + (TUN_HELPER_MAX_FRAME_BYTES + 1).to_bytes(4, "big"))
+        await writer.drain()
+        self.assertEqual(await asyncio.wait_for(reader.read(1), timeout=1), b"")
+        writer.close()
+        await writer.wait_closed()
+
+        client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
+        try:
+            await client.connect()
+            self.assertEqual((await client.snapshot())["backend"], "fake")
+        finally:
+            await client.close()
 
     async def test_client_reports_connection_closed_after_server_stop(self) -> None:
         client = TunHelperClient(socket_path=self.socket_path, session_token="secret")

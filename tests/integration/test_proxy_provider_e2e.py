@@ -4,14 +4,18 @@ import asyncio
 import base64
 import socket
 import ssl
+import sys
 import tempfile
 from pathlib import Path
+
+import pytest
 
 from obstacle_bridge.bridge_proxy_server import (
     ObstacleBridgeProxyServer,
     ObstacleBridgeProxyServerConfig,
     ProxyCredentials,
 )
+from obstacle_bridge.bridge_proxy_worker import ProxyWorker
 from tests.fixtures.localhost_tls import materialize_localhost_tls_fixture_set
 
 
@@ -244,3 +248,43 @@ async def _test_proxy_provider_e2e_python_http_https_and_socks5() -> None:
         await http_server.wait_closed()
         await tls_server.wait_closed()
         tls_tmp.cleanup()
+
+
+@pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="private proxy worker requires desktop Unix sockets")
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_proxy_worker_e2e_python_http_https_and_socks5(implementation, request) -> None:
+    async def exercise():
+        credentials = ProxyCredentials("obproxy", "secret")
+        with tempfile.TemporaryDirectory() as temporary:
+            tls_dir = materialize_localhost_tls_fixture_set(Path(temporary))
+            http_server, http_port, http_captured = await _start_http_target()
+            tls_server, tls_port, tls_captured = await _start_tls_target(tls_dir)
+            executable = request.getfixturevalue("native_proxy_worker_executable") if implementation == "native" else None
+            worker = ProxyWorker(implementation, executable)
+            try:
+                await worker.start({"bind": "127.0.0.1", "http_port": 0, "socks5_port": 0,
+                    "protocols": ["http-connect", "socks5-connect"],
+                    "auth": {"mode": "basic", "username": credentials.username, "token": credentials.password},
+                    "egress": {"mode": "direct"},
+                    "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}})
+                http_proxy = worker.listeners["http"]["bound_port"]
+                socks_proxy = worker.listeners["socks5"]["bound_port"]
+                responses = await asyncio.gather(
+                    *[asyncio.to_thread(_http_via_proxy, http_proxy, http_port, credentials, f"/plain/{i}%2Fescaped?q=x%2Fy") for i in range(4)],
+                    *[asyncio.to_thread(_https_via_http_connect_proxy, http_proxy, tls_port, tls_dir, credentials, f"/secure/{i}") for i in range(4)],
+                    *[asyncio.to_thread(_socks5_via_proxy, socks_proxy, http_port, credentials, f"/socks/{i}") for i in range(4)],
+                )
+                assert all(b"python-target:GET /plain/" in response for response in responses[:4])
+                assert all(b"python-tls-target:GET /secure/" in response for response in responses[4:8])
+                assert all(b"python-target:GET /socks/" in response for response in responses[8:])
+                assert len(http_captured) == 8 and len(tls_captured) == 4
+                first_lines = {data.split(b"\r\n", 1)[0] for data in http_captured}
+                assert {f"GET /plain/{i}%2Fescaped?q=x%2Fy HTTP/1.1".encode() for i in range(4)} <= first_lines
+                assert all(b"Proxy-Authorization:" not in data for data in http_captured)
+            finally:
+                await worker.stop()
+                http_server.close()
+                tls_server.close()
+                await http_server.wait_closed()
+                await tls_server.wait_closed()
+    asyncio.run(exercise())

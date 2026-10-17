@@ -145,6 +145,16 @@ class DebugLoggingConfigurator:
                 default=None,
                 help="UDP log receiver queried by Admin Web in --log-udp-only mode (default: --log-udp-target)",
             )
+        if not _has("--log-worker"):
+            p.add_argument(
+                "--log-worker", choices=("off", "python", "native"), default="off",
+                help="use a supervised private desktop log worker (default off)",
+            )
+        if not _has("--log-worker-native-executable"):
+            p.add_argument(
+                "--log-worker-native-executable", default=None,
+                help="path to ObstacleBridgeLogCollector for --log-worker native",
+            )
 
     @staticmethod
     def from_args(args: argparse.Namespace) -> "DebugLoggingConfigurator":

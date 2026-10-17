@@ -19,6 +19,9 @@ The project currently targets six platform families:
 
 ## For Users
 
+Desktop process ownership and the remaining Python/native worker
+exchangeability plan are described in [Architecture](docs/ARCHITECTURE.md#desktop-process-isolation-and-exchangeability).
+
 ### Whitepaper
 The complete whitepaper is available in [`docs/WHITEPAPER.html`](docs/WHITEPAPER.html). It covers:
 - Internet barriers such as NAT, DPI, protocol blocking, traffic shaping, and TLS interception.
@@ -924,18 +927,22 @@ Operational notes:
 | Option(s) | Default | Description |
 |---|---:|---|
 | `--proxy-provider-enabled`, `--no-proxy-provider-enabled` | `False` | Enable the local explicit proxy provider. |
+| `--proxy-provider-worker` | `off` | Desktop Python runner: select `python` or `native` to isolate the provider in a child process. Both require the explicitly unrestricted destination policy described below. |
+| `--proxy-provider-worker-native-executable` | unset | Path to the `ObstacleBridgeProxyWorker` executable; if unset, it must be on `PATH`. |
 | `--proxy-provider-bind` | `127.0.0.1` | Local bind address for proxy listeners. Keep this on loopback unless you intentionally want LAN clients to use this proxy. |
 | `--proxy-provider-http-port` | `13881` | Local HTTP and HTTPS `CONNECT` proxy listener port. |
 | `--proxy-provider-socks5-port` | `13882` | Local SOCKS5 TCP `CONNECT` proxy listener port. |
 | `--proxy-provider-protocols` | `http-connect socks5-connect` | Enabled proxy protocol families. Supported values are `http-connect`, `socks5-connect`, `http`, and `socks5`. |
 | `--proxy-provider-auth` | `{"mode":"none","username":"","token":""}` | JSON auth object. Use `mode` `token`, `basic`, or `password` plus `username` and `token` or `password` to require proxy authentication. |
 | `--proxy-provider-egress` | `{"mode":"system","address_families":["ipv4","ipv6"]}` | JSON egress policy object for outbound proxy connections. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX. |
-| `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. |
+| `--proxy-provider-policy` | `{"allow_private_destinations":false,"blocked_host_patterns":[]}` | JSON destination policy object. The Python proxy does not enforce restrictions; the worker refuses restricted or unspecified policies rather than silently ignoring them. |
 | `--log-proxy-provider` | inherited | Override the proxy provider logger level, for example `INFO` or `DEBUG`. |
 
 #### Browser setup for HTTP, HTTPS, and SOCKS
 
 ObstacleBridge can expose a first-party local proxy provider for browser or application traffic. The provider is separate from the overlay peer connection: it listens on local loopback ports, accepts explicit proxy clients, and then opens direct outbound connections from the ObstacleBridge runtime.
+
+To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--proxy-provider-worker native` and `--proxy-provider-policy '{"allow_private_destinations":true,"blocked_host_patterns":[]}'`. This explicitly allows private destinations and provides no destination blocklist; use it only where that policy is appropriate. Build the native executable with `swift build --product ObstacleBridgeProxyWorker` and supply its path with `--proxy-provider-worker-native-executable`. The native child currently requires a `127.0.0.1` bind and `--proxy-provider-egress '{"mode":"direct"}'`; unsupported settings fail startup. Neither child restarts automatically yet.
 
 The default local ports are:
 
@@ -1579,7 +1586,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `66` | `1023` |
+| Python CLI/runtime, including macOS Python | `69` | `1049` |
 | macOS Swift app | `1` | `72` |
 | iOS app/extension | `32` | `209` |
 
