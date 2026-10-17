@@ -10,7 +10,9 @@ SHARED_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeAppleShared/"
 IOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeiOS/"
 MACOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeMacOS/"
 DESKTOP_PROXY_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"
+DESKTOP_LOG_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"
 LINUX_DESKTOP_HOST = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift"
+LINUX_LOG_ADAPTER = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift"
 MACOS_DESKTOP_HOST = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"
 SWIFT_SUFFIX = ".swift"
 PARITY_TEST_FILES = {
@@ -57,10 +59,10 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
     # Process spawning is a desktop-only boundary: iOS extensions cannot
     # inherit these workers. Admit this specific macOS host integration only
     # when the corresponding Linux host and their shared owner also change.
-    desktop_proxy_pair = (
+    desktop_pair = (
         set(macos_swift) == {MACOS_DESKTOP_HOST}
-        and DESKTOP_PROXY_SUPERVISOR in _normalize(changed)
-        and LINUX_DESKTOP_HOST in _normalize(changed)
+        and ((DESKTOP_PROXY_SUPERVISOR in _normalize(changed) and LINUX_DESKTOP_HOST in _normalize(changed))
+             or (DESKTOP_LOG_SUPERVISOR in _normalize(changed) and LINUX_LOG_ADAPTER in _normalize(changed)))
     )
     errors: list[str] = []
 
@@ -71,7 +73,7 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
             f"Expected one of: files under {SHARED_SWIFT_PREFIX} or files under {MACOS_SWIFT_PREFIX}"
         )
 
-    if macos_swift and not (shared_swift or ios_swift or desktop_proxy_pair):
+    if macos_swift and not (shared_swift or ios_swift or desktop_pair):
         errors.append(
             "macOS-specific Swift runtime files changed without a shared Swift update or a mirrored iOS Swift update.\n"
             f"Changed macOS files: {', '.join(macos_swift)}\n"

@@ -174,6 +174,9 @@ final class ObstacleBridgeHostRunner {
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
     private var proxyWorker: ObstacleBridgeProxyWorkerSupervisor?
+    private let loggingWorkerLock = NSLock()
+    private var loggingWorker: ObstacleBridgeLogWorkerSupervisor?
+    private var loggingWorkerConfigured = false
     private var proxyProviderLastError = ""
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
     private var macOSTunHelperRuntimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
@@ -395,6 +398,7 @@ final class ObstacleBridgeHostRunner {
 
     private func reloadRuntimeStateForControlAction() throws {
         try reloadRuntimeConfigFromDisk()
+        try startLoggingWorkerIfConfigured()
         stopProxyProvider()
         stopOwnServers()
         prepareSharedOverlayBootstrap()
@@ -452,6 +456,7 @@ final class ObstacleBridgeHostRunner {
         prepareSharedOverlayBootstrap()
         var startupFailed = false
         do {
+            try startLoggingWorkerIfConfigured()
             try startProxyProviderIfConfigured()
             try startOwnServers()
             startSharedWebSocketOverlayTransportOwnerIfNeeded()
@@ -495,6 +500,7 @@ final class ObstacleBridgeHostRunner {
         stopRuntimeHealthHeartbeat()
         stopTelemetry()
         appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
+        stopLoggingWorker()
     }
 
     private var runtimeHealthURL: URL {
@@ -588,6 +594,35 @@ final class ObstacleBridgeHostRunner {
             return runtimeHealthSequence
         }
         enqueueTelemetryHealth(state: event, counter: sequence)
+        activeLoggingWorker()?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
+    }
+
+    private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
+        loggingWorkerLock.lock(); defer { loggingWorkerLock.unlock() }
+        return loggingWorker
+    }
+
+    private func stopLoggingWorker() {
+        loggingWorkerLock.lock(); let previous = loggingWorker; loggingWorker = nil; loggingWorkerLock.unlock()
+        previous?.stop()
+    }
+
+    private func startLoggingWorkerIfConfigured() throws {
+        stopLoggingWorker()
+        let section = runtimeConfigRaw["debug_logging"] as? [String: Any] ?? [:]
+        let selected = section["log_worker"] ?? runtimeConfigRaw["log_worker"]
+        loggingWorkerLock.lock()
+        loggingWorkerConfigured = selected != nil && ((selected as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "invalid") != "off"
+        loggingWorkerLock.unlock()
+        guard let worker = try ObstacleBridgeLogWorkerSupervisor.configured(from: runtimeConfigRaw) else { return }
+        try worker.start()
+        loggingWorkerLock.lock(); loggingWorker = worker; loggingWorkerLock.unlock()
+        worker.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: "runtime.started")
+    }
+
+    private func loggingWorkerSnapshot() -> [String: Any] {
+        loggingWorkerLock.lock(); let worker = loggingWorker; let configured = loggingWorkerConfigured; loggingWorkerLock.unlock()
+        return worker?.status() ?? ["state": configured ? "unavailable" : "off"]
     }
 
     private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
@@ -1466,6 +1501,7 @@ final class ObstacleBridgeHostRunner {
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
             "proxy_provider": proxyProviderSnapshot(),
+            "logging_worker": loggingWorkerSnapshot(),
             "telemetry": telemetryStatusSnapshot(),
             "secure_link_material_generation": 0,
             "secure_link_last_reload_unix_ts": NSNull(),
@@ -2120,6 +2156,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func readLogLines(limit: Int) -> [String] {
+        loggingWorkerLock.lock(); let worker = loggingWorker; let configured = loggingWorkerConfigured; loggingWorkerLock.unlock()
+        if configured { return worker?.fetch(limit: limit)["lines"] as? [String] ?? [] }
         guard let path = configStore.debugLogFilePath(), !path.isEmpty,
               let text = try? String(contentsOfFile: path, encoding: .utf8) else {
             return []

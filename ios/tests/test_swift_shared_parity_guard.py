@@ -97,6 +97,17 @@ def test_both_platform_specific_swift_changes_with_one_parity_test_pass() -> Non
     ]) == []
     assert validate_swift_shared_parity([
         "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ]) == []
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ])
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
         "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift",
     ])

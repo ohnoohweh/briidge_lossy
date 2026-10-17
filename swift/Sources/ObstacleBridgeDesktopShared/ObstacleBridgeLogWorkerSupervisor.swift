@@ -1,0 +1,255 @@
+#if os(macOS) || os(Linux)
+import Dispatch
+import Foundation
+#if os(macOS)
+import Darwin
+private let logDatagramSocket = SOCK_DGRAM
+private let logStreamSocket = SOCK_STREAM
+#else
+import Glibc
+private let logDatagramSocket = Int32(SOCK_DGRAM.rawValue)
+private let logStreamSocket = Int32(SOCK_STREAM.rawValue)
+#endif
+
+/// Supervises either private log collector. Records are best effort; callers
+/// never wait for the collector, disk, a query, or a restart to complete.
+public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
+    public enum Failure: Error, LocalizedError {
+        case invalidConfiguration, unavailable
+        public var errorDescription: String? {
+            switch self {
+            case .invalidConfiguration: return "invalid logging worker configuration"
+            case .unavailable: return "logging worker unavailable"
+            }
+        }
+    }
+
+    private static let maxDatagram = 8 * 1024
+    private let implementation: String
+    private let executable: String
+    private let stateLock = NSLock()
+    private let lifecycleLock = NSLock()
+    private let queryLock = NSLock()
+    private let monitorQueue = DispatchQueue(label: "org.obstaclebridge.desktop.logging-worker")
+    private var process: Process?
+    private var dataFD: Int32 = -1
+    private var lifetimeFD: Int32 = -1
+    private var stopped = true
+    private var timer: DispatchSourceTimer?
+    private var generation = 0
+    private var restarts = 0
+    private var failedStarts = 0
+    private var droppedRecords = 0
+    private var nextAttempt = Date.distantPast
+
+    public init(implementation: String, executable: String) throws {
+        guard ["python", "native"].contains(implementation), !executable.isEmpty else { throw Failure.invalidConfiguration }
+        self.implementation = implementation
+        self.executable = executable
+    }
+
+    /// Desktop configuration intentionally rejects sinks that the private
+    /// collectors cannot own yet, rather than silently dropping file/UDP logs.
+    public static func configured(from root: [String: Any]) throws -> ObstacleBridgeLogWorkerSupervisor? {
+        let section = root["debug_logging"] as? [String: Any] ?? [:]
+        func setting(_ key: String) -> Any? { section[key] ?? root[key] }
+        let rawMode = setting("log_worker")
+        guard rawMode == nil || rawMode is String else { throw Failure.invalidConfiguration }
+        let mode = ((rawMode as? String) ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard ["off", "python", "native"].contains(mode) else { throw Failure.invalidConfiguration }
+        if mode == "off" { return nil }
+        for key in ["log_file", "log_udp_target", "log_admin_udp_target"] {
+            guard let value = setting(key), !(value is NSNull) else { continue }
+            guard let text = value as? String, text.isEmpty else { throw Failure.invalidConfiguration }
+        }
+        for key in ["log_udp_only", "debug_stderr"] {
+            guard let value = setting(key), !(value is NSNull) else { continue }
+            guard let flag = value as? Bool, !flag else { throw Failure.invalidConfiguration }
+        }
+        let executableKey = "log_worker_\(mode)_executable"
+        guard setting(executableKey) == nil || setting(executableKey) is String else { throw Failure.invalidConfiguration }
+        let configured = (setting(executableKey) as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let host = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
+        let executable = configured.flatMap { $0.isEmpty ? nil : $0 }
+            ?? (mode == "python" ? "/usr/bin/python3" : host.deletingLastPathComponent().appendingPathComponent("ObstacleBridgeLogCollector").path)
+        return try .init(implementation: mode, executable: executable)
+    }
+
+    private func socketPair(_ kind: Int32) throws -> (Int32, Int32) {
+        var descriptors: [Int32] = [-1, -1]
+        guard socketpair(AF_UNIX, kind, 0, &descriptors) == 0 else { throw Failure.unavailable }
+        guard fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0,
+              fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) == 0 else {
+            close(descriptors[0]); close(descriptors[1]); throw Failure.unavailable
+        }
+        return (descriptors[0], descriptors[1])
+    }
+
+    private func waitReadable(_ fd: Int32, milliseconds: Int32) -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + UInt64(milliseconds) * 1_000_000
+        while true {
+            let now = DispatchTime.now().uptimeNanoseconds
+            guard now < deadline else { return false }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let remaining = Int32(max(1, (deadline - now) / 1_000_000))
+            let result = poll(&descriptor, 1, remaining)
+            if result < 0 && errno == EINTR { continue }
+            return result > 0 && descriptor.revents & Int16(POLLIN) != 0
+        }
+    }
+
+    private func receive(_ fd: Int32) -> [String: Any]? {
+        var bytes = [UInt8](repeating: 0, count: Self.maxDatagram + 1)
+        let count = recv(fd, &bytes, bytes.count, 0)
+        guard count > 0, count <= Self.maxDatagram,
+              let object = try? JSONSerialization.jsonObject(with: Data(bytes.prefix(count))) as? [String: Any] else { return nil }
+        return object
+    }
+
+    private func sendDatagram(_ fd: Int32, payload: [String: Any]) -> Bool {
+        guard let data = try? JSONSerialization.data(withJSONObject: payload), !data.isEmpty, data.count <= Self.maxDatagram else { return false }
+        #if os(Linux)
+        let flags = Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
+        #else
+        let flags = Int32(MSG_DONTWAIT)
+        #endif
+        return data.withUnsafeBytes { send(fd, $0.baseAddress, $0.count, flags) } == data.count
+    }
+
+    /// Call while lifecycleLock is held. The child inherits only the two
+    /// private sockets as standard descriptors; stdout cannot stall the ring.
+    private func launch() throws {
+        let (parentData, childData) = try socketPair(logDatagramSocket)
+        let parentLifetime: Int32, childLifetime: Int32
+        do { (parentLifetime, childLifetime) = try socketPair(logStreamSocket) }
+        catch { close(parentData); close(childData); throw error }
+        var adopted = false
+        let childInput = FileHandle(fileDescriptor: childData, closeOnDealloc: true)
+        let childError = FileHandle(fileDescriptor: childLifetime, closeOnDealloc: true)
+        let child = Process()
+        defer {
+            try? childInput.close(); try? childError.close()
+            if !adopted {
+                close(parentData); close(parentLifetime)
+                if child.isRunning { _ = kill(child.processIdentifier, SIGKILL); child.waitUntilExit() }
+            }
+        }
+        var bufferSize: Int32 = 64 * 1024
+        for fd in [parentData, childData] {
+            guard setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufferSize, socklen_t(MemoryLayout<Int32>.size)) == 0,
+                  setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufferSize, socklen_t(MemoryLayout<Int32>.size)) == 0 else { throw Failure.unavailable }
+        }
+        #if os(macOS)
+        var noSignal: Int32 = 1
+        guard setsockopt(parentData, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else { throw Failure.unavailable }
+        #endif
+        guard let nullOutput = FileHandle(forWritingAtPath: "/dev/null") else { throw Failure.unavailable }
+        child.executableURL = URL(fileURLWithPath: executable)
+        child.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_logging_ipc"] : []) + ["--private-fds", "0", "2"]
+        child.standardInput = childInput
+        child.standardError = childError
+        child.standardOutput = nullOutput
+        try child.run()
+        try childInput.close(); try childError.close(); try nullOutput.close()
+        guard waitReadable(parentData, milliseconds: 5_000),
+              let ready = receive(parentData), ready["v"] as? Int == 1,
+              ready["kind"] as? String == "worker.ready", ready["role"] as? String == "logging",
+              ready["implementation"] as? String == implementation, child.isRunning else { throw Failure.unavailable }
+        stateLock.lock()
+        process = child; dataFD = parentData; lifetimeFD = parentLifetime; generation += 1
+        stateLock.unlock()
+        adopted = true
+    }
+
+    public func start() throws {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        stateLock.lock(); let canStart = stopped; stopped = false; stateLock.unlock()
+        guard canStart else { throw Failure.invalidConfiguration }
+        do { try launch() }
+        catch { stateLock.lock(); stopped = true; stateLock.unlock(); throw error }
+        let source = DispatchSource.makeTimerSource(queue: monitorQueue)
+        source.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        source.setEventHandler { [weak self] in self?.recoverIfNeeded() }
+        timer = source
+        source.resume()
+    }
+
+    private func retireChild() -> Process? {
+        stateLock.lock()
+        let child = process, data = dataFD, lifetime = lifetimeFD
+        process = nil; dataFD = -1; lifetimeFD = -1
+        stateLock.unlock()
+        if lifetime >= 0 { close(lifetime) }
+        if data >= 0 { close(data) }
+        return child
+    }
+
+    private func recoverIfNeeded() {
+        guard lifecycleLock.try() else { return }
+        defer { lifecycleLock.unlock() }
+        stateLock.lock()
+        let shouldRecover = !stopped && process?.isRunning != true && Date() >= nextAttempt
+        stateLock.unlock()
+        guard shouldRecover else { return }
+        if let old = retireChild() { old.waitUntilExit() }
+        do {
+            try launch()
+            stateLock.lock(); restarts += 1; stateLock.unlock()
+        } catch {
+            stateLock.lock(); failedStarts += 1; nextAttempt = Date().addingTimeInterval(1); stateLock.unlock()
+        }
+    }
+
+    /// Messages are bounded and sent without waiting. Callers must not pass
+    /// credentials, packet contents, or other sensitive payloads.
+    public func emit(name: String, level: String, levelNumber: Int, message: String) {
+        guard stateLock.try() else { return }
+        defer { stateLock.unlock() }
+        guard !stopped, dataFD >= 0, process?.isRunning == true else { droppedRecords += 1; return }
+        let record: [String: Any] = ["v": 1, "created": Date().timeIntervalSince1970, "name": String(name.prefix(256)),
+                                     "level": String(level.prefix(32)), "levelno": levelNumber,
+                                     "message": String(message.prefix(4096)), "process": Int(ProcessInfo.processInfo.processIdentifier), "thread": "native"]
+        if !sendDatagram(dataFD, payload: record) { droppedRecords += 1 }
+    }
+
+    public func fetch(limit: Int) -> [String: Any] {
+        let unavailable: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
+        guard queryLock.try() else { return unavailable }
+        defer { queryLock.unlock() }
+        stateLock.lock()
+        let currentGeneration = generation
+        let descriptor = !stopped && process?.isRunning == true && dataFD >= 0 ? fcntl(dataFD, F_DUPFD_CLOEXEC, 3) : -1
+        stateLock.unlock()
+        guard descriptor >= 0 else { return unavailable }
+        defer { close(descriptor) }
+        let requestID = UUID().uuidString.lowercased()
+        guard sendDatagram(descriptor, payload: ["v": 1, "kind": "logs.query", "limit": max(1, min(limit, 1000)), "request_id": requestID]),
+              waitReadable(descriptor, milliseconds: 150), let reply = receive(descriptor),
+              reply["v"] as? Int == 1, reply["kind"] as? String == "logs.reply", reply["ok"] as? Bool == true,
+              reply["request_id"] as? String == requestID, let lines = reply["lines"] as? [String] else { return unavailable }
+        stateLock.lock(); let current = !stopped && generation == currentGeneration && process?.isRunning == true; stateLock.unlock()
+        return current ? ["available": true, "lines": lines, "error": ""] : unavailable
+    }
+
+    public func status() -> [String: Any] {
+        stateLock.lock(); defer { stateLock.unlock() }
+        let running = !stopped && process?.isRunning == true
+        return ["implementation": implementation, "state": stopped ? "stopped" : (running ? "running" : "restarting"),
+                "pid": Int(process?.processIdentifier ?? 0), "generation": generation, "restarts": restarts,
+                "failed_starts": failedStarts, "dropped_records": droppedRecords]
+    }
+
+    public func stop() {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        timer?.cancel(); timer = nil
+        stateLock.lock(); stopped = true; stateLock.unlock()
+        guard let child = retireChild() else { return }
+        let deadline = Date().addingTimeInterval(1)
+        while child.isRunning && Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        if child.isRunning { _ = kill(child.processIdentifier, SIGKILL) }
+        child.waitUntilExit()
+    }
+
+    deinit { stop() }
+}
+#endif

@@ -1599,6 +1599,12 @@ REQ-ADM-001:
     - tests/unit/test_debug_logging_aliases.py::test_udp_receiver_serves_bounded_admin_log_query
     - tests/unit/test_native_log_collector.py::test_native_collector_accepts_python_records_and_queries
     - tests/unit/test_native_log_collector.py::test_native_collector_refuses_non_loopback_bind
+    - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_records_queries_and_restarts
+    - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_configuration_fails_closed
+    - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_drops_when_collector_stalls
+    - tests/unit/test_native_log_supervisor.py::test_swift_logging_child_exits_on_owner_loss
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
+    - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
     - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes
     - tests/unit/test_managed_logging_worker.py::test_private_query_lock_has_a_bounded_wait

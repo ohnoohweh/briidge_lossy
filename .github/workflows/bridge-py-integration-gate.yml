@@ -97,7 +97,9 @@ jobs:
 
   bridge-py-integration-linux:
     name: Integration Gate (Linux shared)
-    timeout-minutes: 15
+    # Cold Swift builds can consume most of the original 15-minute budget;
+    # leave room for the worker-supervision and mixed-process probes as well.
+    timeout-minutes: 25
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
@@ -135,6 +137,9 @@ jobs:
 
       - name: Test native proxy supervision
         run: pytest -q tests/unit/test_native_proxy_supervisor.py
+
+      - name: Test native logging supervision
+        run: pytest -q tests/unit/test_native_log_supervisor.py
 
       - name: Test private Admin worker
         run: pytest -q tests/unit/test_admin_worker.py
@@ -417,11 +422,14 @@ jobs:
       - name: Test native proxy supervision
         run: pytest -q tests/unit/test_native_proxy_supervisor.py
 
+      - name: Test native logging supervision
+        run: pytest -q tests/unit/test_native_log_supervisor.py
+
       - name: Test macOS host proxy worker selection
         env:
           PYTHONPATH: .:src:ios/src
           OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
-        run: pytest -q ios/tests/test_macos_swift_host_runner.py -k 'macos_host_supervises_proxy_worker or macos_build_uses_core_websocket_payload_source'
+        run: pytest -q ios/tests/test_macos_swift_host_runner.py -k 'macos_host_supervises_proxy_worker or macos_host_supervises_logging_worker or macos_build_uses_core_websocket_payload_source'
 
       - name: Test private Admin worker
         run: pytest -q tests/unit/test_admin_worker.py

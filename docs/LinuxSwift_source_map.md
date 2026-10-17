@@ -34,10 +34,10 @@ behavior is in parity.
 | `ObstacleBridgeCore` | `split-contract` | 29 | Preserve behavior in core while moving crypto providers, compression backends, OS networking, packet devices, resolver calls, and Admin HTTP mechanics below explicit contracts. |
 | `ObstacleBridgeAppleAdapters` | `retain-or-split` | 16 | Keep `Network`, Network Extension, Darwin TUN, XPC, ServiceManagement, Security, Objective-C bridge mechanisms, and the package import probe Apple-specific. |
 | `ObstacleBridgeLinuxAdapters` | `retain-or-thin` | 24 | Keep POSIX descriptors, listener/server I/O, timers, Linux HTTP serving, and foreground CLI resource selection; remove common protocol policy as its core owner lands. |
-| `ObstacleBridgeDesktopShared` | `retain-or-thin` | 1 | Share desktop process supervision and POSIX socket ownership between macOS and Linux without importing OS APIs into Core. |
+| `ObstacleBridgeDesktopShared` | `retain-or-thin` | 2 | Share desktop process supervision and POSIX socket ownership between macOS and Linux without importing OS APIs into Core. |
 | `ObstacleBridgeCore` | `delete-after-migration` | 1 | Retire the reduced core myUDP codec when the Python-complete common myUDP engine replaces it. |
 
-The checked inventory currently contains 121 Swift files. Its file-level entries
+The checked inventory currently contains 122 Swift files. Its file-level entries
 are intentionally exact rather than glob-based, so a new source file is a
 failing ownership decision instead of silently becoming portable or Linux-only.
 

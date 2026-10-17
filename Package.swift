@@ -86,7 +86,7 @@ targets += [
     ),
     .executableTarget(
         name: "ObstacleBridgeLinux",
-        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
+        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore", "ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeLinux",
         exclude: ["Adapters"]
     ),

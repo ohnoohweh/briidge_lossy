@@ -37,10 +37,16 @@ queries, and a lifetime socket causes the child to exit on owner loss. A
 Python monitor restarts the selected implementation with bounded backoff;
 replacement sockets fence old queries, while the recent-log ring is lost on
 restart. Admin reports the logging worker's generation, restart and drop
-counts. The native collector keeps a 1,200-line / 1 MiB bounded ring and writes
-to stdout. This is a logging-specific slice, not the common worker protocol:
-native host supervisors and their runtime producers are not wired and file rotation is unavailable
-in this mode. The capability
+counts. The native collector keeps a 1,200-line / 1 MiB bounded ring; standalone
+mode writes to stdout, while native supervisors discard stdout to avoid blocking.
+The macOS and Linux native hosts can also select either collector
+using `debug_logging.log_worker` (`off`, `python`, or `native`), with optional
+`log_worker_python_executable` and `log_worker_native_executable` overrides.
+Their shared supervisor exposes bounded queries and restart status to Admin;
+the hosts currently emit only selected runtime lifecycle events, and their drop
+counter does not include records rejected during lock contention. Unsupported
+file and UDP sinks are rejected when this worker mode is selected. This is a
+logging-specific slice, not the common worker protocol. The capability
 protects against unprivileged processes without the inherited descriptors, not
 a hostile debugger acting as the same user.
 
@@ -49,9 +55,9 @@ through separate inherited record-only datagram capabilities. A parent relay
 thread validates frame size and rejects query messages, then forwards records
 nonblockingly to the current collector generation. Thus children cannot read
 Admin query replies, and a collector restart does not require restarting those
-children; congestion or collector loss drops records. Native-host producers,
-other future workers, producer-side drop aggregation, file sinks and cross-host
-qualification remain open.
+children; congestion or collector loss drops records. Native-host child relays,
+the rest of the native runtime producers, other future workers, comprehensive
+producer-side drop aggregation, file sinks and cross-host qualification remain open.
 
 The Python runner can select `--proxy-provider-worker python` or `native`; the
 macOS and Linux native hosts accept `proxy_provider.worker` (`python`, `native`,
@@ -127,9 +133,9 @@ Each worker has bounded startup, health, shutdown and recovery behavior;
 failure is reported without silently replacing the selected implementation.
 iOS extensions and Windows retain their existing execution boundaries; this
 desktop plan does not assert they can spawn these workers.
-The Swift parity gate treats the desktop proxy supervisor and its macOS/Linux
-host adapters as one desktop-specific boundary; iOS changes still require
-their own shared-Apple or macOS parity evidence.
+The Swift parity gate treats the desktop proxy and logging supervisors and
+their respective macOS/Linux host adapters as desktop-specific boundaries;
+iOS changes still require their own shared-Apple or macOS parity evidence.
 
 ### Remaining work packages
 

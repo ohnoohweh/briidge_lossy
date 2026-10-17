@@ -52,6 +52,8 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in build_script
     assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift") == 2
+    assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift") == 2
+    assert '"${APP_MACOS_DIR}/ObstacleBridgeLogCollector"' in build_script
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
@@ -3531,6 +3533,37 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
             )
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": implementation, "log_worker_python_executable": sys.executable},
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        status_url = f"http://127.0.0.1:{status_port}/api/status"
+        status = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
+        worker = status["logging_worker"]
+        assert worker["implementation"] == implementation and worker["pid"] > 1 and worker["pid"] != process.pid
+        logs = _wait_http_condition(f"http://127.0.0.1:{status_port}/api/logs?limit=20", lambda item: any("runtime.started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert any("runtime.started" in line for line in logs["lines"])
+        os.kill(worker["pid"], signal.SIGKILL)
+        recovered = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item["logging_worker"]["generation"] > worker["generation"], timeout_sec=20)
+        assert recovered["logging_worker"]["restarts"] >= 1
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
 
 
 @pytest.mark.parametrize("implementation", ["python", "native"])

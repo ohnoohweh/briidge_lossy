@@ -83,7 +83,7 @@ let socketFD: Int32
 let lifetimeFD: Int32
 if privateMode {
     guard let data = Int32(arguments[2]), let lifetime = Int32(arguments[3]),
-          data > 2, lifetime > 2, data != lifetime,
+          data >= 0, lifetime >= 0, data != lifetime,
           socketType(data) == datagramSocketType, socketType(lifetime) == streamSocketType else {
         fail("invalid private logging sockets")
     }

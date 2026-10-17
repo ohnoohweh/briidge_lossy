@@ -13,6 +13,7 @@
       "owner": "ObstacleBridgeDesktopShared",
       "disposition": "retain-or-thin",
       "files": [
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift",
         "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"
       ]
     },

@@ -111,6 +111,8 @@ swift build \
   --scratch-path "${SCRATCH_DIR}" \
   --configuration "${CONFIGURATION}" \
   --product ObstacleBridgeLinux
+swift build --package-path "${REPO_ROOT}" --scratch-path "${SCRATCH_DIR}" --configuration "${CONFIGURATION}" --product ObstacleBridgeProxyWorker
+swift build --package-path "${REPO_ROOT}" --scratch-path "${SCRATCH_DIR}" --configuration "${CONFIGURATION}" --product ObstacleBridgeLogCollector
 
 BINARY_SOURCE="${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeLinux"
 if [ ! -x "${BINARY_SOURCE}" ]; then
@@ -131,6 +133,7 @@ chmod 755 "${BINARY_STAGING_PATH}"
 mv -f "${BINARY_STAGING_PATH}" "${BINARY_PATH}"
 trap - EXIT
 cp "${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeProxyWorker" "${OUTPUT_DIR}/ObstacleBridgeProxyWorker"
+cp "${SCRATCH_DIR}/${CONFIGURATION}/ObstacleBridgeLogCollector" "${OUTPUT_DIR}/ObstacleBridgeLogCollector"
 mkdir -p "${ADMIN_WEB_OUTPUT_DIR}"
 cp -R "${REPO_ROOT}/admin_web/." "${ADMIN_WEB_OUTPUT_DIR}/"
 
