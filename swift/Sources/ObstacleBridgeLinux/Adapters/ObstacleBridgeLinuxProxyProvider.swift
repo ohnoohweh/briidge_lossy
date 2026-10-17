@@ -15,6 +15,8 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
     private var accepted = 0
     private var completed = 0
     private var failed = 0
+    private var boundHTTPPort = 0
+    private var boundSOCKS5Port = 0
 
     public init(configuration: ObstacleBridgeLinuxProxyProviderConfiguration) { self.configuration = configuration }
 
@@ -28,11 +30,14 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
 
     public func snapshot() -> [String: Any] {
         lock.lock(); defer { lock.unlock() }
-        return ["enabled": configuration.enabled, "bind_host": configuration.bindHost, "http_port": configuration.httpEnabled ? configuration.httpPort : 0, "socks5_port": configuration.socks5Enabled ? configuration.socks5Port : 0, "accepted_connections": accepted, "completed_connections": completed, "failed_connections": failed]
+        return ["enabled": configuration.enabled, "bind_host": configuration.bindHost, "http_port": configuration.httpEnabled ? boundHTTPPort : 0, "socks5_port": configuration.socks5Enabled ? boundSOCKS5Port : 0, "accepted_connections": accepted, "completed_connections": completed, "failed_connections": failed]
     }
 
     private func install(port: Int, socks: Bool) throws {
         let fd = try listener(port: port)
+        lock.lock()
+        if socks { boundSOCKS5Port = boundPort(fd) } else { boundHTTPPort = boundPort(fd) }
+        lock.unlock()
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
         source.setEventHandler { [weak self] in self?.accept(listener: fd, socks: socks) }
         source.setCancelHandler { _ = close(fd) }
@@ -93,6 +98,7 @@ public final class ObstacleBridgeLinuxProxyProvider: @unchecked Sendable {
     private func authorized(_ header: String?) -> Bool { guard let credentials = configuration.credentials else { return true }; guard let header, header.lowercased().hasPrefix("basic "), let data = Data(base64Encoded: String(header.dropFirst(6))), let value = String(data: data, encoding: .utf8) else { return false }; return value == "\(credentials.username):\(credentials.password)" }
     private func authority(_ raw: String, defaultPort: Int) throws -> (String, Int) { if raw.hasPrefix("[") { guard let end = raw.firstIndex(of: "]") else { throw ProxyError.invalid }; return (String(raw[raw.index(after: raw.startIndex)..<end]), Int(raw.dropFirst(raw.distance(from: raw.startIndex, to: end) + 2).dropFirst()) ?? defaultPort) }; let parts = raw.split(separator: ":", maxSplits: 1); return (String(parts[0]), parts.count == 2 ? Int(parts[1]) ?? defaultPort : defaultPort) }
     private func listener(port: Int) throws -> Int32 { let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0); guard fd >= 0 else { throw ProxyError.invalid }; var yes: Int32 = 1; _ = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size)); var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = in_port_t(UInt16(port).bigEndian); guard inet_pton(AF_INET, configuration.bindHost, &address.sin_addr) == 1 else { _ = close(fd); throw ProxyError.invalid }; let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }; guard bound == 0, listen(fd, 64) == 0 else { _ = close(fd); throw ProxyError.invalid }; return fd }
+    private func boundPort(_ fd: Int32) -> Int { var address = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size); _ = withUnsafeMutablePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }; return Int(UInt16(bigEndian: address.sin_port)) }
     private func connect(_ host: String, _ port: Int) throws -> Int32 { var hints = addrinfo(ai_flags: 0, ai_family: AF_UNSPEC, ai_socktype: Int32(SOCK_STREAM.rawValue), ai_protocol: 0, ai_addrlen: 0, ai_addr: nil, ai_canonname: nil, ai_next: nil); var result: UnsafeMutablePointer<addrinfo>?; guard getaddrinfo(host, String(port), &hints, &result) == 0 else { throw ProxyError.invalid }; defer { freeaddrinfo(result) }; var row = result; while let current = row { if !configuration.allowPrivateDestinations && isPrivate(current.pointee.ai_addr, family: current.pointee.ai_family) { row = current.pointee.ai_next; continue }; let fd = socket(current.pointee.ai_family, current.pointee.ai_socktype, current.pointee.ai_protocol); if fd >= 0 && Glibc.connect(fd, current.pointee.ai_addr, current.pointee.ai_addrlen) == 0 { return fd }; if fd >= 0 { _ = close(fd) }; row = current.pointee.ai_next }; throw ProxyError.invalid }
     private func isPrivate(_ address: UnsafeMutablePointer<sockaddr>?, family: Int32) -> Bool { guard let address else { return true }; if family == AF_INET { let value = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { UInt32(bigEndian: $0.pointee.sin_addr.s_addr) }; return value >> 24 == 10 || value >> 20 == 0xAC1 || value >> 16 == 0xC0A8 || value >> 24 == 127 || value >> 16 == 0xA9FE }; return family == AF_INET6 }
     private enum ProxyError: Error { case invalid, auth }
