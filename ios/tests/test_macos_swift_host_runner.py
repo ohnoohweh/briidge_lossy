@@ -3610,6 +3610,53 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
             process.communicate(timeout=5)
 
 
+@pytest.mark.parametrize("proxy_implementation", ["python", "native"])
+@pytest.mark.parametrize("log_implementation", ["python", "native"])
+def test_macos_host_proxy_logs_follow_collector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proxy_implementation: str, log_implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
+        "proxy_provider": {
+            "enabled": True, "bind": "127.0.0.1", "http_port": _unused_tcp_port(),
+            "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
+            "worker_python_executable": sys.executable,
+            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+            "egress": {"mode": "direct"},
+            "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
+        },
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = f"http://127.0.0.1:{status_port}/api/status"
+        logs_url = f"http://127.0.0.1:{status_port}/api/logs?limit=100"
+        status = _wait_http_condition(url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        logger, proxy = status["logging_worker"], status["proxy_provider"]["worker"]
+        assert logger["implementation"] == log_implementation and proxy["implementation"] == proxy_implementation
+        logs = _wait_http_condition(logs_url, lambda item: any("[PROXY] listener started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert "private-proxy-token" not in json.dumps(logs)
+        assert logger["pid"] > 1 and logger["pid"] != process.pid
+        os.kill(logger["pid"], signal.SIGKILL)
+        status = _wait_http_condition(url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item["logging_worker"]["generation"] > logger["generation"], timeout_sec=20)
+        assert status["proxy_provider"]["worker"]["pid"] == proxy["pid"]
+        assert proxy["pid"] > 1 and proxy["pid"] != process.pid
+        os.kill(proxy["pid"], signal.SIGKILL)
+        _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item["proxy_provider"]["worker"]["generation"] > proxy["generation"], timeout_sec=20)
+        logs = _wait_http_condition(logs_url, lambda item: any("[PROXY] listener started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert "private-proxy-token" not in json.dumps(logs)
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+
+
 def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:
     artifact = build_macos_swift_artifact()
     binary_path = artifact.binary_path

@@ -672,7 +672,7 @@ final class ObstacleBridgeHostRunner {
             default:
                 throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
             }
-            let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable)
+            let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable, loggingWorker: activeLoggingWorker())
             do {
                 try worker.start(config: ["bind": config.bindHost, "http_port": config.httpPort,
                                           "socks5_port": config.socks5Port, "protocols": config.protocols,

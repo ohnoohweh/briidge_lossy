@@ -188,6 +188,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private let catalogInstanceID: UInt64
     private var stopped = true
     private let runtimeHealthURL: URL?
+    private let loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private let runtimeHealthLock = NSLock()
     private var runtimeHealthRing = ObstacleBridgeRuntimeHealthRing()
     private var runtimeHealthSequence: UInt64 = 0
@@ -201,7 +202,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var liveSnapshotProjection = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil, runtimeHealthRecordCount: 0, previousRuntimeLifetimeEndedCleanly: nil)
     private(set) public var snapshot = ObstacleBridgeLinuxLiveRuntimeSnapshot(state: "stopped", attempts: 0, failureReason: nil, nextRetryMilliseconds: nil, runtimeHealthRecordCount: 0, previousRuntimeLifetimeEndedCleanly: nil)
 
-    public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init(), runtimeHealthURL: URL? = nil) {
+    public init(configuration: ObstacleBridgeLinuxRuntimeConfiguration, policy: ObstacleBridgeLinuxReconnectPolicy = .init(), runtimeHealthURL: URL? = nil, loggingWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: configuration)
         self.configuredRuntime = runtime
         switch configuration.transport {
@@ -217,6 +218,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.statusProjection = runtime.status()
         self.coordinator = .init(candidateCount: configuration.peerCandidates.count, policy: policy)
         self.runtimeHealthURL = runtimeHealthURL
+        self.loggingWorker = loggingWorker
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
         runtime.onDiagnostic = { [weak self] event, fields in
@@ -303,7 +305,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                         throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
                     }
                     let executable = config.workerExecutable ?? (config.worker == "python" ? "/usr/bin/python3" : (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).deletingLastPathComponent().appendingPathComponent("ObstacleBridgeProxyWorker").path)
-                    let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable)
+                    let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable, loggingWorker: self.loggingWorker)
                     try worker.start(config: payload)
                     self.statusLock.lock(); self.proxyWorker = worker; self.statusLock.unlock()
                 } else {

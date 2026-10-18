@@ -212,6 +212,29 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         if !sendDatagram(dataFD, payload: record) { droppedRecords += 1 }
     }
 
+    /// A child gets a separate record-only socket, never the Admin query
+    /// capability. The relay follows collector replacement automatically.
+    public func makeProducerRelay() throws -> ObstacleBridgeLogProducerRelay {
+        try ObstacleBridgeLogProducerRelay(supervisor: self)
+    }
+
+    public func recordRelayAllocationFailure() {
+        stateLock.lock(); droppedRecords += 1; stateLock.unlock()
+    }
+
+    fileprivate func forwardRecord(_ data: Data) {
+        guard stateLock.try() else { return }
+        defer { stateLock.unlock() }
+        guard !stopped, dataFD >= 0, process?.isRunning == true else { droppedRecords += 1; return }
+        #if os(Linux)
+        let flags = Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
+        #else
+        let flags = Int32(MSG_DONTWAIT)
+        #endif
+        let sent = data.withUnsafeBytes { send(dataFD, $0.baseAddress, $0.count, flags) }
+        if sent != data.count { droppedRecords += 1 }
+    }
+
     public func fetch(limit: Int) -> [String: Any] {
         let unavailable: [String: Any] = ["available": false, "lines": [String](), "error": "logger unavailable"]
         guard queryLock.try() else { return unavailable }
@@ -250,6 +273,66 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         child.waitUntilExit()
     }
 
+    deinit { stop() }
+}
+
+/// Bounded record-only ingress; malformed records and queries never reach the
+/// collector. Cancellation closes the read descriptor on its own queue.
+public final class ObstacleBridgeLogProducerRelay: @unchecked Sendable {
+    private weak var supervisor: ObstacleBridgeLogWorkerSupervisor?
+    private let readFD: Int32
+    public let childHandle: FileHandle
+    private let source: DispatchSourceRead
+
+    fileprivate init(supervisor: ObstacleBridgeLogWorkerSupervisor) throws {
+        var fds: [Int32] = [-1, -1]
+        guard socketpair(AF_UNIX, logDatagramSocket, 0, &fds) == 0 else { throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable }
+        let readFD = fds[0], childFD = fds[1]
+        var adopted = false
+        defer { if !adopted { close(readFD); close(childFD) } }
+        guard fcntl(readFD, F_SETFD, FD_CLOEXEC) == 0, fcntl(childFD, F_SETFD, FD_CLOEXEC) == 0 else {
+            throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable
+        }
+        let flags = fcntl(readFD, F_GETFL)
+        guard flags >= 0, fcntl(readFD, F_SETFL, flags | O_NONBLOCK) == 0 else { throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable }
+        var bufferSize: Int32 = 64 * 1024
+        for fd in [readFD, childFD] {
+            guard setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufferSize, socklen_t(MemoryLayout<Int32>.size)) == 0,
+                  setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufferSize, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+                throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable
+            }
+        }
+        #if os(macOS)
+        var noSignal: Int32 = 1
+        guard setsockopt(childFD, SOL_SOCKET, SO_NOSIGPIPE, &noSignal, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
+            throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable
+        }
+        #endif
+        self.supervisor = supervisor
+        self.readFD = readFD
+        self.childHandle = FileHandle(fileDescriptor: childFD, closeOnDealloc: true)
+        self.source = DispatchSource.makeReadSource(fileDescriptor: readFD, queue: DispatchQueue(label: "org.obstaclebridge.desktop.log-relay"))
+        source.setEventHandler { [weak self] in self?.drain() }
+        source.setCancelHandler { close(readFD) }
+        adopted = true
+        source.resume()
+    }
+
+    private func drain() {
+        for _ in 0..<128 {
+            var bytes = [UInt8](repeating: 0, count: 8193)
+            let count = recv(readFD, &bytes, bytes.count, Int32(MSG_DONTWAIT))
+            guard count > 0 else { return }
+            guard count <= 8192 else { continue }
+            let data = Data(bytes.prefix(count))
+            guard let record = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  record["v"] as? Int == 1, record["kind"] == nil else { continue }
+            supervisor?.forwardRecord(data)
+        }
+    }
+
+    public func releaseChildHandle() { try? childHandle.close() }
+    public func stop() { source.cancel(); releaseChildHandle() }
     deinit { stop() }
 }
 #endif

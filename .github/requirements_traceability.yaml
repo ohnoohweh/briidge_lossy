@@ -1612,6 +1612,9 @@ REQ-ADM-001:
     - tests/unit/test_native_log_supervisor.py::test_swift_logging_child_exits_on_owner_loss
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
+    - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector
+    - tests/integration/test_overlay_e2e.py::test_linux_swift_proxy_logs_follow_collector
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
     - tests/unit/test_managed_logging_worker.py::test_private_worker_exits_when_owner_lifetime_closes
     - tests/unit/test_managed_logging_worker.py::test_private_query_lock_has_a_bounded_wait

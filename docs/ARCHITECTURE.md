@@ -50,14 +50,18 @@ logging-specific slice, not the common worker protocol. The capability
 protects against unprivileged processes without the inherited descriptors, not
 a hostile debugger acting as the same user.
 
-Python Admin and Python/native proxy children feed the selected logging child
-through separate inherited record-only datagram capabilities. A parent relay
-thread validates frame size and rejects query messages, then forwards records
-nonblockingly to the current collector generation. Thus children cannot read
-Admin query replies, and a collector restart does not require restarting those
-children; congestion or collector loss drops records. Native-host child relays,
-the rest of the native runtime producers, other future workers, comprehensive
-producer-side drop aggregation, file sinks and cross-host qualification remain open.
+The Python supervisor's Admin child and the Python/native proxy children of
+either host feed the selected logging child through separate inherited
+record-only datagram capabilities. The parent relay validates frame size and
+rejects query messages,
+then forwards records nonblockingly to the current collector generation. Thus
+children cannot read Admin query replies, and a collector restart does not require
+restarting those children; congestion or collector loss drops records. Native
+proxy children currently emit at INFO level, independently of per-component
+logging configuration. Relay allocation failure counts as a dropped record and
+does not prevent proxy startup. The rest of the native runtime producers, other
+future workers, comprehensive producer-side drop aggregation, file/UDP sinks and
+cross-host qualification remain open.
 
 The Python runner can select `--proxy-provider-worker python` or `native`; the
 macOS and Linux native hosts accept `proxy_provider.worker` (`python`, `native`,

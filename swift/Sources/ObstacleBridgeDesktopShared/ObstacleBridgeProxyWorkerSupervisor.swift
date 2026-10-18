@@ -26,6 +26,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
 
     private let implementation: String
     private let executable: String
+    private let loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private let lock = NSLock()
     private let writeLock = NSLock()
     private let readerGroup = DispatchGroup()
@@ -34,12 +35,14 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
     private var listeners: [String: Any] = [:]
     private var lastError = ""
     private var stopping = false
+    private var logRelay: ObstacleBridgeLogProducerRelay?
     private static let maxFrame = 65_536
 
-    public init(implementation: String, executable: String) throws {
+    public init(implementation: String, executable: String, loggingWorker: ObstacleBridgeLogWorkerSupervisor? = nil) throws {
         guard ["python", "native"].contains(implementation), !executable.isEmpty else { throw Failure.invalidConfiguration }
         self.implementation = implementation
         self.executable = executable
+        self.loggingWorker = loggingWorker
     }
 
     private static func waitReady(_ fd: Int32, events: Int16, deadline: UInt64) throws {
@@ -131,11 +134,22 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         process.arguments = (implementation == "python" ? ["-m", "obstacle_bridge.bridge_proxy_worker"] : []) + ["--control-fd", "0"]
         let childInput = FileHandle(fileDescriptor: childFD, closeOnDealloc: true)
         process.standardInput = childInput
+        var relay: ObstacleBridgeLogProducerRelay?
+        if let loggingWorker {
+            do { relay = try loggingWorker.makeProducerRelay() }
+            catch { loggingWorker.recordRelayAllocationFailure() }
+        }
+        if let relay {
+            process.arguments?.append(contentsOf: ["--log-fd", "2"])
+            process.standardError = relay.childHandle
+        }
         do {
             try process.run()
-            lock.lock(); child = process; control = parentFD; stopping = false; lock.unlock()
+            relay?.releaseChildHandle()
+            lock.lock(); child = process; control = parentFD; stopping = false; logRelay = relay; lock.unlock()
             try childInput.close()
-            try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "config": config])
+            try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "config": config,
+                                             "log_root_level": 20, "log_levels": ["proxy_provider": 20]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)
             guard response["kind"] as? String == "proxy.ready", response["implementation"] as? String == implementation,
                   let initial = response["listeners"] as? [String: Any] else { throw Failure.invalidFrame }
@@ -160,6 +174,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             }
         } catch {
             try? childInput.close()
+            relay?.stop()
             lock.lock()
             let adopted = child != nil
             lock.unlock()
@@ -180,7 +195,8 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         lock.lock()
         guard let process = child, !stopping else { lock.unlock(); return }
         stopping = true
-        let fd = control
+        let fd = control, relay = logRelay
+        logRelay = nil
         lock.unlock()
         try? writeFrame(fd, value: ["v": 1, "kind": "proxy.stop"])
         _ = shutdown(fd, Int32(SHUT_RDWR))
@@ -192,6 +208,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             _ = kill(process.processIdentifier, SIGKILL)
         }
         process.waitUntilExit()
+        relay?.stop()
         lock.lock(); child = nil; control = -1; listeners = [:]; lock.unlock()
     }
 
@@ -203,6 +220,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
 public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
     private let implementation: String
     private let executable: String
+    private let loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private let stateLock = NSLock()
     private let lifecycleLock = NSLock()
     private let monitorQueue = DispatchQueue(label: "org.obstaclebridge.desktop.proxy-supervisor")
@@ -215,18 +233,19 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
     private var nextAttempt = Date.distantPast
     private var retryDelay: TimeInterval = 0.25
 
-    public init(implementation: String, executable: String) throws {
+    public init(implementation: String, executable: String, loggingWorker: ObstacleBridgeLogWorkerSupervisor? = nil) throws {
         guard ["python", "native"].contains(implementation), !executable.isEmpty else {
             throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
         }
         self.implementation = implementation
         self.executable = executable
+        self.loggingWorker = loggingWorker
     }
 
     /// Lifecycle lock is held. Bootstrap credentials stay on private sockets
     /// and in the owner's in-memory configuration; they are never status data.
     private func launch(_ config: [String: Any]) throws {
-        let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: implementation, executable: executable)
+        let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: implementation, executable: executable, loggingWorker: loggingWorker)
         try worker.start(config: config)
         let snapshot = worker.snapshot()
         var nextConfig = config

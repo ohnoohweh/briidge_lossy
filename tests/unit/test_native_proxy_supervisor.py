@@ -24,8 +24,19 @@ def native_supervisor(tmp_path_factory):
     if not swiftc:
         pytest.skip("Swift compiler required")
     binary = tmp_path_factory.mktemp("proxy-supervisor") / "supervisor"
-    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"),
+    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"),
+                    str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"),
                     str(ROOT / "tests/fixtures/native_proxy_supervisor_runner.swift"), "-o", str(binary)], check=True)
+    return str(binary)
+
+
+@pytest.fixture(scope="module")
+def native_collector(tmp_path_factory):
+    swiftc = shutil.which("swiftc")
+    if not swiftc:
+        pytest.skip("Swift compiler required")
+    binary = tmp_path_factory.mktemp("proxy-log-collector") / "collector"
+    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(binary)], check=True)
     return str(binary)
 
 
@@ -216,6 +227,72 @@ def test_native_proxy_supervisor_replaces_stalled_child(native_supervisor, nativ
             if child_pid is not None:
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(child_pid, signal.SIGCONT)
+            if host.returncode is None:
+                host.stdin.write(b"stop\n")
+                await host.stdin.drain()
+                await asyncio.wait_for(host.wait(), 10)
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("proxy_implementation", ["python", "native"])
+@pytest.mark.parametrize("log_implementation", ["python", "native"])
+def test_native_proxy_child_logs_follow_collector_and_proxy_restarts(native_supervisor, native_proxy_worker_executable, native_collector, proxy_implementation, log_implementation):
+    async def exercise():
+        proxy_executable = sys.executable if proxy_implementation == "python" else native_proxy_worker_executable
+        log_executable = sys.executable if log_implementation == "python" else native_collector
+        host = await asyncio.create_subprocess_exec(native_supervisor, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+
+        async def command(value):
+            host.stdin.write((value + "\n").encode())
+            await host.stdin.drain()
+            return json.loads(await asyncio.wait_for(host.stdout.readline(), 8))
+
+        try:
+            host.stdin.write((json.dumps({"implementation": proxy_implementation, "executable": proxy_executable, "config": _config(),
+                                          "logging": {"implementation": log_implementation, "executable": log_executable}}) + "\n").encode())
+            await host.stdin.drain()
+            proxy = json.loads(await asyncio.wait_for(host.stdout.readline(), 10))
+            assert proxy["worker"]["state"] == "running"
+            for _ in range(100):
+                result = await command("logs")
+                if any("[PROXY] listener started" in line for line in result.get("lines", [])):
+                    break
+                await asyncio.sleep(0.05)
+            assert result["available"] and any("[PROXY] listener started" in line for line in result["lines"])
+            assert "secret-not-in-process-arguments" not in repr(result)
+            assert not (await command("producer-probe"))["producer_received_reply"]
+            for _ in range(100):
+                result = await command("logs")
+                if any("relay marker" in line for line in result.get("lines", [])):
+                    break
+                await asyncio.sleep(0.05)
+            assert any("relay marker" in line for line in result["lines"])
+            log_status = await command("log-status")
+            assert log_status["pid"] > 1 and log_status["pid"] != host.pid
+            os.kill(log_status["pid"], signal.SIGKILL)
+            for _ in range(160):
+                current = await command("log-status")
+                if current["state"] == "running" and current["generation"] > log_status["generation"]:
+                    break
+                await asyncio.sleep(0.05)
+            assert current["state"] == "running" and current["generation"] > log_status["generation"]
+            assert (await command("status"))["worker"]["pid"] == proxy["worker"]["pid"]
+            assert proxy["worker"]["pid"] > 1 and proxy["worker"]["pid"] != host.pid
+            os.kill(proxy["worker"]["pid"], signal.SIGKILL)
+            for _ in range(160):
+                current = await command("status")
+                if current["worker"]["state"] == "running" and current["worker"]["generation"] > proxy["worker"]["generation"]:
+                    break
+                await asyncio.sleep(0.05)
+            assert current["worker"]["state"] == "running" and current["worker"]["generation"] > proxy["worker"]["generation"]
+            for _ in range(100):
+                result = await command("logs")
+                if any("[PROXY] listener started" in line for line in result.get("lines", [])):
+                    break
+                await asyncio.sleep(0.05)
+            assert result["available"] and any("[PROXY] listener started" in line for line in result["lines"])
+            assert "secret-not-in-process-arguments" not in repr(result)
+        finally:
             if host.returncode is None:
                 host.stdin.write(b"stop\n")
                 await host.stdin.drain()

@@ -56,8 +56,8 @@ private func writeFrame(_ fd: Int32, _ message: [String: Any]) throws {
 private func validateSocket(_ fd: Int32, type: Int32) -> Bool {
     var kind: Int32 = 0
     var size = socklen_t(MemoryLayout<Int32>.size)
-    // A native supervisor can hand over its private socket as standard input.
-    guard (fd == 0 || fd > 2), getsockopt(fd, SOL_SOCKET, SO_TYPE, &kind, &size) == 0, kind == type else { return false }
+    // A native supervisor can hand over private sockets as standard descriptors.
+    guard fd >= 0, getsockopt(fd, SOL_SOCKET, SO_TYPE, &kind, &size) == 0, kind == type else { return false }
     var address = sockaddr_storage()
     var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
     let result = withUnsafeMutablePointer(to: &address) { pointer in

@@ -221,7 +221,7 @@ enum ObstacleBridgeLinuxMain {
             let healthURL = URL(fileURLWithPath: options.configurationPath)
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
-            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
+            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL, loggingWorker: logWorker)
             runtime.onDiagnostic = { event, fields in
                 observability.recordDiagnostic(event, fields: fields)
             }
