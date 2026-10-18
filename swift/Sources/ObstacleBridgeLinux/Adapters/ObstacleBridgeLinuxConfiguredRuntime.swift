@@ -75,6 +75,10 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// The resource owner supplies measured request/reply latency. The Core
     /// lifecycle decides whether sustained delay retires the epoch.
     public var onTransportLivenessSample: ((Double) -> Void)?
+    /// Called after Core consumes a protected control record.  The foreground
+    /// owner uses this to refresh its redacted Admin projection after a
+    /// rekey, whose control exchange deliberately carries no ChannelMux data.
+    public var onSecureLinkStateChange: (() -> Void)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
     init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
@@ -227,6 +231,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
                 } else {
                     payload = wire
                 }
+                onSecureLinkStateChange?()
                 // SecureLink rekey controls have no application payload. They
                 // are fully handled by Core above and must not retire a live
                 // receive epoch merely because ChannelMux has nothing to read.

@@ -1,5 +1,8 @@
 import Dispatch
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 #if os(Linux)
 import Glibc
@@ -8,6 +11,39 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func adminRekeyCompletesAgainstPythonPeerAndKeepsForegroundRuntimeReady() async throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-admin-rekey")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let connected = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
+        runtime.start()
+        defer { runtime.stop() }
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+
+        let server = ObstacleBridgeLinuxAdminServer(
+            liveRuntime: runtime,
+            adminConfiguration: ["admin_web": ["admin_web_auth_disable": true]],
+            secureLinkRekeyHandler: { runtime.requestSecureLinkRekey(peerID: $0) }
+        )
+        try server.start()
+        defer { server.stop() }
+        var request = URLRequest(url: try #require(URL(string: "http://127.0.0.1:\(server.port)/api/secure-link/rekey")))
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["peer_id": "configured-peer"])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(payload["reason"] as? String == "rekey_started")
+        #expect(waitUntil {
+            runtime.status().state == "connected" && runtime.status().peer.rekeysCompletedTotal == 1
+        })
+    }
+
     @Test func publishesConnectingBeforeMyudpHandshakeCompletes() {
         // Nothing listens on this loopback port, so SecureLink's initial
         // request waits for the configured receive-idle window.  Admin must

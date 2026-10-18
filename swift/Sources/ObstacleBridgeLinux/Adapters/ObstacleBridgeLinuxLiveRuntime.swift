@@ -317,6 +317,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.configuredRuntime.adoptInbound(connectedSession, host: host)
             do {
                 self.session = connectedSession
+                connectedSession.onSecureLinkStateChange = { [weak self] in
+                    self?.queue.async { [weak self] in self?.refreshStatusProjection() }
+                }
                 let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: self.configuredRuntime, session: connectedSession)
                 mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
                 mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
@@ -517,6 +520,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let nonce = freshNonce()
             let connectedSession = try transportLifecycleOwner.open(epoch: epoch, sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
+            connectedSession.onSecureLinkStateChange = { [weak self] in
+                self?.queue.async { [weak self] in self?.refreshStatusProjection() }
+            }
             let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
             mux.onUnsolicitedFrame = { [weak self] frame in
                 self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
