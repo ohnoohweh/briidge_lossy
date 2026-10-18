@@ -149,9 +149,6 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
                     savedUnderlay[family] = record
                 }
             }
-            if !excluded.isEmpty && (savedUnderlay["-4"] == nil && excluded.contains { $0.0 == "-4" } || savedUnderlay["-6"] == nil && excluded.contains { $0.0 == "-6" }) {
-                throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("APPLY_NETWORK cannot preserve excluded routes without an underlay default route")
-            }
             _ = try commandRunner(["ip", "link", "set", "dev", ifname, "up", "mtu", String(mtu)], false)
             for (family, cidr) in addresses { _ = try commandRunner(["ip", family, "addr", "replace", cidr, "dev", ifname], false) }
             for (family, route) in excluded {

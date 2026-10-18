@@ -148,6 +148,26 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["ip", "-4", "route", "del", "203.0.113.9/32"]))
     }
 
+    @Test func nativeSwiftHelperAppliesIPv6ExclusionsWithoutAnIPv6UnderlayDefaultRoute() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            commands.append(arguments)
+            // This host has an IPv4 Internet default only.  IPv6 loopback and
+            // link-local routes are still valid main-table exclusions.
+            if arguments == ["ip", "-j", "-4", "route", "show", "default"] {
+                return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]"
+            }
+            return arguments.contains("-j") ? "[]" : ""
+        })
+        #expect(try backend.applyNetwork(["ifname": "obtest0", "tun_routing": [
+            "tunnel_address6": "fd20:106::2", "tunnel_prefix6": 64,
+            "tunnel_gateway6": "fd20:106::1", "included_routes6": ["::/0"],
+            "excluded_routes6": ["::1/128", "fe80::/10"],
+        ]])["applied"] as? Bool == true)
+        #expect(commands.contains(["ip", "-6", "rule", "add", "pref", "11000", "to", "::1/128", "lookup", "main"]))
+        #expect(commands.contains(["ip", "-6", "route", "replace", "table", "21205", "default", "via", "fd20:106::1", "dev", "obtest0", "metric", "1", "onlink"]))
+    }
+
     @Test func nativeSwiftHelperFullTunnelRetainsEveryKernelConnectedLocalLAN() throws {
         var commands: [[String]] = []
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in

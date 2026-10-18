@@ -62,14 +62,6 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         elevated ? 60 : 2
     }
 
-    /// `sudo` must use the caller's controlling terminal while it
-    /// authenticates.  `Process` standard handles can be pipes after the
-    /// foreground program is started by a wrapper, even when stdin initially
-    /// reports as a TTY; `/dev/tty` preserves PAM's no-echo password mode.
-    static func usesControllingTerminal(elevated: Bool) -> Bool {
-        elevated
-    }
-
     /// Keep the privilege decision aligned with the Python foreground
     /// runner. An unprivileged foreground process may start the helper
     /// directly when it already has an effective Linux capability, or when
@@ -183,10 +175,12 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         #endif
         process.executableURL = URL(fileURLWithPath: command.path)
         process.arguments = command.arguments
-        if !Self.usesControllingTerminal(elevated: requiresElevation) {
-            process.standardOutput = Pipe()
-            process.standardError = Pipe()
-        }
+        // Authorization happened above on the controlling terminal.  The
+        // later helper process always uses `sudo -n`, so it must never need
+        // terminal input. Keep its protocol startup announcement and any
+        // helper diagnostics out of the foreground CLI's JSON output.
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
         try process.run()
         let deadline = Date().addingTimeInterval(readyTimeout)
         while !FileManager.default.fileExists(atPath: socketPath), process.isRunning, Date() < deadline {
