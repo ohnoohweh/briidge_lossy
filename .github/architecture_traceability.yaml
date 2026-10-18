@@ -60,6 +60,8 @@ ARC-CMP-001:
     - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
     - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth
     - tests/unit/test_proxy_worker.py::test_runner_reports_lost_proxy_worker_without_in_process_fallback
+    - tests/unit/test_proxy_worker.py::test_supervised_proxy_retries_busy_port_and_cleans_up
+    - tests/unit/test_proxy_worker.py::test_supervised_proxy_stop_cancels_pending_restart
     - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
     - tests/unit/test_proxy_worker.py::test_runner_rejects_unknown_proxy_worker_selection
     - tests/unit/test_proxy_worker.py::test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions

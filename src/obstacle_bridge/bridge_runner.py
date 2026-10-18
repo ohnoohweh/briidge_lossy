@@ -784,7 +784,7 @@ class Runner:
             except ValueError:
                 self._proxy_provider_last_error = "proxy worker destination policy unsupported"
                 raise
-            worker = ProxyWorker(worker_mode, getattr(self.args, "proxy_provider_worker_native_executable", None))
+            worker = ProxyWorker(worker_mode, getattr(self.args, "proxy_provider_worker_native_executable", None), supervised=True)
             try:
                 await self._await_with_async_diag("proxy_provider.worker.start", worker.start(cfg))
             except Exception:
@@ -846,7 +846,10 @@ class Runner:
                 for name, server in sorted(self._proxy_provider_servers.items())
             },
             "last_error": worker.last_error if worker is not None else self._proxy_provider_last_error,
-            **({"worker": {"implementation": worker.implementation, "state": "unavailable" if worker.last_error else "running"}} if worker is not None else {}),
+            **({"worker": {"implementation": worker.implementation,
+                            "state": "running" if worker.process is not None and worker.process.returncode is None and not worker.last_error else "unavailable",
+                            "generation": worker.generation, "restarts": worker.restarts,
+                            "failed_starts": worker.failed_starts}} if worker is not None else {}),
         }
 
     async def _start_tun_helper(self) -> None:

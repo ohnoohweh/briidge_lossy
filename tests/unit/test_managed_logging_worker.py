@@ -147,7 +147,7 @@ def test_proxy_child_sends_logs_to_selected_collector(monkeypatch, request, prox
     monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
     with activate_managed_logging(args) as logs:
         async def exercise():
-            worker = ProxyWorker(proxy_implementation, native_executable=native_proxy)
+            worker = ProxyWorker(proxy_implementation, native_executable=native_proxy, supervised=True)
             await worker.start({"bind": "127.0.0.1", "http_port": 0, "socks5_port": 0,
                                 "protocols": ["http-connect"], "auth": {"mode": "basic", "username": "user", "token": "secret-not-logged"},
                                 "egress": {"mode": "direct"},
@@ -159,6 +159,20 @@ def test_proxy_child_sends_logs_to_selected_collector(monkeypatch, request, prox
                         break
                     await asyncio.sleep(0.05)
                 assert any("[PROXY] listener started" in line for line in data["lines"])
+                assert "secret-not-logged" not in repr(data)
+                old = worker.process
+                old.kill()
+                for _ in range(160):
+                    if worker.generation >= 2 and worker.process.returncode is None:
+                        break
+                    await asyncio.sleep(0.05)
+                assert worker.generation >= 2 and old.returncode is not None
+                for _ in range(60):
+                    data = await asyncio.to_thread(logs.fetch, 100)
+                    if sum("[PROXY] listener started" in line for line in data["lines"]) >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+                assert sum("[PROXY] listener started" in line for line in data["lines"]) >= 2
                 assert "secret-not-logged" not in repr(data)
             finally:
                 await worker.stop()

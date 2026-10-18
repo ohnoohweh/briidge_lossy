@@ -98,7 +98,7 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
             command = subprocess.check_output(["ps", "-p", str(worker.process.pid), "-o", "command="], text=True)
             assert "private-token" not in command
             snap = runner._proxy_provider_snapshot()
-            assert snap["worker"] == {"implementation": backend[0], "state": "running"}
+            assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0, "failed_starts": 0}
             http = snap["listeners"]["http"]["bound_port"]
             socks = snap["listeners"]["socks5"]["bound_port"]
             await _http_tunnel(http, target_port, False)
@@ -152,19 +152,28 @@ def test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth(back
     asyncio.run(exercise())
 
 
-def test_runner_reports_lost_proxy_worker_without_in_process_fallback(backend):
+@pytest.mark.parametrize("loss", ["process", "control"])
+def test_runner_reports_lost_proxy_worker_without_in_process_fallback(backend, loss):
     async def exercise():
         args = build_runtime_args_from_config({"proxy_provider": {"proxy_provider_enabled": True,
             "proxy_provider_worker": backend[0], "proxy_provider_bind": "127.0.0.1",
             "proxy_provider_worker_native_executable": backend[1], "proxy_provider_egress": {"mode": "direct"},
             "proxy_provider_http_port": 0, "proxy_provider_protocols": ["http-connect"],
+            "proxy_provider_auth": {"mode": "basic", "username": "user", "token": "private-token"},
             "proxy_provider_policy": {"allow_private_destinations": True, "blocked_host_patterns": []}}})
         runner = Runner(args)
+        target = await asyncio.start_server(_echo, "127.0.0.1", 0)
+        target_port = target.sockets[0].getsockname()[1]
         await runner._start_proxy_provider()
         worker = runner._proxy_provider_worker
+        old = worker.process
+        port = worker.listeners["http"]["bound_port"]
         try:
-            worker.process.kill()
-            await worker.process.wait()
+            if loss == "process":
+                old.kill()
+                await old.wait()
+            else:
+                worker.writer.close()
             for _ in range(30):
                 if worker.last_error:
                     break
@@ -174,8 +183,74 @@ def test_runner_reports_lost_proxy_worker_without_in_process_fallback(backend):
             assert snapshot["last_error"] == "proxy worker unavailable"
             assert snapshot["listeners"] == {}
             assert runner._proxy_provider_servers == {}
+            for _ in range(160):
+                if worker.generation >= 2 and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.restarts >= 1
+            assert old.returncode is not None and worker.process.pid != old.pid
+            assert worker.listeners["http"]["bound_port"] == port
+            assert runner._proxy_provider_snapshot()["worker"]["state"] == "running"
+            await _http_tunnel(port, target_port, False)
+            await _http_tunnel(port, target_port, True)
         finally:
             await runner._stop_proxy_provider()
+            target.close()
+            await target.wait_closed()
+    asyncio.run(exercise())
+
+
+def test_supervised_proxy_retries_busy_port_and_cleans_up(backend):
+    async def exercise():
+        worker = ProxyWorker(*backend, supervised=True)
+        await worker.start(_config(protocols=["http-connect"]))
+        port = worker.listeners["http"]["bound_port"]
+        old = worker.process
+        reserved = socket.socket()
+        reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            old.kill()
+            await old.wait()
+            reserved.bind(("127.0.0.1", port))
+            reserved.listen()
+            for _ in range(120):
+                if worker.failed_starts:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.failed_starts >= 1 and worker.generation == 1
+            reserved.close()
+            for _ in range(160):
+                if worker.generation >= 2 and worker.process.returncode is None:
+                    break
+                await asyncio.sleep(0.05)
+            assert worker.generation >= 2 and worker.listeners["http"]["bound_port"] == port
+        finally:
+            reserved.close()
+            await worker.stop()
+        assert worker.process.returncode is not None and worker._restart_config is None
+    asyncio.run(exercise())
+
+
+def test_supervised_proxy_stop_cancels_pending_restart(monkeypatch, backend):
+    async def exercise():
+        worker = ProxyWorker(*backend, supervised=True)
+        await worker.start(_config(protocols=["http-connect"]))
+        old = worker.process
+        entered = asyncio.Event()
+
+        async def stalled_restart(_config):
+            entered.set()
+            await asyncio.Event().wait()
+
+        monkeypatch.setattr(worker, "_start_child", stalled_restart)
+        try:
+            old.kill()
+            await asyncio.wait_for(entered.wait(), 5)
+            await asyncio.wait_for(worker.stop(), 3)
+            assert old.returncode is not None and worker._monitor is None
+            assert worker.generation == 1 and worker.restarts == 0 and worker._restart_config is None
+        finally:
+            await worker.stop()
     asyncio.run(exercise())
 
 

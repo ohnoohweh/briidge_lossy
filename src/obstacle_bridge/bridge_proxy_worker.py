@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import copy
 import json
 import logging
 import os
@@ -133,7 +134,7 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
 class ProxyWorker:
     """Async supervisor for one independently owned proxy process."""
 
-    def __init__(self, implementation: str = "python", native_executable: str | None = None) -> None:
+    def __init__(self, implementation: str = "python", native_executable: str | None = None, *, supervised: bool = False) -> None:
         if implementation not in {"python", "native"}:
             raise ValueError("unsupported proxy worker implementation")
         self.implementation = implementation
@@ -145,8 +146,27 @@ class ProxyWorker:
         self.last_error = ""
         self._stopping = False
         self._log_relay = None
+        self._supervised = supervised
+        self._monitor = None
+        self._restart_config = None
+        self.generation = 0
+        self.restarts = 0
+        self.failed_starts = 0
 
     async def start(self, config: dict[str, Any]) -> None:
+        if self.process is not None or self._monitor is not None:
+            raise RuntimeError("proxy worker already started")
+        self._stopping = False
+        self._restart_config = copy.deepcopy(config)
+        try:
+            await self._start_child(self._restart_config)
+        except BaseException:
+            self._restart_config = None
+            raise
+        if self._supervised:
+            self._monitor = asyncio.create_task(self._supervise(), name="proxy-worker-supervisor")
+
+    async def _start_child(self, config: dict[str, Any]) -> None:
         if os.name != "posix":
             raise RuntimeError("proxy workers require Unix socket pairs")
         validate_worker_policy(config)
@@ -189,11 +209,47 @@ class ProxyWorker:
                 raise ValueError("invalid proxy worker readiness")
             self.listeners = response["listeners"]
             self._reader_task = asyncio.create_task(self._receive(reader))
+            for name in ("http", "socks5"):
+                key = f"{name}_port"
+                if int(config.get(key) or 0) == 0 and name in self.listeners:
+                    port = int(self.listeners[name].get("bound_port") or 0)
+                    if port > 0:
+                        config[key] = port
+            self.generation += 1
+            self.last_error = ""
         except BaseException:
             parent.close()
             child.close()
-            await self.stop()
+            await self._stop_child()
             raise
+
+    async def _supervise(self) -> None:
+        while not self._stopping:
+            waiter = asyncio.create_task(self.process.wait())
+            try:
+                await asyncio.wait((waiter, self._reader_task), return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                if not waiter.done():
+                    waiter.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await waiter
+            if self._stopping:
+                return
+            self.listeners = {}
+            self.last_error = "proxy worker unavailable"
+            await self._stop_child()
+            delay = 0.25
+            while not self._stopping:
+                await asyncio.sleep(delay)
+                try:
+                    await self._start_child(self._restart_config)
+                except Exception:
+                    self.failed_starts += 1
+                    self.last_error = "proxy worker unavailable"
+                    delay = min(delay * 2, 5.0)
+                else:
+                    self.restarts += 1
+                    break
 
     async def _receive(self, reader: asyncio.StreamReader) -> None:
         try:
@@ -202,13 +258,22 @@ class ProxyWorker:
                 if event.get("kind") != "proxy.snapshot" or not isinstance(event.get("listeners"), dict):
                     raise ValueError("invalid proxy worker snapshot")
                 self.listeners = event["listeners"]
-        except (asyncio.IncompleteReadError, ConnectionError, ValueError, UnicodeError, json.JSONDecodeError):
+        except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError, UnicodeError, json.JSONDecodeError):
             if not self._stopping:
                 self.listeners = {}
                 self.last_error = "proxy worker unavailable"
 
     async def stop(self) -> None:
         self._stopping = True
+        if self._monitor is not None:
+            self._monitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._monitor
+            self._monitor = None
+        await self._stop_child()
+        self._restart_config = None
+
+    async def _stop_child(self) -> None:
         if self.writer is not None:
             with contextlib.suppress(Exception):
                 await _write_frame(self.writer, {"v": 1, "kind": "proxy.stop"})
@@ -218,14 +283,15 @@ class ProxyWorker:
             self.writer = None
         if self._reader_task is not None:
             self._reader_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reader_task
             self._reader_task = None
         if self.process is not None:
             try:
                 await asyncio.wait_for(self.process.wait(), timeout=2.0)
             except asyncio.TimeoutError:
-                self.process.kill()
+                with contextlib.suppress(ProcessLookupError):
+                    self.process.kill()
                 await self.process.wait()
         if self._log_relay is not None:
             await asyncio.to_thread(self._log_relay.close)
