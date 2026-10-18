@@ -25,6 +25,7 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
+    private let connectionsProvider: () -> [String: Any]
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
@@ -43,6 +44,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
+        self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -56,6 +58,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
+        self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
@@ -71,6 +74,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
         }
+        self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -169,13 +173,14 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "lines": lines, "count": lines.count, "source": "linux-swift", "logger_available": debugLogsProvider != nil, "logger_error": debugLogsProvider == nil ? "native observability unavailable" : ""]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(["peers": peersPayload()]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/connections": response = ObstacleBridgeAdminAPI.linuxJSONResponse(connectionsProvider()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/meta": response = ObstacleBridgeAdminAPI.linuxJSONResponse(metaPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
             let requestedTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
                 .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
                 .dropFirst("topic=".count).description ?? ""
             let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requestedTopic) ?? ""
-            response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload())
+            response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload(), connections: connectionsProvider())
                 .flatMap { ObstacleBridgeAdminAPI.linuxJSONResponse($0) } ?? .init(statusCode: 404, body: Data("{}".utf8))
         case "/api/config":
             if method == "GET" {
@@ -302,7 +307,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         while true {
             let now = ProcessInfo.processInfo.systemUptime
             for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
-                if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()) {
+                if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload(), connections: connectionsProvider()) {
                     guard sendLiveJSON(client, value: ["type": topic, "data": payload]) else { return }
                 }
                 nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
@@ -326,7 +331,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                     )
                     let requested = ObstacleBridgeAdminLiveTopicPolicyPort.parseTopics(object["request"])
                     for topic in requested.sorted() {
-                        if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()) {
+                        if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload(), connections: connectionsProvider()) {
                             guard sendLiveJSON(client, value: ["type": topic, "data": payload]) else { return }
                         }
                         nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)

@@ -709,6 +709,11 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
         runtime.start()
         #expect(connected.wait(timeout: .now() + 3) == .success)
+        let connections = runtime.connectionsForAdmin()
+        let listenerRow = try #require((connections["tcp"] as? [[String: Any]])?.first)
+        #expect(listenerRow["state"] as? String == "listening")
+        #expect(listenerRow["service_name"] as? String == "echo")
+        #expect(listenerRow["local_port"] as? Int == runtime.localServicePorts()[1])
         let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))
         let payload = Data("mux-through-python".utf8)
         #expect(payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) } == payload.count)

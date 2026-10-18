@@ -37,7 +37,7 @@ portable selection or topic policy.
 | Contract | Linux admission | Linux-host evidence |
 | --- | --- | --- |
 | Configured peer candidates | `ObstacleBridgePeerAddressPort` | `corePeerAddressPortNormalizesLinuxCandidateLists` |
-| Admin snapshot envelopes | `ObstacleBridgeAdminSnapshotSupport` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
+| Admin snapshot envelopes and local service connection rows | `ObstacleBridgeAdminSnapshotSupport` | `statusAndPeersAreRedactedAndDescribeLayeredState`, `liveRuntimeRoutesLocalTcpServiceFramesThroughAuthenticatedPythonPeer` |
 | Admin live topics | `ObstacleBridgeAdminLiveTopicPolicyPort` and `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
 | Local proxy provider | Native HTTP CONNECT and SOCKS5 CONNECT listeners use system egress and start before overlay authentication. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
 | TUN diagnostics | Not admitted; no Linux probe-packet injection scheduler is selected. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |

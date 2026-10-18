@@ -456,6 +456,34 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         queue.sync { Dictionary(uniqueKeysWithValues: remoteServiceOwners.map { ($0.specification.serviceID, $0.port) }) }
     }
 
+    /// Shared Admin-Web connection-table shape.  A configured local service
+    /// is visible as a listening row even before a client opens a ChannelMux
+    /// channel, which distinguishes a bound port from an absent service.
+    public func connectionsForAdmin() -> [String: Any] {
+        queue.sync {
+            var tcp: [[String: Any]] = []
+            var udp: [[String: Any]] = []
+            for owner in serviceOwners {
+                let spec = owner.specification
+                let row: [String: Any] = [
+                    "peer_id": "configured-peer",
+                    "chan_id": NSNull(),
+                    "svc_id": Int(spec.serviceID),
+                    "service_name": spec.name ?? "",
+                    "state": "listening",
+                    "role": "client",
+                    "source": spec.listenHost,
+                    "local_port": owner.port,
+                    "remote_destination": "\(spec.targetHost):\(spec.targetPort)",
+                    "stats": ["rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0],
+                    "throttle": ["active": false],
+                ]
+                if spec.listenProtocol == .tcp { tcp.append(row) } else { udp.append(row) }
+            }
+            return ["tcp": tcp, "udp": udp, "tun": []]
+        }
+    }
+
     private func openTransport(epoch: UInt64) {
         guard !stopped, coordinator.snapshot.epoch == epoch else { return }
         var phase = "transport"
@@ -491,6 +519,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             }
             apply(coordinator.handle(.transportConnected(epoch: epoch)))
             apply(coordinator.handle(.authenticated(epoch: epoch)))
+            // The initial Core receive effect is delivered after this
+            // synchronous `openTransport` call returns.  TUN helper elevation
+            // can legitimately pause here for an operator password, so start
+            // the already-admitted receiver before publishing catalog frames
+            // or waiting on that helper.  The deferred Core effect below sees
+            // this same epoch and becomes a no-op.
+            startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
             phase = "remote_catalog"
             try publishRemoteCatalog()
             phase = "service_owners"
@@ -759,6 +794,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func startReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession, mux: ObstacleBridgeLinuxChannelMuxSession, coordinatorEpoch: UInt64) {
         guard session.supportsDuplexReceive else { return }
         let epoch = configuredRuntime.connectionEpoch
+        if let current = transportLifecycleOwner.receiveSnapshot(),
+           current.epoch == epoch,
+           current.state == "running" {
+            return
+        }
         let worker = ObstacleBridgeLinuxReceiveWorker(
             epoch: epoch,
             receive: {

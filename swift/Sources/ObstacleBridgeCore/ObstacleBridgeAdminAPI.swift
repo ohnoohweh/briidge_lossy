@@ -3,10 +3,11 @@ import Foundation
 /// Portable admission for live Admin topics. Resource owners supply already
 /// redacted snapshots; Core decides supported names and stable envelopes.
 public enum ObstacleBridgeAdminLiveTopicPort {
-    public static func payload(topic: String, status: [String: Any], peers: [[String: Any]]) -> Any? {
+    public static func payload(topic: String, status: [String: Any], peers: [[String: Any]], connections: [String: Any] = [:]) -> Any? {
         switch topic {
         case "status": return status
         case "peers": return ["peers": peers]
+        case "connections": return connections
         default: return nil
         }
     }

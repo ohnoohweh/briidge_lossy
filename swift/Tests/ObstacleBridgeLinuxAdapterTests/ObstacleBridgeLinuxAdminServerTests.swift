@@ -200,6 +200,9 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let rows = peers["peers"] as? [[String: Any]]
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
+        let connections = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/connections") as? [String: Any])
+        #expect(connections["tcp"] as? [[String: Any]] == [])
+        #expect(connections["udp"] as? [[String: Any]] == [])
         let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
         #expect(live["overlay_transport"] as? String == "tcp")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
