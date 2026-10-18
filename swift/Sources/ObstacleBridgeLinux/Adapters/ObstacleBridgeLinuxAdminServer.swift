@@ -211,7 +211,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let authenticationRoutes: Set<String> = ["/api/auth/state", "/api/auth/challenge", "/api/auth/login", "/api/auth/logout", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge"]
         if path.hasPrefix("/api/"), !authenticationRoutes.contains(path), !security.isAuthenticated(headers: headers) {
             response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401)
-        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/secure-link/rekey", "/api/shutdown"].contains(path)) {
+        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/secure-link/rekey", "/api/secure-link/reload", "/api/shutdown"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
@@ -313,6 +313,22 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             }
             let result = secureLinkRekeyHandler(peerID)
             response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
+        case "/api/secure-link/reload":
+            guard let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                response = jsonResponse(["ok": false, "error": "invalid JSON body"], statusCode: 400)
+                break
+            }
+            let scope = (payload["scope"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard ["revocation", "local_identity", "all"].contains(scope) else {
+                response = jsonResponse(["ok": false, "error": "scope must be one of revocation, local_identity, all"], statusCode: 400)
+                break
+            }
+            let peerID = (payload["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            response = jsonResponse([
+                "ok": false, "scope": scope, "target_peer_id": peerID.isEmpty ? NSNull() : peerID,
+                "requested": 1, "reloaded": 0, "dropped": 0, "failed": 1,
+                "results": [["transport": statusProvider().transport, "peer_ids": ["configured-peer"], "ok": false, "reason": "secure_link_cert_mode_required"]],
+            ], statusCode: 409)
         case "/api/shutdown":
             guard let shutdownHandler else {
                 response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "shutdown is unavailable for this runtime"], statusCode: 409) ?? .init(statusCode: 500, body: Data("{}".utf8))
