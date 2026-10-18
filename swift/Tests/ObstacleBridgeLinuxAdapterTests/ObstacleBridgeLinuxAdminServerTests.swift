@@ -164,6 +164,43 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(suggested["secure_link_psk"] as? String == "portable-peer-secret")
     }
 
+    @Test func secretBearingInviteApplyPersistsForReceivingLinuxMachine() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("ObstacleBridge.cfg").path
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let source = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "198.51.100.10", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "invite-secret"],
+        ])
+        let recipientStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 1],
+        ], path: path)
+        let recipient = ObstacleBridgeLinuxAdminServer(runtime: runtime, configurationStore: recipientStore)
+        try source.start(); defer { source.stop() }
+        try recipient.start(); defer { recipient.stop() }
+
+        let invite = try #require(try await requestJSON(
+            "http://127.0.0.1:\(source.port)/api/onboarding/invite", method: "POST", body: [:]
+        ).body as? [String: Any])
+        let token = try #require(invite["invite_token"] as? String)
+        let preview = try #require(try await requestJSON(
+            "http://127.0.0.1:\(recipient.port)/api/onboarding/preview", method: "POST", body: ["invite_token": token]
+        ).body as? [String: Any])
+        let updates = try #require(preview["suggested_updates"] as? [String: Any])
+        let applied = try await requestJSON(
+            "http://127.0.0.1:\(recipient.port)/api/config", method: "POST", body: ["updates": updates]
+        )
+        #expect(applied.status == 200)
+        let persisted = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(!persisted.contains("invite-secret"))
+        #expect(persisted.contains("enc:v1:"))
+        #expect(try ObstacleBridgeLinuxRuntimeConfiguration.load(path: path).secureLinkPSK == Data("invite-secret".utf8))
+    }
+
     @Test func metaAndOnboardingRoutesMatchTheShippedAdminWebContract() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let configuration: [String: Any] = [
