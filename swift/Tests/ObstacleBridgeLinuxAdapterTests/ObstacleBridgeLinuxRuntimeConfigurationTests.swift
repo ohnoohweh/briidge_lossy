@@ -336,6 +336,25 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.secureLinkPSK == Data("listener-secret".utf8))
     }
 
+    @Test func myudpListenerAdmitsRemoteCatalogOnlyWhenExplicitlyEnabled() throws {
+        let service: [String: Any] = [
+            "name": "peer-side-http", "listen": ["protocol": "tcp", "bind": "127.0.0.1", "port": 8088],
+            "target": ["protocol": "tcp", "host": "127.0.0.1", "port": 80],
+        ]
+        let base: [String: Any] = [
+            "runner": ["overlay_transport": "myudp", "listener_mode": true],
+            "udp_session": ["udp_own_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+            "channel_mux": ["remote_servers": [service]],
+        ]
+        #expect(try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(base)).remoteServices.isEmpty)
+        var admitted = base
+        admitted["channel_mux"] = ["remote_servers": [service], "channel_mux_listener_publish_remote_services": true]
+        let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(admitted))
+        #expect(configuration.listenerRemoteServicePublicationEnabled)
+        #expect(configuration.remoteServices.count == 1)
+    }
+
     @Test func parsesStructuredOwnAndRemoteServices() throws {
         let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
             "runner": ["overlay_transport": "tcp"],

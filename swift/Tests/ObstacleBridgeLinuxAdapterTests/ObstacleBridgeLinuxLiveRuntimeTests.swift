@@ -294,46 +294,46 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
     }
 
     @Test func myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections() throws {
+        let publishedService = ObstacleBridgeLinuxServiceSpec(
+            serviceID: 1, name: "listener-published", listenProtocol: .tcp,
+            listenHost: "127.0.0.1", listenPort: availableTCPPort(), targetProtocol: .tcp,
+            targetHost: "127.0.0.1", targetPort: 7
+        )
         let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
             transport: .myudp, host: "listener", port: 0, listenerMode: true,
-            secureLinkPSK: Data("linux-swift-psk".utf8)
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            listenerRemoteServicePublicationEnabled: true,
+            remoteServices: [publishedService]
         )
         let listener = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
         defer { listener.stop() }
         listener.start()
-        let connected = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        let finished = DispatchSemaphore(value: 0)
-        for identifier in 1...2 {
-            DispatchQueue.global().async {
-                let clientConfiguration = ObstacleBridgeLinuxRuntimeConfiguration(
-                    transport: .myudp, host: "127.0.0.1", port: listener.port,
-                    secureLinkPSK: Data("linux-swift-psk".utf8)
-                )
-                let client = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-                guard let session = try? client.connect(
-                    sessionID: UInt64(identifier),
-                    clientNonce: Data(repeating: UInt8(identifier), count: 32)
-                ) else { finished.signal(); return }
-                connected.signal()
-                release.wait()
-                session.close()
-                finished.signal()
-            }
+        let clients = (1...2).map { _ in
+            ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+                transport: .myudp, host: "127.0.0.1", port: listener.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8)
+            ))
         }
-        #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(connected.wait(timeout: .now() + 3) == .success)
-        let deadline = Date().addingTimeInterval(3)
-        while listener.peers().count != 2, Date() < deadline {
+        defer { clients.forEach { $0.stop() } }
+        clients[0].start()
+        let firstDeadline = Date().addingTimeInterval(3)
+        while listener.peers().count != 1, Date() < firstDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(listener.activePeerCount == 1)
+        clients[1].start()
+        let secondDeadline = Date().addingTimeInterval(3)
+        while listener.peers().count != 2, Date() < secondDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
         #expect(listener.activePeerCount == 2)
         #expect(listener.peers().count == 2)
         #expect(listener.peers().allSatisfy { $0.snapshot.authenticated })
         #expect(listener.status().appReady)
-        release.signal(); release.signal()
-        #expect(finished.wait(timeout: .now() + 3) == .success)
-        #expect(finished.wait(timeout: .now() + 3) == .success)
+        // The test process shares one network namespace, so both clients
+        // cannot bind the same fixed listener port simultaneously. Assert the
+        // portable per-child catalog-control boundary here instead.
+        #expect(waitUntil { clients.allSatisfy { $0.status().receivedFrames > 0 } })
     }
 
     @Test func myudpForegroundOwnerBoundsAuthenticatedPeerAdmission() throws {
@@ -365,20 +365,26 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(listener.peers().count == 1)
     }
 
-    @Test func myudpForegroundOwnerRejectsAmbiguousListenerServiceBinds() {
+    @Test func myudpForegroundOwnerRejectsAmbiguousOwnServiceBindsButAdmitsPeerPublishedCatalog() throws {
         let service = ObstacleBridgeLinuxServiceSpec(
             serviceID: 1, name: "ambiguous", listenProtocol: .tcp,
             listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: .tcp,
             targetHost: "127.0.0.1", targetPort: 7002
         )
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(
-            "myudp listener rejects ambiguous own_servers and remote_servers; omit both"
+            "myudp listener rejects ambiguous own_servers; use peer-published remote_servers with channel_mux_listener_publish_remote_services=true"
         )) {
             _ = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: .init(
                 transport: .myudp, host: "listener", port: 0, listenerMode: true,
                 secureLinkPSK: Data("linux-swift-psk".utf8), ownServices: [service]
             ))
         }
+        let peerPublished = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: .init(
+            transport: .myudp, host: "listener", port: 0, listenerMode: true,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            listenerRemoteServicePublicationEnabled: true, remoteServices: [service]
+        ))
+        peerPublished.stop()
     }
 
     @Test func myudpForegroundOwnerExpiresIdleChildWithoutReconnect() throws {
@@ -784,6 +790,17 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
 
     private func availableUDPPort() -> Int {
         let fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), 0)
+        defer { _ = close(fd) }
+        var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = 0
+        _ = "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        _ = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
+        return Int(UInt16(bigEndian: actual.sin_port))
+    }
+
+    private func availableTCPPort() -> Int {
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         defer { _ = close(fd) }
         var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = 0
         _ = "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }

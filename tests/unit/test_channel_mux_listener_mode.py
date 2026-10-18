@@ -2036,6 +2036,33 @@ class ChannelMuxListenerModeTests(unittest.TestCase):
         finally:
             mux.loop.close()
 
+    def test_listener_mode_explicitly_publishes_remote_servers_per_authenticated_peer(self):
+        args = argparse.Namespace(
+            peer=None,
+            udp_peer=None,
+            tcp_peer=None,
+            ws_peer=None,
+            quic_peer=None,
+            overlay_transport='myudp',
+            own_servers=None,
+            remote_servers=[{
+                'listen': {'protocol': 'tcp', 'bind': '127.0.0.1', 'port': 3129},
+                'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 3128},
+            }],
+            channel_mux_listener_publish_remote_services=True,
+            mux_tcp_bp_threshold=1,
+            mux_tcp_bp_latency_ms=300,
+            mux_tcp_bp_poll_interval_ms=50,
+        )
+
+        mux = ChannelMux.from_args(_FakeSession(), asyncio.new_event_loop(), args)
+        try:
+            self.assertEqual(mux._local_services, {})
+            self.assertEqual(len(mux._remote_services_requested), 1)
+            self.assertEqual(mux._remote_services_requested[0].l_port, 3129)
+        finally:
+            mux.loop.close()
+
     def test_client_mode_keeps_own_servers(self):
         args = argparse.Namespace(
             peer='127.0.0.1',

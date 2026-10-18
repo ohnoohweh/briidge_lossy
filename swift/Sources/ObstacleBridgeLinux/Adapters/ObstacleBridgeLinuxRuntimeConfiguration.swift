@@ -213,6 +213,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// default preserves wire compatibility; smaller values exercise Core's
     /// typed control and UDP-fragment effects without changing socket policy.
     public let channelMuxMaximumApplicationPayload: Int
+    /// Explicitly admits a shared listener's remote catalog as one isolated
+    /// control publication per authenticated child.
+    public let listenerRemoteServicePublicationEnabled: Bool
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
     /// Explicit helper-control endpoint. This is admitted independently from
@@ -233,7 +236,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// before the remote peer authenticates.
     public let proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, listenerRemoteServicePublicationEnabled: Bool = false, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -253,6 +256,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
         self.compressionPolicy = compressionPolicy
         self.channelMuxMaximumApplicationPayload = max(32, min(channelMuxMaximumApplicationPayload, 65_535))
+        self.listenerRemoteServicePublicationEnabled = listenerRemoteServicePublicationEnabled
         self.ownServices = ownServices
         self.remoteServices = remoteServices
         self.tunHelperSocketPath = tunHelperSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tunHelperSocketPath : nil
@@ -460,6 +464,8 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
         }
         let receiveIdleTimeoutMilliseconds = max(1, integer(flat["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
+        let channelMux = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("channel_mux", from: root)
+        let listenerRemoteServicePublicationEnabled = boolean(channelMux["channel_mux_listener_publish_remote_services"]) ?? false
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
         return .init(
@@ -480,8 +486,12 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             secureLinkPSK: psk,
             receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
             compressionPolicy: compressionPolicy,
+            listenerRemoteServicePublicationEnabled: listenerRemoteServicePublicationEnabled,
             ownServices: try serviceSpecs(root, key: "own_servers"),
-            remoteServices: try serviceSpecs(root, key: "remote_servers"),
+            remoteServices: ObstacleBridgeListenerServicePolicy.publishesRemoteServices(
+                listenerMode: listenerMode,
+                explicitlyEnabled: listenerRemoteServicePublicationEnabled
+            ) ? try serviceSpecs(root, key: "remote_servers") : [],
             tunHelperSocketPath: tunHelperSocket, tunHelperSessionToken: tunHelperSessionToken,
             launchSwiftTunHelper: launchSwiftTunHelper, tunHelperExecutable: tunHelperExecutable,
             tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan, proxyProvider: proxyProvider

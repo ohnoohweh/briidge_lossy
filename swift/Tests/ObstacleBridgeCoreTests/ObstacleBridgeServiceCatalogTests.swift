@@ -47,4 +47,16 @@ struct ObstacleBridgeServiceCatalogTests {
             try ObstacleBridgeServiceCatalogStore().install(instanceID: 1, connectionSequence: 1, services: [first, duplicate])
         }
     }
+
+    @Test func sharedListenerPublishesRemoteCatalogOnlyWithExplicitAdmission() {
+        #expect(!ObstacleBridgeListenerServicePolicy.publishesRemoteServices(
+            listenerMode: true, explicitlyEnabled: false
+        ))
+        #expect(ObstacleBridgeListenerServicePolicy.publishesRemoteServices(
+            listenerMode: true, explicitlyEnabled: true
+        ))
+        #expect(ObstacleBridgeListenerServicePolicy.publishesRemoteServices(
+            listenerMode: false, explicitlyEnabled: false
+        ))
+    }
 }

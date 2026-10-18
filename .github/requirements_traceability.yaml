@@ -1105,7 +1105,7 @@ REQ-LST-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpListenerAuthenticatesIndependentPeersBeforeExposingSessions
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerBoundsAuthenticatedPeerAdmission
-    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRejectsAmbiguousListenerServiceBinds
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRejectsAmbiguousOwnServiceBindsButAdmitsPeerPublishedCatalog
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerExpiresIdleChildWithoutReconnect
     - tests/unit/test_ws_multi_peer.py::test_inbound_mux_rewrite_allocates_distinct_server_channels_per_peer
     - tests/unit/test_channel_mux_swift_parity.py::test_swift_channelmux_tcp_client_open_then_connect_matches_python
@@ -1205,8 +1205,13 @@ REQ-MUX-004:
   unit_tests:
     - tests/unit/test_channel_mux_listener_mode.py::test_remote_catalog_replacement_adds_and_removes_services
     - tests/unit/test_channel_mux_listener_mode.py::test_passive_listener_starts_peer_tcp_listener_from_remote_catalog
+    - tests/unit/test_channel_mux_listener_mode.py::test_listener_mode_explicitly_publishes_remote_servers_per_authenticated_peer
     - tests/unit/test_channel_mux_peer_catalog.py::test_peer_disconnect_closes_tcp_udp_listeners_for_that_peer
     - ios/tests/test_m3_native_sources.py::test_swift_overlay_remote_service_catalog_uses_current_tun_epoch
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeServiceCatalogTests.swift::sharedListenerPublishesRemoteCatalogOnlyWithExplicitAdmission
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::myudpListenerAdmitsRemoteCatalogOnlyWhenExplicitlyEnabled
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRejectsAmbiguousOwnServiceBindsButAdmitsPeerPublishedCatalog
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections
 
 REQ-MUX-006:
   integration_tests:

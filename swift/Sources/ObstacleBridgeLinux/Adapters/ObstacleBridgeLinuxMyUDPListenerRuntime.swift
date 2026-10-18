@@ -30,9 +30,9 @@ public final class ObstacleBridgeLinuxMyUDPListenerRuntime: @unchecked Sendable 
                 "myudp listener runtime requires listener_mode=true and secure_link_mode=psk"
             )
         }
-        guard configuration.ownServices.isEmpty, configuration.remoteServices.isEmpty else {
+        guard configuration.ownServices.isEmpty else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(
-                "myudp listener rejects ambiguous own_servers and remote_servers; omit both"
+                "myudp listener rejects ambiguous own_servers; use peer-published remote_servers with channel_mux_listener_publish_remote_services=true"
             )
         }
         self.configuration = configuration

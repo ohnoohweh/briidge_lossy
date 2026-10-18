@@ -321,11 +321,17 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                 mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
                 mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
                 self.channelMux = mux
-                try self.publishRemoteCatalog(); try self.startOwnServiceOwners()
                 self.refreshStatusProjection()
                 self.apply(self.coordinator.handle(.adoptAuthenticated))
                 guard let epoch = self.coordinator.snapshot.epoch else { return }
                 self.activeCoordinatorEpoch = epoch
+                // An accepted child is a full-duplex authenticated epoch just
+                // like an outbound connection. Start its receiver before
+                // publishing the configured catalog so the child can install
+                // the control message immediately rather than waiting for an
+                // unrelated later read.
+                self.startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
+                try self.publishRemoteCatalog(); try self.startOwnServiceOwners()
             } catch {
                 connectedSession.close(); self.session = nil; self.channelMux = nil
                 self.replaceReceiveWorker(with: nil); self.stopServiceOwners(); self.stopRemoteServiceOwners()

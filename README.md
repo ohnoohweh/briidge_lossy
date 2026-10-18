@@ -4,7 +4,7 @@ ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for 
 The project currently targets six platform families:
 
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
-- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, and bounded local telemetry-spool paths backed by shared Core protocol codecs; see the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
+- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, bounded local telemetry-spool, and explicit per-child listener remote-catalog paths backed by shared Core protocol codecs; see the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
@@ -654,8 +654,9 @@ Current websocket payload forms:
 ### Channel mux
 | Option(s) | Default | Description |
 |---|---:|---|
-| `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Listener instances ignore `--own-servers` because multiple overlay peers make the target ambiguous. |
-| `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. |
+| `--own-servers` | `None` | Service catalog for client mode. Define `own_servers` as structured JSON service objects with `listen` and `target` blocks. Python listeners ignore an ordinary catalog, and the shared Linux myUDP listener rejects it, because no target peer is selected; server-owned shared TUN is the separately specified exception. |
+| `--remote-servers` | `None` | Service catalog applied on the connected overlay peer in client mode. Define `remote_servers` as structured JSON service objects with `listen` and `target` blocks. A multiplexing listener can broadcast the same catalog independently to authenticated children only with `--channel-mux-listener-publish-remote-services`. |
+| `--channel-mux-listener-publish-remote-services` | `False` | Explicitly broadcast the listener's `remote_servers` catalog to each authenticated child. This is not a selected-peer `own_servers` mechanism. |
 | `--channel-mux-egress` | `{"mode":"system"}` | JSON target-side egress policy object for ChannelMux client dials. System mode uses WinHTTP/PAC on Windows and `HTTP_PROXY`, `HTTPS_PROXY`, and `NO_PROXY` on Linux/POSIX for TCP target connections. UDP targets remain direct because HTTP CONNECT-style proxies are not UDP relays. |
 | `--mux-tcp-bp-threshold` | `1` | Mux TCP: size threshold (bytes) to trigger drain() (default 1). |
 | `--mux-tcp-bp-latency-ms` | `300` | Mux TCP: if > 0, drain writers after this ms when bytes pending. |
