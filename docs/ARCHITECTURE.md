@@ -50,7 +50,7 @@ logging-specific slice, not the common worker protocol. The capability
 protects against unprivileged processes without the inherited descriptors, not
 a hostile debugger acting as the same user.
 
-The Python supervisor's Admin child and the Python/native proxy children of
+The Python supervisor's Admin and peer children and the Python/native proxy children of
 either host feed the selected logging child through separate inherited
 record-only datagram capabilities. The parent relay validates frame size and
 rejects query messages,
@@ -103,8 +103,28 @@ not survive replacement. Embedded restart callbacks are rejected in this
 mode. This is an opt-in Python-only slice: native Admin and native supervision,
 comprehensive API/security parity, and full operation-generation fencing
 remain open. Synchronous runner calls execute on the runner loop;
-deadlines cannot undo an operation already started. Peer-stack and shared-TUN
-routing workers are not yet implemented.
+deadlines cannot undo an operation already started.
+
+The Python desktop runner can opt into `--peer-stack-worker python` for one
+outbound TCP peer with TUN disabled. The child owns transport, SecureLink,
+compression, ChannelMux and its TCP/UDP services; startup configuration and
+credentials travel over an inherited, size-bounded private control stream.
+Correlated requests carry a peer identity and generation; the supervisor
+projects generation-fenced status, peer and connection snapshots, restarts a
+lost child with fresh capabilities and bounded backoff, and does not fall back
+to an in-process peer. The child exits on owner loss and logs through a
+record-only relay to either managed collector. Existing connections are lost
+on replacement. TUN settings and TUN service catalogs, including catalogs
+received from a remote peer, are rejected in this mode. Peer configuration
+changes require stopping and restarting the runtime; reconnect, rekey and reload
+controls explicitly report that they are unsupported. Without a managed
+collector, the child inherits the supervisor's standard-error sink.
+
+This is a Python-supervised, Python-child, single outbound TCP slice only.
+Native peer workers and supervision, listener-side peer ownership, other
+transports, peer control operations, live peer configuration, terminal status,
+and shared-TUN routing/data IPC remain open; there is no shared-TUN worker yet.
+The peer control stream is not yet the common cross-runtime worker protocol.
 
 The Python/Swift Admin component probe compiles against the shared runtime
 policy and currently exposes three parity gaps: TUN routing summary/control

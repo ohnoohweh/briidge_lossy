@@ -222,6 +222,7 @@ ARC-CMP-003:
   # The separate RuntimeConfig policy probe compiles its Core service and
   # ChannelMux codec dependencies for portable route and schema checks.
   unit_tests:
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_rejects_remote_tun_before_install_or_hooks
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_repairs_stale_six_level_swift_source_paths
     - ios/tests/test_ios_xcode_patch.py::test_patch_pbxproj_text_injects_extension_target
     - ios/tests/test_ios_runtime_config_policy.py::test_runtime_config_peer_exclusions_are_portable_and_dual_stack
@@ -418,6 +419,7 @@ ARC-CMP-003:
     - tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python
     - ios/tests/test_macos_swift_host_runner.py::test_macos_swift_host_runner_exposes_shared_tun_control_plane_against_python_peer
   integration_tests:
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_carries_secure_mux_traffic_and_owner_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_concurrent_tcp_channels
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_listener_invalid_sender_expires_before_stale_window
     - tests/integration/test_ios_e2e.py::test_ios_e2e_app_ws_overlay_udp_service_reaches_linux_peer_udp_echo
@@ -474,6 +476,9 @@ ARC-CMP-004:
   # errexit relaxation needed to translate rc=75/77 into DSM-managed relaunch
   # instead of a final service stop.
   integration_tests:
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
+    - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_swift_over_myudp_packet_carry
@@ -749,6 +754,8 @@ ARC-CMP-005:
   # The shared Telemetry tab retains only bounded delivery and collector
   # summaries; it never reflects telemetry event payloads or credentials.
   unit_tests:
+    - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss
@@ -1037,6 +1044,7 @@ ARC-CMP-006:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::webSocketHandshakeFailureUsesBoundedCoreRetryLifecycle
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::protectedMyudpReceiveFailureWithdrawsEpochAndUsesBoundedReconnect
   integration_tests:
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_carries_secure_mux_traffic_and_owner_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_myudp_runtime_probe_recovers_repeated_dropped_application_data

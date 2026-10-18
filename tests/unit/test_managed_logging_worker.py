@@ -19,6 +19,7 @@ import pytest
 from obstacle_bridge.bridge_logging_ipc import fetch_remote_log_lines
 from obstacle_bridge.bridge_logging_worker import ChildLogRelay, ManagedLoggingWorker, SupervisedLoggingWorker, _PrivateLogHandler, activate_managed_logging
 from obstacle_bridge.bridge_proxy_worker import ProxyWorker
+from obstacle_bridge.bridge_peer_worker import PeerStackWorker
 from obstacle_bridge.bridge import AdminWebUI
 
 SOURCE = Path(__file__).resolve().parents[2] / "swift/Sources/ObstacleBridgeLogCollector/main.swift"
@@ -195,6 +196,44 @@ def test_failed_relay_allocation_does_not_prevent_proxy_start(monkeypatch):
                 finally:
                     await worker.stop()
             asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("logger_implementation", ["python", "native"])
+def test_peer_child_logs_follow_collector_replacement(monkeypatch, request, logger_implementation):
+    native_log = request.getfixturevalue("native_collector") if logger_implementation == "native" else None
+    args = SimpleNamespace(log_worker=logger_implementation, log_worker_native_executable=str(native_log) if native_log else None, log_file=None)
+    monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
+    with activate_managed_logging(args) as logs:
+        async def exercise():
+            config = {"runner": {"overlay_transport": "tcp"}, "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": 9},
+                      "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": "peer-secret-not-logged"}}
+            worker = PeerStackWorker("log-test")
+            await worker.start(config)
+            try:
+                async def wait_start_log():
+                    for _ in range(100):
+                        data = await asyncio.to_thread(logs.fetch, 100)
+                        if any("[SERVER] ObstacleBridge build=" in line for line in data["lines"]):
+                            return data
+                        await asyncio.sleep(0.05)
+                    pytest.fail("peer startup log missing")
+
+                assert "peer-secret-not-logged" not in repr(await wait_start_log())
+                original_peer = worker.process
+                logs.process.kill()
+                for _ in range(120):
+                    if logs.status()["generation"] >= 2:
+                        break
+                    await asyncio.sleep(0.05)
+                assert logs.status()["generation"] >= 2
+                assert worker.process is original_peer and original_peer.returncode is None
+                await worker.stop()
+                await worker.start(config)
+                assert worker.generation == 2
+                assert "peer-secret-not-logged" not in repr(await wait_start_log())
+            finally:
+                await worker.stop()
+        asyncio.run(exercise())
 
 
 def test_child_producer_drops_records_when_relay_is_stalled():

@@ -159,6 +159,8 @@ REQ-AUT-001:
   # Swift-owned TCP/UDP service channels. Its Python myudp peer models the
   # reliable length-prefixed stream and its process ports are xdist-isolated.
   integration_tests:
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_carries_secure_mux_traffic_and_owner_loss
+    - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_foreground_runtime_lifecycle
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip
@@ -744,8 +746,15 @@ REQ-LIFE-001:
   # and forwards every newer disconnected transport epoch so ChannelMux can
   # complete bounded candidate rotation and request a supervised restart.
   integration_tests:
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
   unit_tests:
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_aborts_inflight_start_when_owner_disappears
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_rejects_oversized_and_noncanonical_frames
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_invalid_start_is_reaped_without_exposing_configuration
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_restricts_shared_services_and_non_client_modes
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_rejects_remote_tun_before_install_or_hooks
     - tests/unit/test_secure_link_psk.py::test_disconnected_transport_lifecycle_clears_authenticated_state_even_if_inner_is_stale
     - tests/unit/test_secure_link_psk.py::test_authenticated_transport_watchdog_fails_closed_after_missed_disconnect_callback
     - tests/unit/test_swift_layer_readiness_parity.py::test_swift_authenticated_secure_link_cannot_outlive_observed_transport_disconnect
@@ -1573,10 +1582,13 @@ REQ-ADM-001:
   # An enabled collector is a supervised child whose failure stays observable
   # without preventing bridge startup.
   integration_tests:
+    - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_when_auth_disabled
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_when_auth_disabled
     - tests/integration/test_ios_simulator_e2e.py::test_ios_simulator_e2e_app_ws_secure_link_client_authenticates_and_is_visible_via_host_webadmin_api
   unit_tests:
+    - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
+    - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates
     - tests/unit/test_admin_worker.py::test_python_admin_worker_updates_runner_and_serves_concurrent_requests
     - tests/unit/test_admin_worker.py::test_admin_worker_exits_on_owner_loss_and_reports_child_loss

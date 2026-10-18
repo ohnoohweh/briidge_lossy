@@ -132,6 +132,9 @@ jobs:
       - name: Test native log collector interoperability
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
+      - name: Test isolated Python peer stack
+        run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
+
       - name: Test private proxy worker
         run: |
           pytest -q tests/unit/test_proxy_worker.py
@@ -417,6 +420,9 @@ jobs:
 
       - name: Test native log collector interoperability
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
+
+      - name: Test isolated Python peer stack
+        run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
       - name: Test private proxy worker
         run: |

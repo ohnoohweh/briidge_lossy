@@ -5750,6 +5750,8 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self._record_sync_diag("ChannelMux._on_local_tun_packet", phase="finished")
 
     def _rx_tun(self, chan: int, mtype: ChannelMux.MType, data: bytes, peer_id: Optional[int] = None) -> None:
+        if bool(getattr(getattr(self, "args", None), "_peer_worker_forbid_tun", False)):
+            return
         if mtype == ChannelMux.MType.OPEN:
             self._rx_tun_open(chan, data, peer_id=peer_id)
         elif mtype == ChannelMux.MType.OPEN_CHUNK:
@@ -6128,6 +6130,11 @@ class ChannelMux(ChannelMuxVirtualPeerMixin, ChannelMuxSharedTunMixin):
             self.log.warning("[MUX/CTRL] invalid REMOTE_SERVICES_SET_V2 payload (%d bytes)", len(payload))
             return False
         instance_id, connection_seq, services = decoded
+        if bool(getattr(getattr(self, "args", None), "_peer_worker_forbid_tun", False)) and any(
+            spec.l_proto == "tun" or spec.r_proto == "tun" for spec in services
+        ):
+            self.log.warning("[MUX/CTRL] peer worker rejected TUN service catalog")
+            return False
         peer_key = int(peer_id or 0)
         self._active_peer_service_catalogs.add(peer_key)
         prev_epoch = self._peer_mux_epochs.get(peer_key)
