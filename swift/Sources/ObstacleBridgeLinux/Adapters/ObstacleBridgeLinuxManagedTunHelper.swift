@@ -51,10 +51,11 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         elevated ? 60 : 2
     }
 
-    /// `sudo` must own the invoking terminal while it authenticates. Routing
-    /// its diagnostic stream through a Pipe makes PAM's prompt path unreliable
-    /// and, on some terminals, loses the terminal's no-echo password mode.
-    static func inheritsTerminalStreams(elevated: Bool) -> Bool {
+    /// `sudo` must use the caller's controlling terminal while it
+    /// authenticates.  `Process` standard handles can be pipes after the
+    /// foreground program is started by a wrapper, even when stdin initially
+    /// reports as a TTY; `/dev/tty` preserves PAM's no-echo password mode.
+    static func usesControllingTerminal(elevated: Bool) -> Bool {
         elevated
     }
 
@@ -85,12 +86,16 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         #endif
         process.executableURL = URL(fileURLWithPath: command.path)
         process.arguments = command.arguments
-        if Self.inheritsTerminalStreams(elevated: requiresElevation) {
+        if Self.usesControllingTerminal(elevated: requiresElevation) {
             // Keep the password prompt and its no-echo terminal handling in
             // sudo/PAM. Never feed a password through a pipe or command line.
-            process.standardInput = FileHandle.standardInput
-            process.standardOutput = FileHandle.standardOutput
-            process.standardError = FileHandle.standardError
+            guard let terminalInput = FileHandle(forReadingAtPath: "/dev/tty"),
+                  let terminalOutput = FileHandle(forWritingAtPath: "/dev/tty") else {
+                throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires /dev/tty for sudo authentication")
+            }
+            process.standardInput = terminalInput
+            process.standardOutput = terminalOutput
+            process.standardError = terminalOutput
         } else {
             process.standardOutput = Pipe()
             process.standardError = Pipe()

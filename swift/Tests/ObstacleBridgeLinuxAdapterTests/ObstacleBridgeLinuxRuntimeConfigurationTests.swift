@@ -24,8 +24,8 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(direct.arguments.first == "--tun-helper-server")
         #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: true) == 60)
         #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: false) == 2)
-        #expect(ObstacleBridgeLinuxManagedTunHelper.inheritsTerminalStreams(elevated: true))
-        #expect(!ObstacleBridgeLinuxManagedTunHelper.inheritsTerminalStreams(elevated: false))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.usesControllingTerminal(elevated: true))
+        #expect(!ObstacleBridgeLinuxManagedTunHelper.usesControllingTerminal(elevated: false))
     }
 
     @Test func observabilityWritesForegroundLifecycleToConfiguredLogAndBoundedTelemetrySpool() throws {
