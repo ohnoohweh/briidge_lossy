@@ -154,6 +154,42 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         }
     }
 
+    /// Admin-Web projection of this listener and its currently active mux
+    /// channels.  The descriptor owner is the only Linux layer that can
+    /// distinguish a configured listener from a connection accepted through
+    /// that listener; exposing both makes the shared onboarding policy behave
+    /// like Python's connection snapshot.
+    public func adminConnectionRows(peerID: String, catalog: String = "own_servers") -> [[String: Any]] {
+        queue.sync {
+            let boundListenerPort = listener >= 0 ? boundPort(listener) : 0
+            let base: [String: Any] = [
+                "peer_id": peerID,
+                "svc_id": Int(spec.serviceID),
+                "service_name": spec.name ?? "",
+                "role": "client",
+                "source": spec.listenHost,
+                "local": ["host": spec.listenHost, "port": boundListenerPort],
+                "local_port": boundListenerPort,
+                "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
+                "catalog": catalog,
+                "stats": ["rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0],
+                "throttle": ["active": false],
+            ]
+            var listenerRow = base
+            listenerRow["chan_id"] = NSNull()
+            listenerRow["state"] = "listening"
+            var rows = [listenerRow]
+            let channels = (spec.listenProtocol == .tcp ? coreTCPChannels.union(coreTCPClientChannels) : coreUDPChannels.union(coreUDPClientChannels)).sorted()
+            for channelID in channels {
+                var row = base
+                row["chan_id"] = Int(channelID)
+                row["state"] = "connected"
+                rows.append(row)
+            }
+            return rows
+        }
+    }
+
     private func listenerReadable() {
         guard !stopped else { return }
         if spec.listenProtocol == .tcp { acceptTCP() } else { receiveUDP() }

@@ -287,7 +287,16 @@ struct ObstacleBridgeLinuxAdminServerTests {
         ]
         let server = ObstacleBridgeLinuxAdminServer(
             runtime: runtime, adminConfiguration: configuration,
-            buildInfo: ["available": true, "commit": "0123456789ab", "build_timestamp_utc": "2026-10-18T00:00:00Z", "tainted": false, "tracked_changes": 0, "untracked_changes": 0]
+            buildInfo: ["available": true, "commit": "0123456789ab", "build_timestamp_utc": "2026-10-18T00:00:00Z", "tainted": false, "tracked_changes": 0, "untracked_changes": 0],
+            connectionsProvider: {
+                ["tcp": [
+                    ["peer_id": "peer-b", "state": "connected", "local_port": 31_28, "remote_destination": "198.51.100.5:8080"],
+                    ["peer_id": "peer-b", "state": "connected", "local_port": 31_28, "remote_destination": "198.51.100.5:8080"],
+                    ["peer_id": "peer-b", "state": "listening", "local_port": 9_999, "remote_destination": "198.51.100.6:80"],
+                ], "udp": [
+                    ["peer_id": "peer-a", "state": "open", "local_port": "5353", "remote_destination": ["2001:db8::5", 5353]],
+                ]]
+            }
         )
         try server.start(); defer { server.stop() }
         let base = "http://127.0.0.1:\(server.port)"
@@ -301,7 +310,13 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(profile["transport"] as? String == "tcp")
         #expect(profile["peer_host"] as? String == "198.51.100.10")
         let blueprints = try #require(try await getJSON(base + "/api/onboarding/blueprints") as? [String: Any])
-        #expect(blueprints["blueprints"] as? [[String: Any]] != nil)
+        let blueprintRows = try #require(blueprints["blueprints"] as? [[String: Any]])
+        #expect(blueprintRows.count == 2)
+        let peerA = try #require(blueprintRows.first { $0["peer_id"] as? String == "peer-a" })
+        let peerASpec = try #require((peerA["own_servers"] as? [[String: Any]])?.first)
+        #expect((peerASpec["target"] as? [String: Any])?["host"] as? String == "2001:db8::5")
+        let peerB = try #require(blueprintRows.first { $0["peer_id"] as? String == "peer-b" })
+        #expect((peerB["own_servers"] as? [[String: Any]])?.count == 1)
 
         let generated = try #require(try await requestJSON(base + "/api/onboarding/invite/generate", method: "POST", body: ["connection_id": profile["id"] as? String ?? ""]).body as? [String: Any])
         let token = try #require(generated["invite_token"] as? String)

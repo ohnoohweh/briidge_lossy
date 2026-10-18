@@ -726,6 +726,14 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         var received = [UInt8](repeating: 0, count: payload.count)
         #expect(read(fd, &received, received.count) == payload.count)
         #expect(Data(received) == payload)
+        #expect(waitUntil {
+            let rows = runtime.connectionsForAdmin()["tcp"] as? [[String: Any]] ?? []
+            return rows.contains {
+                ($0["state"] as? String) == "connected" &&
+                ($0["peer_id"] as? String) == "configured-peer" &&
+                ($0["remote_destination"] as? [String: Any])?["port"] as? Int == 7
+            }
+        })
         _ = close(fd)
         #expect(waitUntil { runtime.status().activeTCPChannels == 0 })
         runtime.stop()

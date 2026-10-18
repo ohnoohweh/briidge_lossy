@@ -498,21 +498,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             var tcp: [[String: Any]] = []
             var udp: [[String: Any]] = []
             for owner in serviceOwners {
-                let spec = owner.specification
-                let row: [String: Any] = [
-                    "peer_id": "configured-peer",
-                    "chan_id": NSNull(),
-                    "svc_id": Int(spec.serviceID),
-                    "service_name": spec.name ?? "",
-                    "state": "listening",
-                    "role": "client",
-                    "source": spec.listenHost,
-                    "local_port": owner.port,
-                    "remote_destination": "\(spec.targetHost):\(spec.targetPort)",
-                    "stats": ["rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0],
-                    "throttle": ["active": false],
-                ]
-                if spec.listenProtocol == .tcp { tcp.append(row) } else { udp.append(row) }
+                let rows = owner.adminConnectionRows(peerID: "configured-peer")
+                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
+            }
+            for owner in remoteServiceOwners {
+                let rows = owner.adminConnectionRows(peerID: "configured-peer", catalog: "remote_servers")
+                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
             }
             return ["tcp": tcp, "udp": udp, "tun": []]
         }

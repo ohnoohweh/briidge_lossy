@@ -45,10 +45,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
-        self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
+        self.connectionsProvider = connectionsProvider
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
@@ -324,7 +324,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             let profiles = ObstacleBridgeAdminOnboardingPort.connectionProfiles(runtimeConfig: adminConfigurationProvider())
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": profiles.count, "profiles": profiles]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/onboarding/blueprints":
-            let blueprints = ObstacleBridgeAdminOnboardingPort.blueprints()
+            let blueprints = ObstacleBridgeAdminOnboardingPort.blueprints(connections: connectionsProvider())
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": blueprints.count, "blueprints": blueprints]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/onboarding/invite", "/api/onboarding/invite/generate":
             do {

@@ -34,10 +34,81 @@ public enum ObstacleBridgeAdminOnboardingPort {
         ObstacleBridgeOnboarding.connectionProfiles(runtimeConfig: ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig))
     }
 
-    /// A disconnected node has no peer-derived service blueprint.  Keep the
-    /// response envelope stable so the shared Admin Web can render an empty
-    /// selector instead of treating Linux native as an unsupported backend.
-    public static func blueprints() -> [[String: Any]] { [] }
+    /// Derives the portable service definitions offered by connected peers.
+    ///
+    /// The Admin adapters own their connection snapshots, but the selection,
+    /// validation, and emitted JSON shape must remain identical across hosts.
+    /// A listening row is a local service already bound by this node, not a
+    /// peer-derived candidate for an onboarding invitation.
+    public static func blueprints(connections: [String: Any]) -> [[String: Any]] {
+        var grouped: [String: [[String: Any]]] = [:]
+        for protocolName in ["udp", "tcp"] {
+            for row in connections[protocolName] as? [[String: Any]] ?? [] {
+                if (row["state"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "listening" {
+                    continue
+                }
+                let peerID = (row["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !peerID.isEmpty,
+                      let localPort = validPort(row["local_port"]),
+                      let destination = hostAndPort(row["remote_destination"])
+                else { continue }
+                let specification: [String: Any] = [
+                    "name": "bp-\(peerID)-\(protocolName)-\(localPort)",
+                    "listen": ["protocol": protocolName, "bind": "0.0.0.0", "port": localPort],
+                    "target": ["protocol": protocolName, "host": destination.host, "port": destination.port],
+                ]
+                if !containsEquivalent(specification, in: grouped[peerID] ?? []) {
+                    grouped[peerID, default: []].append(specification)
+                }
+            }
+        }
+        return grouped.keys.sorted().compactMap { peerID in
+            guard let specifications = grouped[peerID], !specifications.isEmpty else { return nil }
+            return ["peer_id": peerID, "own_servers": specifications]
+        }
+    }
+
+    private static func validPort(_ value: Any?) -> Int? {
+        let port: Int?
+        if let number = value as? NSNumber { port = number.intValue }
+        else if let text = value as? String { port = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        else { port = nil }
+        guard let port, (1...65_535).contains(port) else { return nil }
+        return port
+    }
+
+    private static func hostAndPort(_ value: Any?) -> (host: String, port: Int)? {
+        if let dictionary = value as? [String: Any] {
+            let host = (dictionary["host"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty, let port = validPort(dictionary["port"]) else { return nil }
+            return (host, port)
+        }
+        if let tuple = value as? [Any], tuple.count >= 2 {
+            let host = (tuple[0] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty, let port = validPort(tuple[1]) else { return nil }
+            return (host, port)
+        }
+        let text = (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if text.hasPrefix("["), let closing = text.firstIndex(of: "]"), text[text.index(after: closing)...].hasPrefix(":") {
+            let host = String(text[text.index(after: text.startIndex)..<closing])
+            let portText = String(text[text.index(closing, offsetBy: 2)...])
+            guard !host.isEmpty, let port = validPort(portText) else { return nil }
+            return (host, port)
+        }
+        guard let separator = text.lastIndex(of: ":") else { return nil }
+        let host = String(text[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let portText = String(text[text.index(after: separator)...])
+        guard !host.isEmpty, let port = validPort(portText) else { return nil }
+        return (host, port)
+    }
+
+    private static func containsEquivalent(_ candidate: [String: Any], in values: [[String: Any]]) -> Bool {
+        guard let candidateData = try? JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys]) else { return false }
+        return values.contains { value in
+            (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) == candidateData
+        }
+    }
 
     public static func generate(body: Data?, runtimeConfig: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
         let flattened = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig)
