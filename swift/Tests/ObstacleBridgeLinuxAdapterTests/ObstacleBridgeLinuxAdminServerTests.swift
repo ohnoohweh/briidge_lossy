@@ -97,6 +97,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
             "admin_web": ["admin_web_auth_disable": false, "admin_web_username": "operator", "admin_web_password": "secret"],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "linux-reveal-secret"],
         ])
         let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, configurationStore: store)
         try server.start()
@@ -130,6 +131,27 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(saved.status == 200)
         #expect((saved.body as? [String: Any])?["ok"] as? Bool == true)
         #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_name"] as? String == "Updated")
+        let effectiveConfiguration = try store.runtimeSnapshot()
+        #expect((effectiveConfiguration["secure_link"] as? [String: Any])?["secure_link_psk"] as? String == "linux-reveal-secret")
+
+        let revealChallenge = try #require((try await requestJSON(base + "/api/config/secret/secure-link-psk/challenge", method: "POST", body: [:], headers: ["Cookie": cookie])).body as? [String: Any])
+        let revealID = try #require(revealChallenge["challenge_id"] as? String)
+        let revealSeed = try #require(revealChallenge["seed"] as? String)
+        let revealProof = digest("\(revealSeed):operator:secret:secure_link_psk")
+        let revealed = try #require((try await requestJSON(base + "/api/config/secret/secure-link-psk", method: "POST", body: ["challenge_id": revealID, "proof": revealProof], headers: ["Cookie": cookie])).body as? [String: Any])
+        let envelope = try #require(revealed["encrypted"] as? [String: Any])
+        #expect(String(describing: envelope).contains("linux-reveal-secret") == false)
+        let saltText = try #require(envelope["salt"] as? String)
+        let nonceText = try #require(envelope["nonce"] as? String)
+        let ciphertextText = try #require(envelope["ciphertext"] as? String)
+        let aadText = try #require(envelope["aad"] as? String)
+        let salt = try #require(Data(base64Encoded: saltText))
+        let nonce = try #require(Data(base64Encoded: nonceText))
+        let ciphertext = try #require(Data(base64Encoded: ciphertextText))
+        let aad = try #require(Data(base64Encoded: aadText))
+        let key = try ObstacleBridgeCrypto.pbkdf2SHA256(password: Data("secret".utf8), salt: salt, iterations: 200_000, outputByteCount: 32)
+        let plaintext = try ObstacleBridgeCrypto.aesGCMOpen(ciphertextAndTag: ciphertext, key: key, nonce: nonce, authenticatedData: aad)
+        #expect(String(decoding: plaintext, as: UTF8.self) == "linux-reveal-secret")
     }
 
     @Test func adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract() async throws {

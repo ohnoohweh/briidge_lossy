@@ -200,10 +200,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         }
         let response: ObstacleBridgeAdminLinuxResponse
         var controlAction: (@Sendable () -> Void)?
-        let authenticationRoutes: Set<String> = ["/api/auth/state", "/api/auth/challenge", "/api/auth/login", "/api/auth/logout", "/api/config/challenge"]
+        let authenticationRoutes: Set<String> = ["/api/auth/state", "/api/auth/challenge", "/api/auth/login", "/api/auth/logout", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge"]
         if path.hasPrefix("/api/"), !authenticationRoutes.contains(path), !security.isAuthenticated(headers: headers) {
             response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401)
-        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/reconnect", "/api/shutdown"].contains(path)) {
+        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/reconnect", "/api/shutdown"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
@@ -263,6 +263,18 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 do { response = jsonResponse(try security.issueConfigChallenge(updates: updates)) }
                 catch { response = jsonResponse(["ok": false, "error": "updates must be an object"], statusCode: 400) }
             } else { response = jsonResponse(["ok": false, "error": "updates must be an object"], statusCode: 400) }
+        case "/api/config/secret/secure-link-psk/challenge":
+            let authRequired = security.state(headers: headers)["auth_required"] as? Bool ?? false
+            if method != "POST" { response = jsonResponse(["error": "method not allowed"], statusCode: 405) }
+            else if !authRequired { response = jsonResponse(["ok": false, "error": "admin password authentication is required to reveal secure_link_psk"], statusCode: 403) }
+            else if !security.isAuthenticated(headers: headers) { response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401) }
+            else { response = jsonResponse(security.issueSecretRevealChallenge(secretName: "secure_link_psk")) }
+        case "/api/config/secret/secure-link-psk":
+            if method != "POST" { response = jsonResponse(["error": "method not allowed"], statusCode: 405) }
+            else {
+                let flat = ObstacleBridgeRuntimeConfigPort.flatten((try? configurationStore?.runtimeSnapshot()) ?? adminConfigurationProvider())
+                response = security.revealSecret(body: body, secretName: "secure_link_psk", secretValue: flat["secure_link_psk"] as? String ?? "")
+            }
         case "/api/reconnect":
             guard let reconnectHandler else {
                 response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "reconnect is unavailable for this runtime"], statusCode: 409) ?? .init(statusCode: 500, body: Data("{}".utf8))

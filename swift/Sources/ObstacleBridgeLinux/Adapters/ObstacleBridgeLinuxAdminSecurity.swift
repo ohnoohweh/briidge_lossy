@@ -8,6 +8,7 @@ final class ObstacleBridgeLinuxAdminSecurity: @unchecked Sendable {
     private let lock = NSLock()
     private var authState = ObstacleBridgeAdminAuthPolicy.State()
     private var configChallenges: [String: ObstacleBridgeAdminConfigChallengePolicy.Challenge] = [:]
+    private var revealChallenges: [String: ObstacleBridgeAdminSecretRevealPolicy.Challenge] = [:]
     private let credentials: () -> (required: Bool, username: String, password: String)
     private let scope: () -> String
 
@@ -59,6 +60,68 @@ final class ObstacleBridgeLinuxAdminSecurity: @unchecked Sendable {
         defer { lock.unlock() }
         authState.reset()
         configChallenges.removeAll()
+        revealChallenges.removeAll()
+    }
+
+    func issueSecretRevealChallenge(secretName: String) -> [String: Any] {
+        let identifier = UUID().uuidString.lowercased()
+        let seed = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased() + identifier
+        let challenge = ObstacleBridgeAdminSecretRevealPolicy.issue(
+            identifier: identifier, seed: seed, secretName: secretName,
+            now: Date().timeIntervalSince1970, ttl: 60
+        )
+        lock.lock()
+        defer { lock.unlock() }
+        revealChallenges = revealChallenges.filter { $0.value.expiresAt > Date().timeIntervalSince1970 }
+        revealChallenges[identifier] = challenge
+        return ["ok": true, "auth_required": true, "challenge_id": identifier, "seed": seed, "secret_name": secretName]
+    }
+
+    func revealSecret(body: Data?, secretName: String, secretValue: String) -> ObstacleBridgeAdminLinuxResponse {
+        let settings = credentials()
+        guard settings.required else {
+            return json(["ok": false, "error": "admin password authentication is required to reveal \(secretName)"], status: 403)
+        }
+        guard let body, let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            return json(["ok": false, "error": "invalid JSON body"], status: 400)
+        }
+        let identifier = (payload["challenge_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let proof = (payload["proof"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !identifier.isEmpty, !proof.isEmpty else {
+            return json(["ok": false, "error": "\(secretName) reveal confirmation required"], status: 428)
+        }
+        lock.lock()
+        let challenge = revealChallenges.removeValue(forKey: identifier)
+        lock.unlock()
+        guard let challenge else {
+            return json(["ok": false, "error": "invalid or expired \(secretName) reveal challenge"], status: 403)
+        }
+        let result = ObstacleBridgeAdminSecretRevealPolicy.validate(
+            challenge, proof: proof, secretName: secretName, username: settings.username,
+            password: settings.password, now: Date().timeIntervalSince1970, digest: Self.sha256Hex
+        )
+        switch result {
+        case .expired:
+            return json(["ok": false, "error": "invalid or expired \(secretName) reveal challenge"], status: 403)
+        case .secretMismatch:
+            return json(["ok": false, "error": "secret reveal payload mismatch"], status: 403)
+        case .proofMismatch:
+            return json(["ok": false, "error": "\(secretName) reveal confirmation failed"], status: 403)
+        case .valid:
+            break
+        }
+        var generator = SystemRandomNumberGenerator()
+        let salt = Data((0..<16).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        let nonce = Data((0..<12).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+        do {
+            let envelope = try ObstacleBridgeAdminSecretRevealPolicy.encryptedEnvelope(
+                secretName: secretName, secretValue: secretValue, password: settings.password,
+                salt: salt, nonce: nonce
+            )
+            return json(["ok": true, "secret_name": secretName, "encrypted": envelope])
+        } catch {
+            return json(["ok": false, "error": "secret reveal encryption failed"], status: 500)
+        }
     }
 
     func issueConfigChallenge(updates: [String: Any]) throws -> [String: Any] {
