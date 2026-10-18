@@ -8,7 +8,7 @@ struct NativeProxySupervisorRunner {
               let implementation = doc["implementation"] as? String,
               let executable = doc["executable"] as? String,
               let config = doc["config"] as? [String: Any] else { exit(2) }
-        let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: implementation, executable: executable)
+        let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: implementation, executable: executable)
         do {
             try worker.start(config: config)
             emit(worker.snapshot())

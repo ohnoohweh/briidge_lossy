@@ -704,6 +704,8 @@ REQ-PRX-001:
     - ios/tests/test_swift_shared_parity_guard.py::test_ios_only_swift_change_requires_shared_or_macos_peer_update
     - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
     - tests/unit/test_native_proxy_supervisor.py::test_owner_loss_closes_proxy_listener
+    - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_supervisor_retries_occupied_port
+    - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_supervisor_replaces_stalled_child
     - tests/unit/test_native_proxy_supervisor.py::test_restricted_policy_fails_closed
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::proxyWorkerConfigurationPreservesPolicyAndSelection

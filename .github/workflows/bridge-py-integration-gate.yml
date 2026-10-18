@@ -133,7 +133,9 @@ jobs:
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test private proxy worker
-        run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+        run: |
+          pytest -q tests/unit/test_proxy_worker.py
+          pytest -q tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
       - name: Test native proxy supervision
         run: pytest -q tests/unit/test_native_proxy_supervisor.py
@@ -417,7 +419,9 @@ jobs:
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test private proxy worker
-        run: pytest -q tests/unit/test_proxy_worker.py tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+        run: |
+          pytest -q tests/unit/test_proxy_worker.py
+          pytest -q tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
       - name: Test native proxy supervision
         run: pytest -q tests/unit/test_native_proxy_supervisor.py

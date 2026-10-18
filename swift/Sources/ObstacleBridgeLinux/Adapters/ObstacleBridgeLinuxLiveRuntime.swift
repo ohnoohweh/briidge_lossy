@@ -183,7 +183,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private var channelOwners: [String: ObstacleBridgeLinuxServiceSocketOwner] = [:]
     private var proxyProvider: ObstacleBridgeLinuxProxyProvider?
     /// Published under statusLock so Admin never waits for the transport queue.
-    private var proxyWorker: ObstacleBridgeProxyWorkerSupervisor?
+    private var proxyWorker: ObstacleBridgeSupervisedProxyWorker?
     private let remoteCatalogStore = ObstacleBridgeLinuxServiceCatalogStore()
     private let catalogInstanceID: UInt64
     private var stopped = true
@@ -303,7 +303,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
                         throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
                     }
                     let executable = config.workerExecutable ?? (config.worker == "python" ? "/usr/bin/python3" : (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])).deletingLastPathComponent().appendingPathComponent("ObstacleBridgeProxyWorker").path)
-                    let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: config.worker, executable: executable)
+                    let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable)
                     try worker.start(config: payload)
                     self.statusLock.lock(); self.proxyWorker = worker; self.statusLock.unlock()
                 } else {

@@ -68,21 +68,19 @@ selected child owns the HTTP and SOCKS listeners and client connections; the par
 periodic snapshots over a bounded inherited Unix stream and observes control
 socket loss. Proxy credentials are handed over that socket, not command-line
 arguments or the environment. Parent loss closes the child and listeners;
-child loss is reported without falling back to an in-process proxy. The Python
-runner restarts either selected child after process or control loss using fresh
-capabilities and bounded backoff, retaining the first bound ports and exposing
-generation, restart and failed-start counts. Existing proxy connections are
-lost during replacement. The native host supervisor does not yet restart the
-child. The native
+child loss is reported without falling back to an in-process proxy. Both the
+Python runner and native hosts restart either selected child after process or
+control loss using fresh capabilities and bounded backoff, retaining the first
+bound ports and exposing generation, restart and failed-start counts. Native
+status snapshots reject observations from a retired generation. Existing proxy
+connections are lost during replacement. The native
 worker currently accepts only IPv4 loopback listener binds and direct egress,
 caps each listener at 128 concurrent clients, and uses 30-second socket I/O
 timeouts. Each native session has independent scheduling and a bounded duplex
 poll buffer; half-closes propagate after pending data is delivered. The worker
-fails startup for unsupported settings. Native host supervision uses a
-private inherited stream, bounds startup and health reads, reports child loss
-without fallback, and does not restart the worker. Basic macOS and Linux
-native-host selection and child-loss checks run in CI; broader mixed-process
-qualification remains open. The Python proxy provider
+fails startup for unsupported settings. Native host supervision bounds startup
+and health reads. Basic macOS and Linux native-host selection and child-loss
+checks run in CI; broader mixed-process qualification remains open. The Python proxy provider
 does not enforce destination-policy restrictions, so the worker refuses to
 start unless the operator explicitly chooses unrestricted destinations and no
 blocked patterns. Complete native/Python parity is not claimed by this process slice.

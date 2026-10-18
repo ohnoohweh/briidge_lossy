@@ -197,4 +197,114 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
 
     deinit { stop() }
 }
+
+/// Restarts either selected proxy implementation without replacing it with an
+/// in-process listener. Each generation receives a fresh control capability.
+public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
+    private let implementation: String
+    private let executable: String
+    private let stateLock = NSLock()
+    private let lifecycleLock = NSLock()
+    private let monitorQueue = DispatchQueue(label: "org.obstaclebridge.desktop.proxy-supervisor")
+    private var active: ObstacleBridgeProxyWorkerSupervisor?
+    private var configuration: [String: Any]?
+    private var timer: DispatchSourceTimer?
+    private var stopped = true
+    private var generation = 0
+    private var failedStarts = 0
+    private var nextAttempt = Date.distantPast
+    private var retryDelay: TimeInterval = 0.25
+
+    public init(implementation: String, executable: String) throws {
+        guard ["python", "native"].contains(implementation), !executable.isEmpty else {
+            throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
+        }
+        self.implementation = implementation
+        self.executable = executable
+    }
+
+    /// Lifecycle lock is held. Bootstrap credentials stay on private sockets
+    /// and in the owner's in-memory configuration; they are never status data.
+    private func launch(_ config: [String: Any]) throws {
+        let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: implementation, executable: executable)
+        try worker.start(config: config)
+        let snapshot = worker.snapshot()
+        var nextConfig = config
+        let listeners = snapshot["listeners"] as? [String: Any] ?? [:]
+        for name in ["http", "socks5"] {
+            let key = "\(name)_port"
+            let configuredPort = (config[key] as? NSNumber)?.intValue ?? 0
+            if configuredPort == 0, let listener = listeners[name] as? [String: Any],
+               let port = listener["bound_port"] as? Int, port > 0 {
+                nextConfig[key] = port
+            }
+        }
+        stateLock.lock()
+        active = worker; configuration = nextConfig; generation += 1
+        stateLock.unlock()
+    }
+
+    public func start(config: [String: Any]) throws {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        stateLock.lock(); let canStart = stopped && generation == 0; if canStart { stopped = false }; stateLock.unlock()
+        guard canStart else { throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration }
+        do { try launch(config) }
+        catch { stateLock.lock(); stopped = true; stateLock.unlock(); throw error }
+        let source = DispatchSource.makeTimerSource(queue: monitorQueue)
+        source.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        source.setEventHandler { [weak self] in self?.recoverIfNeeded() }
+        timer = source
+        source.resume()
+    }
+
+    private func recoverIfNeeded() {
+        guard lifecycleLock.try() else { return }
+        defer { lifecycleLock.unlock() }
+        stateLock.lock(); let worker = active; let isStopped = stopped; stateLock.unlock()
+        guard !isStopped else { return }
+        if let worker {
+            let snapshot = worker.snapshot()
+            let state = (snapshot["worker"] as? [String: Any])?["state"] as? String
+            guard state != "running" else { return }
+            stateLock.lock(); active = nil; nextAttempt = Date().addingTimeInterval(0.25); stateLock.unlock()
+            worker.stop()
+            return
+        }
+        stateLock.lock(); let config = configuration; let ready = Date() >= nextAttempt; stateLock.unlock()
+        guard ready, let config else { return }
+        do {
+            try launch(config)
+            stateLock.lock(); retryDelay = 0.25; stateLock.unlock()
+        } catch {
+            stateLock.lock()
+            failedStarts += 1; nextAttempt = Date().addingTimeInterval(retryDelay)
+            retryDelay = min(retryDelay * 2, 5)
+            stateLock.unlock()
+        }
+    }
+
+    public func snapshot() -> [String: Any] {
+        stateLock.lock()
+        let worker = active, localGeneration = generation, localRestarts = max(0, generation - 1), localFailures = failedStarts, isStopped = stopped
+        stateLock.unlock()
+        let snapshot = worker?.snapshot() ?? [:]
+        stateLock.lock(); let current = !stopped && active === worker && generation == localGeneration; stateLock.unlock()
+        let inner = snapshot["worker"] as? [String: Any] ?? [:]
+        let running = current && inner["state"] as? String == "running"
+        return ["worker": ["implementation": implementation, "state": isStopped ? "stopped" : (running ? "running" : "unavailable"),
+                           "pid": running ? (inner["pid"] as? Int ?? 0) : 0, "generation": localGeneration,
+                           "restarts": localRestarts, "failed_starts": localFailures],
+                "listeners": running ? (snapshot["listeners"] ?? [:]) : [:],
+                "last_error": running || isStopped ? "" : "proxy worker unavailable"]
+    }
+
+    public func stop() {
+        lifecycleLock.lock(); defer { lifecycleLock.unlock() }
+        timer?.cancel(); timer = nil
+        stateLock.lock(); stopped = true; let worker = active; active = nil; configuration = nil; stateLock.unlock()
+        worker?.stop()
+    }
+
+    deinit { stop() }
+}
 #endif

@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import os
 from pathlib import Path
 import signal
 import shutil
+import socket
 import subprocess
 import sys
 
@@ -49,7 +51,7 @@ def test_swift_supervisor_owns_python_or_native_proxy(native_supervisor, native_
             await host.stdin.drain()
             ready = json.loads(await asyncio.wait_for(host.stdout.readline(), 10))
             assert ready["worker"]["state"] == "running"
-            assert ready["worker"]["pid"] != host.pid
+            assert ready["worker"]["pid"] > 1 and ready["worker"]["pid"] != host.pid
             port = ready["listeners"]["http"]["bound_port"]
             command = subprocess.check_output(["ps", "-p", str(ready["worker"]["pid"]), "-o", "command="], text=True)
             assert "secret-not-in-process-arguments" not in command
@@ -65,15 +67,26 @@ def test_swift_supervisor_owns_python_or_native_proxy(native_supervisor, native_
             writer.close()
             await writer.wait_closed()
             os.kill(ready["worker"]["pid"], signal.SIGKILL)
-            for _ in range(60):
+            for _ in range(140):
                 host.stdin.write(b"status\n")
                 await host.stdin.drain()
                 status = json.loads(await asyncio.wait_for(host.stdout.readline(), 5))
-                if status["worker"]["state"] == "unavailable":
+                assert status["worker"]["restarts"] == max(0, status["worker"]["generation"] - 1)
+                if status["worker"]["state"] == "running" and status["worker"]["generation"] > ready["worker"]["generation"]:
                     break
                 await asyncio.sleep(0.05)
-            assert status["worker"]["state"] == "unavailable"
-            assert status["listeners"] == {}
+            assert status["worker"]["state"] == "running" and status["worker"]["restarts"] >= 1
+            assert status["worker"]["pid"] != ready["worker"]["pid"]
+            assert status["listeners"]["http"]["bound_port"] == port
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            writer.write(f"CONNECT 127.0.0.1:{target} HTTP/1.1\r\nProxy-Authorization: Basic {auth}\r\n\r\n".encode())
+            await writer.drain()
+            assert (await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)).startswith(b"HTTP/1.1 200")
+            writer.write(b"recovered")
+            await writer.drain()
+            assert await asyncio.wait_for(reader.readexactly(9), 5) == b"recovered"
+            writer.close()
+            await writer.wait_closed()
         finally:
             host.stdin.write(b"stop\n")
             await host.stdin.drain()
@@ -104,6 +117,109 @@ def test_owner_loss_closes_proxy_listener(native_supervisor, native_proxy_worker
             await asyncio.sleep(0.05)
         else:
             pytest.fail("proxy listener survived supervisor loss")
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+@pytest.mark.parametrize("stop_during_backoff", [False, True])
+def test_native_proxy_supervisor_retries_occupied_port(native_supervisor, native_proxy_worker_executable, implementation, stop_during_backoff):
+    async def exercise():
+        executable = sys.executable if implementation == "python" else native_proxy_worker_executable
+        host = await asyncio.create_subprocess_exec(native_supervisor, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+        reserved = socket.socket()
+        reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
+        async def status():
+            host.stdin.write(b"status\n")
+            await host.stdin.drain()
+            current = json.loads(await asyncio.wait_for(host.stdout.readline(), 5))
+            assert current["worker"]["restarts"] == max(0, current["worker"]["generation"] - 1)
+            return current
+
+        try:
+            host.stdin.write((json.dumps({"implementation": implementation, "executable": executable, "config": _config()}) + "\n").encode())
+            await host.stdin.drain()
+            ready = json.loads(await asyncio.wait_for(host.stdout.readline(), 10))
+            port = ready["listeners"]["http"]["bound_port"]
+            assert ready["worker"]["pid"] > 1 and ready["worker"]["pid"] != host.pid
+            os.kill(ready["worker"]["pid"], signal.SIGKILL)
+            for _ in range(100):
+                try:
+                    reserved.bind(("127.0.0.1", port))
+                    reserved.listen()
+                    break
+                except OSError:
+                    await asyncio.sleep(0.01)
+            else:
+                pytest.fail("could not reserve the retired listener")
+            for _ in range(160):
+                current = await status()
+                if current["worker"]["failed_starts"] >= 1:
+                    break
+                await asyncio.sleep(0.05)
+            assert current["worker"]["failed_starts"] >= 1
+            assert current["worker"]["state"] == "unavailable" and current["listeners"] == {}
+            assert "secret-not-in-process-arguments" not in json.dumps(current)
+            if stop_during_backoff:
+                host.stdin.write(b"stop\n")
+                await host.stdin.drain()
+                await asyncio.wait_for(host.wait(), 8)
+                reserved.close()
+                await asyncio.sleep(0.6)
+                with pytest.raises(OSError):
+                    await asyncio.open_connection("127.0.0.1", port)
+                return
+            reserved.close()
+            for _ in range(160):
+                current = await status()
+                if current["worker"]["state"] == "running" and current["worker"]["generation"] >= 2:
+                    break
+                await asyncio.sleep(0.05)
+            assert current["worker"]["state"] == "running"
+            assert current["listeners"]["http"]["bound_port"] == port
+            assert current["worker"]["restarts"] >= 1
+        finally:
+            reserved.close()
+            if host.returncode is None:
+                host.stdin.write(b"stop\n")
+                await host.stdin.drain()
+                await asyncio.wait_for(host.wait(), 8)
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_native_proxy_supervisor_replaces_stalled_child(native_supervisor, native_proxy_worker_executable, implementation):
+    async def exercise():
+        executable = sys.executable if implementation == "python" else native_proxy_worker_executable
+        host = await asyncio.create_subprocess_exec(native_supervisor, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+        child_pid = None
+        try:
+            host.stdin.write((json.dumps({"implementation": implementation, "executable": executable, "config": _config()}) + "\n").encode())
+            await host.stdin.drain()
+            ready = json.loads(await asyncio.wait_for(host.stdout.readline(), 10))
+            child_pid = ready["worker"]["pid"]
+            assert child_pid > 1 and child_pid != host.pid
+            os.kill(child_pid, signal.SIGSTOP)
+            for _ in range(240):
+                host.stdin.write(b"status\n")
+                await host.stdin.drain()
+                current = json.loads(await asyncio.wait_for(host.stdout.readline(), 5))
+                assert current["worker"]["restarts"] == max(0, current["worker"]["generation"] - 1)
+                if current["worker"]["state"] == "running" and current["worker"]["generation"] >= 2:
+                    break
+                await asyncio.sleep(0.05)
+            assert current["worker"]["state"] == "running" and current["worker"]["generation"] >= 2
+            assert current["worker"]["pid"] != child_pid
+            assert current["listeners"]["http"]["bound_port"] == ready["listeners"]["http"]["bound_port"]
+            child_pid = None
+        finally:
+            if child_pid is not None:
+                with contextlib.suppress(ProcessLookupError):
+                    os.kill(child_pid, signal.SIGCONT)
+            if host.returncode is None:
+                host.stdin.write(b"stop\n")
+                await host.stdin.drain()
+                await asyncio.wait_for(host.wait(), 10)
     asyncio.run(exercise())
 
 

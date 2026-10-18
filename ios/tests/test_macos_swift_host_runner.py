@@ -3591,14 +3591,16 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
         status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
         proxy = status["proxy_provider"]
         assert proxy["worker"]["implementation"] == implementation
-        assert proxy["worker"]["pid"] != process.pid
+        assert proxy["worker"]["pid"] > 1 and proxy["worker"]["pid"] != process.pid
         assert proxy["listeners"]["http"]["bound_port"] == proxy_port
         assert "private-proxy-token" not in json.dumps(status)
         os.kill(proxy["worker"]["pid"], signal.SIGKILL)
-        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "unavailable", timeout_sec=20)
-        assert status["proxy_provider"]["listeners"] == {}
-        with pytest.raises(OSError), socket.create_connection(("127.0.0.1", proxy_port), timeout=1):
-            pass
+        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item["proxy_provider"]["worker"]["generation"] > proxy["worker"]["generation"], timeout_sec=20)
+        assert status["proxy_provider"]["worker"]["restarts"] >= 1
+        assert status["proxy_provider"]["listeners"]["http"]["bound_port"] == proxy_port
+        with socket.create_connection(("127.0.0.1", proxy_port), timeout=2) as conn:
+            conn.sendall(b"CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n")
+            assert conn.recv(1024).startswith(b"HTTP/1.1 407")
     finally:
         process.terminate()
         try:

@@ -31,15 +31,27 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
             #expect(worker["state"] as? String == "running")
             #expect(worker["implementation"] as? String == implementation)
             let pid = try #require(worker["pid"] as? Int)
+            let initialListeners = try #require(proxy["listeners"] as? [String: Any])
+            let initialHTTP = try #require(initialListeners["http"] as? [String: Any])
+            let initialPort = try #require(initialHTTP["bound_port"] as? Int)
             try #require(pid > 1)
             #expect(kill(Int32(pid), SIGKILL) == 0)
-            while Date() < deadline {
+            let recoveryDeadline = Date().addingTimeInterval(10)
+            while Date() < recoveryDeadline {
                 proxy = runtime.resourceHealthForAdmin()["proxy_provider"] as? [String: Any] ?? [:]
-                if (proxy["worker"] as? [String: Any])?["state"] as? String == "unavailable" { break }
+                let current = proxy["worker"] as? [String: Any] ?? [:]
+                if current["state"] as? String == "running", (current["generation"] as? Int ?? 0) > 1 { break }
                 Thread.sleep(forTimeInterval: 0.05)
             }
-            #expect((proxy["worker"] as? [String: Any])?["state"] as? String == "unavailable")
-            #expect((proxy["listeners"] as? [String: Any])?.isEmpty == true)
+            let recovered = try #require(proxy["worker"] as? [String: Any])
+            #expect(recovered["state"] as? String == "running")
+            #expect((recovered["generation"] as? Int ?? 0) > 1)
+            #expect((recovered["restarts"] as? Int ?? 0) >= 1)
+            let recoveredPID = try #require(recovered["pid"] as? Int)
+            #expect(recoveredPID > 1 && recoveredPID != pid)
+            let recoveredListeners = try #require(proxy["listeners"] as? [String: Any])
+            let recoveredHTTP = try #require(recoveredListeners["http"] as? [String: Any])
+            #expect(recoveredHTTP["bound_port"] as? Int == initialPort)
             runtime.stop()
         }
     }

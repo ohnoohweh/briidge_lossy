@@ -173,7 +173,7 @@ final class ObstacleBridgeHostRunner {
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
-    private var proxyWorker: ObstacleBridgeProxyWorkerSupervisor?
+    private var proxyWorker: ObstacleBridgeSupervisedProxyWorker?
     private let loggingWorkerLock = NSLock()
     private var loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private var loggingWorkerConfigured = false
@@ -672,7 +672,7 @@ final class ObstacleBridgeHostRunner {
             default:
                 throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
             }
-            let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: config.worker, executable: executable)
+            let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable)
             do {
                 try worker.start(config: ["bind": config.bindHost, "http_port": config.httpPort,
                                           "socks5_port": config.socks5Port, "protocols": config.protocols,
