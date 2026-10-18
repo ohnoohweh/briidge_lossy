@@ -272,6 +272,8 @@ pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round
 
 `ObstacleBridgeLinuxAdminServerTests.adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes` verifies the Linux HTTP adapter uses the shared Core login, configuration-change, and PSK-reveal policies: protected routes reject an unauthenticated request, a correct cookie-backed login admits the request, a configuration save requires a proof bound to the exact updates, and a password-confirmed PSK response is an AES-GCM envelope rather than plaintext.
 
+`ObstacleBridgeLinuxAdminServerTests.adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract` verifies the authenticated Admin lifecycle controls dispatch reconnect, controlled foreground restart, and shutdown only after their HTTP success response is prepared.
+
 The Linux Swift live-runtime suite includes a Python peer that accepts the
 WebSocket TCP connection but rejects HTTP upgrade, proving the selected
 WebSocket owner reports that connection-completion failure through Core's

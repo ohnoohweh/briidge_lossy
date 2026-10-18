@@ -6,6 +6,13 @@ import Glibc
 #endif
 
 enum ObstacleBridgeLinuxMain {
+    private final class ForegroundRestartState: @unchecked Sendable {
+        let lock = NSLock()
+        var requested = false
+    }
+
+    private static let foregroundRestartState = ForegroundRestartState()
+
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
         if let runOptions = ObstacleBridgeLinuxForegroundOptions.parse(arguments) {
@@ -192,7 +199,7 @@ enum ObstacleBridgeLinuxMain {
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, restartHandler: requestForegroundRestart, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo)
                 try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
@@ -216,6 +223,7 @@ enum ObstacleBridgeLinuxMain {
                 configurationStore: adminConfigurationStore,
                 staticDirectory: staticDirectory,
                 reconnectHandler: runtime.reconnect,
+                restartHandler: requestForegroundRestart,
                 shutdownHandler: requestForegroundShutdown,
                 debugLogsProvider: observability.recentLogLines,
                 buildInfo: buildInfo
@@ -308,6 +316,7 @@ enum ObstacleBridgeLinuxMain {
                 if let signal { recordSignal?(signal) }
                 stop()
                 admin?.stop()
+                if consumeForegroundRestartRequest() { restartForegroundProcess() }
                 exit(0)
             }
         }
@@ -340,6 +349,34 @@ enum ObstacleBridgeLinuxMain {
         #else
         exit(0)
         #endif
+    }
+
+    private static func requestForegroundRestart() {
+        foregroundRestartState.lock.lock()
+        foregroundRestartState.requested = true
+        foregroundRestartState.lock.unlock()
+        requestForegroundShutdown()
+    }
+
+    private static func consumeForegroundRestartRequest() -> Bool {
+        foregroundRestartState.lock.lock()
+        defer { foregroundRestartState.lock.unlock() }
+        let requested = foregroundRestartState.requested
+        foregroundRestartState.requested = false
+        return requested
+    }
+
+    private static func restartForegroundProcess() -> Never {
+        #if os(Linux)
+        let arguments = CommandLine.arguments
+        guard let executable = arguments.first, !executable.isEmpty else { exit(75) }
+        let storage = arguments.map { strdup($0) }
+        guard storage.allSatisfy({ $0 != nil }) else { exit(75) }
+        var argv = storage.map { Optional($0!) }
+        argv.append(nil)
+        executable.withCString { path in _ = execv(path, &argv) }
+        #endif
+        exit(75)
     }
 
     private static func writeError(_ message: String) {

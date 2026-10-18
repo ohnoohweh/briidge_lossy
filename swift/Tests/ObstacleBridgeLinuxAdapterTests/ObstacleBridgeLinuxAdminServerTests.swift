@@ -160,11 +160,13 @@ struct ObstacleBridgeLinuxAdminServerTests {
             "admin_web": ["admin_web_auth_disable": true, "admin_web_name": "Linux native"],
         ])
         let reconnected = DispatchSemaphore(value: 0)
+        let restarted = DispatchSemaphore(value: 0)
         let shutdownRequested = DispatchSemaphore(value: 0)
         let server = ObstacleBridgeLinuxAdminServer(
             runtime: runtime,
             configurationStore: store,
             reconnectHandler: { reconnected.signal() },
+            restartHandler: { restarted.signal() },
             shutdownHandler: { shutdownRequested.signal() }
         )
         try server.start(); defer { server.stop() }
@@ -187,6 +189,10 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(reconnect.status == 200)
         #expect((reconnect.body as? [String: Any])?["ok"] as? Bool == true)
         #expect(reconnected.wait(timeout: .now() + 1) == .success)
+        let restart = try await requestJSON(base + "/api/restart", method: "POST", body: [:])
+        #expect(restart.status == 200)
+        #expect((restart.body as? [String: Any])?["restarting"] as? Bool == true)
+        #expect(restarted.wait(timeout: .now() + 1) == .success)
         let shutdown = try await requestJSON(base + "/api/shutdown", method: "POST", body: [:])
         #expect(shutdown.status == 200)
         #expect((shutdown.body as? [String: Any])?["shutdown_requested"] as? Bool == true)
