@@ -1176,6 +1176,7 @@ REQ-MUX-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::channelMuxFramesUseReadySessionAndRejectStaleEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSecureLinkCarriesChannelMuxFrameAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxServiceSocketOwnerTests.swift::tcpListenerPublishesOpenAndDataFrames
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeChannelMuxChannelIDAllocationTests.swift::partitionsPeerAndListenerIDsAcrossIndependentOwners
 
 REQ-MUX-002:
   integration_tests:

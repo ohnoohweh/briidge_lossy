@@ -83,6 +83,7 @@ final class ObstacleBridgeTcpOverlayTransportOwner {
         runtime: ObstacleBridgeChannelMuxTcpRuntime(
             instanceID: muxInstanceID,
             connectionSeq: muxConnectionSeq,
+            allocation: .peerClient(),
             sessionMaxAppPayload: sessionMaxAppPayload
         ),
         sessionMaxAppPayload: sessionMaxAppPayload,

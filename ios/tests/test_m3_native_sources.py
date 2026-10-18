@@ -452,6 +452,23 @@ def test_channel_mux_tcp_runtime_source_exists() -> None:
     assert "handleLocalClientData(" in runtime
     assert "handleLocalClientEOF(" in runtime
     assert "handleInboundClientClose(" in runtime
+    assert "struct ObstacleBridgeChannelMuxChannelIDAllocation" in runtime
+    assert "case peerClient" in runtime
+    assert "case listener" in runtime
+    assert "public static func peerClient" in runtime
+    assert "public static func listener" in runtime
+
+
+def test_apple_tcp_overlay_owners_use_shared_peer_client_channel_allocation() -> None:
+    for name in (
+        "ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+        "ObstacleBridgeQuicOverlayTransportOwner.swift",
+    ):
+        source = (SHARED_NATIVE_DIR / name).read_text(encoding="utf-8")
+        assert "ObstacleBridgeChannelMuxTcpRuntime(" in source
+        assert "allocation: .peerClient()" in source
 
 
 def test_compress_layer_runtime_source_exists() -> None:

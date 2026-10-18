@@ -81,7 +81,7 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
     @Test func tcpListenerPublishesOpenAndDataFrames() throws {
         let received = LockedFrames()
         let ready = DispatchSemaphore(value: 0)
-        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp), initialChannelID: 5, channelIDStride: 4) { _, frames in
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp), channelIDAllocation: .peerClient(ownerIndex: 2, ownerCount: 3)) { _, frames in
             received.append(frames)
             if received.all.count >= 2 { ready.signal() }
         }

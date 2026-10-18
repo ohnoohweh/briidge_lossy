@@ -119,6 +119,12 @@ def test_macos_shared_channelmux_codec_preserves_reserved_local_tun_service_id()
     codec = (CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxCompatibilityCodec.swift").read_text(encoding="utf-8")
 
     assert "(0...Int(UInt16.max)).contains(value.svcID)" in codec
+
+
+def test_macos_host_runner_uses_shared_peer_client_channel_allocation() -> None:
+    source = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert source.count("ObstacleBridgeChannelMuxTcpRuntime(allocation: .peerClient())") == 2
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeMacOS"

@@ -1572,6 +1572,10 @@ The shared Python/Swift ChannelMux fixture passes explicit inbound DATA and
 CLOSE counters for server and client paths to preserve the portable Core replay
 contract in parity tests.
 
+The same Core contract reserves odd ChannelMux IDs for peer/client owners and
+even IDs for listener owners; Linux, macOS, and iOS use that shared allocation
+policy rather than platform-specific ID assignment.
+
 Cross-runtime service qualification separately observes protected-overlay
 readiness and asynchronous local TCP-listener publication before sending data,
 recreating the pre-send client socket while bounded transient refusal or

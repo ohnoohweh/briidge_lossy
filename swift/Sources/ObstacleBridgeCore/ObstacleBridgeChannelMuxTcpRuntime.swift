@@ -1,5 +1,38 @@
 import Foundation
 
+/// The wire-level channel-ID partition shared by every ChannelMux runtime.
+///
+/// A peer/client allocates odd IDs and an overlay listener allocates even IDs,
+/// matching the Python implementation. When one host has several independent
+/// socket owners, each owner receives a disjoint subsequence of that role's
+/// half of the ID space. This prevents simultaneous OPEN frames from two
+/// directions, or from two local owners, from claiming the same channel.
+public struct ObstacleBridgeChannelMuxChannelIDAllocation: Equatable, Sendable {
+    public enum Role: Equatable, Sendable {
+        case peerClient
+        case listener
+    }
+
+    public let initialChannelID: Int
+    public let channelIDStride: Int
+
+    public init(role: Role, ownerIndex: Int = 0, ownerCount: Int = 1) {
+        let safeOwnerCount = max(1, ownerCount)
+        let safeOwnerIndex = min(max(0, ownerIndex), safeOwnerCount - 1)
+        let roleStart = role == .peerClient ? 1 : 2
+        self.initialChannelID = roleStart + (safeOwnerIndex * 2)
+        self.channelIDStride = safeOwnerCount * 2
+    }
+
+    public static func peerClient(ownerIndex: Int = 0, ownerCount: Int = 1) -> Self {
+        .init(role: .peerClient, ownerIndex: ownerIndex, ownerCount: ownerCount)
+    }
+
+    public static func listener(ownerIndex: Int = 0, ownerCount: Int = 1) -> Self {
+        .init(role: .listener, ownerIndex: ownerIndex, ownerCount: ownerCount)
+    }
+}
+
 public final class ObstacleBridgeChannelMuxTcpRuntime {
     public struct LocalServerAcceptSnapshot {
         public let chanID: Int
@@ -79,7 +112,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
     }
 
     private let sessionMaxAppPayload: Int
-    private let channelIDStride: UInt16
+    private var channelIDStride: UInt16
     /// The common portable state owner for locally accepted TCP services.
     /// Native dictionaries below retain only NWConnection bookkeeping and
     /// client-dial metadata.
@@ -99,30 +132,64 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
     public init(
         instanceID: UInt64 = 0,
         connectionSeq: UInt32 = 0,
-        nextTcpID: Int = 1,
-        channelIDStride: Int = 1,
+        allocation: ObstacleBridgeChannelMuxChannelIDAllocation = .peerClient(),
         sessionMaxAppPayload: Int = 65535
     ) {
         self.sessionMaxAppPayload = sessionMaxAppPayload
-        self.channelIDStride = UInt16(clamping: max(1, channelIDStride))
+        self.channelIDStride = UInt16(clamping: allocation.channelIDStride)
         self.serverSession = ObstacleBridgeChannelMuxSession(
             maximumApplicationPayload: sessionMaxAppPayload,
             instanceID: instanceID,
             connectionSequence: connectionSeq,
-            initialChannelID: UInt16(clamping: nextTcpID),
+            initialChannelID: UInt16(clamping: allocation.initialChannelID),
             channelStride: self.channelIDStride
         )
         self.clientSession = ObstacleBridgeChannelMuxSession(
             maximumApplicationPayload: sessionMaxAppPayload
         )
         self.counters = [:]
-        self.nextTcpID = max(1, nextTcpID)
+        self.nextTcpID = allocation.initialChannelID
         self.clientServiceIDByChannel = [:]
         self.clientOpenKeyByChannel = [:]
         self.clientChannelByOpenKey = [:]
         self.clientPending = [:]
         self.clientTransports = [:]
         self.serverActiveChannels = []
+    }
+
+    /// Compatibility initializer for protocol probes that supply an explicit
+    /// initial value. Product runtimes use `allocation:` so role partitioning
+    /// remains visible at every platform boundary.
+    public convenience init(
+        instanceID: UInt64 = 0,
+        connectionSeq: UInt32 = 0,
+        nextTcpID: Int,
+        channelIDStride: Int = 1,
+        sessionMaxAppPayload: Int = 65535
+    ) {
+        self.init(
+            instanceID: instanceID,
+            connectionSeq: connectionSeq,
+            allocation: .init(
+                role: nextTcpID.isMultiple(of: 2) ? .listener : .peerClient,
+                ownerIndex: 0,
+                ownerCount: max(1, channelIDStride / 2)
+            ),
+            sessionMaxAppPayload: sessionMaxAppPayload
+        )
+        // Preserve the caller-supplied fixture/probe value exactly. The
+        // compatibility surface predates the role allocator and permits
+        // arbitrary positive starts for vector qualification.
+        let initialChannelID = UInt16(clamping: max(1, nextTcpID))
+        self.serverSession = ObstacleBridgeChannelMuxSession(
+            maximumApplicationPayload: sessionMaxAppPayload,
+            instanceID: instanceID,
+            connectionSequence: connectionSeq,
+            initialChannelID: initialChannelID,
+            channelStride: UInt16(clamping: max(1, channelIDStride))
+        )
+        self.channelIDStride = UInt16(clamping: max(1, channelIDStride))
+        self.nextTcpID = max(1, nextTcpID)
     }
 
     public struct EpochResetSnapshot {
