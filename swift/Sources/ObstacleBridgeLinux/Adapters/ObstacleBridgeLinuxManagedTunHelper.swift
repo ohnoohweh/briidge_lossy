@@ -55,19 +55,13 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         ("/usr/bin/sudo", ["-v"])
     }
 
-    /// A `Process` launched from the foreground runtime does not reliably
-    /// inherit its shell's standard input on every Linux Foundation runtime.
-    /// Bind the one interactive sudo authorization directly to the controlling
-    /// terminal so PAM can disable echo and read the password from the same
-    /// terminal that displays its prompt.
-    static func bindAuthorizationToControllingTerminal(_ authorization: Process, terminalPath: String = "/dev/tty") throws {
-        guard let input = FileHandle(forReadingAtPath: terminalPath),
-              let output = FileHandle(forWritingAtPath: terminalPath) else {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper cannot access the controlling terminal for sudo authentication")
-        }
-        authorization.standardInput = input
-        authorization.standardOutput = output
-        authorization.standardError = output
+    /// The interactive authorization child must use one raw controlling-TTY
+    /// descriptor for all three standard streams.  Passing Foundation
+    /// `FileHandle`s to `Process` can leave sudo with a non-terminal input
+    /// stream on Linux, which makes its password prompt visible but causes
+    /// reads to fail with `EIO`.
+    static func authorizationTerminalDescriptors(_ terminal: Int32) -> (input: Int32, output: Int32, error: Int32) {
+        (terminal, terminal, terminal)
     }
 
     /// An interactive sudo prompt needs materially longer than a direct child
@@ -103,6 +97,52 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
     }
 
     #if os(Linux)
+    /// Runs exactly one synchronous `sudo -v` through the caller's controlling
+    /// terminal before the runtime creates threads or starts its background
+    /// helper.  This deliberately bypasses Foundation `Process` for the one
+    /// interactive handoff; the later helper launch is `sudo -n` and never
+    /// reads a password.
+    private static func authorizeOnControllingTerminal(command: (path: String, arguments: [String])) throws {
+        let terminal = "/dev/tty".withCString { open($0, O_RDWR | O_CLOEXEC) }
+        guard terminal >= 0 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires an interactive controlling terminal for sudo authentication")
+        }
+        defer { _ = close(terminal) }
+
+        let child = fork()
+        guard child >= 0 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("unable to create sudo authorization process for the Linux TUN helper")
+        }
+        if child == 0 {
+            let descriptors = authorizationTerminalDescriptors(terminal)
+            guard dup2(descriptors.input, STDIN_FILENO) >= 0,
+                  dup2(descriptors.output, STDOUT_FILENO) >= 0,
+                  dup2(descriptors.error, STDERR_FILENO) >= 0 else {
+                _exit(126)
+            }
+            if terminal > STDERR_FILENO { _ = close(terminal) }
+
+            let argumentStorage: [UnsafeMutablePointer<CChar>?] = ([command.path] + command.arguments).map {
+                $0.withCString { strdup($0) }
+            }
+            guard argumentStorage.allSatisfy({ $0 != nil }) else { _exit(127) }
+            var argv = argumentStorage.map { Optional($0!) }
+            argv.append(nil)
+            command.path.withCString { path in _ = execv(path, &argv) }
+            _exit(127)
+        }
+
+        var status: Int32 = 0
+        while waitpid(child, &status, 0) == -1 {
+            if errno != EINTR {
+                throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("unable to wait for sudo authorization for the Linux TUN helper")
+            }
+        }
+        guard status == 0 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("sudo authorization for the Linux TUN helper was not accepted")
+        }
+    }
+
     private static func effectiveCapabilityMask() -> UInt64 {
         guard let status = try? String(contentsOfFile: "/proc/self/status", encoding: .utf8),
               let line = status.split(separator: "\n").first(where: { $0.hasPrefix("CapEff:") })
@@ -131,11 +171,9 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
     }
     #endif
 
-    /// Establish a sudo timestamp before the asynchronous runtime starts.
-    /// Process deliberately inherits stdin/stdout/stderr here: sudo then owns
-    /// the caller's foreground terminal and keeps its password entry hidden.
-    /// The foreground app itself never becomes privileged; its later helper
-    /// child uses the timestamp with `sudo -n`.
+    /// Establish a sudo timestamp before the asynchronous runtime starts. The
+    /// foreground app itself never becomes privileged; its later helper child
+    /// uses the timestamp with `sudo -n`.
     public static func preauthorizeManagedHelperIfNeeded(executable: String? = nil) throws {
         #if os(Linux)
         let selected = executable ?? CommandLine.arguments.first ?? ""
@@ -144,23 +182,7 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
             : URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
                 .appendingPathComponent(selected).standardizedFileURL.path
         guard geteuid() != 0, !canLaunchWithoutSudo(executable: resolved) else { return }
-        guard isatty(STDIN_FILENO) == 1 else {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires an interactive terminal for sudo authentication")
-        }
-        let command = authorizationCommand()
-        let authorization = Process()
-        authorization.executableURL = URL(fileURLWithPath: command.path)
-        authorization.arguments = command.arguments
-        do {
-            try bindAuthorizationToControllingTerminal(authorization)
-            try authorization.run()
-            authorization.waitUntilExit()
-        } catch {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("unable to start sudo authorization for the Linux TUN helper")
-        }
-        guard authorization.terminationStatus == 0 else {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("sudo authorization for the Linux TUN helper was not accepted")
-        }
+        try authorizeOnControllingTerminal(command: authorizationCommand())
         #endif
     }
 

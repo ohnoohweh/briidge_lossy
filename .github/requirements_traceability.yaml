@@ -1013,6 +1013,7 @@ REQ-LIFE-010:
     - tests/unit/test_channel_mux_tun_helper.py::test_helper_mode_network_payload_carries_listener_hook_env
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperElevatesOnlyTheSeparateHelperProcess
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperAuthorizationKeepsAllSudoStreamsOnOneRawTerminal
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_builds_and_launches_swift_protocol_v1_helper
     - tests/unit/test_swift_tun_helper.py::test_identity_matches_only_embedded_commit_dirty_and_diff
     - tests/unit/test_swift_tun_helper.py::test_dirty_checkout_rebuilds_even_when_embedded_identity_matches

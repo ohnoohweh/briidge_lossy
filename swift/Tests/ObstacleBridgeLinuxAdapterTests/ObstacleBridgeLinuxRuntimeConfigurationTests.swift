@@ -29,15 +29,11 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(authorization.arguments == ["-v"])
     }
 
-    @Test func managedTunHelperBindsInteractiveAuthorizationToControllingTerminal() throws {
-        let terminal = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-tty-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: terminal) }
-        #expect(FileManager.default.createFile(atPath: terminal.path, contents: Data()))
-        let authorization = Process()
-        try ObstacleBridgeLinuxManagedTunHelper.bindAuthorizationToControllingTerminal(authorization, terminalPath: terminal.path)
-        #expect(authorization.standardInput is FileHandle)
-        #expect(authorization.standardOutput is FileHandle)
-        #expect(authorization.standardError is FileHandle)
+    @Test func managedTunHelperAuthorizationKeepsAllSudoStreamsOnOneRawTerminal() {
+        let descriptors = ObstacleBridgeLinuxManagedTunHelper.authorizationTerminalDescriptors(42)
+        #expect(descriptors.input == 42)
+        #expect(descriptors.output == 42)
+        #expect(descriptors.error == 42)
     }
 
     @Test func managedTunHelperMatchesPythonCapabilityBasedPrivilegeAdmission() {

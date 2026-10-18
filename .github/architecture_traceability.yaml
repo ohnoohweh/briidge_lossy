@@ -562,6 +562,7 @@ ARC-CMP-004:
     - tests/unit/test_runner_tun_helper.py::test_tun_helper_snapshot_reports_main_process_identity_for_inline_mode
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_sudo_for_native_backend_when_unprivileged
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperElevatesOnlyTheSeparateHelperProcess
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperAuthorizationKeepsAllSudoStreamsOnOneRawTerminal
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_runner_attaches_to_prestarted_tun_helper_from_env_config
