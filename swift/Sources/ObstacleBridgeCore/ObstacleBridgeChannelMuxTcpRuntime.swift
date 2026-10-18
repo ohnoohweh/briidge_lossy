@@ -79,6 +79,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
     }
 
     private let sessionMaxAppPayload: Int
+    private let channelIDStride: UInt16
     /// The common portable state owner for locally accepted TCP services.
     /// Native dictionaries below retain only NWConnection bookkeeping and
     /// client-dial metadata.
@@ -99,20 +100,23 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         instanceID: UInt64 = 0,
         connectionSeq: UInt32 = 0,
         nextTcpID: Int = 1,
+        channelIDStride: Int = 1,
         sessionMaxAppPayload: Int = 65535
     ) {
         self.sessionMaxAppPayload = sessionMaxAppPayload
+        self.channelIDStride = UInt16(clamping: max(1, channelIDStride))
         self.serverSession = ObstacleBridgeChannelMuxSession(
             maximumApplicationPayload: sessionMaxAppPayload,
             instanceID: instanceID,
             connectionSequence: connectionSeq,
-            initialChannelID: UInt16(clamping: nextTcpID)
+            initialChannelID: UInt16(clamping: nextTcpID),
+            channelStride: self.channelIDStride
         )
         self.clientSession = ObstacleBridgeChannelMuxSession(
             maximumApplicationPayload: sessionMaxAppPayload
         )
         self.counters = [:]
-        self.nextTcpID = nextTcpID
+        self.nextTcpID = max(1, nextTcpID)
         self.clientServiceIDByChannel = [:]
         self.clientOpenKeyByChannel = [:]
         self.clientChannelByOpenKey = [:]
@@ -136,7 +140,8 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
             maximumApplicationPayload: sessionMaxAppPayload,
             instanceID: instanceID,
             connectionSequence: connectionSeq,
-            initialChannelID: UInt16(clamping: nextTcpID)
+            initialChannelID: UInt16(clamping: nextTcpID),
+            channelStride: channelIDStride
         )
         clientSession = ObstacleBridgeChannelMuxSession(maximumApplicationPayload: sessionMaxAppPayload)
         counters.removeAll(); serverActiveChannels.removeAll(); clientServiceIDByChannel.removeAll()

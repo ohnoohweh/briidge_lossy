@@ -739,8 +739,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func startOwnServiceOwners() throws {
         stopServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
-        for spec in configuredRuntime.configuration.ownServices {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
+        let specs = configuredRuntime.configuration.ownServices
+        for (index, spec) in specs.enumerated() {
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, initialChannelID: 1 + (index * 2), channelIDStride: max(2, specs.count * 2)) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
@@ -857,8 +858,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
         stopRemoteServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
-        for spec in specs {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
+        for (index, spec) in specs.enumerated() {
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, initialChannelID: 2 + (index * 2), channelIDStride: max(2, specs.count * 2)) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
