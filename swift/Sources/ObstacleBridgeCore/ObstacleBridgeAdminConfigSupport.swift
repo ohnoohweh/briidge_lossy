@@ -43,10 +43,11 @@ public enum ObstacleBridgeAdminOnboardingPort {
         let flattened = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig)
         return linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
             method: "POST", body: body, runtimeConfig: flattened, profiles: connectionProfiles(runtimeConfig: flattened),
-            encryptSecrets: { payload in
-                guard !containsSecret(payload) else { throw NSError(domain: "ObstacleBridgeLinux", code: 1, userInfo: [NSLocalizedDescriptionKey: "Linux onboarding secrets are unavailable"]) }
-                return payload
-            }
+            // Invite tokens intentionally carry the peer PSK in the same
+            // portable representation as Python. The recipient's config
+            // store seals it with that recipient's machine-derived key when
+            // the suggested update is applied.
+            encryptSecrets: { $0 }
         ))
     }
     public static func preview(body: Data?) -> ObstacleBridgeAdminLinuxResponse {
@@ -55,11 +56,6 @@ public enum ObstacleBridgeAdminOnboardingPort {
     private static func linuxResponse(_ response: ObstacleBridgeAdminAPIResponse) -> ObstacleBridgeAdminLinuxResponse {
         let code = Int(response.statusLine.split(separator: " ").dropFirst().first ?? "500") ?? 500
         return .init(statusCode: code, body: response.body)
-    }
-    private static func containsSecret(_ value: Any) -> Bool {
-        if let object = value as? [String: Any] { return object.contains { $0.key.lowercased().contains("psk") || $0.key.lowercased().contains("password") || containsSecret($0.value) } }
-        if let values = value as? [Any] { return values.contains(where: containsSecret) }
-        return false
     }
 }
 

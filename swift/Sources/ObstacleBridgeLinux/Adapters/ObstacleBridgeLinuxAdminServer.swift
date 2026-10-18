@@ -224,7 +224,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             let blueprints = ObstacleBridgeAdminOnboardingPort.blueprints()
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": blueprints.count, "blueprints": blueprints]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/onboarding/invite", "/api/onboarding/invite/generate":
-            response = ObstacleBridgeAdminOnboardingPort.generate(body: body, runtimeConfig: adminConfigurationProvider())
+            do {
+                let runtimeConfiguration = try configurationStore?.runtimeSnapshot() ?? adminConfigurationProvider()
+                response = ObstacleBridgeAdminOnboardingPort.generate(body: body, runtimeConfig: runtimeConfiguration)
+            } catch {
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": error.localizedDescription], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            }
         case "/api/onboarding/preview", "/api/onboarding/invite/preview":
             response = ObstacleBridgeAdminOnboardingPort.preview(body: body)
         case "/api/admin-ui":

@@ -1588,6 +1588,7 @@ REQ-ADM-009:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::configurationStorePersistsPythonCompatibleEncryptedSecrets
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_ignores_unsectioned_config
     - tests/unit/test_embeddable_core.py::test_build_runtime_args_uses_channel_mux_egress_key
     - tests/unit/test_runner_config_persistence.py::test_runtime_config_save_discards_unregistered_sections
@@ -1723,6 +1724,7 @@ REQ-ADM-010:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_onboarding_invite_api_masks_psk_and_returns_apply_updates
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::onboardingHTTPUsesCoreTokenPolicyAndCarriesSecretsForRecipientOwnedPersistence
     - tests/unit/test_admin_web_payloads.py::test_onboarding_connection_profiles_expose_configured_transports
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_roundtrip_and_suggested_updates
     - tests/unit/test_admin_web_payloads.py::test_onboarding_invite_applies_client_options_for_every_transport

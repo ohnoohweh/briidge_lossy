@@ -49,6 +49,29 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(preservedAdmin["admin_web_username"] as? String == "")
     }
 
+    @Test func configurationStorePersistsPythonCompatibleEncryptedSecrets() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("ObstacleBridge.cfg").path
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "old-secret"],
+            "admin_web": ["admin_web_password": "old-admin-password"],
+        ], path: path)
+
+        let saved = try store.apply(updates: ["secure_link_psk": "new-secret", "admin_web_password": "new-admin-password"])
+        let persisted = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(!persisted.contains("old-secret"))
+        #expect(!persisted.contains("new-secret"))
+        #expect(!persisted.contains("old-admin-password"))
+        #expect(!persisted.contains("new-admin-password"))
+        #expect(persisted.contains("enc:v1:"))
+        #expect((saved.configuration["secure_link"] as? [String: Any])?["secure_link_psk"] as? String != "new-secret")
+        #expect(try ObstacleBridgeLinuxRuntimeConfiguration.load(path: path).secureLinkPSK == Data("new-secret".utf8))
+    }
+
     @Test func configHTTPUpdatePersistsValidatedFieldsAndRejectsInvalidInput() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: ["admin_web": ["admin_web_auth_disable": false]])
@@ -109,7 +132,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(shutdownRequested.wait(timeout: .now() + 1) == .success)
     }
 
-    @Test func onboardingHTTPUsesCoreTokenPolicyAndFailsClosedForSecrets() async throws {
+    @Test func onboardingHTTPUsesCoreTokenPolicyAndCarriesSecretsForRecipientOwnedPersistence() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
             "runner": ["overlay_transport": "tcp"],
@@ -125,11 +148,20 @@ struct ObstacleBridgeLinuxAdminServerTests {
         ).body as? [String: Any])
         #expect(preview["ok"] as? Bool == true)
 
-        let secretServer = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: ["secure_link_psk": "no-linux-key-owner"])
+        let secretServer = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "portable-peer-secret"],
+        ])
         try secretServer.start(); defer { secretServer.stop() }
-        let rejected = try await requestJSON("http://127.0.0.1:\(secretServer.port)/api/onboarding/invite", method: "POST", body: [:])
-        #expect(rejected.status == 400)
-        #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
+        let secretInvite = try await requestJSON("http://127.0.0.1:\(secretServer.port)/api/onboarding/invite", method: "POST", body: [:])
+        #expect(secretInvite.status == 200)
+        let secretToken = try #require((secretInvite.body as? [String: Any])?["invite_token"] as? String)
+        let secretPreview = try #require(try await requestJSON(
+            "http://127.0.0.1:\(secretServer.port)/api/onboarding/preview", method: "POST", body: ["invite_token": secretToken]
+        ).body as? [String: Any])
+        let suggested = try #require(secretPreview["suggested_updates"] as? [String: Any])
+        #expect(suggested["secure_link_psk"] as? String == "portable-peer-secret")
     }
 
     @Test func metaAndOnboardingRoutesMatchTheShippedAdminWebContract() async throws {

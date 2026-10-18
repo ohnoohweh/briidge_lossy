@@ -18,9 +18,42 @@ enum ObstacleBridgeLinuxConfigSecretCodec {
         return transformed
     }
 
-    /// Internal to permit portable regression fixtures without exposing a
-    /// configuration-encryption API from the Linux runtime product.
+    static func encryptPayload(_ root: [String: Any]) throws -> [String: Any] {
+        guard let transformed = try encryptTransform(root) as? [String: Any] else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+        }
+        return transformed
+    }
+
+    /// Kept deterministic for envelope compatibility vectors.
     static func encryptForTesting(_ value: String, nonce: Data) throws -> String {
+        try encrypt(value, nonce: nonce)
+    }
+
+    private static func encryptTransform(_ value: Any) throws -> Any {
+        if let object = value as? [String: Any] {
+            var transformed: [String: Any] = [:]
+            for (field, nestedValue) in object {
+                if secretFields.contains(field), let secret = nestedValue as? String {
+                    transformed[field] = try encrypt(secret)
+                } else {
+                    transformed[field] = try encryptTransform(nestedValue)
+                }
+            }
+            return transformed
+        }
+        if let array = value as? [Any] {
+            return try array.map(encryptTransform)
+        }
+        return value
+    }
+
+    private static func encrypt(_ value: String, nonce: Data? = nil) throws -> String {
+        guard !value.isEmpty, !value.hasPrefix(prefix) else { return value }
+        let nonce = try nonce ?? freshNonce()
+        guard nonce.count == 12 else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("configuration secret nonce must be 12 bytes")
+        }
         let sealed = try ObstacleBridgeCrypto.chaChaPolySeal(
             plaintext: Data(value.utf8), key: try key(), nonce: nonce,
             authenticatedData: authenticatedData
@@ -29,6 +62,11 @@ enum ObstacleBridgeLinuxConfigSecretCodec {
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func freshNonce() throws -> Data {
+        var generator = SystemRandomNumberGenerator()
+        return Data((0..<12).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
     }
 
     private static func transform(_ value: Any) throws -> Any {
