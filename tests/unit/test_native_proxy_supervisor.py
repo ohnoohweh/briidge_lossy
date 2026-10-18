@@ -300,6 +300,49 @@ def test_native_proxy_child_logs_follow_collector_and_proxy_restarts(native_supe
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("proxy_implementation", ["python", "native"])
+@pytest.mark.parametrize("log_implementation", ["python", "native"])
+@pytest.mark.parametrize("level", ["INFO", "WARNING"])
+def test_native_proxy_child_honors_component_log_level(native_supervisor, native_proxy_worker_executable, native_collector, proxy_implementation, log_implementation, level):
+    async def exercise():
+        proxy_executable = sys.executable if proxy_implementation == "python" else native_proxy_worker_executable
+        log_executable = sys.executable if log_implementation == "python" else native_collector
+        host = await asyncio.create_subprocess_exec(native_supervisor, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+
+        async def command(value):
+            host.stdin.write((value + "\n").encode())
+            await host.stdin.drain()
+            return json.loads(await asyncio.wait_for(host.stdout.readline(), 8))
+
+        try:
+            host.stdin.write((json.dumps({"implementation": proxy_implementation, "executable": proxy_executable, "config": _config(),
+                                          "logging": {"implementation": log_implementation, "executable": log_executable,
+                                                      "configuration": {"proxy_provider": {"log_proxy_provider": level}}}}) + "\n").encode())
+            await host.stdin.drain()
+            proxy = json.loads(await asyncio.wait_for(host.stdout.readline(), 10))
+            reader, writer = await asyncio.open_connection("127.0.0.1", proxy["listeners"]["http"]["bound_port"])
+            writer.write(b"invalid-request\r\n\r\n")
+            await writer.drain()
+            writer.write_eof()
+            await asyncio.wait_for(reader.read(4096), 5)
+            writer.close()
+            await writer.wait_closed()
+            for _ in range(100):
+                logs = await command("logs")
+                if any("[PROXY] client failed" in line for line in logs.get("lines", [])):
+                    break
+                await asyncio.sleep(0.05)
+            assert logs["available"] and any("[PROXY] client failed" in line for line in logs["lines"])
+            assert any("[PROXY] listener started" in line for line in logs["lines"]) == (level == "INFO")
+            assert "secret-not-in-process-arguments" not in repr(logs)
+        finally:
+            if host.returncode is None:
+                host.stdin.write(b"stop\n")
+                await host.stdin.drain()
+                await asyncio.wait_for(host.wait(), 10)
+    asyncio.run(exercise())
+
+
 @pytest.mark.parametrize("implementation", ["python", "native"])
 def test_restricted_policy_fails_closed(native_supervisor, native_proxy_worker_executable, implementation):
     config = _config()

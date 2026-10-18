@@ -27,6 +27,9 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     private static let maxDatagram = 8 * 1024
     private let implementation: String
     private let executable: String
+    /// Python's managed log ring uses a DEBUG root and optional component
+    /// overrides; keep the same effective threshold for native-host children.
+    public let proxyLogLevel: Int
     private let stateLock = NSLock()
     private let lifecycleLock = NSLock()
     private let queryLock = NSLock()
@@ -42,10 +45,11 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     private var droppedRecords = 0
     private var nextAttempt = Date.distantPast
 
-    public init(implementation: String, executable: String) throws {
+    public init(implementation: String, executable: String, proxyLogLevel: Int = 0) throws {
         guard ["python", "native"].contains(implementation), !executable.isEmpty else { throw Failure.invalidConfiguration }
         self.implementation = implementation
         self.executable = executable
+        self.proxyLogLevel = proxyLogLevel
     }
 
     /// Desktop configuration intentionally rejects sinks that the private
@@ -72,7 +76,12 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         let host = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0])
         let executable = configured.flatMap { $0.isEmpty ? nil : $0 }
             ?? (mode == "python" ? "/usr/bin/python3" : host.deletingLastPathComponent().appendingPathComponent("ObstacleBridgeLogCollector").path)
-        return try .init(implementation: mode, executable: executable)
+        let proxy = root["proxy_provider"] as? [String: Any] ?? [:]
+        let rawProxyLevel = proxy["log_proxy_provider"] ?? root["log_proxy_provider"]
+        let levels = ["NOTSET": 0, "DEBUG": 10, "INFO": 20, "WARNING": 30, "WARN": 30,
+                      "ERROR": 40, "CRITICAL": 50, "FATAL": 50]
+        let proxyLevel = (rawProxyLevel as? String).flatMap { levels[$0.uppercased()] } ?? 0
+        return try .init(implementation: mode, executable: executable, proxyLogLevel: proxyLevel)
     }
 
     private func socketPair(_ kind: Int32) throws -> (Int32, Int32) {

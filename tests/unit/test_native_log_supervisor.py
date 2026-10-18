@@ -99,6 +99,20 @@ def test_swift_host_logging_configuration_fails_closed(native_log_binaries, conf
     assert json.loads(completed.stdout)["selection"] == expected
 
 
+@pytest.mark.parametrize(("configuration", "level"), [
+    ({"log_worker": "native"}, 0),
+    ({"log_worker": "native", "log_proxy_provider": "warning"}, 30),
+    ({"log_worker": "native", "proxy_provider": {"log_proxy_provider": "DEBUG"}}, 10),
+    ({"log_worker": "native", "proxy_provider": {"log_proxy_provider": "NOTSET"}}, 0),
+    ({"log_worker": "native", "proxy_provider": {"log_proxy_provider": "invalid"}}, 0),
+    ({"log_worker": "native", "proxy_provider": {"log_proxy_provider": None}}, 0),
+])
+def test_swift_host_proxy_log_level_configuration(native_log_binaries, configuration, level):
+    owner, _ = native_log_binaries
+    completed = subprocess.run([owner], input=json.dumps({"configuration": configuration}) + "\n", text=True, capture_output=True, check=True, timeout=5)
+    assert json.loads(completed.stdout)["proxy_log_level"] == level
+
+
 @pytest.mark.parametrize("implementation", ["python", "native"])
 def test_swift_host_logging_drops_when_collector_stalls(native_log_binaries, implementation):
     async def exercise():

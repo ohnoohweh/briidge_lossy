@@ -17,7 +17,10 @@ struct NativeProxySupervisorRunner {
         if let logging = doc["logging"] as? [String: Any],
            let logImplementation = logging["implementation"] as? String,
            let logExecutable = logging["executable"] as? String {
-            let logger = try ObstacleBridgeLogWorkerSupervisor(implementation: logImplementation, executable: logExecutable)
+            var configuration = logging["configuration"] as? [String: Any] ?? [:]
+            configuration["log_worker"] = logImplementation
+            configuration["log_worker_\(logImplementation)_executable"] = logExecutable
+            guard let logger = try ObstacleBridgeLogWorkerSupervisor.configured(from: configuration) else { exit(2) }
             try logger.start()
             loggingWorker = logger
         }

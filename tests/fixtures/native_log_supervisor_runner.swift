@@ -6,7 +6,10 @@ struct NativeLogSupervisorRunner {
         guard let line = readLine(), let input = line.data(using: .utf8),
               let doc = try JSONSerialization.jsonObject(with: input) as? [String: Any] else { exit(2) }
         if let configuration = doc["configuration"] as? [String: Any] {
-            do { emit(["selection": try ObstacleBridgeLogWorkerSupervisor.configured(from: configuration) == nil ? "off" : "enabled"]) }
+            do {
+                let worker = try ObstacleBridgeLogWorkerSupervisor.configured(from: configuration)
+                emit(["selection": worker == nil ? "off" : "enabled", "proxy_log_level": worker?.proxyLogLevel ?? 0])
+            }
             catch { emit(["selection": "invalid"]) }
             return
         }

@@ -149,7 +149,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             lock.lock(); child = process; control = parentFD; stopping = false; logRelay = relay; lock.unlock()
             try childInput.close()
             try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "config": config,
-                                             "log_root_level": 20, "log_levels": ["proxy_provider": 20]])
+                                             "log_root_level": 10, "log_levels": ["proxy_provider": loggingWorker?.proxyLogLevel ?? 0]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)
             guard response["kind"] as? String == "proxy.ready", response["implementation"] as? String == implementation,
                   let initial = response["listeners"] as? [String: Any] else { throw Failure.invalidFrame }

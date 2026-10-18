@@ -3617,12 +3617,15 @@ def test_macos_host_proxy_logs_follow_collector(tmp_path: Path, monkeypatch: pyt
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
     status_port = _unused_tcp_port()
+    proxy_port = _unused_tcp_port()
+    while proxy_port == status_port:
+        proxy_port = _unused_tcp_port()
     config_path = tmp_path / "runtime.json"
     config_path.write_text(json.dumps({
         "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
         "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
         "proxy_provider": {
-            "enabled": True, "bind": "127.0.0.1", "http_port": _unused_tcp_port(),
+            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
             "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
             "worker_python_executable": sys.executable,
             "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
@@ -3647,6 +3650,45 @@ def test_macos_host_proxy_logs_follow_collector(tmp_path: Path, monkeypatch: pyt
         os.kill(proxy["pid"], signal.SIGKILL)
         _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item["proxy_provider"]["worker"]["generation"] > proxy["generation"], timeout_sec=20)
         logs = _wait_http_condition(logs_url, lambda item: any("[PROXY] listener started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert "private-proxy-token" not in json.dumps(logs)
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("proxy_implementation", ["python", "native"])
+@pytest.mark.parametrize("log_implementation", ["python", "native"])
+def test_macos_host_proxy_component_log_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proxy_implementation: str, log_implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port, proxy_port = _unused_tcp_port(), _unused_tcp_port()
+    while proxy_port == status_port:
+        proxy_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
+        "proxy_provider": {"enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
+            "worker_python_executable": sys.executable, "log_proxy_provider": "WARNING",
+            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+            "egress": {"mode": "direct"}, "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}},
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = f"http://127.0.0.1:{status_port}/api/status"
+        _wait_http_condition(url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        with socket.create_connection(("127.0.0.1", proxy_port), timeout=2) as client:
+            client.sendall(b"invalid-request\r\n\r\n")
+            client.shutdown(socket.SHUT_WR)
+            client.recv(4096)
+        logs = _wait_http_condition(f"http://127.0.0.1:{status_port}/api/logs?limit=100", lambda item: any("[PROXY] client failed" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert not any("[PROXY] listener started" in line for line in logs["lines"])
         assert "private-proxy-token" not in json.dumps(logs)
     finally:
         process.terminate()

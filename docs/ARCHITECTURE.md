@@ -57,9 +57,10 @@ rejects query messages,
 then forwards records nonblockingly to the current collector generation. Thus
 children cannot read Admin query replies, and a collector restart does not require
 restarting those children; congestion or collector loss drops records. Native
-proxy children currently emit at INFO level, independently of per-component
-logging configuration. Relay allocation failure counts as a dropped record and
-does not prevent proxy startup. The rest of the native runtime producers, other
+hosts pass the proxy component's configured level to either proxy implementation,
+using the Python managed logging ring's DEBUG root when no override is set.
+Relay allocation failure counts as a dropped record and does not prevent proxy
+startup. The rest of the native runtime producers, other
 future workers, comprehensive producer-side drop aggregation, file/UDP sinks and
 cross-host qualification remain open.
 
