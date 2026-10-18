@@ -55,6 +55,21 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         ("/usr/bin/sudo", ["-v"])
     }
 
+    /// A `Process` launched from the foreground runtime does not reliably
+    /// inherit its shell's standard input on every Linux Foundation runtime.
+    /// Bind the one interactive sudo authorization directly to the controlling
+    /// terminal so PAM can disable echo and read the password from the same
+    /// terminal that displays its prompt.
+    static func bindAuthorizationToControllingTerminal(_ authorization: Process, terminalPath: String = "/dev/tty") throws {
+        guard let input = FileHandle(forReadingAtPath: terminalPath),
+              let output = FileHandle(forWritingAtPath: terminalPath) else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper cannot access the controlling terminal for sudo authentication")
+        }
+        authorization.standardInput = input
+        authorization.standardOutput = output
+        authorization.standardError = output
+    }
+
     /// An interactive sudo prompt needs materially longer than a direct child
     /// launch to create its private socket. The foreground stays responsive
     /// while this bounded wait is in progress.
@@ -137,6 +152,7 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         authorization.executableURL = URL(fileURLWithPath: command.path)
         authorization.arguments = command.arguments
         do {
+            try bindAuthorizationToControllingTerminal(authorization)
             try authorization.run()
             authorization.waitUntilExit()
         } catch {
