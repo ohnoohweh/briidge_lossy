@@ -3,7 +3,8 @@ import ObstacleBridgeCore
 
 /// Linux-owned, bounded observability producer. It deliberately performs no
 /// network I/O on runtime callbacks: telemetry is first persisted through the
-/// shared private spool, and a supervisor/uploader may drain it separately.
+/// shared private spool, and the optional uploader drains that spool outside
+/// the foreground runtime's callback path.
 public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     private let lock = NSLock()
     private let fileURL: URL?
@@ -13,6 +14,7 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     private var uploadTimer: DispatchSourceTimer?
     private let maximumRecentLines: Int
     private var recentLines: [String] = []
+    private var lastLifecycleSignature: String?
 
     public init(configuration: [String: Any], sessionID: String = UUID().uuidString.lowercased()) {
         let logging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: configuration)
@@ -45,10 +47,27 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     }
 
     public func record(_ event: String, priority: ObstacleBridgeTelemetryPriority = .normal, fields: [String: ObstacleBridgeTelemetryFieldValue] = [:]) {
-        writeLog("\(event) \(fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " "))")
+        writeLog("\(event) \(fields.map { "\($0.key)=\(self.logValue($0.value))" }.sorted().joined(separator: " "))")
         guard let emitter, let spool, emitter.emit(event: event, fields: fields, priority: priority) else { return }
         for item in emitter.drain() { _ = spool.append(item) }
         uploader?.uploadOnce()
+    }
+
+    /// Records the redacted foreground lifecycle to both configured local
+    /// logging and the shared telemetry spool. Repeated snapshots of the same
+    /// state are intentionally collapsed so a high-frequency Admin refresh
+    /// cannot consume the bounded spool.
+    public func recordForegroundLifecycle(state: String, transport: String) {
+        let signature = "\(state)@\(transport)"
+        lock.lock()
+        let isDuplicate = lastLifecycleSignature == signature
+        lastLifecycleSignature = signature
+        lock.unlock()
+        guard !isDuplicate else { return }
+        record("runtime.lifecycle", fields: [
+            "state": .string(state),
+            "transport": .string(transport),
+        ])
     }
 
     /// Stores local runtime diagnostics without converting them to telemetry
@@ -96,6 +115,15 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
                 // Logging is best effort; the runtime must remain available if the log cannot be written.
             }
             _ = try? handle.close()
+        }
+    }
+
+    private func logValue(_ value: ObstacleBridgeTelemetryFieldValue) -> String {
+        switch value {
+        case .bool(let value): return value ? "true" : "false"
+        case .integer(let value): return String(value)
+        case .number(let value): return String(value)
+        case .string(let value): return value
         }
     }
 }

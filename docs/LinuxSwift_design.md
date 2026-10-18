@@ -118,6 +118,14 @@ failure even when another runtime subsequently reuses the configured log file.
 The foreground Admin-log observer is a second sink, never a replacement for
 that persisted diagnostic sink; this preserves the post-auth failure evidence
 needed to distinguish a local service or TUN startup error from peer loss.
+Foreground lifecycle changes (`started`, connection-state changes, and
+`stopped`) are written to the configured `debug_logging.log_file` and, when
+`telemetry_client.telemetry_enabled` is configured, emitted as allowlisted
+`runtime.lifecycle` records into the shared bounded private telemetry spool.
+Repeated snapshots of one state are collapsed before spool admission. The
+optional Linux HTTPS/mTLS drain path has adapter-level acknowledgement coverage,
+but full collector qualification remains a Linux product parity gap; loss of
+that drain never blocks local logging or spool persistence.
 When the native client starts its managed privileged TUN helper, only that
 child inherits the invoking terminal for `sudo`/PAM authentication; the main
 client stays unprivileged and no password is accepted through a pipe or command

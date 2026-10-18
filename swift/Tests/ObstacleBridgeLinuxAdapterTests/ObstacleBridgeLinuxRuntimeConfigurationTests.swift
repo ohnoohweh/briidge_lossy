@@ -28,7 +28,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(!ObstacleBridgeLinuxManagedTunHelper.inheritsTerminalStreams(elevated: false))
     }
 
-    @Test func observabilityWritesLifecycleLogAndBoundedTelemetrySpool() throws {
+    @Test func observabilityWritesForegroundLifecycleToConfiguredLogAndBoundedTelemetrySpool() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-observability-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let log = directory.appendingPathComponent("runtime.log")
@@ -36,9 +36,20 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             "debug_logging": ["log_file": log.path],
             "telemetry_client": ["telemetry_enabled": true, "telemetry_spool_directory": directory.appendingPathComponent("spool").path],
         ], sessionID: "test-session")
-        producer.record("runtime.starting")
-        #expect(String(decoding: try Data(contentsOf: log), as: UTF8.self).contains("runtime.starting"))
-        #expect(producer.telemetryStatus()["pending_events"] as? Int == 1)
+        let spoolDirectory = directory.appendingPathComponent("spool")
+        producer.recordForegroundLifecycle(state: "started", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "connecting", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "connecting", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "connected", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "stopped", transport: "myudp")
+
+        let logContents = String(decoding: try Data(contentsOf: log), as: UTF8.self)
+        #expect(logContents.contains("runtime.lifecycle"))
+        #expect(logContents.contains("state=connected"))
+        let events = try ObstacleBridgeTelemetrySpool(directory: spoolDirectory).recover()
+        #expect(events.map(\.event) == ["runtime.lifecycle", "runtime.lifecycle", "runtime.lifecycle", "runtime.lifecycle"])
+        #expect(events.compactMap { $0.fields["state"] } == [.string("started"), .string("connecting"), .string("connected"), .string("stopped")])
+        #expect(events.allSatisfy { $0.fields["transport"] == .string("myudp") })
     }
 
     @Test func admitsExplicitHelperControlSocketWithoutAdmittingTunStartup() throws {

@@ -205,8 +205,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
         let connections = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/connections") as? [String: Any])
-        #expect(connections["tcp"] as? [[String: Any]] == [])
-        #expect(connections["udp"] as? [[String: Any]] == [])
+        #expect((connections["tcp"] as? [[String: Any]])?.isEmpty == true)
+        #expect((connections["udp"] as? [[String: Any]])?.isEmpty == true)
         let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
         #expect(live["overlay_transport"] as? String == "tcp")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
@@ -219,7 +219,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         socket.resume()
         try await socket.send(.string("{\"subscribe\":[\"status\",\"peers\"],\"active_tabs\":[\"status\"],\"request\":[\"status\",\"peers\"]}"))
         var liveTypes = Set<String>()
-        for _ in 0..<3 {
+        for _ in 0..<4 {
             let message = try await socket.receive()
             let data: Data
             switch message {
@@ -232,6 +232,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
             if document["type"] as? String == "status" {
                 #expect((document["data"] as? [String: Any])?["overlay_transport"] as? String == "tcp")
             }
+            if liveTypes.isSuperset(of: ["hello", "status", "peers"]) { break }
         }
         #expect(liveTypes.contains("hello"))
         #expect(liveTypes.contains("status"))

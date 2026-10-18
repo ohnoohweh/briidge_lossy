@@ -187,7 +187,7 @@ enum ObstacleBridgeLinuxMain {
             guard adminWeb.enabled else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("admin_web.admin_web is disabled; enable it to start the Linux native Admin Web server") }
             let staticDirectory = URL(fileURLWithPath: adminWeb.staticDirectory)
             let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration)
-            observability.record("runtime.starting")
+            observability.recordForegroundLifecycle(state: "started", transport: configuration.transport.rawValue)
             let buildInfo = embeddedBuildInfo()
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
@@ -197,7 +197,7 @@ enum ObstacleBridgeLinuxMain {
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
                 let resources: [Any] = [runtime, admin, observability]
-                    + installForegroundShutdown(stop: { observability.record("runtime.stopped"); observability.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
+                    + installForegroundShutdown(stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
                 withExtendedLifetime(resources) { dispatchMain() }
             }
             let healthURL = URL(fileURLWithPath: options.configurationPath)
@@ -206,6 +206,9 @@ enum ObstacleBridgeLinuxMain {
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
             runtime.onDiagnostic = { event, fields in
                 observability.recordDiagnostic(event, fields: fields)
+            }
+            runtime.onSnapshot = { snapshot in
+                observability.recordForegroundLifecycle(state: snapshot.state, transport: configuration.transport.rawValue)
             }
             let admin = ObstacleBridgeLinuxAdminServer(
                 liveRuntime: runtime,
@@ -261,7 +264,7 @@ enum ObstacleBridgeLinuxMain {
             let status = "{\"admin_port\":\(admin.port),\"admin_url\":\"http://127.0.0.1:\(admin.port)/\",\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
             resources.append(contentsOf: installForegroundShutdown(
-                stop: { observability.record("runtime.stopped"); observability.stop(); runtime.stop() },
+                stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); runtime.stop() },
                 recordSignal: runtime.recordShutdownSignal,
                 admin: admin,
                 holdSeconds: options.holdSeconds

@@ -4,7 +4,7 @@ ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for 
 The project currently targets six platform families:
 
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
-- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, and TUN-helper paths backed by the shared Core protocol codecs; see the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
+- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, and bounded local telemetry-spool paths backed by shared Core protocol codecs; see the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
