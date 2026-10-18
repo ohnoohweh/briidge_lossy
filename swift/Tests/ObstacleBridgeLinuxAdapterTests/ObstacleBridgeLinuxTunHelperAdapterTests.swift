@@ -89,6 +89,15 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(try adapter.send(command: .stop, payload: [:])["stopping"] as? Bool == true)
     }
 
+    @Test func controlExchangeIgnoresHelperEventBeforeItsResponse() throws {
+        let backend = SwiftHelperBackend(emitEventBeforeReply: true)
+        let path = "/tmp/obstaclebridge-swift-helper-event-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
+        try server.start(); defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        #expect(try adapter.send(command: .applyNetwork, payload: [:])["applied"] as? Bool == true)
+    }
+
     @Test func swiftHelperServerStopsAfterAuthenticatedClientIdleWindow() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-idle-\(UUID().uuidString).sock"
@@ -314,9 +323,16 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
     private let lock = NSLock(); private var receivedPackets: [Data] = []
     private let receivedPacket = DispatchSemaphore(value: 0)
+    private let emitEventBeforeReply: Bool
+    private var eventSink: (String) -> Void = { _ in }
+    init(emitEventBeforeReply: Bool = false) { self.emitEventBeforeReply = emitEventBeforeReply }
     var packets: [Data] { lock.lock(); defer { lock.unlock() }; return receivedPackets }
     func openTun(_ payload: [String: Any]) throws -> [String: Any] { ["opened": true] }
-    func applyNetwork(_ payload: [String: Any]) throws -> [String: Any] { ["applied": true] }
+    func setEventSink(_ sink: @escaping (String) -> Void) { eventSink = sink }
+    func applyNetwork(_ payload: [String: Any]) throws -> [String: Any] {
+        if emitEventBeforeReply { eventSink("network apply started") }
+        return ["applied": true]
+    }
     func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] { ["removed": true] }
     func setTunEnabled(_ payload: [String: Any]) throws -> [String: Any] { ["enabled": true] }
     func writePacket(_ packet: Data) throws { lock.lock(); receivedPackets.append(packet); lock.unlock(); receivedPacket.signal() }

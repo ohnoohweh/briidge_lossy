@@ -822,14 +822,22 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         tunDevice = device
         tunHelperPacketDevice = device
         tunChannelAdapter = adapter
+        var setupStage = "open_tun"
         do {
             _ = try helper.send(command: .openTun, payload: ["ifname": configuredRuntime.configuration.tunInterfaceName, "mtu": plan.mtu])
+            setupStage = "packet_endpoint"
             try device.start()
+            setupStage = "apply_network"
             _ = try configuredRuntime.configuration.applyPacketTunnelPlanThroughHelper(interfaceName: configuredRuntime.configuration.tunInterfaceName)
             tunNetworkApplied = true
+            setupStage = "overlay_ready"
             adapter.overlayLifecycleChanged(ready: true)
         }
-        catch { stopPacketDevice(); throw error }
+        catch {
+            appendRuntimeHealth(event: "tun_start_failed stage=\(setupStage) reason=\(error.localizedDescription)")
+            stopPacketDevice()
+            throw error
+        }
     }
 
     private func stopPacketDevice() {
