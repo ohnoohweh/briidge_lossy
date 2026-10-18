@@ -93,6 +93,45 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
     }
 
+    @Test func adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "admin_web": ["admin_web_auth_disable": false, "admin_web_username": "operator", "admin_web_password": "secret"],
+        ])
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, configurationStore: store)
+        try server.start()
+        defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let denied = try await requestJSON(base + "/api/status", method: "GET", body: [:])
+        #expect(denied.status == 401)
+        #expect((denied.body as? [String: Any])?["error"] as? String == "authentication required")
+
+        let challenge = try #require((try await requestJSON(base + "/api/auth/challenge", method: "GET", body: [:])).body as? [String: Any])
+        let challengeID = try #require(challenge["challenge_id"] as? String)
+        let seed = try #require(challenge["seed"] as? String)
+        let proof = digest("\(seed):operator:secret")
+        let login = try await requestJSON(base + "/api/auth/login", method: "POST", body: ["challenge_id": challengeID, "proof": proof])
+        #expect(login.status == 200)
+        let cookie = try #require(login.headers["Set-Cookie"]?.split(separator: ";").first.map(String.init))
+
+        let admitted = try await requestJSON(base + "/api/status", method: "GET", body: [:], headers: ["Cookie": cookie])
+        #expect(admitted.status == 200)
+        let unconfirmed = try await requestJSON(base + "/api/config", method: "POST", body: ["updates": ["admin_web_name": "Updated"]], headers: ["Cookie": cookie])
+        #expect(unconfirmed.status == 428)
+
+        let updates: [String: Any] = ["admin_web_name": "Updated"]
+        let configChallenge = try #require((try await requestJSON(base + "/api/config/challenge", method: "POST", body: ["updates": updates], headers: ["Cookie": cookie])).body as? [String: Any])
+        let configID = try #require(configChallenge["challenge_id"] as? String)
+        let configSeed = try #require(configChallenge["seed"] as? String)
+        let updatesDigest = try #require(configChallenge["updates_digest"] as? String)
+        let configProof = digest("\(configSeed):operator:secret:\(updatesDigest)")
+        let saved = try await requestJSON(base + "/api/config", method: "POST", body: ["updates": updates, "challenge_id": configID, "proof": configProof], headers: ["Cookie": cookie])
+        #expect(saved.status == 200)
+        #expect((saved.body as? [String: Any])?["ok"] as? Bool == true)
+        #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_name"] as? String == "Updated")
+    }
+
     @Test func adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
@@ -497,12 +536,22 @@ struct ObstacleBridgeLinuxAdminServerTests {
         return try JSONSerialization.jsonObject(with: data)
     }
 
-    private func requestJSON(_ text: String, method: String, body: [String: Any]) async throws -> (status: Int, body: Any) {
+    private func requestJSON(_ text: String, method: String, body: [String: Any], headers: [String: String] = [:]) async throws -> (status: Int, body: Any, headers: [String: String]) {
         var request = URLRequest(url: try #require(URL(string: text)))
         request.httpMethod = method
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if method != "GET" {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await URLSession.shared.data(for: request)
-        return (try #require((response as? HTTPURLResponse)?.statusCode), try JSONSerialization.jsonObject(with: data))
+        let httpResponse = try #require(response as? HTTPURLResponse)
+        return (httpResponse.statusCode, try JSONSerialization.jsonObject(with: data), httpResponse.allHeaderFields.reduce(into: [:]) { headers, item in
+            if let key = item.key as? String, let value = item.value as? String { headers[key] = value }
+        })
+    }
+
+    private func digest(_ text: String) -> String {
+        ObstacleBridgeCrypto.sha256(Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

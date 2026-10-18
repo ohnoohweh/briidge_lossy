@@ -270,6 +270,8 @@ pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --run --admin-port 8080
 ```
 
+`ObstacleBridgeLinuxAdminServerTests.adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes` verifies the Linux HTTP adapter uses the shared Core login and configuration-change challenge policies: protected routes reject an unauthenticated request, a correct cookie-backed login admits the request, and a configuration save requires a proof bound to the exact updates.
+
 The Linux Swift live-runtime suite includes a Python peer that accepts the
 WebSocket TCP connection but rejects HTTP upgrade, proving the selected
 WebSocket owner reports that connection-completion failure through Core's

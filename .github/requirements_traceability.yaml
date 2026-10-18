@@ -1612,6 +1612,7 @@ REQ-ADM-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_unavailable_without_correct_auth
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_unavailable_without_correct_auth
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes
     - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
 
 REQ-ADM-004:
@@ -1619,6 +1620,7 @@ REQ-ADM-004:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_api_available_after_correct_auth
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_live_ws_available_after_correct_auth
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes
     - tests/unit/test_requirements_unit_gaps.py::test_auth_required_rejects_bad_login_and_accepts_challenge_proof
 
 REQ-ADM-005:
@@ -1718,6 +1720,7 @@ REQ-ADM-008:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_admin_config_challenge_masks_and_saves_secrets_encrypted
   unit_tests:
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes
     - tests/unit/test_admin_web_payloads.py::test_config_save_requires_challenge_bound_to_update_block
 
 REQ-ADM-010:

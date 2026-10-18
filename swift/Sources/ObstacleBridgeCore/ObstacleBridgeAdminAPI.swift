@@ -271,11 +271,13 @@ public struct ObstacleBridgeAdminLinuxResponse {
     public let statusCode: Int
     public let body: Data
     public let contentType: String
+    public let headers: [(String, String)]
 
-    public init(statusCode: Int, body: Data, contentType: String = "application/json") {
+    public init(statusCode: Int, body: Data, contentType: String = "application/json", headers: [(String, String)] = []) {
         self.statusCode = statusCode
         self.body = body
         self.contentType = contentType
+        self.headers = headers
     }
 }
 

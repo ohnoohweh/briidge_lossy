@@ -130,6 +130,7 @@
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxForegroundOptions.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminConfigurationStore.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminServer.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminSecurity.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminWebConfiguration.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift",
         "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxProxyProvider.swift",
@@ -335,11 +336,11 @@
       "id": "admin-config-and-onboarding",
       "requirements": ["REQ-ADM-001", "REQ-ADM-002", "REQ-ADM-003", "REQ-ADM-004", "REQ-ADM-005", "REQ-ADM-006", "REQ-ADM-007", "REQ-ADM-008", "REQ-ADM-009", "REQ-ADM-010", "REQ-ADM-011", "REQ-ADM-012"],
       "python_implementations": ["src/obstacle_bridge/bridge_webadmin.py", "src/obstacle_bridge/bridge_runner.py", "src/obstacle_bridge/onboarding.py"],
-      "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminServer.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxRuntimeConfiguration.swift"],
+      "swift_implementations": ["swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminServer.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxAdminSecurity.swift", "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxRuntimeConfiguration.swift"],
       "python_tests": ["tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python"],
       "swift_tests": ["swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxAdminServerTests.swift::statusAndPeersAreRedactedAndDescribeLayeredState", "swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::parsesSectionedMyudpConfiguration"],
       "parity_tests": ["tests/unit/test_admin_web_component_parity.py::test_swift_admin_api_status_route_matches_python"],
-      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Linux Swift serves a redacted status/peer subset; Python config persistence, Admin authentication, full routes, onboarding, and secret handling remain unmapped or incomplete."}
+      "linux_swift": {"applicability": "required", "status": "partial", "reason": "Linux Swift serves shared-Core Admin authentication, challenge-bound configuration updates, redacted status/peer routes, and recipient-owned encrypted onboarding persistence. Python-compatible restart, SecureLink control/reveal, TUN control/repair, and complete connected-peer operator routes remain incomplete."}
     }
   ],
   "r005_psk_traceability": [
