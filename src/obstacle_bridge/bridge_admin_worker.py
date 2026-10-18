@@ -25,7 +25,9 @@ SYNC_METHODS = frozenset({
     "_restart_requires_delay", "get_async_diagnostics_snapshot", "get_debug_logs",
     "get_telemetry_client_snapshot", "fetch_logs",
 })
-ASYNC_METHODS = frozenset({"request_tun_enabled", "probe_tun_connectivity_verification"})
+ASYNC_METHODS = frozenset({"request_tun_enabled", "probe_tun_connectivity_verification",
+                           "request_overlay_reconnect_async", "request_secure_link_rekey_async",
+                           "request_secure_link_reload_async"})
 
 
 def _encode(message: dict[str, Any]) -> bytes:

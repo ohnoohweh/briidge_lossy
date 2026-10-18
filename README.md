@@ -938,6 +938,10 @@ Operational notes:
 
 ObstacleBridge can expose a first-party local proxy provider for browser or application traffic. The provider is separate from the overlay peer connection: it listens on local loopback ports, accepts explicit proxy clients, and then opens direct outbound connections from the ObstacleBridge runtime.
 
+To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--proxy-provider-worker native` and `--proxy-provider-policy '{"allow_private_destinations":true,"blocked_host_patterns":[]}'`. This explicitly allows private destinations and provides no destination blocklist; use it only where that policy is appropriate. Build the native executable with `swift build --product ObstacleBridgeProxyWorker` and supply its path with `--proxy-provider-worker-native-executable`. The native child currently requires a `127.0.0.1` bind and `--proxy-provider-egress '{"mode":"direct"}'`; unsupported settings fail startup. The supervisor replaces a lost child; active proxy connections do not survive replacement.
+
+On desktop Linux and macOS, the Python runner also supports the experimental `--peer-stack-worker python --no-tun-enabled-on-startup` for a single outbound TCP peer. Its child owns the peer stack and TCP/UDP services, and the supervisor replaces it after failure. Admin reconnect, rekey and reload requests are forwarded to the child; if a reply is lost, the operation's outcome is unknown and it is not retried automatically. This mode rejects TUN services and peer configuration updates, and does not yet support native peer workers, listener peers or other overlay transports. Existing connections are lost when the child is replaced.
+
 The default local ports are:
 
 - HTTP and HTTPS proxy traffic through HTTP absolute-form and `CONNECT`: `127.0.0.1:13881`
@@ -1588,9 +1592,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `65` | `1019` |
-| macOS Swift app | `1` | `72` |
-| iOS app/extension | `32` | `209` |
+| Python CLI/runtime, including macOS Python | `74` | `1107` |
+| macOS Swift app | `1` | `78` |
+| iOS app/extension | `32` | `210` |
 
 #### Requirement traceability
 

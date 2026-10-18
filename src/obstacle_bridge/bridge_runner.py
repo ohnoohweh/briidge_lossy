@@ -352,6 +352,34 @@ class Runner:
         if worker is not None:
             await worker.stop()
 
+    async def _peer_stack_control(self, operation: str, target_peer_id: Optional[str], scope: Optional[str] = None) -> dict:
+        worker = self._peer_stack_worker
+        if worker is not None:
+            try:
+                return await worker.control(operation, target_peer_id=target_peer_id, scope=scope)
+            except (ConnectionError, OSError, ValueError, RuntimeError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+                pass
+        # The operation may have reached a child before its reply was lost.
+        # Do not retry it automatically or report that it definitely failed.
+        return {"ok": False, "target_peer_id": target_peer_id, "requested": 0,
+                "reason": "peer_worker_unavailable_or_outcome_unknown",
+                "error": "peer_worker_unavailable_or_outcome_unknown"}
+
+    async def request_overlay_reconnect_async(self, target_peer_id: Optional[str] = None) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+            return await self._peer_stack_control("reconnect", target_peer_id)
+        return self.request_overlay_reconnect(target_peer_id=target_peer_id)
+
+    async def request_secure_link_rekey_async(self, target_peer_id: Optional[str] = None) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+            return await self._peer_stack_control("rekey", target_peer_id)
+        return self.request_secure_link_rekey(target_peer_id=target_peer_id)
+
+    async def request_secure_link_reload_async(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+            return await self._peer_stack_control("reload", target_peer_id, scope=scope)
+        return self.request_secure_link_reload(scope=scope, target_peer_id=target_peer_id)
+
     def _telemetry_collector_warning(self, message: str) -> None:
         text = "WARNING: telemetry collector " + str(message)
         self._telemetry_collector_last_error = text
@@ -1926,7 +1954,7 @@ class Runner:
 
     def request_overlay_reconnect(self, target_peer_id: Optional[str] = None) -> dict:
         target = str(target_peer_id or "").strip()
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             return {"ok": False, "target_peer_id": target or None, "requested": 0,
                     "sessions": 0, "transports": [], "reason": "peer_worker_control_not_supported"}
         requested = 0
@@ -2237,7 +2265,7 @@ class Runner:
         }
         payload["tun_helper"] = self._tun_helper_snapshot()
         payload.update(self._runtime_health_status_fields())
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             snapshot = self._current_peer_stack_snapshot()
             if snapshot is not None:
                 child_status = snapshot["bundle"]["status"]
@@ -2257,7 +2285,7 @@ class Runner:
         return payload
 
     def get_connections_snapshot(self) -> dict:
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             snapshot = self._current_peer_stack_snapshot()
             if snapshot is not None:
                 return copy.deepcopy(snapshot["bundle"]["connections"])
@@ -2862,7 +2890,7 @@ class Runner:
                 self._peer_traffic_rate_state.pop(peer_id, None)
 
     def get_peer_connections_snapshot(self) -> dict:
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             snapshot = self._current_peer_stack_snapshot()
             return copy.deepcopy(snapshot["bundle"]["peers"]) if snapshot is not None else {"peers": [], "count": 0}
         peers: list = []
@@ -3215,7 +3243,7 @@ class Runner:
 
     def request_secure_link_rekey(self, target_peer_id: Optional[str] = None) -> dict:
         target = str(target_peer_id or "").strip()
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             return {"ok": False, "target_peer_id": target or None, "requested": 0,
                     "skipped": 0, "results": [], "error": "peer_worker_control_not_supported"}
         requested = 0
@@ -3280,7 +3308,7 @@ class Runner:
     def request_secure_link_reload(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
         normalized_scope = str(scope or "").strip().lower()
         target = str(target_peer_id or "").strip()
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             return {"ok": False, "scope": normalized_scope, "target_peer_id": target or None,
                     "requested": 0, "reloaded": 0, "dropped": 0, "failed": 0,
                     "results": [], "reason": "peer_worker_control_not_supported"}
@@ -3451,7 +3479,7 @@ class Runner:
                     normalized_updates[str(nested_key)] = nested_value
                 continue
             normalized_updates[str(key)] = value
-        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
             peer_sections = ("runner", "tcp_session", "secure_link", "compress_layer", "channel_mux", "TUN_routing", "tun_execution")
             peer_keys = {key for section in peer_sections for key in (getattr(self.args, "_config_sections", {}) or {}).get(section, ())}
             if peer_keys.intersection(normalized_updates):

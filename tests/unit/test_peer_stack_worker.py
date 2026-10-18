@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import signal
 import socket
 import struct
 import sys
@@ -91,6 +93,73 @@ def test_peer_worker_inherits_stderr_without_managed_collector(monkeypatch, capf
     monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
     asyncio.run(exercise())
     assert "[SERVER] ObstacleBridge build=" in capfd.readouterr().err
+
+
+def test_cancelled_peer_retirement_kills_and_reaps_child():
+    async def exercise():
+        class Process:
+            returncode = None
+
+            def __init__(self):
+                self.waiting = asyncio.Event()
+                self.stopped = asyncio.Event()
+                self.killed = False
+
+            async def wait(self):
+                self.waiting.set()
+                await self.stopped.wait()
+                return self.returncode
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+                self.stopped.set()
+
+        worker = PeerStackWorker("cancel-test")
+        process = Process()
+        worker.process = process
+        task = asyncio.create_task(worker._retire())
+        await asyncio.wait_for(process.waiting.wait(), 1)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert process.killed and process.returncode == -9 and worker.process is None
+    asyncio.run(exercise())
+
+
+def test_peer_control_deadline_kills_and_reaps_unresponsive_child():
+    async def exercise():
+        worker = PeerStackWorker("deadline-test")
+        await worker.start(_config())
+        child = worker.process
+        try:
+            os.kill(child.pid, signal.SIGSTOP)
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(worker.control("reconnect"), 0.25)
+            await asyncio.wait_for(child.wait(), 2)
+            assert child.returncode is not None and worker.process is None
+        finally:
+            await worker.stop()
+    asyncio.run(exercise())
+
+
+def test_peer_control_lost_reply_reports_unknown_without_retry():
+    async def exercise():
+        from obstacle_bridge.bridge import Runner
+
+        class LostReply:
+            calls = 0
+
+            async def control(self, operation, target_peer_id=None, scope=None):
+                self.calls += 1
+                raise asyncio.TimeoutError()
+
+        runner = Runner.__new__(Runner)
+        runner._peer_stack_worker = LostReply()
+        result = await runner._peer_stack_control("rekey", "0:0")
+        assert result["ok"] is False and result["reason"] == "peer_worker_unavailable_or_outcome_unknown"
+        assert result["target_peer_id"] == "0:0" and runner._peer_stack_worker.calls == 1
+    asyncio.run(exercise())
 
 
 def test_peer_worker_aborts_inflight_start_when_owner_disappears(monkeypatch):

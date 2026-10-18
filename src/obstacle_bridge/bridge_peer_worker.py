@@ -148,6 +148,21 @@ async def _serve(control_fd: int, log_fd: int | None = None) -> None:
             if request.get("kind") == "peer.stop":
                 await _write_frame(writer, {**identity, "kind": "peer.stopping", "id": request_id})
                 break
+            if request.get("kind") == "peer.control":
+                operation = request.get("operation")
+                target = request.get("target_peer_id")
+                if target is not None and (not isinstance(target, str) or len(target) > 128):
+                    raise ValueError("invalid peer control target")
+                if operation == "reconnect":
+                    result = runner.request_overlay_reconnect(target_peer_id=target)
+                elif operation == "rekey":
+                    result = runner.request_secure_link_rekey(target_peer_id=target)
+                elif operation == "reload" and request.get("scope") in {"all", "revocation", "local_identity"}:
+                    result = runner.request_secure_link_reload(scope=request["scope"], target_peer_id=target)
+                else:
+                    raise ValueError("invalid peer control operation")
+                await _write_frame(writer, {**identity, "kind": "peer.control.reply", "id": request_id, "result": result})
+                continue
             if request.get("kind") != "peer.snapshot":
                 raise ValueError("unsupported peer worker request")
             await _write_frame(writer, {**identity, "kind": "peer.snapshot.reply", "id": request_id,
@@ -238,20 +253,25 @@ class PeerStackWorker:
                 await process.wait()
             raise
 
-    async def _request(self, kind: str, expected: str) -> dict[str, Any]:
+    async def _request(self, kind: str, expected: str, **fields: Any) -> dict[str, Any]:
         async with self._lock:
             if self.process is None or self.process.returncode is not None or self._reader is None or self._writer is None:
                 raise RuntimeError("peer worker unavailable")
             request_id = uuid.uuid4().hex
             try:
                 await _write_frame(self._writer, {"v": 1, "kind": kind, "peer_id": self.peer_id,
-                                                  "generation": self.generation, "id": request_id})
+                                                  "generation": self.generation, "id": request_id, **fields})
                 reply = await asyncio.wait_for(_read_frame(self._reader), 2.0)
                 if (reply.get("kind") != expected or reply.get("id") != request_id
                         or reply.get("peer_id") != self.peer_id or type(reply.get("generation")) is not int
                         or reply["generation"] != self.generation):
                     raise ValueError("invalid peer worker response")
                 return reply
+            except asyncio.CancelledError:
+                # A caller deadline must not wait through graceful shutdown of
+                # a hung child, or leave a partially consumed stream reusable.
+                await self._retire(force=True)
+                raise
             except BaseException:
                 # Never reuse a stream after a partial or timed-out response.
                 await self._retire()
@@ -267,30 +287,59 @@ class PeerStackWorker:
     async def snapshot(self) -> dict[str, Any]:
         return (await self.snapshot_bundle())["status"]
 
+    async def control(self, operation: str, target_peer_id: str | None = None, scope: str | None = None) -> dict[str, Any]:
+        if operation not in {"reconnect", "rekey", "reload"}:
+            raise ValueError("invalid peer control operation")
+        if target_peer_id is not None and (not isinstance(target_peer_id, str) or len(target_peer_id) > 128):
+            raise ValueError("invalid peer control target")
+        if operation == "reload" and scope not in {"all", "revocation", "local_identity"}:
+            raise ValueError("invalid peer reload scope")
+        reply = await self._request("peer.control", "peer.control.reply", operation=operation,
+                                    target_peer_id=target_peer_id, scope=scope)
+        if not isinstance(reply.get("result"), dict):
+            await self._retire()
+            raise ValueError("invalid peer control response")
+        return reply["result"]
+
     async def stop(self) -> None:
         if self.process is not None and self.process.returncode is None:
             with contextlib.suppress(Exception):
                 await self._request("peer.stop", "peer.stopping")
         await self._retire()
 
-    async def _retire(self) -> None:
+    async def _retire(self, *, force: bool = False) -> None:
         process, writer, relay = self.process, self._writer, self._log_relay
         self.process = None
         self._writer = None
         self._reader = None
         self._log_relay = None
-        if writer is not None:
-            writer.close()
-            with contextlib.suppress(Exception):
-                await writer.wait_closed()
-        if process is not None and process.returncode is None:
-            try:
-                await asyncio.wait_for(process.wait(), 12.0)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
-        if relay is not None:
-            relay.close()
+        try:
+            if writer is not None:
+                writer.close()
+                with contextlib.suppress(Exception):
+                    await writer.wait_closed()
+            if process is not None and process.returncode is None:
+                if force:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                try:
+                    await asyncio.wait_for(process.wait(), 12.0)
+                except asyncio.TimeoutError:
+                    with contextlib.suppress(ProcessLookupError):
+                        process.kill()
+                    await process.wait()
+        except BaseException:
+            # Retirement may itself be cancelled by an Admin deadline or
+            # supervisor shutdown after ownership was cleared above.
+            if process is not None and process.returncode is None:
+                with contextlib.suppress(ProcessLookupError):
+                    process.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.shield(process.wait())
+            raise
+        finally:
+            if relay is not None:
+                relay.close()
 
 
 def main() -> None:

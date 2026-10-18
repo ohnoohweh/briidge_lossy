@@ -418,6 +418,22 @@ class AdminWebUI:
         fut = asyncio.run_coroutine_threadsafe(coro, runner_loop)
         return fut.result(timeout=timeout)
 
+    async def _call_peer_control(self, method: str, **kwargs):
+        async_method = getattr(self.runner, method + "_async", None)
+        if not callable(async_method):
+            return self._call_runner(getattr(self.runner, method), timeout=1.0, **kwargs)
+        coroutine = async_method(**kwargs)
+        runner_loop = self._runner_loop
+        if runner_loop is None or runner_loop is asyncio.get_running_loop():
+            return await asyncio.wait_for(coroutine, 3.5)
+        future = asyncio.run_coroutine_threadsafe(coroutine, runner_loop)
+        return await asyncio.wait_for(asyncio.wrap_future(future), 3.5)
+
+    def _peer_control_unavailable_payload(self) -> dict:
+        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+            return {"ok": False, "error": "peer control unavailable or outcome unknown"}
+        return {"ok": False, "error": "runner busy", "retryable": True}
+
     def _cache_snapshot(self, topic: str, payload: dict) -> None:
         with self._snapshot_cache_lock:
             self._snapshot_cache[str(topic)] = {
@@ -1983,9 +1999,9 @@ class AdminWebUI:
             await self._send_json(writer, 400, {"ok": False, "error": "peer_id is required"})
             return
         try:
-            payload = self._call_runner(self.runner.request_secure_link_rekey, target_peer_id=target_peer_id, timeout=1.0)
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            payload = await self._call_peer_control("request_secure_link_rekey", target_peer_id=target_peer_id)
+        except (concurrent.futures.TimeoutError, asyncio.TimeoutError, RuntimeError, OSError):
+            await self._send_json(writer, 503, self._peer_control_unavailable_payload())
             return
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
@@ -2011,14 +2027,13 @@ class AdminWebUI:
             return
         target_peer_id = str(req.get("peer_id", "") or "").strip()
         try:
-            payload = self._call_runner(
-                self.runner.request_secure_link_reload,
+            payload = await self._call_peer_control(
+                "request_secure_link_reload",
                 scope=scope,
                 target_peer_id=target_peer_id or None,
-                timeout=1.0,
             )
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+        except (concurrent.futures.TimeoutError, asyncio.TimeoutError, RuntimeError, OSError):
+            await self._send_json(writer, 503, self._peer_control_unavailable_payload())
             return
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
@@ -2133,9 +2148,9 @@ class AdminWebUI:
                 return
         target_peer_id = str(req.get("peer_id", "") or "").strip() or None
         try:
-            payload = self._call_runner(self.runner.request_overlay_reconnect, target_peer_id=target_peer_id, timeout=1.0)
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            payload = await self._call_peer_control("request_overlay_reconnect", target_peer_id=target_peer_id)
+        except (concurrent.futures.TimeoutError, asyncio.TimeoutError, RuntimeError, OSError):
+            await self._send_json(writer, 503, self._peer_control_unavailable_payload())
             return
         code = 200 if bool(payload.get("ok")) else (404 if payload.get("reason") == "unknown_peer_id" else 409)
         self._log_api_response(

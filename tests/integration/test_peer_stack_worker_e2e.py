@@ -260,7 +260,8 @@ def test_python_peer_worker_exits_when_supervisor_is_killed():
     asyncio.run(exercise())
 
 
-def test_module_entrypoint_supervises_peer_worker(tmp_path):
+@pytest.mark.parametrize("admin_worker", ["off", "python"])
+def test_module_entrypoint_supervises_peer_worker(tmp_path, admin_worker):
     async def exercise():
         async def echo(reader, writer):
             try:
@@ -289,25 +290,43 @@ def test_module_entrypoint_supervises_peer_worker(tmp_path):
         config_path.write_text(json.dumps({"runner": {"overlay_transport": "tcp", "peer_stack_worker": "python"},
             "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
             "secure_link": secure, "TUN_routing": {"enabled_on_startup": False},
-            "admin_web": {"admin_web_bind": "127.0.0.1", "admin_web_port": admin_port, "admin_web_auth_disable": True},
+            "admin_web": {"admin_web_bind": "127.0.0.1", "admin_web_port": admin_port, "admin_web_auth_disable": True,
+                          "admin_web_worker": admin_worker},
             "stats_board": {"status": False},
             "channel_mux": {"own_servers": [{"name": "entrypoint-echo",
                 "listen": {"protocol": "tcp", "bind": "127.0.0.1", "port": service_port},
                 "target": {"protocol": "tcp", "host": "127.0.0.1", "port": target_port}}]}}), encoding="utf-8")
         launcher = None
 
-        async def status():
+        async def request(path, payload=None):
             reader, writer = await asyncio.open_connection("127.0.0.1", admin_port)
             try:
-                writer.write(b"GET /api/status HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                body = json.dumps(payload).encode() if payload is not None else b""
+                method = "POST" if payload is not None else "GET"
+                writer.write(f"{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: {len(body)}\r\n\r\n".encode() + body)
                 await writer.drain()
                 response = await asyncio.wait_for(reader.read(), 5)
                 head, body = response.split(b"\r\n\r\n", 1)
-                assert head.startswith(b"HTTP/1.1 200"), head
-                return json.loads(body)
+                return int(head.split()[1]), json.loads(body)
             finally:
                 writer.close()
                 await writer.wait_closed()
+
+        async def status():
+            code, payload = await request("/api/status")
+            assert code == 200
+            return payload
+
+        async def authenticated_peer(previous_session=0):
+            for _ in range(200):
+                code, payload = await request("/api/peers")
+                assert code == 200
+                for row in payload.get("peers", []):
+                    session = int((row.get("secure_link") or {}).get("session_id") or 0)
+                    if row.get("id") and session and session != previous_session:
+                        return str(row["id"]), session
+                await asyncio.sleep(0.05)
+            pytest.fail("isolated peer did not authenticate a new SecureLink session")
 
         async def wait_generation(after):
             for _ in range(200):
@@ -344,6 +363,21 @@ def test_module_entrypoint_supervises_peer_worker(tmp_path):
                 stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
                 start_new_session=True)
             initial = await wait_generation(0)
+            await exchange()
+            peer_id, session = await authenticated_peer()
+            code, payload = await request("/api/secure-link/rekey", {"peer_id": peer_id})
+            assert code == 200 and payload.get("ok") is True and payload.get("requested") == 1, payload
+            await authenticated_peer(session)
+            await exchange()
+            code, payload = await request("/api/secure-link/reload", {"scope": "all", "peer_id": peer_id})
+            assert code == 409 and payload.get("requested") == 1 and payload.get("failed") == 1, payload
+            assert payload["results"][0]["reason"] == "secure_link_cert_mode_required"
+            code, payload = await request("/api/secure-link/reload", {"scope": "all", "peer_id": peer_id + "-missing"})
+            assert code == 409 and payload.get("reason") == "unknown_peer_id", payload
+            code, payload = await request("/api/reconnect", {"peer_id": peer_id + "-missing"})
+            assert code == 404 and payload.get("reason") == "unknown_peer_id", payload
+            code, payload = await request("/api/reconnect", {"peer_id": peer_id})
+            assert code == 200 and payload.get("ok") is True and payload.get("requested") == 1, payload
             await exchange()
             assert initial["pid"] > 1 and initial["pid"] not in {os.getpid(), launcher.pid}
             os.kill(initial["pid"], signal.SIGKILL)

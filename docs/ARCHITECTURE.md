@@ -116,13 +116,18 @@ to an in-process peer. The child exits on owner loss and logs through a
 record-only relay to either managed collector. Existing connections are lost
 on replacement. TUN settings and TUN service catalogs, including catalogs
 received from a remote peer, are rejected in this mode. Peer configuration
-changes require stopping and restarting the runtime; reconnect, rekey and reload
-controls explicitly report that they are unsupported. Without a managed
-collector, the child inherits the supervisor's standard-error sink.
+changes require stopping and restarting the runtime. Admin forwards reconnect,
+rekey and material-reload requests over the same correlated, generation-fenced
+channel, including when Admin is a child; a lost reply has an unknown outcome
+and is not retried automatically. A cancelled control request terminates and
+reaps a stalled child. The synchronous embedding controls still report that
+peer-worker control is unsupported; asynchronous controls provide the worker
+path. Without a managed collector, the child inherits the supervisor's
+standard-error sink.
 
 This is a Python-supervised, Python-child, single outbound TCP slice only.
 Native peer workers and supervision, listener-side peer ownership, other
-transports, peer control operations, live peer configuration, terminal status,
+transports, broader peer control qualification, live peer configuration, terminal status,
 and shared-TUN routing/data IPC remain open; there is no shared-TUN worker yet.
 The peer control stream is not yet the common cross-runtime worker protocol.
 
