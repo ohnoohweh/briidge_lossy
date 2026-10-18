@@ -160,12 +160,18 @@ struct ObstacleBridgeLinuxAdminServerTests {
             "admin_web": ["admin_web_auth_disable": true, "admin_web_name": "Linux native"],
         ])
         let reconnected = DispatchSemaphore(value: 0)
+        let rekeyed = DispatchSemaphore(value: 0)
         let restarted = DispatchSemaphore(value: 0)
         let shutdownRequested = DispatchSemaphore(value: 0)
         let server = ObstacleBridgeLinuxAdminServer(
             runtime: runtime,
             configurationStore: store,
             reconnectHandler: { reconnected.signal() },
+            secureLinkRekeyHandler: { peerID in
+                guard peerID == "configured-peer" else { return ["ok": false, "reason": "unknown_peer_id"] }
+                rekeyed.signal()
+                return ["ok": true, "reason": "rekey_started"]
+            },
             restartHandler: { restarted.signal() },
             shutdownHandler: { shutdownRequested.signal() }
         )
@@ -189,6 +195,10 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(reconnect.status == 200)
         #expect((reconnect.body as? [String: Any])?["ok"] as? Bool == true)
         #expect(reconnected.wait(timeout: .now() + 1) == .success)
+        let rekey = try await requestJSON(base + "/api/secure-link/rekey", method: "POST", body: ["peer_id": "configured-peer"])
+        #expect(rekey.status == 200)
+        #expect((rekey.body as? [String: Any])?["reason"] as? String == "rekey_started")
+        #expect(rekeyed.wait(timeout: .now() + 1) == .success)
         let restart = try await requestJSON(base + "/api/restart", method: "POST", body: [:])
         #expect(restart.status == 200)
         #expect((restart.body as? [String: Any])?["restarting"] as? Bool == true)

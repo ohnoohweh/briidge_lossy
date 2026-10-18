@@ -223,6 +223,7 @@ enum ObstacleBridgeLinuxMain {
                 configurationStore: adminConfigurationStore,
                 staticDirectory: staticDirectory,
                 reconnectHandler: runtime.reconnect,
+                secureLinkRekeyHandler: runtime.requestSecureLinkRekey,
                 restartHandler: requestForegroundRestart,
                 shutdownHandler: requestForegroundShutdown,
                 debugLogsProvider: observability.recentLogLines,

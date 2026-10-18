@@ -34,6 +34,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let staticDirectory: URL?
     private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
     private let reconnectHandler: (@Sendable () -> Void)?
+    private let secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])?
     private let restartHandler: (@Sendable () -> Void)?
     private let shutdownHandler: (@Sendable () -> Void)?
     private let debugLogsProvider: ((Int) -> [String])?
@@ -44,7 +45,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
@@ -56,12 +57,13 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.buildInfoProvider = { buildInfo ?? ["available": false] }
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
+        self.secureLinkRekeyHandler = secureLinkRekeyHandler
         self.restartHandler = restartHandler
         self.shutdownHandler = shutdownHandler
         self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
@@ -73,12 +75,13 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.buildInfoProvider = { buildInfo ?? ["available": false] }
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
+        self.secureLinkRekeyHandler = secureLinkRekeyHandler
         self.restartHandler = restartHandler
         self.shutdownHandler = shutdownHandler
         self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
@@ -92,6 +95,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.buildInfoProvider = { buildInfo ?? ["available": false] }
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
+        self.secureLinkRekeyHandler = secureLinkRekeyHandler
         self.restartHandler = restartHandler
         self.shutdownHandler = shutdownHandler
         self.debugLogsProvider = debugLogsProvider
@@ -207,7 +211,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let authenticationRoutes: Set<String> = ["/api/auth/state", "/api/auth/challenge", "/api/auth/login", "/api/auth/logout", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge"]
         if path.hasPrefix("/api/"), !authenticationRoutes.contains(path), !security.isAuthenticated(headers: headers) {
             response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401)
-        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/shutdown"].contains(path)) {
+        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/secure-link/rekey", "/api/shutdown"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
@@ -293,6 +297,22 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             }
             controlAction = restartHandler
             response = jsonResponse(["ok": true, "restarting": true, "restart_embedded": false, "restart_mode": "immediate", "restart_delay_sec": 0])
+        case "/api/secure-link/rekey":
+            guard let secureLinkRekeyHandler else {
+                response = jsonResponse(["ok": false, "reason": "runtime_unavailable"], statusCode: 409)
+                break
+            }
+            guard let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                response = jsonResponse(["ok": false, "error": "invalid JSON body"], statusCode: 400)
+                break
+            }
+            let peerID = (payload["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !peerID.isEmpty else {
+                response = jsonResponse(["ok": false, "error": "peer_id is required"], statusCode: 400)
+                break
+            }
+            let result = secureLinkRekeyHandler(peerID)
+            response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
         case "/api/shutdown":
             guard let shutdownHandler else {
                 response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "shutdown is unavailable for this runtime"], statusCode: 409) ?? .init(statusCode: 500, body: Data("{}".utf8))

@@ -193,20 +193,58 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         }
     }
 
+    /// Starts a live owner-driven rekey without creating a competing reader.
+    /// The receive owner consumes the reply/commit/done control frames and
+    /// forwards any Core-emitted response on the existing lower transport.
+    public func requestSecureLinkRekey(sessionID: UInt64, clientNonce: Data) throws -> Int {
+        guard let overlayAdapter else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
+        do {
+            let outbound = try overlayAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce).emittedFrames
+            for frame in outbound { try lowerSession.send(frame) }
+            return outbound.count
+        } catch {
+            fail(error)
+            throw error
+        }
+    }
+
     /// Used exclusively by the epoch's receive worker. Compatibility request
     /// replies are consumed here, so an older diagnostic caller cannot create
     /// a second descriptor reader beside ChannelMux dispatch.
     public func receiveForOwner() throws -> Data? {
-        let payload = try receiveInbound()
-        requestLock.lock()
-        if let pending = pendingCompatibilityReply {
-            pendingCompatibilityReply?.value = payload
-            pending.signal.signal()
-            requestLock.unlock()
-            return nil
+        do {
+            while true {
+                let wire = try lowerSession.receive()
+                let payload: Data?
+                if let overlayAdapter {
+                    let inbound = overlayAdapter.handleInboundFrame(wire)
+                    for reply in inbound.emittedFrames { try lowerSession.send(reply) }
+                    payload = inbound.deliveredPayloads.first
+                } else if let secureLink {
+                    payload = try secureLink.unprotect(wire)
+                } else if let secureLinkServer {
+                    payload = try secureLinkServer.unprotect(wire)
+                } else {
+                    payload = wire
+                }
+                // SecureLink rekey controls have no application payload. They
+                // are fully handled by Core above and must not retire a live
+                // receive epoch merely because ChannelMux has nothing to read.
+                guard let payload else { continue }
+                requestLock.lock()
+                if let pending = pendingCompatibilityReply {
+                    pendingCompatibilityReply?.value = payload
+                    pending.signal.signal()
+                    requestLock.unlock()
+                    return nil
+                }
+                requestLock.unlock()
+                return payload
+            }
+        } catch {
+            fail(error)
+            throw error
         }
-        requestLock.unlock()
-        return payload
     }
 
     public func activateReceiveOwner() {

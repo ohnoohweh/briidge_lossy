@@ -398,6 +398,34 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         }
     }
 
+    /// Starts a PSK rekey on the current authenticated client epoch. Control
+    /// replies stay with the existing receive owner, preserving channel and
+    /// transport identity rather than turning an operator rekey into a full
+    /// reconnect.
+    public func requestSecureLinkRekey(peerID: String) -> [String: Any] {
+        queue.sync {
+            guard peerID == "configured-peer" else {
+                return ["ok": false, "reason": "unknown_peer_id"]
+            }
+            guard !stopped, !inboundOnly, let session, configuredRuntime.status().appReady else {
+                return ["ok": false, "reason": "transport_not_connected"]
+            }
+            guard session.isProtected else {
+                return ["ok": false, "reason": "secure_link_not_enabled"]
+            }
+            var generator = SystemRandomNumberGenerator()
+            let sessionID = UInt64.random(in: 1...UInt64.max, using: &generator)
+            let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+            do {
+                let count = try session.requestSecureLinkRekey(sessionID: sessionID, clientNonce: nonce)
+                refreshStatusProjection()
+                return ["ok": true, "reason": "rekey_started", "requested": 1, "skipped": 0, "emitted_frames": count]
+            } catch {
+                return ["ok": false, "reason": "rekey_request_failed", "detail": error.localizedDescription]
+            }
+        }
+    }
+
     /// Bound ports for configured local services. This supports operational
     /// discovery when a service deliberately requests port zero in tests or a
     /// managed deployment; it contains no peer, payload, or secret material.
