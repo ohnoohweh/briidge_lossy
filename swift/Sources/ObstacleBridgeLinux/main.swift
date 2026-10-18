@@ -192,6 +192,9 @@ enum ObstacleBridgeLinuxMain {
             let adminConfiguration = try ObstacleBridgeLinuxRuntimeConfiguration.rawConfiguration(path: options.configurationPath)
             let adminWeb = ObstacleBridgeLinuxAdminWebConfiguration(rawConfiguration: adminConfiguration, portOverride: options.adminPort)
             guard adminWeb.enabled else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("admin_web.admin_web is disabled; enable it to start the Linux native Admin Web server") }
+            if configuration.launchSwiftTunHelper, configuration.packetTunnelEnabled {
+                try ObstacleBridgeLinuxManagedTunHelper.preauthorizeManagedHelperIfNeeded(executable: configuration.tunHelperExecutable)
+            }
             let staticDirectory = URL(fileURLWithPath: adminWeb.staticDirectory)
             let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration)
             observability.recordForegroundLifecycle(state: "started", transport: configuration.transport.rawValue)

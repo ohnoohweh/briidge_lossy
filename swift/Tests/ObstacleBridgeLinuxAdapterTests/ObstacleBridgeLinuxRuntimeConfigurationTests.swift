@@ -12,7 +12,7 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             elevated: true
         )
         #expect(elevated.path == "/usr/bin/sudo")
-        #expect(elevated.arguments == ["--", "/opt/obstaclebridge/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/helper.sock", "test-token", "--idle-sec", "30"])
+        #expect(elevated.arguments == ["-n", "--", "/opt/obstaclebridge/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/helper.sock", "test-token", "--idle-sec", "30"])
 
         let direct = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
             executable: "/opt/obstaclebridge/ObstacleBridgeLinux",
@@ -26,6 +26,9 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: false) == 2)
         #expect(ObstacleBridgeLinuxManagedTunHelper.usesControllingTerminal(elevated: true))
         #expect(!ObstacleBridgeLinuxManagedTunHelper.usesControllingTerminal(elevated: false))
+        let authorization = ObstacleBridgeLinuxManagedTunHelper.authorizationCommand()
+        #expect(authorization.path == "/usr/bin/sudo")
+        #expect(authorization.arguments == ["-v"])
     }
 
     @Test func managedTunHelperMatchesPythonCapabilityBasedPrivilegeAdmission() {

@@ -43,9 +43,16 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
     static func launchCommand(executable: String, socketPath: String, sessionToken: String, elevated: Bool) -> (path: String, arguments: [String]) {
         let helperArguments = ["--tun-helper-server", socketPath, sessionToken, "--idle-sec", "30"]
         if elevated {
-            return ("/usr/bin/sudo", ["--", executable] + helperArguments)
+            // Interactive authorization is completed while the foreground
+            // command owns the terminal. The delayed helper launch must never
+            // compete with the shell for password input.
+            return ("/usr/bin/sudo", ["-n", "--", executable] + helperArguments)
         }
         return (executable, helperArguments)
+    }
+
+    static func authorizationCommand() -> (path: String, arguments: [String]) {
+        ("/usr/bin/sudo", ["-v"])
     }
 
     /// An interactive sudo prompt needs materially longer than a direct child
@@ -117,6 +124,38 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
     }
     #endif
 
+    /// Establish a sudo timestamp before the asynchronous runtime starts.
+    /// Process deliberately inherits stdin/stdout/stderr here: sudo then owns
+    /// the caller's foreground terminal and keeps its password entry hidden.
+    /// The foreground app itself never becomes privileged; its later helper
+    /// child uses the timestamp with `sudo -n`.
+    public static func preauthorizeManagedHelperIfNeeded(executable: String? = nil) throws {
+        #if os(Linux)
+        let selected = executable ?? CommandLine.arguments.first ?? ""
+        let resolved = selected.hasPrefix("/")
+            ? URL(fileURLWithPath: selected).standardizedFileURL.path
+            : URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent(selected).standardizedFileURL.path
+        guard geteuid() != 0, !canLaunchWithoutSudo(executable: resolved) else { return }
+        guard isatty(STDIN_FILENO) == 1 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires an interactive terminal for sudo authentication")
+        }
+        let command = authorizationCommand()
+        let authorization = Process()
+        authorization.executableURL = URL(fileURLWithPath: command.path)
+        authorization.arguments = command.arguments
+        do {
+            try authorization.run()
+            authorization.waitUntilExit()
+        } catch {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("unable to start sudo authorization for the Linux TUN helper")
+        }
+        guard authorization.terminationStatus == 0 else {
+            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("sudo authorization for the Linux TUN helper was not accepted")
+        }
+        #endif
+    }
+
     public func start(timeout: TimeInterval? = nil) throws {
         guard !process.isRunning else { return }
         if FileManager.default.fileExists(atPath: socketPath) {
@@ -144,17 +183,7 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         #endif
         process.executableURL = URL(fileURLWithPath: command.path)
         process.arguments = command.arguments
-        if Self.usesControllingTerminal(elevated: requiresElevation) {
-            // Keep the password prompt and its no-echo terminal handling in
-            // sudo/PAM. Never feed a password through a pipe or command line.
-            guard let terminalInput = FileHandle(forReadingAtPath: "/dev/tty"),
-                  let terminalOutput = FileHandle(forWritingAtPath: "/dev/tty") else {
-                throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper requires /dev/tty for sudo authentication")
-            }
-            process.standardInput = terminalInput
-            process.standardOutput = terminalOutput
-            process.standardError = terminalOutput
-        } else {
+        if !Self.usesControllingTerminal(elevated: requiresElevation) {
             process.standardOutput = Pipe()
             process.standardError = Pipe()
         }
@@ -165,6 +194,9 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         }
         guard FileManager.default.fileExists(atPath: socketPath) else {
             if process.isRunning { process.terminate() }
+            if !process.isRunning {
+                throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper exited before creating its socket (status \(process.terminationStatus))")
+            }
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper did not create its socket")
         }
     }
