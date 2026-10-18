@@ -163,6 +163,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let rekeyed = DispatchSemaphore(value: 0)
         let restarted = DispatchSemaphore(value: 0)
         let shutdownRequested = DispatchSemaphore(value: 0)
+        let tunControls = DispatchSemaphore(value: 0)
+        let tunRepairs = DispatchSemaphore(value: 0)
         let server = ObstacleBridgeLinuxAdminServer(
             runtime: runtime,
             configurationStore: store,
@@ -173,7 +175,16 @@ struct ObstacleBridgeLinuxAdminServerTests {
                 return ["ok": true, "reason": "rekey_started"]
             },
             restartHandler: { restarted.signal() },
-            shutdownHandler: { shutdownRequested.signal() }
+            shutdownHandler: { shutdownRequested.signal() },
+            tunRoutingProvider: { ["ok": true, "configured": true, "enabled": false, "network_policy_applied": false] },
+            tunRoutingControlHandler: { enabled in
+                tunControls.signal()
+                return ["ok": true, "configured": true, "enabled": enabled, "network_policy_applied": enabled]
+            },
+            tunHelperRepairHandler: {
+                tunRepairs.signal()
+                return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
+            }
         )
         try server.start(); defer { server.stop() }
         let base = "http://127.0.0.1:\(server.port)"
@@ -205,6 +216,17 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((((reload.body as? [String: Any])?["results"] as? [[String: Any]])?.first?["reason"] as? String) == "secure_link_cert_mode_required")
         let invalidReload = try await requestJSON(base + "/api/secure-link/reload", method: "POST", body: ["scope": "bad"])
         #expect(invalidReload.status == 400)
+        let tunStatus = try #require(try await getJSON(base + "/api/tun-routing/status") as? [String: Any])
+        #expect(tunStatus["configured"] as? Bool == true)
+        let tunEnabled = try await requestJSON(base + "/api/tun-routing/control", method: "POST", body: ["enabled": true])
+        #expect(tunEnabled.status == 200)
+        #expect((tunEnabled.body as? [String: Any])?["enabled"] as? Bool == true)
+        #expect(tunControls.wait(timeout: .now() + 1) == .success)
+        let missingTunEnabled = try await requestJSON(base + "/api/tun-routing/control", method: "POST", body: [:])
+        #expect(missingTunEnabled.status == 400)
+        let repaired = try await requestJSON(base + "/api/tun-helper/repair", method: "POST", body: [:])
+        #expect(repaired.status == 200)
+        #expect(tunRepairs.wait(timeout: .now() + 1) == .success)
         let restart = try await requestJSON(base + "/api/restart", method: "POST", body: [:])
         #expect(restart.status == 200)
         #expect((restart.body as? [String: Any])?["restarting"] as? Bool == true)

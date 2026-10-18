@@ -482,6 +482,75 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         ]
     }
 
+    /// Redacted packet-tunnel state for the shared Admin routing panel.
+    public func tunRoutingForAdmin() -> [String: Any] {
+        queue.sync { tunRoutingForAdminLocked() }
+    }
+
+    private func tunRoutingForAdminLocked() -> [String: Any] {
+            let configured = configuredRuntime.configuration
+            return [
+                "ok": true,
+                "configured": configured.packetTunnelEnabled,
+                "enabled": tunDevice != nil && tunNetworkApplied,
+                "startup_enabled": configured.packetTunnelPlan?.enabledOnStartup ?? false,
+                "helper_configured": configured.tunHelperSocketPath != nil,
+                "managed_helper": configured.launchSwiftTunHelper,
+                "managed_helper_running": managedTunHelper?.isRunning ?? false,
+                "device_open": tunDevice != nil,
+                "network_policy_applied": tunNetworkApplied,
+            ]
+    }
+
+    /// Applies or removes only the selected configuration's helper-owned TUN
+    /// plan. It never accepts route or helper credentials from HTTP.
+    public func requestTunEnabled(_ enabled: Bool) -> [String: Any] {
+        queue.sync {
+            let configured = configuredRuntime.configuration
+            guard configured.packetTunnelEnabled, configured.packetTunnelPlan != nil else {
+                return ["ok": false, "enabled": false, "reason": "packet_tunnel_not_configured"]
+            }
+            do {
+                if enabled {
+                    guard status().appReady else {
+                        return ["ok": false, "enabled": false, "reason": "overlay_not_ready"]
+                    }
+                    try startPacketDeviceIfNeeded()
+                } else {
+                    stopPacketDevice()
+                }
+                var result = tunRoutingForAdminLocked()
+                result["ok"] = true
+                return result
+            } catch {
+                appendRuntimeHealth(event: "tun_admin_control_failed: \(error.localizedDescription)")
+                return ["ok": false, "enabled": false, "reason": "tun_control_failed", "detail": error.localizedDescription]
+            }
+        }
+    }
+
+    /// Repairs the existing helper/device lifecycle without accepting a new
+    /// socket, token, route set, or hook from the browser.
+    public func repairTunHelperForAdmin() -> [String: Any] {
+        queue.sync {
+            let configured = configuredRuntime.configuration
+            guard configured.packetTunnelEnabled, configured.packetTunnelPlan != nil else {
+                return ["ok": false, "repaired": [], "failed": ["packet_tunnel_not_configured"]]
+            }
+            guard status().appReady else {
+                return ["ok": false, "repaired": [], "failed": ["overlay_not_ready"]]
+            }
+            stopPacketDevice()
+            do {
+                try startPacketDeviceIfNeeded()
+                return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
+            } catch {
+                appendRuntimeHealth(event: "tun_helper_repair_failed: \(error.localizedDescription)")
+                return ["ok": false, "repaired": [], "failed": [error.localizedDescription]]
+            }
+        }
+    }
+
     /// Delivers one authenticated ChannelMux frame from the overlay reader.
     /// The current lower transport supplies replies synchronously; this API is
     /// also the receive-side handoff used by a future duplex reader.

@@ -29,6 +29,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
+    private let tunRoutingProvider: () -> [String: Any]
+    private let tunRoutingControlHandler: ((Bool) -> [String: Any])?
+    private let tunHelperRepairHandler: (() -> [String: Any])?
     private let adminConfigurationProvider: () -> [String: Any]
     private let buildInfoProvider: () -> [String: Any]
     private let staticDirectory: URL?
@@ -45,13 +48,16 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = connectionsProvider
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
+        self.tunRoutingProvider = tunRoutingProvider
+        self.tunRoutingControlHandler = tunRoutingControlHandler
+        self.tunHelperRepairHandler = tunHelperRepairHandler
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
         self.security = Self.makeSecurity(adminConfiguration: adminConfiguration, configurationStore: configurationStore)
         self.buildInfoProvider = { buildInfo ?? ["available": false] }
@@ -70,6 +76,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
+        self.tunRoutingProvider = { liveRuntime.tunRoutingForAdmin() }
+        self.tunRoutingControlHandler = { liveRuntime.requestTunEnabled($0) }
+        self.tunHelperRepairHandler = { liveRuntime.repairTunHelperForAdmin() }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
         self.security = Self.makeSecurity(adminConfiguration: adminConfiguration, configurationStore: configurationStore)
         self.buildInfoProvider = { buildInfo ?? ["available": false] }
@@ -90,6 +99,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
+        self.tunRoutingProvider = { ["ok": true, "configured": false, "enabled": false] }
+        self.tunRoutingControlHandler = nil
+        self.tunHelperRepairHandler = nil
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
         self.security = Self.makeSecurity(adminConfiguration: adminConfiguration, configurationStore: configurationStore)
         self.buildInfoProvider = { buildInfo ?? ["available": false] }
@@ -211,7 +223,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let authenticationRoutes: Set<String> = ["/api/auth/state", "/api/auth/challenge", "/api/auth/login", "/api/auth/logout", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge"]
         if path.hasPrefix("/api/"), !authenticationRoutes.contains(path), !security.isAuthenticated(headers: headers) {
             response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401)
-        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/secure-link/rekey", "/api/secure-link/reload", "/api/shutdown"].contains(path)) {
+        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/secure-link/rekey", "/api/secure-link/reload", "/api/tun-routing/control", "/api/tun-helper/repair", "/api/shutdown"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
@@ -329,6 +341,26 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "requested": 1, "reloaded": 0, "dropped": 0, "failed": 1,
                 "results": [["transport": statusProvider().transport, "peer_ids": ["configured-peer"], "ok": false, "reason": "secure_link_cert_mode_required"]],
             ], statusCode: 409)
+        case "/api/tun-routing/status":
+            response = jsonResponse(tunRoutingProvider())
+        case "/api/tun-routing/control":
+            guard let tunRoutingControlHandler else {
+                response = jsonResponse(["ok": false, "error": "TUN control is unavailable for this runtime"], statusCode: 409)
+                break
+            }
+            guard let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let enabled = payload["enabled"] as? Bool else {
+                response = jsonResponse(["ok": false, "error": "enabled is required"], statusCode: 400)
+                break
+            }
+            let result = tunRoutingControlHandler(enabled)
+            response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
+        case "/api/tun-helper/repair":
+            guard let tunHelperRepairHandler else {
+                response = jsonResponse(["ok": false, "error": "TUN helper repair is unavailable for this runtime"], statusCode: 409)
+                break
+            }
+            let result = tunHelperRepairHandler()
+            response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
         case "/api/shutdown":
             guard let shutdownHandler else {
                 response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "shutdown is unavailable for this runtime"], statusCode: 409) ?? .init(statusCode: 500, body: Data("{}".utf8))
