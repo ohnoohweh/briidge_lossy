@@ -30,6 +30,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
     private let adminConfigurationProvider: () -> [String: Any]
+    private let buildInfoProvider: () -> [String: Any]
     private let staticDirectory: URL?
     private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
     private let reconnectHandler: (@Sendable () -> Void)?
@@ -41,7 +42,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
@@ -49,13 +50,14 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.buildInfoProvider = { buildInfo ?? ["available": false] }
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
         self.shutdownHandler = shutdownHandler
         self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
@@ -63,13 +65,14 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.buildInfoProvider = { buildInfo ?? ["available": false] }
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
         self.shutdownHandler = shutdownHandler
         self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
@@ -79,6 +82,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.buildInfoProvider = { buildInfo ?? ["available": false] }
         self.staticDirectory = staticDirectory
         self.reconnectHandler = reconnectHandler
         self.shutdownHandler = shutdownHandler
@@ -408,9 +412,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "overlay_transport": statusProvider().transport,
             "dashboard_enabled": true,
             "milestone": "C",
-            // Build identity belongs to the executable target.  The adapter
-            // must not invent it when embedded by tests or another host.
-            "build": ["available": false],
+            "build": buildInfoProvider(),
             "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
         ]
     }
@@ -462,6 +464,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "failure_reason": status.receiveFailureReason as Any,
             ],
             "peer": peerPayload(status.peer),
+            "build": buildInfoProvider(),
         ]
         return payload
     }

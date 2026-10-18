@@ -83,9 +83,10 @@ native server currently admits its status, peer, live-topic, configuration,
 configuration-challenge, reconnect, shutdown, metadata, Admin-UI,
 security-advisor, onboarding-profile, onboarding-blueprint, and onboarding
 invite generate/preview routes. Configuration snapshots are flattened for the
-shared form fields and carry the Core-owned grouped schema. The metadata route
-always returns an explicit build-availability value; executable build identity
-is not fabricated by the reusable Admin adapter.
+shared form fields and carry the Core-owned grouped schema. The metadata and
+status routes carry the executable target's embedded build identity when the
+foreground client supplies it; reusable Admin embeddings remain explicitly
+unavailable rather than fabricating an identity.
 
 The remaining route-parity gaps are explicit: Admin authentication/session
 routes; restart; SecureLink rekey/reload and PSK reveal; TUN routing/control

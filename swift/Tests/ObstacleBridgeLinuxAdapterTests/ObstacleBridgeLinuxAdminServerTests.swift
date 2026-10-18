@@ -139,13 +139,17 @@ struct ObstacleBridgeLinuxAdminServerTests {
             "runner": ["overlay_transport": "tcp"],
             "tcp_session": ["tcp_peer": "198.51.100.10", "tcp_peer_port": 4433],
         ]
-        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: configuration)
+        let server = ObstacleBridgeLinuxAdminServer(
+            runtime: runtime, adminConfiguration: configuration,
+            buildInfo: ["available": true, "commit": "0123456789ab", "build_timestamp_utc": "2026-10-18T00:00:00Z", "tainted": false, "tracked_changes": 0, "untracked_changes": 0]
+        )
         try server.start(); defer { server.stop() }
         let base = "http://127.0.0.1:\(server.port)"
 
         let meta = try #require(try await getJSON(base + "/api/meta") as? [String: Any])
         #expect(meta["admin_web_name"] as? String == "Linux Admin")
-        #expect((meta["build"] as? [String: Any])?["available"] as? Bool == false)
+        #expect((meta["build"] as? [String: Any])?["available"] as? Bool == true)
+        #expect((meta["build"] as? [String: Any])?["commit"] as? String == "0123456789ab")
         let profiles = try #require(try await getJSON(base + "/api/onboarding/connection-profiles") as? [String: Any])
         let profile = try #require((profiles["profiles"] as? [[String: Any]])?.first)
         #expect(profile["transport"] as? String == "tcp")

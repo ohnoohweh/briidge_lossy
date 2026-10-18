@@ -188,10 +188,11 @@ enum ObstacleBridgeLinuxMain {
             let staticDirectory = URL(fileURLWithPath: adminWeb.staticDirectory)
             let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration)
             observability.record("runtime.starting")
+            let buildInfo = embeddedBuildInfo()
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, shutdownHandler: requestForegroundShutdown)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo)
                 try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
@@ -213,7 +214,8 @@ enum ObstacleBridgeLinuxMain {
                 staticDirectory: staticDirectory,
                 reconnectHandler: runtime.reconnect,
                 shutdownHandler: requestForegroundShutdown,
-                debugLogsProvider: observability.recentLogLines
+                debugLogsProvider: observability.recentLogLines,
+                buildInfo: buildInfo
             )
             try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
             var resources: [Any] = [observability]
@@ -269,6 +271,21 @@ enum ObstacleBridgeLinuxMain {
             writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")
             exit(1)
         }
+    }
+
+    /// The executable target owns this generated stamp.  Adapters receive a
+    /// redacted value object so embedded/test hosts never need to fabricate an
+    /// identity merely to serve Admin routes.
+    private static func embeddedBuildInfo() -> [String: Any] {
+        guard let data = ObstacleBridgeLinuxBuildInfo.json().data(using: .utf8),
+              var value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return ["available": false] }
+        let dirty = value["dirty"] as? Bool ?? false
+        value["available"] = true
+        value["tainted"] = dirty
+        value["tracked_changes"] = dirty ? 1 : 0
+        value["untracked_changes"] = 0
+        return value
     }
 
     private static func installForegroundShutdown(
