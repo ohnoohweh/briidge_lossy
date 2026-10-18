@@ -28,6 +28,14 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(!ObstacleBridgeLinuxManagedTunHelper.usesControllingTerminal(elevated: false))
     }
 
+    @Test func managedTunHelperMatchesPythonCapabilityBasedPrivilegeAdmission() {
+        #expect(!ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 0, fileCapabilityDescription: ""))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 1 << 12, fileCapabilityDescription: ""))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 1 << 21, fileCapabilityDescription: ""))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 0, fileCapabilityDescription: "/opt/ObstacleBridgeLinux cap_net_admin=ep"))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 0, fileCapabilityDescription: "/opt/ObstacleBridgeLinux cap_sys_admin=ep"))
+    }
+
     @Test func observabilityWritesForegroundLifecycleToConfiguredLogAndBoundedTelemetrySpool() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-observability-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }

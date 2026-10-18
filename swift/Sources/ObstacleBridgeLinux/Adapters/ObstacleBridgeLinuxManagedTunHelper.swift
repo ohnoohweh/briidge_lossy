@@ -7,6 +7,10 @@ import Glibc
 /// the IPC adapter: the adapter still sees only an authenticated Unix endpoint
 /// and can therefore interoperate with an externally supervised helper.
 public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
+    /// Linux capability numbers defined by `linux/capability.h`.  Either
+    /// capability is sufficient for the helper's TUN and route ownership.
+    private static let capNetAdminBit: UInt64 = 1 << 12
+    private static let capSysAdminBit: UInt64 = 1 << 21
     private let socketPath: String
     private let sessionToken: String
     private let executable: String
@@ -59,13 +63,67 @@ public final class ObstacleBridgeLinuxManagedTunHelper: @unchecked Sendable {
         elevated
     }
 
+    /// Keep the privilege decision aligned with the Python foreground
+    /// runner. An unprivileged foreground process may start the helper
+    /// directly when it already has an effective Linux capability, or when
+    /// the selected helper executable carries that capability as a file cap.
+    /// Otherwise only the separate helper subprocess is launched through
+    /// sudo.
+    static func canLaunchWithoutSudo(effectiveCapabilityMask: UInt64, fileCapabilityDescription: String) -> Bool {
+        if effectiveCapabilityMask & (capNetAdminBit | capSysAdminBit) != 0 {
+            return true
+        }
+        let capabilities = fileCapabilityDescription.lowercased()
+        return capabilities.contains("cap_net_admin") || capabilities.contains("cap_sys_admin")
+    }
+
+    private static func canLaunchWithoutSudo(executable: String) -> Bool {
+        #if os(Linux)
+        return canLaunchWithoutSudo(
+            effectiveCapabilityMask: effectiveCapabilityMask(),
+            fileCapabilityDescription: fileCapabilityDescription(executable: executable)
+        )
+        #else
+        return false
+        #endif
+    }
+
+    #if os(Linux)
+    private static func effectiveCapabilityMask() -> UInt64 {
+        guard let status = try? String(contentsOfFile: "/proc/self/status", encoding: .utf8),
+              let line = status.split(separator: "\n").first(where: { $0.hasPrefix("CapEff:") })
+        else { return 0 }
+        let value = line.dropFirst("CapEff:".count).trimmingCharacters(in: .whitespaces)
+        return UInt64(value, radix: 16) ?? 0
+    }
+
+    private static func fileCapabilityDescription(executable: String) -> String {
+        let candidates = ["/usr/sbin/getcap", "/usr/bin/getcap", "/sbin/getcap", "/bin/getcap"]
+        guard let tool = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) else { return "" }
+        let process = Process()
+        let output = Pipe()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = [executable]
+        process.standardOutput = output
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return "" }
+            return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        } catch {
+            return ""
+        }
+    }
+    #endif
+
     public func start(timeout: TimeInterval? = nil) throws {
         guard !process.isRunning else { return }
         if FileManager.default.fileExists(atPath: socketPath) {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("managed Swift TUN helper refuses an existing socket path")
         }
         #if os(Linux)
-        let requiresElevation = geteuid() != 0
+        let requiresElevation = geteuid() != 0 && !Self.canLaunchWithoutSudo(executable: executable)
         #else
         let requiresElevation = false
         #endif
