@@ -308,32 +308,62 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let directory = URL(fileURLWithPath: "/tmp/obstaclebridge-swift-hook-\(UUID().uuidString)", isDirectory: true)
         let hook = directory.appendingPathComponent("hook.sh")
         let marker = directory.appendingPathComponent("events")
+        let socket = directory.appendingPathComponent("helper.sock")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$2\" >> '\(marker.path)'\n".utf8).write(to: hook)
         guard chmod(hook.path, 0o700) == 0 else { throw POSIXError(.EPERM) }
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
-        defer { backend.stop() }
-        _ = try backend.openTun(["ifname": name, "mtu": 1400])
-        let interface = try #require(backend.snapshot()["ifname"] as? String)
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: socket.path, sessionToken: "privileged-swift-helper-token", backend: backend)
+        try server.start()
+        defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: socket.path, sessionToken: "privileged-swift-helper-token")
+        let opened = try adapter.send(command: .openTun, payload: ["ifname": name, "mtu": 1400])
+        let interface = try #require(opened["ifname"] as? String)
         // This opt-in test runs concurrently with the basic privileged
         // route test, so its host policy must not compete for that route.
         let route = "198.21.0.0/16"
+        let route6 = "fd21:106::/64"
+        let peerExclusion = "203.0.113.254/32"
         let address = "198.20.0.1"
-        _ = try backend.applyNetwork(["ifname": interface, "hook_path": hook.path, "tun_routing": [
+        let address6 = "fd20:106::1"
+        _ = try adapter.send(command: .applyNetwork, payload: ["ifname": interface, "hook_path": hook.path, "tun_routing": [
             "tunnel_address": address, "tunnel_prefix": 24,
-            "included_routes": [route], "dns_servers": ["192.0.2.53"],
+            "tunnel_address6": address6, "tunnel_prefix6": 64,
+            "included_routes": [route], "included_routes6": [route6],
+            "excluded_routes": [peerExclusion], "dns_servers": ["192.0.2.53"],
         ]])
+        // This is the packet path used by the unprivileged foreground after
+        // it authenticates to the helper.  The helper counter proves the
+        // packet reached the real TUN owner rather than merely a test socket.
+        _ = try adapter.sendPacketToHelper(Data([0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 198, 20, 0, 1, 198, 21, 0, 1]))
+        let deadline = Date().addingTimeInterval(1)
+        var packetSnapshot: [String: Any] = [:]
+        while Date() < deadline {
+            packetSnapshot = try adapter.send(command: .snapshot, payload: [:])
+            if (packetSnapshot["packets_from_runtime"] as? Int ?? 0) == 1 { break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        #expect(packetSnapshot["packets_from_runtime"] as? Int == 1)
         #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "addr", "show", "dev", interface], false).contains(address))
         #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", route], false).contains(interface))
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "addr", "show", "dev", interface], false).contains(address6))
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "route", "show", route6], false).contains(interface))
+        #expect(!(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", peerExclusion], false)).contains(interface))
         #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["resolvectl", "dns", interface], false).contains("192.0.2.53"))
-        _ = try backend.removeNetwork([:])
+        _ = try adapter.send(command: .removeNetwork, payload: [:])
         let addressesAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "addr", "show", "dev", interface], false)
         let routesAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", route], false)
+        let addresses6AfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "addr", "show", "dev", interface], false)
+        let routes6AfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "route", "show", route6], false)
+        let peerExclusionAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", peerExclusion], false)
         let dnsAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["resolvectl", "dns", interface], false)
         #expect(!addressesAfterRemoval.contains(address))
         #expect(!routesAfterRemoval.contains(interface))
+        #expect(!addresses6AfterRemoval.contains(address6))
+        #expect(!routes6AfterRemoval.contains(interface))
+        #expect(!peerExclusionAfterRemoval.contains(interface))
         #expect(!dnsAfterRemoval.contains("192.0.2.53"))
         #expect(String(decoding: try Data(contentsOf: marker), as: UTF8.self) == "up:\(interface)\ndown:\(interface)\n")
         #endif
