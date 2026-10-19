@@ -55,7 +55,16 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("persisted helper policy has no safe interface name")
         }
         for entry in (snapshot["applied_routes"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "route", interfaceName: ifname) }
-        for entry in (snapshot["excluded_routes"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "route", interfaceName: nil) }
+        let previousExcluded = snapshot["previous_excluded_routes"] as? [String: [String: Any]] ?? [:]
+        for entry in (snapshot["excluded_routes"] as? [String] ?? []).reversed() {
+            let parts = entry.split(separator: " ", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else { continue }
+            if let previous = previousExcluded[entry] {
+                _ = try commandRunner(Self.restoreRoute(family: parts[0], fallback: parts[1], record: previous), true)
+            } else {
+                try removePersistedIP(entry, kind: "route", interfaceName: nil)
+            }
+        }
         for record in (snapshot["policy_rule_records"] as? [[String: Any]] ?? []).reversed() {
             guard let family = record["family"] as? String, family == "-4" || family == "-6",
                   let preference = record["preference"] as? Int, preference > 0,
@@ -68,6 +77,9 @@ public final class ObstacleBridgeLinuxNativeTunHelperBackend: ObstacleBridgeLinu
         }
         if !(snapshot["dns_servers"] as? [String] ?? []).isEmpty { _ = try commandRunner(["resolvectl", "revert", ifname], true) }
         for rule in (snapshot["firewall_rules"] as? [[String]] ?? []).reversed() { _ = try commandRunner(Self.removeFirewallRule(rule), true) }
+        if let hookPath = snapshot["hook_path"] as? String, hookPath.hasPrefix("/") {
+            _ = try commandRunner([hookPath, "down", ifname], true)
+        }
         for entry in (snapshot["applied_addresses"] as? [String] ?? []).reversed() { try removePersistedIP(entry, kind: "addr", interfaceName: ifname) }
         try FileManager.default.removeItem(at: stateURL)
         emitEvent("recovered prior helper policy interface=\(ifname)")

@@ -265,12 +265,29 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func nativeSwiftHelperRecoversPersistedPolicyBeforeNewOwnership() throws {
         let path = URL(fileURLWithPath: "/tmp/obstaclebridge-native-recovery-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: path) }
-        let writer = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in arguments.contains("-j") ? "[]" : "" })
-        _ = try writer.applyNetwork(["ifname": "obtest0", "tun_routing": ["included_routes": ["10.0.0.0/8"]]])
+        let writer = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in
+            if arguments == ["ip", "-j", "-4", "route", "show", "default"] { return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]" }
+            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\"}]" }
+            return arguments.contains("-j") ? "[]" : ""
+        })
+        _ = try writer.applyNetwork([
+            "ifname": "obtest0", "hook_path": "/opt/obstaclebridge/tun-hook",
+            "listener_hook_env": ["WAN_IF": "eth0"],
+            "tun_routing": [
+                "tunnel_address": "198.18.0.1", "tunnel_prefix": 24,
+                "included_routes": ["10.0.0.0/8"], "excluded_routes": ["203.0.113.9/32"],
+                "dns_servers": ["1.1.1.1"],
+            ],
+        ])
         var commands: [[String]] = []
         let recovery = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in commands.append(arguments); return "" })
         try recovery.recoverPersistedPolicy()
         #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
+        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1"]))
+        #expect(commands.contains(["resolvectl", "revert", "obtest0"]))
+        #expect(commands.contains(["iptables", "-D", "FORWARD", "-i", "obtest0", "-o", "eth0", "-j", "ACCEPT"]))
+        #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "down", "obtest0"]))
+        #expect(commands.contains(["ip", "-4", "addr", "del", "198.18.0.1/24", "dev", "obtest0"]))
         #expect(!FileManager.default.fileExists(atPath: path.path))
     }
 
