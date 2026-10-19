@@ -385,6 +385,94 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(String(decoding: try Data(contentsOf: marker), as: UTF8.self) == "up:\(interface)\ndown:\(interface)\n")
         #endif
     }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1" && ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_LINUX_TEST_HELPER_EXECUTABLE"] != nil))
+    func privilegedNativeSwiftHelperRecoversPolicyAfterHelperProcessLoss() throws {
+        #if os(Linux)
+        let executable = try #require(ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_LINUX_TEST_HELPER_EXECUTABLE"])
+        #expect(FileManager.default.isExecutableFile(atPath: executable))
+        let directory = URL(fileURLWithPath: "/tmp/obstaclebridge-swift-recovery-\(UUID().uuidString)", isDirectory: true)
+        let socket = directory.appendingPathComponent("helper.sock")
+        let state = URL(fileURLWithPath: socket.path + ".state.json")
+        let hook = directory.appendingPathComponent("hook.sh")
+        let marker = directory.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$2\" >> '\(marker.path)'\n".utf8).write(to: hook)
+        guard chmod(hook.path, 0o700) == 0 else { throw POSIXError(.EPERM) }
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let wanInterface = try #require(try defaultIPv4Interface())
+        let token = "privileged-recovery-token"
+        let first = try launchNativeHelper(executable: executable, socketPath: socket.path, token: token)
+        defer { terminate(first) }
+        let firstAdapter = try waitForNativeHelper(socketPath: socket.path, token: token, process: first)
+        let opened = try firstAdapter.send(command: .openTun, payload: ["ifname": "obkr\(getpid() % 10_000)", "mtu": 1400])
+        let interface = try #require(opened["ifname"] as? String)
+        let address = "198.20.1.1"
+        _ = try firstAdapter.send(command: .applyNetwork, payload: [
+            "ifname": interface, "hook_path": hook.path,
+            "listener_hook_env": ["WAN_IF": wanInterface],
+            "tun_routing": [
+                "tunnel_address": address, "tunnel_prefix": 24,
+                "included_routes": ["198.22.0.0/16"], "dns_servers": ["192.0.2.53"],
+            ],
+        ])
+        #expect(FileManager.default.fileExists(atPath: state.path))
+        let forwardBeforeLoss = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["iptables", "-S", "FORWARD"], false)
+        #expect(forwardBeforeLoss.contains("-i \(interface) -o \(wanInterface) -j ACCEPT"))
+
+        // SIGKILL models an interrupted helper: no in-process STOP/rollback is
+        // allowed to run, so the successor must consume the persisted policy.
+        _ = kill(first.processIdentifier, SIGKILL)
+        first.waitUntilExit()
+        #expect(FileManager.default.fileExists(atPath: state.path))
+
+        let replacement = try launchNativeHelper(executable: executable, socketPath: socket.path, token: token)
+        defer { terminate(replacement) }
+        let replacementAdapter = try waitForNativeHelper(socketPath: socket.path, token: token, process: replacement)
+        #expect(!FileManager.default.fileExists(atPath: state.path))
+        #expect(try replacementAdapter.send(command: .snapshot, payload: [:])["network_applied"] as? Bool == false)
+        let forwardAfterRecovery = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["iptables", "-S", "FORWARD"], false)
+        #expect(!forwardAfterRecovery.contains("-i \(interface) -o \(wanInterface) -j ACCEPT"))
+        #expect(String(decoding: try Data(contentsOf: marker), as: UTF8.self) == "up:\(interface)\ndown:\(interface)\n")
+
+        _ = try replacementAdapter.send(command: .stop, payload: [:])
+        let stoppedDeadline = Date().addingTimeInterval(2)
+        while replacement.isRunning && Date() < stoppedDeadline { Thread.sleep(forTimeInterval: 0.02) }
+        #expect(!replacement.isRunning)
+        #endif
+    }
+
+    private func defaultIPv4Interface() throws -> String? {
+        let text = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", "default"], false)
+        guard let routes = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]] else { return nil }
+        return routes.first?["dev"] as? String
+    }
+
+    private func launchNativeHelper(executable: String, socketPath: String, token: String) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["--tun-helper-server", socketPath, token, "--idle-sec", "30"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        return process
+    }
+
+    private func waitForNativeHelper(socketPath: String, token: String, process: Process) throws -> ObstacleBridgeLinuxTunHelperAdapter {
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: socketPath, sessionToken: token, timeoutMilliseconds: 100)
+        let deadline = Date().addingTimeInterval(3)
+        while process.isRunning && Date() < deadline {
+            if (try? adapter.send(command: .snapshot, payload: [:])) != nil { return adapter }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("native Swift helper did not become available")
+    }
+
+    private func terminate(_ process: Process) {
+        if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
+    }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {

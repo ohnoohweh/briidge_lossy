@@ -94,16 +94,22 @@ enum ObstacleBridgeLinuxMain {
                 stateURL: URL(fileURLWithPath: socketPath + ".state.json")
             )
             try backend.recoverPersistedPolicy()
+            let stopped = DispatchSemaphore(value: 0)
             let server = try ObstacleBridgeLinuxTunHelperServer(
                 socketPath: socketPath,
                 sessionToken: sessionToken,
                 backend: backend,
-                authenticatedClientIdleTimeout: idleTimeout
+                authenticatedClientIdleTimeout: idleTimeout,
+                onStop: { stopped.signal() }
             )
             try server.start()
             print("{\"socket_path\":\"\(socketPath)\",\"state\":\"listening\",\"backend\":\"linux-swift-native\"}")
             let resources: [Any] = [server, backend]
                 + installForegroundShutdown(stop: { server.stop() }, admin: nil, holdSeconds: nil)
+            DispatchQueue.global().async {
+                stopped.wait()
+                exit(0)
+            }
             withExtendedLifetime(resources) { dispatchMain() }
         } catch {
             writeError("ObstacleBridgeLinux: TUN helper server failed: \(error.localizedDescription)")

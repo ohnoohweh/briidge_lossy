@@ -1026,6 +1026,7 @@ REQ-LIFE-010:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperFullTunnelRetainsEveryKernelConnectedLocalLAN
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperQualifiesTunRouteDNSAndHookLifecycle
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperRecoversPersistedPolicyBeforeNewOwnership
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperRecoversPolicyAfterHelperProcessLoss
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
     - tests/unit/test_runner_tun_helper.py::test_runner_attaches_to_prestarted_tun_helper_from_env_config
     - tests/unit/test_runner_tun_helper.py::test_stop_tun_helper_process_is_noop_for_prestarted_helper

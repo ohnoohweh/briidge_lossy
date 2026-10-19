@@ -565,6 +565,7 @@ ARC-CMP-004:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperAuthorizationKeepsAllSudoStreamsOnOneRawTerminal
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperQualifiesTunRouteDNSAndHookLifecycle
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::nativeSwiftHelperRecoversPersistedPolicyBeforeNewOwnership
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::privilegedNativeSwiftHelperRecoversPolicyAfterHelperProcessLoss
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_skips_sudo_when_python_has_linux_capability
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_uses_override_helper_executable
     - tests/unit/test_runner_tun_helper.py::test_runner_attaches_to_prestarted_tun_helper_from_env_config

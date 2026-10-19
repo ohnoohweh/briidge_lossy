@@ -18,7 +18,7 @@ if [[ -z "$effective_capabilities" ]] || (( (16#$effective_capabilities & 0x1000
   echo "Linux Swift privileged TUN qualification requires effective CAP_NET_ADMIN." >&2
   exit 2
 fi
-for command in ip resolvectl; do
+for command in ip resolvectl iptables ip6tables; do
   if ! command -v "$command" >/dev/null 2>&1; then
     echo "Linux Swift privileged TUN qualification requires $command." >&2
     exit 2
@@ -26,4 +26,5 @@ for command in ip resolvectl; do
 done
 
 ./scripts/build_linux_app.sh
+export OBSTACLEBRIDGE_LINUX_TEST_HELPER_EXECUTABLE="$(pwd)/build/linux/ObstacleBridgeLinux"
 swift test --package-path swift --filter ObstacleBridgeLinuxTunHelperAdapterTests

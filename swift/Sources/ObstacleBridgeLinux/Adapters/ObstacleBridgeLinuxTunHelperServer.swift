@@ -40,6 +40,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private let sessionToken: String
     private let authenticatedClientIdleTimeout: TimeInterval
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
+    private let onStop: (() -> Void)?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
     private let lock = NSLock()
     private let writerLock = NSLock()
@@ -49,7 +50,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private var lastAuthenticatedActivity = Date()
     private var watchdog: DispatchSourceTimer?
 
-    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5) throws {
+    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5, onStop: (() -> Void)? = nil) throws {
         guard !socketPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sessionToken.isEmpty else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper server requires socket path and session token")
         }
@@ -57,6 +58,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         self.sessionToken = sessionToken
         self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0.5)
         self.backend = backend
+        self.onStop = onStop
         backend.setPacketSink { [weak self] packet in self?.emitPacket(packet) }
         backend.setEventSink { [weak self] detail in self?.emitEvent(detail) }
     }
@@ -97,6 +99,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         lock.lock(); authenticatedClients.removeAll(); lock.unlock()
         _ = unlink(socketPath)
         backend.stop()
+        onStop?()
     }
 
     private func acceptLoop() {
