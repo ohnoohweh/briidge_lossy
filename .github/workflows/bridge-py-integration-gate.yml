@@ -201,6 +201,13 @@ jobs:
             --runtime-mode "${{ matrix.runtime_mode }}" \
             --log-dir "artifacts/overlay-runtime-${{ matrix.label }}"
 
+      - name: Run native/Python myUDP send-window pressure case
+        if: matrix.label == 'python-linux-native'
+        run: |
+          pytest -vv --timeout=180 \
+            tests/integration/test_overlay_e2e.py \
+            -k linux_native_python_myudp_window_pressure
+
       - name: Upload overlay child-process logs
         if: always()
         uses: actions/upload-artifact@v4

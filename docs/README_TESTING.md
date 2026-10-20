@@ -613,6 +613,14 @@ through `test_overlay_e2e_mixed_runtime_myudp_delay_loss`. The full-pressure
 case verifies that one maximum-size CONTROL missing list becomes multiple
 wire-valid retransmission DATA batches.
 
+On Linux, `test_overlay_e2e_linux_native_python_myudp_window_pressure` runs
+the native client against the Python listener with five simultaneous 65,535-byte
+TCP records. Their roughly 230 initial DATA chunks exceed the default
+200-frame send window, and verifies ordered, lossless draining after CONTROL
+acknowledgements. The generated loopback address is included in `NO_PROXY` for
+both bridge processes so the Python service target cannot be routed through a
+host-configured proxy.
+
 This gives controlled reproduction of retransmission and missed-frame behavior using the real bridge processes instead of an in-memory simulator.
 
 ### 5. API/auth integration tests
@@ -668,7 +676,7 @@ The supporting project-level intent documents are:
 | Entry point | Scope | Objective | How to start |
 |---|---|---|---|
 | `test_overlay_e2e_basic` | Base transport smoke coverage | Verify that each primary overlay transport can carry the configured UDP or TCP service mapping end to end | `pytest -q tests/integration/test_overlay_e2e.py -k basic` |
-| `test_overlay_e2e_python_server_linux_native_client_myudp_basic` | Python/native runtime matrix | Verify the same `case04` TCP request/reply spec traverses myUDP for both Python↔Python and Python-listener↔built-Linux-native-client process pairings, without modifying either product runtime | `./.venv/bin/python tests/integration/test_overlay_e2e.py --cases case04_tcp_over_own_udp_clients_ipv4 --runtime-mode python-server-linux-native-client --log-dir ./e2e_overlay_linux_native_case04` |
+| `test_overlay_e2e_python_server_linux_native_client_myudp_basic` and `test_overlay_e2e_linux_native_python_myudp_window_pressure` | Python/native runtime matrix | Verify the normal TCP request/reply path and five simultaneous maximum-size records (about 230 initial chunks) across the default 200-frame myUDP send window for the Python-listener↔built-Linux-native-client product pair | `pytest -q tests/integration/test_overlay_e2e.py -k 'python_server_linux_native_client_myudp_basic or linux_native_python_myudp_window_pressure'` |
 | `test_overlay_e2e_reconnect` | Restart and reconnect flows | Verify disconnect detection, recovery, and post-restart functionality across base and localhost variants | `pytest -q tests/integration/test_overlay_e2e.py -k reconnect` |
 | `test_reconnect_regression` and `test_stream_peer_rotation` | Reconnect lifecycle regression | Verify reconnect-loop re-entry after completed reconnect tasks, minimum-delay throttling between repeated failed reconnect attempts, peer rotation, and shutdown-safe reconnect-coroutine cleanup for TCP, QUIC, and WebSocket transports | `pytest -q tests/integration/test_reconnect_regression.py tests/unit/test_stream_peer_rotation.py` |
 | `test_overlay_e2e_listener_two_clients` | Multi-client listener | Verify that a listener can serve two clients and reports them correctly in admin APIs | `pytest -q tests/integration/test_overlay_e2e.py -k listener_two_clients` |

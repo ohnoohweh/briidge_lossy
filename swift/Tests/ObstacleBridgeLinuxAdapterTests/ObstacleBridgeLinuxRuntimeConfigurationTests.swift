@@ -4,6 +4,24 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
+    @Test func debugLoggingIsOptInFromTheGroupedConfiguration() throws {
+        let base: [String: Any] = [
+            "runner": ["overlay_transport": "myudp"],
+            "udp_session": ["udp_peer": "127.0.0.1", "udp_peer_port": 4444],
+        ]
+        let disabled = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: base)
+        )
+        #expect(!disabled.debugLoggingEnabled)
+
+        var enabled = base
+        enabled["debug_logging"] = ["debug_enabled": true]
+        let configured = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: enabled)
+        )
+        #expect(configured.debugLoggingEnabled)
+    }
+
     @Test func managedTunHelperElevatesOnlyTheSeparateHelperProcess() {
         let elevated = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
             executable: "/opt/obstaclebridge/ObstacleBridgeLinux",

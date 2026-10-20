@@ -223,6 +223,9 @@ enum ObstacleBridgeLinuxMain {
             runtime.onDiagnostic = { event, fields in
                 observability.recordDiagnostic(event, fields: fields)
             }
+            runtime.onDebugDiagnostic = { event, fields in
+                observability.recordDiagnostic("debug.\(event)", fields: fields)
+            }
             runtime.onSnapshot = { snapshot in
                 observability.recordForegroundLifecycle(state: snapshot.state, transport: configuration.transport.rawValue)
             }

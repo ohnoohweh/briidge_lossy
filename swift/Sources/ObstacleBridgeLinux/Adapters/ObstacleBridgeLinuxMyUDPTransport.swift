@@ -111,8 +111,13 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             }
             try execute(effect.frames)
         }
-        guard let firstCounter else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-        return firstCounter
+        // A full send window means the record is now owned by Core's bounded
+        // queue; it is not an I/O failure.  A later CONTROL acknowledgement
+        // causes `receive()` / `serviceTimers()` to flush it.  Counter zero
+        // is outside the wire-valid DATA range and therefore unambiguously
+        // represents an accepted-but-not-yet-emitted record to synchronous
+        // callers.  The duplex ChannelMux path deliberately ignores it.
+        return firstCounter ?? 0
     }
 
     public func receive() throws -> (counter: UInt16, payload: Data) {
@@ -129,7 +134,20 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             stateLock.unlock()
             var buffer = [UInt8](repeating: 0, count: 1_452)
             let received = recv(descriptor, &buffer, buffer.count, 0)
-            guard received > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+            guard received > 0 else {
+                let code = errno
+                // A receive timeout is the owner’s timer cadence, not a
+                // disconnected UDP peer.  Keep the duplex reader alive and
+                // let Core emit due CONTROL, retransmission, or IDLE frames.
+                // Treating EAGAIN as fatal caused an otherwise healthy quiet
+                // myUDP epoch to reconnect before its first local service
+                // connection could be accepted.
+                if code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT {
+                    try serviceTimers()
+                    continue
+                }
+                throw ObstacleBridgeLinuxMyUDPError.ioFailure(code)
+            }
             let wire = Data(buffer.prefix(Int(received)))
             stateLock.lock()
             let now = DispatchTime.now().uptimeNanoseconds

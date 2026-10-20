@@ -164,6 +164,7 @@ ARC-CMP-002:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_delay_loss
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_server_linux_native_client_myudp_basic
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_python_myudp_window_pressure
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_myudp_secure_link_psk_transport_outage_with_live_tcp_backlog_reauthenticates_cleanly
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_secure_link_psk_udp_fragmentation_survives_text_mode
 
@@ -245,7 +246,7 @@ ARC-CMP-003:
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::overlayAppPingPongFramesMatchPythonLayout
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::linuxChannelMuxReassemblesCoreControlChunksBeforeDelivery
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::webSocketTextFramesNegotiateAndRoundTripAgainstPythonPeer
-    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlFrameRoundTripsAndRejectsTrailingBytes
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlFrameRoundTripsAndAcceptsOuterTrailingBytes
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpControlMissingListUsesPayloadDerivedLimit
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::myudpBatchPayloadAndGenericEnvelopeAreCoreOwned
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::secureLinkFrameEnvelopePreservesFlagsAndRejectsTruncation

@@ -79,6 +79,9 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// owner uses this to refresh its redacted Admin projection after a
     /// rekey, whose control exchange deliberately carries no ChannelMux data.
     public var onSecureLinkStateChange: (() -> Void)?
+    /// Optional foreground-owned, payload-free debug sink. It is nil in the
+    /// normal path, so its fields are never constructed unless enabled.
+    public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
     private(set) public var snapshot: ObstacleBridgeLinuxOverlaySnapshot
 
     init(lower: ObstacleBridgeLinuxOverlayTransportClient, lowerSession: ObstacleBridgeLinuxOverlayTransportSession, secureLink: ObstacleBridgeSecureLinkPSKClient?, secureLinkServer: ObstacleBridgeSecureLinkPSKServer? = nil, transport: ObstacleBridgeLinuxTransport) {
@@ -147,6 +150,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     public var supportsDuplexReceive: Bool { true }
     public func sendOneWay(_ payload: Data) throws {
         do {
+            debug("secure_link.outbound", ["protected": isProtected ? "true" : "false", "application_bytes": String(payload.count)])
             if let overlayAdapter {
                 for wire in try overlayAdapter.handleOutboundPayload(payload).emittedFrames { try lowerSession.send(wire) }
             }
@@ -154,6 +158,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             else if let secureLinkServer { try lowerSession.send(secureLinkServer.protect(payload)) }
             else { try lowerSession.send(payload) }
         } catch {
+            debug("secure_link.outbound_failed", ["reason": error.localizedDescription])
             fail(error)
             throw error
         }
@@ -172,6 +177,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             if let secureLinkServer { return try secureLinkServer.unprotect(wire) }
             return wire
         } catch {
+            debug("secure_link.inbound_failed", ["reason": error.localizedDescription])
             fail(error)
             throw error
         }
@@ -192,6 +198,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
             let commit = try secureLink.handleRekeyReply(reply)
             try secureLink.handleRekeyDone(lowerSession.exchange(commit))
         } catch {
+            debug("secure_link.rekey.exchange_failed", ["reason": error.localizedDescription])
             fail(error)
             throw error
         }
@@ -204,9 +211,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
         guard let overlayAdapter else { throw ObstacleBridgeLinuxOverlayTransportError.invalidFrame }
         do {
             let outbound = try overlayAdapter.requestSecureLinkRekey(sessionID: sessionID, clientNonce: clientNonce).emittedFrames
+            debug("secure_link.rekey.owner_started", ["frames": String(outbound.count)])
             for frame in outbound { try lowerSession.send(frame) }
             return outbound.count
         } catch {
+            debug("secure_link.rekey.owner_failed", ["reason": error.localizedDescription])
             fail(error)
             throw error
         }
@@ -232,6 +241,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
                     payload = wire
                 }
                 onSecureLinkStateChange?()
+                debug("secure_link.inbound", ["wire_bytes": String(wire.count), "delivered_application": payload == nil ? "false" : "true"])
                 // SecureLink rekey controls have no application payload. They
                 // are fully handled by Core above and must not retire a live
                 // receive epoch merely because ChannelMux has nothing to read.
@@ -247,6 +257,7 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
                 return payload
             }
         } catch {
+            debug("secure_link.owner_receive_failed", ["reason": error.localizedDescription])
             fail(error)
             throw error
         }
@@ -262,6 +273,11 @@ public final class ObstacleBridgeLinuxConfiguredSession: @unchecked Sendable {
     /// installed. Protected records are authenticated and therefore a decode
     /// rejection must retire the epoch instead of being treated as noise.
     public var isProtected: Bool { overlayAdapter != nil || secureLink != nil || secureLinkServer != nil }
+
+    private func debug(_ event: String, _ fields: @autoclosure () -> [String: String]) {
+        guard let onDebugDiagnostic else { return }
+        onDebugDiagnostic(event, fields())
+    }
 
     public func probeLiveness() throws { try lowerSession.probeLiveness() }
     public func cancelReceive() { lowerSession.close() }
@@ -416,6 +432,8 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
     /// Values are restricted to transport metadata and error text; no key or
     /// packet data crosses this callback.
     public var onDiagnostic: ((String, [String: String]) -> Void)?
+    /// Foreground-owned, payload-free diagnostics for opt-in debugging.
+    public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
 
     public var snapshot: ObstacleBridgeLinuxOverlaySnapshot { publishedAdmission.snapshot }
     public var connectionEpoch: UInt64 { publishedAdmission.connectionEpoch }
@@ -473,10 +491,12 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 let (lower, lowerSession) = try openLowerSession(host)
                 let session: ObstacleBridgeLinuxConfiguredSession
                 if let psk = configuration.secureLinkPSK {
+                    debug("secure_link.handshake.started", ["transport": configuration.transport.rawValue])
                     let adapter = ObstacleBridgeOverlayLayerTransportAdapter(clientPSK: String(decoding: psk, as: UTF8.self))
                     session = ObstacleBridgeLinuxConfiguredSession(lower: lower, lowerSession: lowerSession, overlayAdapter: adapter, transport: configuration.transport)
                     guard admission.installInFlightConnection(session) else { throw ObstacleBridgeLinuxOverlayTransportError.cancelled }
                     try session.completeClientHandshake(sessionID: sessionID, clientNonce: clientNonce)
+                    debug("secure_link.handshake.completed", ["transport": configuration.transport.rawValue])
                     admission.secureLinkState = "authenticated"
                     admission.clearInFlightConnection(session)
                 } else {
@@ -497,6 +517,10 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
                 ])
                 return session
             } catch {
+                debug("secure_link.handshake_or_transport_failed", [
+                    "transport": configuration.transport.rawValue,
+                    "reason": error.localizedDescription,
+                ])
                 if admission.isInFlightConnectionCancelled {
                     admission.clearInFlightConnection()
                     throw ObstacleBridgeLinuxOverlayTransportError.cancelled
@@ -514,6 +538,11 @@ public final class ObstacleBridgeLinuxConfiguredRuntime {
             }
         }
         throw lastError ?? ObstacleBridgeLinuxOverlayTransportError.invalidFrame
+    }
+
+    private func debug(_ event: String, _ fields: @autoclosure () -> [String: String]) {
+        guard configuration.debugLoggingEnabled, let onDebugDiagnostic else { return }
+        onDebugDiagnostic(event, fields())
     }
 
     /// Interrupts an in-progress lower transport or SecureLink handshake

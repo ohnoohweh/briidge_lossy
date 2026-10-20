@@ -62,10 +62,10 @@ struct ObstacleBridgeCryptoTests {
         let idle = try ObstacleBridgeMyUDPCodec.encodeWire(type: ObstacleBridgeMyUDPCodec.idleType, payload: Data(), transmittedNanoseconds: 1, echoedNanoseconds: 2)
         #expect(try ObstacleBridgeMyUDPCodec.decodeWire(idle) == .init(type: 0, payload: Data(), transmittedNanoseconds: 1, echoedNanoseconds: 2))
     }
-    @Test func myudpControlFrameRoundTripsAndRejectsTrailingBytes() throws {
+    @Test func myudpControlFrameRoundTripsAndAcceptsOuterTrailingBytes() throws {
         let wire = try ObstacleBridgeMyUDPCodec.encodeControl(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9)
         #expect(try ObstacleBridgeMyUDPCodec.decodeControl(wire) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
-        #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeControl(wire + Data([0])) }
+        #expect(try ObstacleBridgeMyUDPCodec.decodeControl(wire + Data([0])) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
     }
     @Test func myudpControlMissingListUsesPayloadDerivedLimit() throws {
         #expect(ObstacleBridgeMyUDPCodec.maximumControlMissingCount == 713)

@@ -162,6 +162,7 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
     public var onDiagnostic: ((String, [String: String]) -> Void)?
+    public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
     private let transportLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner
@@ -217,6 +218,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
         runtime.onDiagnostic = { [weak self] event, fields in
             self?.emitDiagnostic(event, fields: fields)
+        }
+        runtime.onDebugDiagnostic = { [weak self] event, fields in
+            self?.emitDebugDiagnostic(event, fields)
         }
     }
 
@@ -317,6 +321,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.configuredRuntime.adoptInbound(connectedSession, host: host)
             do {
                 self.session = connectedSession
+                connectedSession.onDebugDiagnostic = { [weak self] event, fields in
+                    self?.emitDebugDiagnostic(event, fields)
+                }
                 connectedSession.onSecureLinkStateChange = { [weak self] in
                     self?.queue.async { [weak self] in self?.refreshStatusProjection() }
                 }
@@ -420,10 +427,16 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let sessionID = UInt64.random(in: 1...UInt64.max, using: &generator)
             let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
             do {
+                emitDebugDiagnostic("secure_link.rekey.request", [
+                    "peer": peerID,
+                    "state": configuredRuntime.status().secureLinkState,
+                ])
                 let count = try session.requestSecureLinkRekey(sessionID: sessionID, clientNonce: nonce)
+                emitDebugDiagnostic("secure_link.rekey.frames_emitted", ["count": String(count)])
                 refreshStatusProjection()
                 return ["ok": true, "reason": "rekey_started", "requested": 1, "skipped": 0, "emitted_frames": count]
             } catch {
+                emitDebugDiagnostic("secure_link.rekey.failed", ["reason": error.localizedDescription])
                 return ["ok": false, "reason": "rekey_request_failed", "detail": error.localizedDescription]
             }
         }
@@ -589,6 +602,9 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             let nonce = freshNonce()
             let connectedSession = try transportLifecycleOwner.open(epoch: epoch, sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
+            connectedSession.onDebugDiagnostic = { [weak self] event, fields in
+                self?.emitDebugDiagnostic(event, fields)
+            }
             connectedSession.onSecureLinkStateChange = { [weak self] in
                 self?.queue.async { [weak self] in self?.refreshStatusProjection() }
             }
@@ -889,9 +905,19 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
         guard !stopped, let channelMux else { return }
         for frame in frames {
+            emitDebugDiagnostic("myudp.channel_mux.send", [
+                "message_type": String(frame.messageType.rawValue),
+                "channel": String(frame.channelID),
+                "body_bytes": String(frame.body.count),
+            ])
             if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
             do { try channelMux.sendUnsolicited(frame) }
             catch {
+                emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+                    "message_type": String(frame.messageType.rawValue),
+                    "channel": String(frame.channelID),
+                    "reason": error.localizedDescription,
+                ])
                 if let epoch = activeCoordinatorEpoch {
                     apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
                 }
@@ -953,8 +979,18 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func receiveFailed(workerEpoch: UInt64, coordinatorEpoch: UInt64, reason: String) {
         guard !stopped, configuredRuntime.connectionEpoch == workerEpoch,
               activeCoordinatorEpoch == coordinatorEpoch else { return }
+        emitDebugDiagnostic("overlay.receive_failed", [
+            "worker_epoch": String(workerEpoch),
+            "coordinator_epoch": String(coordinatorEpoch),
+            "reason": reason,
+        ])
         if inboundOnly { apply(coordinator.handle(.stop)) }
         else { apply(coordinator.handle(.receiveFinished(epoch: coordinatorEpoch, reason: reason))) }
+    }
+
+    private func emitDebugDiagnostic(_ event: String, _ fields: @autoclosure () -> [String: String]) {
+        guard configuredRuntime.configuration.debugLoggingEnabled else { return }
+        onDebugDiagnostic?(event, fields())
     }
 
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {

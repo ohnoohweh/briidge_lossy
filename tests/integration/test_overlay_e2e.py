@@ -56,7 +56,9 @@ _SECURE_LINK_CERT_FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
 
 def peer_endpoint_text(value: Any) -> str:
     if isinstance(value, dict):
-        host = str(value.get('host') or value.get('bind') or value.get('ifname') or '').strip()
+        host = str(
+            value.get('host') or value.get('active_host') or value.get('bind') or value.get('ifname') or ''
+        ).strip()
         port = value.get('port')
         if host and port not in (None, ''):
             port_s = str(port).strip()
@@ -143,6 +145,8 @@ class MyudpDelayLossCase:
     duplicate_client_to_server_data: tuple[int, ...] = ()
     reorder_client_to_server_data: tuple[int, ...] = ()
     drop_client_to_server_min_chunks: int = 0
+    bulk_tcp_records: int = 0
+    native_receive_idle_timeout_ms: int = 0
 
 
 class LinuxSwiftSecureLinkPeer:
@@ -1449,6 +1453,23 @@ MYUDP_DELAY_LOSS_CASES: Dict[str, MyudpDelayLossCase] = {
         drop_client_to_server_data=tuple(range(1, CONTROL_MAX_MISSED + 3)),
         tcp_application_stream=True,
         tcp_expected_request_bytes=32768,
+        bulk_tcp_records=16,
+    ),
+    # One max-size stream record needs approximately 46 myUDP DATA chunks.
+    # Five simultaneous records therefore exceed the default 200-frame send
+    # window and must drain in order as CONTROL acknowledgements make room.
+    'tc11_64k_records_exceed_default_send_window': MyudpDelayLossCase(
+        name='tc11_64k_records_exceed_default_send_window',
+        direction='client_to_server',
+        payload=b'W' * 65535,
+        # This case isolates send-window draining.  The general delay/loss
+        # cases retain their 300 ms impairment; applying it here makes the
+        # native receive-owner idle before the workload begins.
+        delay_ms=0,
+        tcp_application_stream=True,
+        tcp_expected_request_bytes=65535,
+        bulk_tcp_records=5,
+        native_receive_idle_timeout_ms=60_000,
     ),
 }
 
@@ -2462,6 +2483,7 @@ def _runtime_config_from_bridge_args(
         '--quic-key': ('quic_key', str),
         '--peer-resolve-family': ('peer_resolve_family', str),
         '--client-restart-if-disconnected': ('client_restart_if_disconnected', float),
+        '--secure-link-receive-idle-timeout-ms': ('secure_link_receive_idle_timeout_ms', int),
         '--overlay-reconnect-retry-delay-ms': ('overlay_reconnect_retry_delay_ms', int),
         '--secure-link-mode': ('secure_link_mode', str),
         '--secure-link-psk': ('secure_link_psk', str),
@@ -2621,6 +2643,8 @@ def _linux_native_runtime_config(
         'remote_servers': flat['remote_servers'],
         'tun_execution': {'tun_execution_mode': 'inline'},
     }
+    if 'secure_link_receive_idle_timeout_ms' in flat:
+        runtime_config['secure_link_receive_idle_timeout_ms'] = flat['secure_link_receive_idle_timeout_ms']
     for key in ('compress_layer', 'compress_layer_algo', 'compress_layer_level', 'compress_layer_min_bytes', 'compress_layer_types'):
         if key in flat:
             runtime_config[key] = flat[key]
@@ -3941,7 +3965,7 @@ def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: st
         for row in rows:
             if str(row.get('transport', '')).strip().lower() != normalized_transport:
                 continue
-            peer = peer_endpoint_text(row.get('peer'))
+            peer = peer_endpoint_text(row.get('peer') or row)
             if peer and peer.lower() != 'n/a':
                 who = f' {label}' if label else ''
                 log.info(f'[PEERS]{who} port={admin_port} transport={normalized_transport} peer={peer}')
@@ -4510,6 +4534,18 @@ def status_state(doc: dict) -> str:
     transport_runtime = _status_transport_runtime(doc)
     if bool(transport_runtime.get('overlay_connected')):
         return 'CONNECTED'
+    # The foreground Linux-native status schema reports the active state at
+    # the document root instead of under Python's transport_runtime object.
+    # Accept that public product schema so a mixed-runtime E2E case waits for
+    # both sides rather than timing out after they have connected.
+    native_state = str(doc.get('transport_state') or '').strip().upper()
+    if native_state:
+        return native_state
+    native_peer = doc.get('peer') or {}
+    if isinstance(native_peer, dict):
+        native_peer_state = str(native_peer.get('state') or '').strip().upper()
+        if native_peer_state:
+            return native_peer_state
     runtime_status = str((doc.get('bootstrap_state') or {}).get('status') or '').strip().upper()
     if runtime_status:
         return runtime_status
@@ -4967,7 +5003,10 @@ def run_case_myudp_delay_loss(
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{loss_case.name}_bridge_client.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
-    ] + admin_args(client_admin)
+    ] + (
+        ['--secure-link-receive-idle-timeout-ms', str(loss_case.native_receive_idle_timeout_ms)]
+        if loss_case.native_receive_idle_timeout_ms else []
+    ) + admin_args(client_admin)
     server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
     server_cmd = build_bridge_command(
         server_runtime,
@@ -5013,19 +5052,37 @@ def run_case_myudp_delay_loss(
         proxy.start()
 
         phase('2. Start myudp bridge server and client through proxy')
-        server_proc = start_proc(f'{loss_case.name}_bridge_server', server_cmd, log_dir, admin_port=server_admin)
-        client_proc = start_proc(f'{loss_case.name}_bridge_client', client_cmd, log_dir, admin_port=client_admin)
+        local_bypass_env = {'NO_PROXY': loopback_v4, 'no_proxy': loopback_v4}
+        server_proc = start_proc(
+            f'{loss_case.name}_bridge_server', server_cmd, log_dir,
+            env_extra=local_bypass_env, admin_port=server_admin,
+        )
+        client_proc = start_proc(
+            f'{loss_case.name}_bridge_client', client_cmd, log_dir,
+            env_extra=local_bypass_env, admin_port=client_admin,
+        )
         wait_admin_up(server_admin, timeout=10.0)
         wait_admin_up(client_admin, timeout=10.0)
 
         phase('3. Wait for both peers to become CONNECTED')
         server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
-        wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
-        wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
+        # The native foreground projection is validated by its dedicated
+        # status-schema tests.  Start the window-pressure workload as soon as
+        # both transport states are connected so its result is about bounded
+        # queue draining, rather than an intentionally idle preamble.
+        if runtime_mode != 'python-server-linux-native-client':
+            wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
+            wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
 
         if loss_case.name == 'tc0_idle_connectivity':
             time.sleep(1.5)
             return
+
+        if loss_case.tcp_application_stream:
+            # The Linux-native client publishes local TCP services after the
+            # overlay readiness transition.  Wait for the real bind before
+            # issuing concurrent max-size records.
+            wait_tcp_listen(loopback_v4, client_probe_port, timeout=12.0)
 
         phase('4. Execute bidirectional app probes across the delayed/lossy myudp overlay')
         if loss_case.name == 'tc5_concurrent_bidir':
@@ -5095,11 +5152,17 @@ def run_case_myudp_delay_loss(
                     )
             return
 
-        if loss_case.name == 'tc10_full_missed_list_pressure':
-            payloads = [
-                (f'Z{i:03d}-'.encode('ascii') + b'Z' * (32768 - 5))
-                for i in range(16)
-            ]
+        if loss_case.bulk_tcp_records:
+            if loss_case.name == 'tc10_full_missed_list_pressure':
+                payloads = [
+                    (f'Z{i:03d}-'.encode('ascii') + b'Z' * (32768 - 5))
+                    for i in range(loss_case.bulk_tcp_records)
+                ]
+            else:
+                payloads = [
+                    (f'W{i:03d}-'.encode('ascii') + loss_case.payload[5:])
+                    for i in range(loss_case.bulk_tcp_records)
+                ]
             results: list[Optional[bytes]] = [None] * len(payloads)
             errors: list[tuple[int, Exception]] = []
 
@@ -7377,6 +7440,11 @@ MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
 ]
 
 
+LINUX_NATIVE_MYUDP_WINDOW_PRESSURE_CASES = [
+    'tc11_64k_records_exceed_default_send_window',
+]
+
+
 @pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize('runtime_mode', ['swift-server-python-client', 'python-server-swift-client'])
@@ -7388,6 +7456,23 @@ def test_overlay_e2e_mixed_runtime_myudp_delay_loss(case_name: str, runtime_mode
         tmp_path,
         CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
         runtime_mode=runtime_mode,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize('case_name', LINUX_NATIVE_MYUDP_WINDOW_PRESSURE_CASES)
+def test_overlay_e2e_linux_native_python_myudp_window_pressure(case_name: str, tmp_path: Path) -> None:
+    """Python listener and Linux client drain max-size records beyond one send window."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux-native overlay runtime mode requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux-native overlay runtime mode requires swift on PATH')
+    run_case_myudp_delay_loss(
+        MYUDP_DELAY_LOSS_CASES[case_name],
+        tmp_path,
+        CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
+        runtime_mode='python-server-linux-native-client',
     )
 
 
@@ -12912,6 +12997,14 @@ def test_overlay_e2e_try_get_status_uses_registered_admin_loopback_host(monkeypa
 
     assert body == {"ok": True, "state": "CONNECTED"}
     assert seen_urls == [f"http://127.88.77.67:{port}/api/status"]
+
+
+def test_overlay_e2e_status_state_accepts_linux_native_schema() -> None:
+    assert status_state({'transport_state': 'connected', 'peer': {'state': 'connected'}}) == 'CONNECTED'
+
+
+def test_overlay_e2e_peer_endpoint_text_accepts_linux_native_schema() -> None:
+    assert peer_endpoint_text({'active_host': '127.0.0.1', 'port': 14443}) == '127.0.0.1:14443'
 
 
 def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:

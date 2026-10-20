@@ -1196,7 +1196,10 @@ public enum ObstacleBridgeMyUDPCodec {
             let type = try reader.readUInt8(), bodyLength = Int(try reader.readUInt16())
             let transmittedNanoseconds = try reader.readUInt64(), echoedNanoseconds = try reader.readUInt64()
             let payload = try reader.readData(count: bodyLength)
-            guard reader.isAtEnd else { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
+            // Python consumes only the declared myUDP frame and leaves any
+            // outer-envelope remainder with its caller.  A UDP adapter may
+            // already have separated that outer framing; accepting it here
+            // preserves the same declared-frame contract on Linux.
             return .init(type: type, payload: payload, transmittedNanoseconds: transmittedNanoseconds, echoedNanoseconds: echoedNanoseconds)
         } catch { throw ObstacleBridgeMyUDPCodecError.invalidFrame }
     }
