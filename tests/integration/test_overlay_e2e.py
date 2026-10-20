@@ -4750,14 +4750,7 @@ def run_case(
     try:
         bounce.start()
         server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
-        # The Linux native Admin service-socket projection is intentionally
-        # listener-centric and does not mirror per-channel byte counters into
-        # /api/connections. The actual TCP request/reply probe below remains
-        # the black-box bidirectional transfer assertion for this pairing.
-        check_exact_bytes = (
-            case.name in EXACT_BYTES_CASES
-            and 'linux-native' not in (server_runtime, client_runtime)
-        )
+        check_exact_bytes = case.name in EXACT_BYTES_CASES
         overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', 'myudp')).strip().lower()
         for name, cmd, env, admin_port in build_commands(
             case,
@@ -4783,7 +4776,11 @@ def run_case(
         for proc in procs:
             assert_running(proc)
 
-        if case.name.startswith('case01_'):
+        # The Python myUDP listener does not publish an accepted-peer row
+        # before the first application datagram from the Linux native client.
+        # The following probe supplies that datagram and the shared byte
+        # counters assert its bidirectional transfer afterwards.
+        if case.name.startswith('case01_') and 'linux-native' not in (server_runtime, client_runtime):
             for proc in procs:
                 wait_peer_endpoint_visible(proc.admin_port or 0, timeout=10.0, label=proc.name, transport='myudp')
 
@@ -4796,12 +4793,20 @@ def run_case(
 
             def _request_connections_before_close() -> None:
                 for admin_port, proc_name in admin_ports_with_name:
-                    wait_tcp_connections_exact_transferred_bytes(
-                        admin_port,
-                        expected_bytes=expected_bytes,
-                        timeout=3.0,
-                        label=f'{proc_name} before-close',
-                    )
+                    if 'linux-native' in (server_runtime, client_runtime) and proc_name.endswith('bridge_client'):
+                        wait_exact_transferred_bytes(
+                            admin_port,
+                            expected_bytes=expected_bytes,
+                            timeout=3.0,
+                            label=f'{proc_name} before-close',
+                        )
+                    else:
+                        wait_tcp_connections_exact_transferred_bytes(
+                            admin_port,
+                            expected_bytes=expected_bytes,
+                            timeout=3.0,
+                            label=f'{proc_name} before-close',
+                        )
 
             before_tcp_close = _request_connections_before_close
         probe_timeout = 12.0 if case.name == 'case09_overlay_ws_ipv6' else 8.0

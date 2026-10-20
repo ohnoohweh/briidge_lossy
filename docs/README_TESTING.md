@@ -198,10 +198,16 @@ Use these when you want a product-specific view instead of the blended shared re
 ```bash
 pytest -q tests/unit
 pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only" -k "linux_swift"
-python tests/integration/test_overlay_e2e.py --cases case04_tcp_over_own_udp_clients_ipv4 --runtime-mode python-python --log-dir artifacts/overlay-runtime-python-python
-python tests/integration/test_overlay_e2e.py --cases case04_tcp_over_own_udp_clients_ipv4 --runtime-mode python-server-linux-native-client --log-dir artifacts/overlay-runtime-python-linux-native
+python tests/integration/test_overlay_e2e.py --mode basic --runtime-mode python-python --log-dir /tmp/overlay-runtime-python-python
+python tests/integration/test_overlay_e2e.py --mode basic --runtime-mode python-server-linux-native-client --log-dir /tmp/overlay-runtime-python-linux-native
 pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
+
+The two `--mode basic` commands are the Linux native/Python interoperability
+matrix used by CI. They execute the same eleven single-client cases across
+myUDP, TCP, WebSocket, and outbound QUIC with IPv4/IPv6 coverage. They do not
+qualify native listener ownership, reconnect behavior, multi-peer admission,
+custom QUIC trust roots, or multi-candidate peer-family selection.
 
 - `macos`
 

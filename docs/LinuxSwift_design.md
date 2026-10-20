@@ -13,7 +13,7 @@ evidence is traceable.
 | `LSW-005` | Packet-device access has adapter evidence, but full privileged Linux TUN data-plane qualification is incomplete. | An authorized-host test proves `/dev/net/tun` ingress and egress across an authenticated ChannelMux peer, including epoch teardown, with no packet acceptance before readiness and no fallback to Python. |
 | `LSW-006` | Native helper route, DNS, underlay-preservation, firewall, and teardown behavior lacks complete end-to-end kernel qualification with the native TUN data path. | An authorized-host test proves configured address, IPv4/IPv6 routes, peer exclusions, DNS, optional firewall, hook apply/remove, and clean recovery after interruption; it verifies traffic through the created TUN and leaves no helper-owned kernel state after controlled stop or recovery. |
 | `LSW-TEL-001` | Local lifecycle logging and private bounded spool persistence are implemented, but Linux has no end-to-end collector qualification for its HTTPS/mTLS delivery path. | A Linux client with generated credentials delivers ordered batches to the reference HTTPS collector, retries a rejected/unavailable collector without blocking runtime callbacks, acknowledges only accepted ranges, and exposes only bounded/redacted delivery state. |
-| `LSW-005B.2` | QUIC is limited to an outbound reliable-stream boundary. Listener ownership, custom trust-root interoperability, peer-family mapping, and ChannelMux service-flow qualification are absent. | The selected backend passes Python-peer interoperability for configured trust roots and IPv4/IPv6 family policy; safe listener ownership and authenticated ChannelMux service flow have integration evidence, or unsupported portions remain explicitly rejected with a documented product decision. |
+| `LSW-005B.2` | QUIC is limited to an outbound reliable-stream boundary. Listener ownership, custom trust-root interoperability, multi-candidate peer-family mapping, and reconnect/stale-completion qualification remain absent. The Linux native/Python overlay interoperability matrix exercises only the supported direction: a native QUIC client connects to a Python listener and carries a cleartext UDP service flow over direct IPv4 and IPv6 literals. It does not claim coverage of the remaining boundaries. | The selected backend passes Python-peer interoperability for configured trust roots and multi-candidate IPv4/IPv6 family policy; safe listener ownership and authenticated ChannelMux service flow have integration evidence, or unsupported portions remain explicitly rejected with a documented product decision. |
 | `LSW-PROXY-001` | Proxy support is limited to one HTTP CONNECT bootstrap. Proxy authentication challenges, proxy chains, and HTTP/2 proxy transport are unavailable. | Each supported advanced proxy mode has explicit configuration admission, credential redaction, failure diagnostics, and Python-peer integration coverage; modes intentionally not supported fail before connection with actionable diagnostics. |
 | `LSW-PKG-001` | The Linux archive/installer has no repository metadata, automated upgrade, or privilege-provisioning path. | The supported packaging format declares artifact identity, upgrade/rollback behavior, unprivileged foreground and scoped-helper privilege provisioning, state/config ownership, and an install/upgrade/uninstall qualification test. |
 
@@ -42,3 +42,18 @@ evidence is traceable.
 Do not retain a completed work package in this document. Move its durable
 contract and evidence to the relevant requirement, test guide, and source
 inventory, then remove its row from this ledger.
+
+## Linux native/Python overlay interoperability matrix
+
+The `bridge-py-integration-gate` runs the same `test_overlay_e2e.py --mode
+basic` catalog in `python-python` and
+`python-server-linux-native-client` modes. The catalog is the supported
+single-client, Python-listener boundary: myUDP cases 01--05, TCP cases 06--07,
+WebSocket cases 08--09, and outbound QUIC cases 10--11. It covers IPv4 and
+IPv6 overlay endpoints plus UDP and TCP application services without changing
+either product for the test harness.
+
+The localhost reconnect variants and the two-client/listener catalogs do not
+run in this matrix. They require native restart, listener, or multi-peer
+orchestration that the client-only runtime mode does not represent. They remain
+separate work, rather than being treated as coverage supplied by this matrix.

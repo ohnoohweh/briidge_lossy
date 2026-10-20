@@ -13,6 +13,8 @@
 ARC-CMP-001:
   # The independent myUDP peer remains bound through the client's post-reply
   # CONTROL/IDLE acknowledgement; repeated-loss has a bounded receive window.
+  # The shared basic overlay catalog uses this boundary in Python/Python and
+  # Python/Linux-native process pairings, including native service byte rows.
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_linux_swift_myudp_reference_peer_waits_for_response_drain

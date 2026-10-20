@@ -49,6 +49,13 @@ WebSocket payload mode's frame-size bound directly from that Core codec, so its
 executable test fixture cannot retain an Apple-only size calculation.
 - `REQ-OVL-005`: A peer client shall be able to establish a QUIC overlay session to a listener and carry UDP application traffic across it.
 - `REQ-OVL-006`: Supported overlay transports shall work on both IPv4 and IPv6 where the specific transport mode is configured for that address family. For WebSocket listener mode, binding to the IPv6 wildcard address `::` shall create a dual-stack listener that accepts both IPv6 and IPv4-mapped incoming connections where the operating system supports dual-stack IPv6 sockets; this wildcard bind is an intentional operator-selected all-interface overlay listener, and operators who need narrower exposure shall bind a specific local address instead. Binding to `0.0.0.0` remains IPv4-only.
+
+Implementation note: the shared basic overlay catalog is executable with a
+Python client or a Linux-native client against the same Python listener. The
+native Admin connection projection reports live per-channel application byte
+and message counters, so the TCP-over-myUDP interoperation case checks the
+same bidirectional transferred-byte contract at both process boundaries.
+
 - `REQ-OVL-007`: Overlay peer resolution shall behave deterministically for reconnect scenarios on both IPv4 and IPv6. The runtime configuration surface shall scope peer-family preference per transport (`udp_peer_resolve_family`, `tcp_peer_resolve_family`, `ws_peer_resolve_family`, `quic_peer_resolve_family`), and peer endpoint fields shall accept either one host/FQDN or an ordered comma-separated list of IPv4/IPv6 alternatives. When multiple alternatives are configured, the runtime shall prefer addresses that match the selected transport-local family policy, but if the preferred family cannot be used and a usable alternative family is available, connection bootstrap shall fall back to that alternative instead of failing solely because the first family choice was unavailable.
 Implementation note: operator-facing peer snapshots for peer-client transports shall distinguish the configured candidate set from the concrete endpoint that is actually in use. When a transport resolves or rotates through a comma-separated host list, `/api/peers` and the WebAdmin peer row shall report the applied peer host and port for the active attempt or live connection so the observed address family and selected candidate are unambiguous. When no live/applied endpoint has been learned yet, wrapped client snapshots may temporarily fall back to the configured target string until resolution or failover selects a concrete peer.
 

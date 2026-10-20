@@ -42,6 +42,13 @@ public struct ObstacleBridgeLinuxServiceSocketOwnerEpochReset: Equatable, Sendab
 public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     public typealias FrameSink = (ObstacleBridgeLinuxServiceSocketOwner, [ObstacleBridgeChannelMuxFrame]) -> Void
 
+    private struct ChannelTraffic {
+        var rxBytes = 0
+        var txBytes = 0
+        var rxMessages = 0
+        var txMessages = 0
+    }
+
     private var spec: ObstacleBridgeLinuxServiceSpec
     private let frameSink: FrameSink
     private let queue: DispatchQueue
@@ -57,6 +64,8 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var coreUDPChannels: Set<UInt16> = []
     private var coreTCPClientChannels: Set<UInt16> = []
     private var coreUDPClientChannels: Set<UInt16> = []
+    private var channelTraffic: [UInt16: ChannelTraffic] = [:]
+    private var completedTraffic = ChannelTraffic()
     private var openedTCPChannels = 0
     private var openedUDPChannels = 0
     private var malformedFrames = 0
@@ -172,7 +181,12 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 "local_port": boundListenerPort,
                 "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
                 "catalog": catalog,
-                "stats": ["rx_bytes": 0, "tx_bytes": 0, "rx_msgs": 0, "tx_msgs": 0],
+                "stats": [
+                    "rx_bytes": completedTraffic.rxBytes,
+                    "tx_bytes": completedTraffic.txBytes,
+                    "rx_msgs": completedTraffic.rxMessages,
+                    "tx_msgs": completedTraffic.txMessages,
+                ],
                 "throttle": ["active": false],
             ]
             var listenerRow = base
@@ -184,6 +198,13 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 var row = base
                 row["chan_id"] = Int(channelID)
                 row["state"] = "connected"
+                let traffic = channelTraffic[channelID] ?? .init()
+                row["stats"] = [
+                    "rx_bytes": traffic.rxBytes,
+                    "tx_bytes": traffic.txBytes,
+                    "rx_msgs": traffic.rxMessages,
+                    "tx_msgs": traffic.txMessages,
+                ]
                 rows.append(row)
             }
             return rows
@@ -202,6 +223,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
               let channelID = UInt16(exactly: snapshot.chanID) else { if fd >= 0 { _ = close(fd) }; return }
         descriptors[channelID] = fd
         coreTCPChannels.insert(channelID)
+        channelTraffic[channelID] = .init()
         openedTCPChannels += 1
         installReadSource(fd: fd, channelID: channelID, isUDP: false)
         emitCoreWires(snapshot.frames)
@@ -222,6 +244,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         udpChannels[addressData] = channelID
         udpPeers[channelID] = (addressData, length)
         coreUDPChannels.insert(channelID)
+        channelTraffic[channelID] = .init()
         if snapshot.allocatedChannel { openedUDPChannels += 1 }
         emitCoreWires(snapshot.frames)
     }
@@ -240,6 +263,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         let count = read(fd, &bytes, bytes.count)
         if count > 0 {
             let payload = Data(bytes.prefix(Int(count)))
+            recordLocalRead(channelID: channelID, bytes: Int(count))
             if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
             } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
@@ -269,6 +293,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 do {
                     try connectTarget(channelID: frame.channelID, spec: target)
                     coreTCPClientChannels.insert(frame.channelID)
+                    channelTraffic[frame.channelID] = .init()
                     openedTCPChannels += 1
                     _ = tcpRuntime.handleClientConnected(chanID: Int(frame.channelID))
                 } catch {
@@ -287,6 +312,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 do {
                     try connectTarget(channelID: frame.channelID, spec: target)
                     coreUDPClientChannels.insert(frame.channelID)
+                    channelTraffic[frame.channelID] = .init()
                     openedUDPChannels += 1
                     _ = udpRuntime.handleClientConnected(chanID: Int(frame.channelID))
                 } catch {
@@ -370,15 +396,23 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private func writeLocal(channelID: UInt16, payload: Data) {
         guard !payload.isEmpty else { return }
         if let (address, length) = udpPeers[channelID] {
-            _ = address.withUnsafeBytes { bytes in
+            let written = address.withUnsafeBytes { bytes in
                 bytes.baseAddress!.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(listener, payload.withUnsafeBytes { $0.baseAddress }, payload.count, 0, $0, length) }
             }
+            if written > 0 { recordLocalWrite(channelID: channelID, bytes: Int(written)) }
         } else if let fd = descriptors[channelID] {
-            _ = payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) }
+            let written = payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) }
+            if written > 0 { recordLocalWrite(channelID: channelID, bytes: Int(written)) }
         }
     }
 
     private func closeChannel(_ channelID: UInt16) {
+        if let traffic = channelTraffic[channelID] {
+            completedTraffic.rxBytes += traffic.rxBytes
+            completedTraffic.txBytes += traffic.txBytes
+            completedTraffic.rxMessages += traffic.rxMessages
+            completedTraffic.txMessages += traffic.txMessages
+        }
         connectionSources.removeValue(forKey: channelID)?.cancel()
         descriptors.removeValue(forKey: channelID)
         udpPeers.removeValue(forKey: channelID)
@@ -387,6 +421,23 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         coreUDPChannels.remove(channelID)
         coreTCPClientChannels.remove(channelID)
         coreUDPClientChannels.remove(channelID)
+        channelTraffic.removeValue(forKey: channelID)
+    }
+
+    private func recordLocalRead(channelID: UInt16, bytes: Int) {
+        guard bytes > 0 else { return }
+        var traffic = channelTraffic[channelID] ?? .init()
+        traffic.rxBytes += bytes
+        traffic.rxMessages += 1
+        channelTraffic[channelID] = traffic
+    }
+
+    private func recordLocalWrite(channelID: UInt16, bytes: Int) {
+        guard bytes > 0 else { return }
+        var traffic = channelTraffic[channelID] ?? .init()
+        traffic.txBytes += bytes
+        traffic.txMessages += 1
+        channelTraffic[channelID] = traffic
     }
 
     private func nativeSpec() -> ObstacleBridgeNativeServiceSpec {

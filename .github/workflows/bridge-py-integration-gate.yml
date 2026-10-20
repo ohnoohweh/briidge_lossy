@@ -194,10 +194,10 @@ jobs:
         if: matrix.build_native
         run: ./scripts/build_linux_app.sh
 
-      - name: Run shared overlay case
+      - name: Run shared overlay interoperability matrix
         run: |
           python tests/integration/test_overlay_e2e.py \
-            --cases case04_tcp_over_own_udp_clients_ipv4 \
+            --mode basic \
             --runtime-mode "${{ matrix.runtime_mode }}" \
             --log-dir "artifacts/overlay-runtime-${{ matrix.label }}"
 
