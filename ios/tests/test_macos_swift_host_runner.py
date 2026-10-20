@@ -53,6 +53,14 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
+def test_macos_webadmin_uses_core_canonical_json_serializer() -> None:
+    webadmin = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
+    service_codec = (CORE_SWIFT_DIR / "ObstacleBridgeServiceCodec.swift").read_text(encoding="utf-8")
+
+    assert "ObstacleBridgeCanonicalJSON.data(fromJSONObject: value)" in webadmin
+    assert "public enum ObstacleBridgeCanonicalJSON" in service_codec
+
+
 def test_macos_build_includes_mtls_telemetry_transport() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     source = (SHARED_NATIVE_DIR / "ObstacleBridgeTelemetryMTLSUploader.swift").read_text(encoding="utf-8")

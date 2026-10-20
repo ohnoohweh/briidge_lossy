@@ -16,6 +16,7 @@ REQ-OVL-001:
   integration_tests:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_client_runtime_mode_uses_grouped_user_config
+    - tests/integration/test_overlay_e2e.py::test_overlay_e2e_linux_native_basic_mode_excludes_known_quic_incompatibility
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_server_linux_native_client_myudp_basic
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_python_peer_linux_swift_secure_link_psk_round_trip
     - tests/integration/test_overlay_e2e.py::test_linux_swift_myudp_reference_peer_waits_for_response_drain
@@ -23,6 +24,7 @@ REQ-OVL-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpDataFrameRoundTripsAgainstPythonPeer
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorRotatesCandidateAfterFailedEpoch
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxOverlayTransportTests.swift::myudpSupervisorUsesCoreTimerRecoveryBeforeReconnect
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeCryptoTests.swift::canonicalJSONIsSharedByAdminAndServiceCatalogOwners
     - tests/unit/test_requirements_unit_gaps.py::test_myudp_bidirectional_sessions_deliver_independent_payloads
 
 REQ-RUN-001:

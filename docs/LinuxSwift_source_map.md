@@ -79,7 +79,7 @@ the Python result for the following already-observed differences:
 | myUDP trailing bytes | Accept a declared frame and let the caller retain outer trailing bytes. | Matches Python: the portable decoder consumes the declared frame and leaves outer trailing bytes to its caller. |
 | myUDP CONTROL missing list | Derive the bounded list capacity from the wire payload budget. | Matches Python: both implementations admit 713 counters in a 1433-byte payload. |
 | myUDP ring boundary | Use Python half-ring comparison semantics. | Matches Python: the shared Core uses the same 65535-counter ring and half-ring cutoff. The normal 200-frame send window cannot reach this boundary. |
-| Canonical JSON | Preserve Python protocol byte ordering. | Core service/catalog serialization uses the protocol key order; Linux Admin serialization remains generic until its Core migration. |
+| Canonical JSON | Preserve Python protocol byte ordering. | Core owns canonical JSON for both protocol service/catalog records and generic Linux/Apple Admin documents; service/catalog records retain their explicit protocol key order. |
 
 Linux service catalogs do not introduce a separate protocol: Linux converts its
 socket records to Core service records and delegates RS3 catalog bytes and

@@ -205,10 +205,13 @@ pytest -q -n 4 tests/integration/test_overlay_e2e.py -m "windows_only"
 ```
 
 The two `--mode basic` commands are the Linux native/Python interoperability
-matrix used by CI. They execute the same eleven single-client cases across
-myUDP, TCP, WebSocket, and outbound QUIC with IPv4/IPv6 coverage. They do not
-qualify native listener ownership, reconnect behavior, multi-peer admission,
-custom QUIC trust roots, or multi-candidate peer-family selection.
+matrix used by CI. Python/Python executes all eleven single-client cases;
+Python/Linux-native executes cases 01--09 (myUDP, TCP, and WebSocket) over
+IPv4/IPv6. The native QUIC cases remain explicitly selectable but are excluded
+until the client and Python aioquic listener share a TLS signature algorithm.
+These lanes do not qualify native listener ownership, reconnect behavior,
+multi-peer admission, custom QUIC trust roots, or multi-candidate peer-family
+selection.
 Linux listener/Python-client service tests consume peer rows from the shared
 `/api/peers` response wrapper rather than assuming a bare array.
 

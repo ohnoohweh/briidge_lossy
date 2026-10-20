@@ -734,7 +734,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         ]
     }
 
-    private func json(_ object: Any) -> Data { (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8) }
+    private func json(_ object: Any) -> Data { ObstacleBridgeCanonicalJSON.data(fromJSONObject: object) ?? Data("{}".utf8) }
 
     private func ipv4Address(_ host: String) -> in_addr? {
         var address = in_addr()

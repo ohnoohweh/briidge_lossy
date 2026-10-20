@@ -1617,7 +1617,7 @@ This baseline also includes explicit traceability for the layered reconnect cont
 Linux Swift Admin additionally publishes one redacted Core/adapter peer projection with lifecycle/readiness, epoch/session diagnostics, retry presentation, and protected-frame counters/totals. The projection deliberately excludes PSKs, nonces, keys, and plaintext; broader Python peer-traffic, passed/dropped-frame, and failure-category parity remains tracked as an explicit Linux Swift gap.
 Its silent-peer qualification records a replacement authenticated snapshot before retired protected data withdraws that epoch.
 It also covers the dedicated TUN / Routing admin surface for global-connectivity name-resolution reporting and the ChannelMux ICMP breadcrumb lane used to correlate local-TUN read, overlay send/receive, and local-TUN write decisions during packet-loss investigations. Python and iOS regression coverage additionally guards the shared ChannelMux, packet-flow, and ICMP/name-resolution admission boundaries so no TUN-originated traffic is emitted before the layered connected state is reached. Once ready, TUN reads remain unthrottled; only completed ChannelMux TUN data is dropped immediately before SecureLink when estimated transport delay reaches two seconds.
-The authenticated TUN-helper protocol-v1 header and JSON control envelope are Core-owned, so a Python runtime can use the same local helper wire contract with compiled Linux and macOS resource owners instead of accepting a platform-specific control ABI. Each selector rebuilds when the compiled helper's embedded Git identity is dirty, absent, or mismatched; authenticated macOS clients receive helper-originated packet/event frames and use the Python-compatible subnet-peer default when a tunnel gateway is omitted.
+The authenticated TUN-helper protocol-v1 header and JSON control envelope are Core-owned, so a Python runtime can use the same local helper wire contract with compiled Linux and macOS resource owners instead of accepting a platform-specific control ABI. Core also owns canonical JSON serialization for Linux and Apple Admin documents, while service catalogs retain their protocol key order. Each selector rebuilds when the compiled helper's embedded Git identity is dirty, absent, or mismatched; authenticated macOS clients receive helper-originated packet/event frames and use the Python-compatible subnet-peer default when a tunnel gateway is omitted.
 The current snapshot coverage also includes peer-admin reporting for applied stream endpoints, so `/api/peers` can distinguish a configured multi-host candidate list from the concrete `ws` or `quic` peer address that was actually selected.
 
 This top-level section is intentionally compact and honest. Keep the detailed behavior, rationale, and scenario-level discussion in [docs/REQUIREMENTS.md](docs/REQUIREMENTS.md), [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/SYSTEM_BOUNDARY.md](docs/SYSTEM_BOUNDARY.md), and [docs/README_TESTING.md](docs/README_TESTING.md).
@@ -1631,9 +1631,9 @@ This section is intentionally narrower than product coverage. It shows the evide
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `72` | `0` | `72` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `74` | `0` | `74` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `84` | `154` | `238` |
+| Total parity-oriented evidence | Sum of the lanes above | `86` | `154` | `240` |
 
 Important caveat:
 

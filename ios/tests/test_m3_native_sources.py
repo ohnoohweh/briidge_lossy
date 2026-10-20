@@ -582,12 +582,15 @@ def test_shared_peer_address_resolver_is_darwin_specific() -> None:
 def test_webadmin_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
     live_policy = (CORE_SWIFT_DIR / "ObstacleBridgeWebAdminLiveTopicPolicy.swift").read_text(encoding="utf-8")
+    service_codec = (CORE_SWIFT_DIR / "ObstacleBridgeServiceCodec.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebAdminServer" in runtime
     assert "normalizedListenerHost(" in runtime
     assert 'host == "0.0.0.0"' in runtime
     assert 'host == "localhost"' in runtime
     assert '"/api/status"' in runtime
+    assert "ObstacleBridgeCanonicalJSON.data(fromJSONObject: value)" in runtime
+    assert "public enum ObstacleBridgeCanonicalJSON" in service_codec
     assert '"/api/live"' in runtime
     assert "101 Switching Protocols" in runtime
     assert "Sec-WebSocket-Accept" in runtime

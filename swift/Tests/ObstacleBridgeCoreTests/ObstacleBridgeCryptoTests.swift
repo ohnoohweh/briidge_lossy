@@ -858,6 +858,13 @@ struct ObstacleBridgeCoreCodecTests {
         #expect(throws: ObstacleBridgeServiceCodecError.invalidPayload) { try ObstacleBridgeServiceCodec.decodeOpen(Data("O5".utf8)) }
     }
 
+    @Test func canonicalJSONIsSharedByAdminAndServiceCatalogOwners() throws {
+        let admin = try #require(ObstacleBridgeCanonicalJSON.data(fromJSONObject: ["z": 1, "a": ["y": true, "b": false]]))
+        #expect(String(decoding: admin, as: UTF8.self) == "{\"a\":{\"b\":false,\"y\":true},\"z\":1}")
+        let service = ObstacleBridgeServiceSpec(serviceID: 1, name: nil, listenProtocol: 0, listenHost: "127.0.0.1", listenPort: 1, targetProtocol: 1, targetHost: "127.0.0.1", targetPort: 2)
+        #expect(String(decoding: try ObstacleBridgeServiceCodec.canonicalCatalogData([service]), as: UTF8.self).hasPrefix("[{\"svc_id\":1,\"l_proto\":\"udp\""))
+    }
+
     @Test func controlChunksMatchPythonLayoutAndRemainBounded() throws {
         let payload = Data(0..<25)
         let chunks = try ObstacleBridgeControlChunkCodec.chunk(transactionID: 9, maximumApplicationPayload: 32, payload: payload)
@@ -969,11 +976,22 @@ struct ObstacleBridgeCoreCodecTests {
         for value in try #require(myudp["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeData(.hex(value)) }
         }
+        for value in try #require(myudp["outer_trailing_wire_hex"] as? [String]) {
+            #expect(try ObstacleBridgeMyUDPCodec.decodeData(.hex(value)) == .init(
+                counter: UInt16(try #require(myudp["counter"] as? Int)),
+                payload: myudpPayload,
+                transmittedNanoseconds: UInt64(try #require(myudp["transmitted_nanoseconds"] as? Int)),
+                echoedNanoseconds: UInt64(try #require(myudp["echoed_nanoseconds"] as? Int))
+            ))
+        }
         let control = try #require(corpus["myudp_control"] as? [String: Any])
         let controlWire = Data.hex(try #require(control["wire_hex"] as? String))
         #expect(try ObstacleBridgeMyUDPCodec.decodeControl(controlWire) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
         for value in try #require(control["malformed_wire_hex"] as? [String]) {
             #expect(throws: ObstacleBridgeMyUDPCodecError.invalidFrame) { try ObstacleBridgeMyUDPCodec.decodeControl(.hex(value)) }
+        }
+        for value in try #require(control["outer_trailing_wire_hex"] as? [String]) {
+            #expect(try ObstacleBridgeMyUDPCodec.decodeControl(.hex(value)) == .init(lastInOrder: 4, highestReceived: 7, missing: [5, 6], transmittedNanoseconds: 8, echoedNanoseconds: 9))
         }
         let websocket = try #require(corpus["websocket_binary"] as? [String: Any])
         let websocketPayload = Data.hex(try #require(websocket["payload_hex"] as? String))

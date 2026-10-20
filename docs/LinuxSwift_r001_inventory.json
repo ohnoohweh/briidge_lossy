@@ -505,6 +505,6 @@
     {"area": "myudp trailing bytes", "python_wins": "accept the declared frame and leave outer trailing bytes to the caller", "swift_gap": "portable Linux decoder requires exact length"},
     {"area": "myudp CONTROL missing list", "python_wins": "derive the bounded capacity from the wire payload budget", "swift_gap": "portable Linux codec caps entries at 64"},
     {"area": "myudp ring comparison", "python_wins": "use the Python half-ring boundary semantics", "swift_gap": "Linux transport differs at the 32767-distance edge"},
-    {"area": "canonical JSON", "python_wins": "preserve Python protocol byte ordering", "swift_gap": "Core service/catalog serialization uses explicit protocol key order; Linux Admin serialization remains generic until its Core migration."}
+    {"area": "canonical JSON", "python_wins": "preserve Python protocol byte ordering", "swift_gap": "None: Core owns canonical JSON for Linux and Apple Admin documents; service/catalog records retain explicit protocol key order."}
   ]
 }
