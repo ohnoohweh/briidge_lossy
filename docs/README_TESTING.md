@@ -208,6 +208,8 @@ matrix used by CI. They execute the same eleven single-client cases across
 myUDP, TCP, WebSocket, and outbound QUIC with IPv4/IPv6 coverage. They do not
 qualify native listener ownership, reconnect behavior, multi-peer admission,
 custom QUIC trust roots, or multi-candidate peer-family selection.
+Linux listener/Python-client service tests consume peer rows from the shared
+`/api/peers` response wrapper rather than assuming a bare array.
 
 - `macos`
 

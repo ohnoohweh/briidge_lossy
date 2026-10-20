@@ -8119,7 +8119,9 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         layers = status['connection_layers']
         assert isinstance(layers, list)
         assert next(layer for layer in layers if layer['name'] == 'secure_link')['authenticated'] is True
-        _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
+        _code, peers_doc = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
+        peers = peers_doc.get('peers', peers_doc) if isinstance(peers_doc, dict) else peers_doc
+        assert isinstance(peers, list)
         assert len(peers) == 1
         assert {key: peers[0][key] for key in ('peer_id', 'transport', 'state', 'app_ready', 'configured_candidates', 'active_host', 'port', 'failure_reason')} == {
             'peer_id': 'configured-peer', 'transport': overlay_transport,
