@@ -215,6 +215,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeNativePeerWorker.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunnerMain.swift"
 
 echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
@@ -334,6 +335,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeNativePeerWorker.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacAppMain.swift"
 

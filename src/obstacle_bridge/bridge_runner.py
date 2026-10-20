@@ -366,17 +366,17 @@ class Runner:
                 "error": "peer_worker_unavailable_or_outcome_unknown"}
 
     async def request_overlay_reconnect_async(self, target_peer_id: Optional[str] = None) -> dict:
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             return await self._peer_stack_control("reconnect", target_peer_id)
         return self.request_overlay_reconnect(target_peer_id=target_peer_id)
 
     async def request_secure_link_rekey_async(self, target_peer_id: Optional[str] = None) -> dict:
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             return await self._peer_stack_control("rekey", target_peer_id)
         return self.request_secure_link_rekey(target_peer_id=target_peer_id)
 
     async def request_secure_link_reload_async(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             return await self._peer_stack_control("reload", target_peer_id, scope=scope)
         return self.request_secure_link_reload(scope=scope, target_peer_id=target_peer_id)
 
@@ -1514,11 +1514,13 @@ class Runner:
     async def start(self) -> None:
         ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
         peer_mode = str(getattr(self.args, "peer_stack_worker", "off") or "off")
-        if peer_mode not in {"off", "python"}:
+        if peer_mode not in {"off", "python", "native"}:
             raise ValueError("unsupported peer worker implementation")
-        if peer_mode == "python" and (ios_admin_ui or sys.platform not in {"darwin", "linux"}):
+        if peer_mode in {"python", "native"} and (ios_admin_ui or sys.platform not in {"darwin", "linux"}):
             raise ValueError("peer workers require desktop macOS or Linux")
-        peer_config = self._peer_stack_config() if peer_mode == "python" else None
+        if peer_mode == "native" and sys.platform != "darwin":
+            raise ValueError("native peer workers are not available on this platform")
+        peer_config = self._peer_stack_config() if peer_mode in {"python", "native"} else None
         self._loop = asyncio.get_running_loop()
         self._install_async_task_factory(self._loop)
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
@@ -1552,7 +1554,8 @@ class Runner:
 
         if peer_config is not None:
             from .bridge_peer_worker import PeerStackWorker
-            worker = PeerStackWorker()
+            worker = PeerStackWorker(implementation=peer_mode,
+                                     native_executable=getattr(self.args, "peer_stack_worker_native_executable", None))
             self._peer_stack_worker = worker
             try:
                 await worker.start(peer_config)
@@ -1954,7 +1957,7 @@ class Runner:
 
     def request_overlay_reconnect(self, target_peer_id: Optional[str] = None) -> dict:
         target = str(target_peer_id or "").strip()
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             return {"ok": False, "target_peer_id": target or None, "requested": 0,
                     "sessions": 0, "transports": [], "reason": "peer_worker_control_not_supported"}
         requested = 0
@@ -2265,7 +2268,7 @@ class Runner:
         }
         payload["tun_helper"] = self._tun_helper_snapshot()
         payload.update(self._runtime_health_status_fields())
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()
             if snapshot is not None:
                 child_status = snapshot["bundle"]["status"]
@@ -2275,7 +2278,7 @@ class Runner:
             worker = self._peer_stack_worker
             process = worker.process if worker is not None else None
             payload["peer_stack_worker"] = {
-                "implementation": "python",
+                "implementation": str(getattr(worker, "implementation", "python")),
                 "state": "running" if snapshot is not None else "unavailable",
                 "pid": process.pid if process is not None and process.returncode is None else None,
                 "generation": worker.generation if worker is not None else 0,
@@ -2285,7 +2288,7 @@ class Runner:
         return payload
 
     def get_connections_snapshot(self) -> dict:
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()
             if snapshot is not None:
                 return copy.deepcopy(snapshot["bundle"]["connections"])
@@ -2890,7 +2893,7 @@ class Runner:
                 self._peer_traffic_rate_state.pop(peer_id, None)
 
     def get_peer_connections_snapshot(self) -> dict:
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()
             return copy.deepcopy(snapshot["bundle"]["peers"]) if snapshot is not None else {"peers": [], "count": 0}
         peers: list = []
@@ -3243,7 +3246,7 @@ class Runner:
 
     def request_secure_link_rekey(self, target_peer_id: Optional[str] = None) -> dict:
         target = str(target_peer_id or "").strip()
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             return {"ok": False, "target_peer_id": target or None, "requested": 0,
                     "skipped": 0, "results": [], "error": "peer_worker_control_not_supported"}
         requested = 0
@@ -3308,7 +3311,7 @@ class Runner:
     def request_secure_link_reload(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
         normalized_scope = str(scope or "").strip().lower()
         target = str(target_peer_id or "").strip()
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             return {"ok": False, "scope": normalized_scope, "target_peer_id": target or None,
                     "requested": 0, "reloaded": 0, "dropped": 0, "failed": 0,
                     "results": [], "reason": "peer_worker_control_not_supported"}
@@ -3479,7 +3482,7 @@ class Runner:
                     normalized_updates[str(nested_key)] = nested_value
                 continue
             normalized_updates[str(key)] = value
-        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") == "python":
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             peer_sections = ("runner", "tcp_session", "secure_link", "compress_layer", "channel_mux", "TUN_routing", "tun_execution")
             peer_keys = {key for section in peer_sections for key in (getattr(self.args, "_config_sections", {}) or {}).get(section, ())}
             if peer_keys.intersection(normalized_updates):
@@ -3633,9 +3636,12 @@ class Runner:
             )
         if not _has('--peer-stack-worker'):
             p.add_argument(
-                '--peer-stack-worker', choices=['off', 'python'], default='off',
-                help='Run one outbound TCP peer stack in a supervised Python process (requires TUN disabled).',
+                '--peer-stack-worker', choices=['off', 'python', 'native'], default='off',
+                help='Run one outbound TCP peer stack in a supervised Python or native process (requires TUN disabled).',
             )
+        if not _has('--peer-stack-worker-native-executable'):
+            p.add_argument('--peer-stack-worker-native-executable', default=None,
+                           help='macOS native peer worker executable; defaults to ObstacleBridgeHostRunner on PATH.')
         if not _has('--client-restart-if-disconnected'):
             p.add_argument(
                 '--client-restart-if-disconnected',

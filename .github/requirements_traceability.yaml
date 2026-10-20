@@ -746,10 +746,12 @@ REQ-LIFE-001:
   # and forwards every newer disconnected transport epoch so ChannelMux can
   # complete bounded candidate rotation and request a supervised restart.
   integration_tests:
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
   unit_tests:
+    - tests/unit/test_peer_stack_worker.py::test_native_peer_worker_is_rejected_off_macos
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_aborts_inflight_start_when_owner_disappears
     - tests/unit/test_peer_stack_worker.py::test_cancelled_peer_retirement_kills_and_reaps_child
     - tests/unit/test_peer_stack_worker.py::test_peer_control_deadline_kills_and_reaps_unresponsive_child

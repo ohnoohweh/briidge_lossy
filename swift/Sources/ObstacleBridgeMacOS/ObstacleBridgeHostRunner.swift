@@ -271,6 +271,75 @@ final class ObstacleBridgeHostRunner {
         serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
     }
 
+    /// Initializes the narrowly scoped native peer child from its inherited
+    /// control capability. The configuration is intentionally never written to
+    /// a file by this path.
+    init(peerWorkerConfiguration decoded: [String: Any]) throws {
+        try Self.validatePeerWorkerConfiguration(decoded)
+        self.runtimeConfigPath = "<peer-worker-ipc>"
+        self.runtimeConfigRaw = decoded
+        self.runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
+        self.configStore = ObstacleBridgeConfigStore(
+            configPath: self.runtimeConfigPath,
+            groupedConfig: decoded,
+            runtimeConfig: self.runtimeConfig
+        )
+        self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
+        self.remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
+        self.bindHost = "127.0.0.1"
+        self.statusPort = 0
+        self.macOSTunHelperClientFactory = Self.makeDefaultMacOSTunHelperClient
+        serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
+    }
+
+    private static func validatePeerWorkerConfiguration(_ grouped: [String: Any]) throws {
+        let flat = ObstacleBridgeRuntimeConfig.flatten(grouped)
+        guard stringValue(from: flat["overlay_transport"])?.lowercased() == "tcp",
+              let peer = stringValue(from: flat["tcp_peer"]), !peer.isEmpty,
+              (intValue(from: flat["tcp_peer_port"]) ?? 0) > 0
+        else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("native peer worker requires one outbound TCP peer")
+        }
+        guard boolValue(from: flat["enabled_on_startup"]) != true,
+              boolValue(from: flat["proxy_provider_enabled"]) != true,
+              boolValue(from: flat["telemetry_enabled"]) != true,
+              boolValue(from: flat["telemetry_collector_enabled"]) != true
+        else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("native peer worker cannot own shared desktop services")
+        }
+        let services = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: flat)
+            + ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: flat)
+        guard services.allSatisfy({ $0.listenProtocol != "tun" && $0.targetProtocol != "tun" }) else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("native peer worker cannot own TUN services")
+        }
+    }
+
+    func startPeerWorker() throws {
+        prepareSharedOverlayBootstrap()
+        try startOwnServers()
+        startSharedTCPOverlayTransportOwnerIfNeeded()
+        bootstrapState["startup_status"] = "ready"
+    }
+
+    func stopPeerWorker() {
+        sharedTcpOverlayTransportOwner?.stop()
+        sharedTcpOverlayTransportOwner = nil
+        stopOwnServers()
+    }
+
+    func peerWorkerSnapshotBundle() -> [String: Any] {
+        let status = snapshotUncached()
+        let connections = connectionsSnapshotUncached()
+        return [
+            "status": status,
+            "connections": connections,
+            "peers": ["peers": peersSnapshotUncached(
+                connections: connections,
+                transportRuntime: status["transport_runtime"] as? [String: Any]
+            )],
+        ]
+    }
+
     private static func makeDefaultMacOSTunHelperClient(
         queue: DispatchQueue,
         packetSink: @escaping (Data) -> Void,

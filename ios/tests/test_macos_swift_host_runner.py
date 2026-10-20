@@ -30,6 +30,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
+from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
+from obstacle_bridge.bridge_peer_worker import PeerStackWorker
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
 from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
@@ -55,6 +57,68 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift") == 2
     assert '"${APP_MACOS_DIR}/ObstacleBridgeLogCollector"' in build_script
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
+
+
+def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_only() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    entrypoint = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
+    worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
+    runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
+    assert '"--peer-worker-control-fd"' in entrypoint
+    assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
+    assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
+    assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
+    assert "native peer worker cannot own shared desktop services" in runner
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
+def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener() -> None:
+    async def exercise() -> None:
+        artifact = build_macos_swift_artifact()
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            overlay_port = int(reservation.getsockname()[1])
+        secret = "macos-native-peer-worker-test-secret"
+        listener_args = build_runtime_args_from_config({
+            "runner": {"overlay_transport": "tcp"},
+            "tcp_session": {"tcp_bind": "127.0.0.1", "tcp_own_port": overlay_port},
+            "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
+            "TUN_routing": {"enabled_on_startup": False},
+        })
+        listener_args.admin_web = listener_args.status = False
+        listener = Runner(listener_args)
+        worker = PeerStackWorker(
+            "macos-native-peer", implementation="native", native_executable=str(artifact.binary_path)
+        )
+        try:
+            await listener.start()
+            await worker.start({
+                "runner": {"overlay_transport": "tcp"},
+                "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
+                "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
+                "TUN_routing": {"enabled_on_startup": False},
+            })
+            process = worker.process
+            assert process is not None and process.pid != os.getpid()
+            command = subprocess.check_output(["ps", "-p", str(process.pid), "-o", "command="], text=True)
+            assert secret not in command
+            for _ in range(100):
+                snapshot = await worker.snapshot()
+                runtime = snapshot.get("transport_runtime", {}).get("tcp", {})
+                if runtime.get("app_ready") is True:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("native peer worker did not establish SecureLink with Python listener")
+            assert secret not in json.dumps(snapshot)
+            assert (await worker.control("rekey"))["reason"] == "native_peer_control_not_supported"
+        finally:
+            await worker.stop()
+            await listener.stop(reason="macos-native-peer-worker-test")
+
+    asyncio.run(exercise())
 
 
 def test_macos_webadmin_uses_core_canonical_json_serializer() -> None:

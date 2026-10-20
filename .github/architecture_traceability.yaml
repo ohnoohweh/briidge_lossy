@@ -476,6 +476,7 @@ ARC-CMP-004:
   # errexit relaxation needed to translate rc=75/77 into DSM-managed relaunch
   # instead of a final service stop.
   integration_tests:
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker

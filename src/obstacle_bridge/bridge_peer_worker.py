@@ -12,6 +12,7 @@ import contextlib
 import json
 import logging
 import os
+import shutil
 import socket
 import struct
 import sys
@@ -189,11 +190,15 @@ async def _serve(control_fd: int, log_fd: int | None = None) -> None:
 class PeerStackWorker:
     """Python supervisor for a single outbound TCP peer stack."""
 
-    def __init__(self, peer_id: str | None = None) -> None:
+    def __init__(self, peer_id: str | None = None, *, implementation: str = "python", native_executable: str | None = None) -> None:
         self.peer_id = peer_id or uuid.uuid4().hex
         if not 1 <= len(self.peer_id) <= 128:
             raise ValueError("invalid peer identity")
         self.generation = 0
+        if implementation not in {"python", "native"}:
+            raise ValueError("unsupported peer worker implementation")
+        self.implementation = implementation
+        self.native_executable = native_executable
         self.process: asyncio.subprocess.Process | None = None
         self._reader: asyncio.StreamReader | None = None
         self._writer: asyncio.StreamWriter | None = None
@@ -205,12 +210,20 @@ class PeerStackWorker:
             raise RuntimeError("peer worker already started")
         if sys.platform not in {"darwin", "linux"}:
             raise RuntimeError("peer workers require macOS or Linux")
+        if self.implementation == "native" and sys.platform != "darwin":
+            raise RuntimeError("native peer worker is not available on this platform")
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         process = None
         try:
-            from .bridge_logging_worker import open_child_log_relay
-            self._log_relay = open_child_log_relay()
-            command = [sys.executable, "-m", "obstacle_bridge.bridge_peer_worker", "--control-fd", str(child.fileno())]
+            if self.implementation == "python":
+                from .bridge_logging_worker import open_child_log_relay
+                self._log_relay = open_child_log_relay()
+                command = [sys.executable, "-m", "obstacle_bridge.bridge_peer_worker", "--control-fd", str(child.fileno())]
+            else:
+                executable = self.native_executable or os.environ.get("OBSTACLEBRIDGE_NATIVE_PEER_WORKER") or shutil.which("ObstacleBridgeHostRunner")
+                if not executable or not os.path.isfile(executable) or not os.access(executable, os.X_OK):
+                    raise RuntimeError("native peer worker executable is unavailable")
+                command = [executable, "--peer-worker-control-fd", str(child.fileno())]
             inherited = [child.fileno()]
             if self._log_relay is not None:
                 log_fd = self._log_relay.sender.fileno()
@@ -239,7 +252,7 @@ class PeerStackWorker:
                                              "log_root_level": logging.getLogger().level,
                                              "log_levels": {name: logging.getLogger(name).level for name in names}})
             ready = await asyncio.wait_for(_read_frame(self._reader), 20.0)
-            if (ready.get("kind") != "peer.ready" or ready.get("implementation") != "python"
+            if (ready.get("kind") != "peer.ready" or ready.get("implementation") != self.implementation
                     or ready.get("peer_id") != self.peer_id or type(ready.get("generation")) is not int
                     or ready["generation"] != generation):
                 raise RuntimeError("peer worker startup failed")

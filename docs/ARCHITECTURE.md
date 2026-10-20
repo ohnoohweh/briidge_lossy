@@ -106,9 +106,12 @@ remain open. Synchronous runner calls execute on the runner loop;
 deadlines cannot undo an operation already started.
 
 The Python desktop runner can opt into `--peer-stack-worker python` for one
-outbound TCP peer with TUN disabled. The child owns transport, SecureLink,
-compression, ChannelMux and its TCP/UDP services; startup configuration and
-credentials travel over an inherited, size-bounded private control stream.
+outbound TCP peer with TUN disabled. On macOS it can instead select
+`--peer-stack-worker native` and point `--peer-stack-worker-native-executable`
+at the signed `ObstacleBridgeHostRunner` (or resolve that executable on
+`PATH`). The selected child owns transport, SecureLink, compression, ChannelMux
+and its TCP/UDP services; startup configuration and credentials travel over an
+inherited, size-bounded private control stream.
 Correlated requests carry a peer identity and generation; the supervisor
 projects generation-fenced status, peer and connection snapshots, restarts a
 lost child with fresh capabilities and bounded backoff, and does not fall back
@@ -125,11 +128,21 @@ peer-worker control is unsupported; asynchronous controls provide the worker
 path. Without a managed collector, the child inherits the supervisor's
 standard-error sink.
 
-This is a Python-supervised, Python-child, single outbound TCP slice only.
-Native peer workers and supervision, listener-side peer ownership, other
-transports, broader peer control qualification, live peer configuration, terminal status,
+This is a Python-supervised, single-outbound-TCP slice. Its child can be Python
+on macOS or Linux, or the native macOS host runner. The native child receives
+only the inherited control descriptor: it starts neither Admin, proxy,
+telemetry, runtime-health persistence nor TUN helper; it rejects TUN catalogs
+and shared desktop-service settings. It returns generation-fenced status,
+connections and peer snapshots, exits on control-owner loss, and is replaced
+by the existing Python supervisor after failure. Native peer control requests
+currently return an explicit unsupported result, and native-child stderr is
+inherited rather than sent through the managed logging relay. Linux-native
+peer children and supervision, listener-side peer ownership, other transports,
+broader peer-control qualification, live peer configuration, terminal status,
 and shared-TUN routing/data IPC remain open; there is no shared-TUN worker yet.
-The peer control stream is not yet the common cross-runtime worker protocol.
+The peer control stream is not yet the common cross-runtime worker protocol:
+it has no capability negotiation, binary data-plane contract, write deadline,
+or duplicate-key-rejecting native JSON parser.
 
 The Python/Swift Admin component probe compiles against the shared runtime
 policy and currently exposes three parity gaps: TUN routing summary/control

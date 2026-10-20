@@ -2,6 +2,8 @@ import Foundation
 import Darwin
 
 enum ObstacleBridgeRuntimeConfig {
+    /// Version shared by desktop hosts when handing runtime configuration to an isolated worker.
+    static let isolatedWorkerProtocolVersion = 1
     // Packaged-host qualification may provide an isolated runtime config
     // without changing either platform's durable app-scoped configuration.
     // The macOS primary app and host runner consume this shared vocabulary;
