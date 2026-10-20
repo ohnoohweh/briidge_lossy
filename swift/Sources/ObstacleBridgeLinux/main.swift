@@ -15,6 +15,10 @@ enum ObstacleBridgeLinuxMain {
 
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments[0] == "--peer-worker-control-fd", let fd = Int32(arguments[1]) {
+            do { try ObstacleBridgeLinuxNativePeerWorker.run(controlFD: fd) } catch { exit(2) }
+            return
+        }
         if let runOptions = ObstacleBridgeLinuxForegroundOptions.parse(arguments) {
             runForeground(options: runOptions)
             return

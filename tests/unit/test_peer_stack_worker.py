@@ -84,9 +84,9 @@ def test_peer_worker_invalid_start_is_reaped_without_exposing_configuration():
 
 def test_native_peer_worker_is_rejected_off_macos(monkeypatch):
     async def exercise():
-        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr(sys, "platform", "win32")
         worker = PeerStackWorker("native-platform-test", implementation="native")
-        with pytest.raises(RuntimeError, match="not available"):
+        with pytest.raises(RuntimeError, match="require macOS or Linux"):
             await worker.start(_config())
         assert worker.process is None and worker.generation == 0
     asyncio.run(exercise())

@@ -210,7 +210,7 @@ class PeerStackWorker:
             raise RuntimeError("peer worker already started")
         if sys.platform not in {"darwin", "linux"}:
             raise RuntimeError("peer workers require macOS or Linux")
-        if self.implementation == "native" and sys.platform != "darwin":
+        if self.implementation == "native" and sys.platform not in {"darwin", "linux"}:
             raise RuntimeError("native peer worker is not available on this platform")
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         process = None
@@ -220,7 +220,8 @@ class PeerStackWorker:
                 self._log_relay = open_child_log_relay()
                 command = [sys.executable, "-m", "obstacle_bridge.bridge_peer_worker", "--control-fd", str(child.fileno())]
             else:
-                executable = self.native_executable or os.environ.get("OBSTACLEBRIDGE_NATIVE_PEER_WORKER") or shutil.which("ObstacleBridgeHostRunner")
+                default_executable = "ObstacleBridgeHostRunner" if sys.platform == "darwin" else "ObstacleBridgeLinux"
+                executable = self.native_executable or os.environ.get("OBSTACLEBRIDGE_NATIVE_PEER_WORKER") or shutil.which(default_executable)
                 if not executable or not os.path.isfile(executable) or not os.access(executable, os.X_OK):
                     raise RuntimeError("native peer worker executable is unavailable")
                 command = [executable, "--peer-worker-control-fd", str(child.fileno())]

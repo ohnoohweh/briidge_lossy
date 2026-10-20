@@ -569,6 +569,16 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         )
     }
 
+    /// Worker configuration arrives over an inherited private descriptor. Keep
+    /// its admission identical to file-backed foreground configuration without
+    /// materializing credentials on disk.
+    public static func parseJSONObject(_ root: [String: Any]) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
+        guard JSONSerialization.isValidJSONObject(root) else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+        }
+        return try parse(data: JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]))
+    }
+
     private static func string(_ value: Any?) -> String? { value as? String }
     private static func nonEmptyString(_ value: Any?) -> String? {
         guard let value = string(value)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else { return nil }

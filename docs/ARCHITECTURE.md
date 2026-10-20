@@ -129,15 +129,16 @@ path. Without a managed collector, the child inherits the supervisor's
 standard-error sink.
 
 This is a Python-supervised, single-outbound-TCP slice. Its child can be Python
-on macOS or Linux, or the native macOS host runner. The native child receives
+on macOS or Linux, or the native macOS host runner / Linux executable. The native child receives
 only the inherited control descriptor: it starts neither Admin, proxy,
 telemetry, runtime-health persistence nor TUN helper; it rejects TUN catalogs
 and shared desktop-service settings. It returns generation-fenced status,
 connections and peer snapshots, exits on control-owner loss, and is replaced
 by the existing Python supervisor after failure. Native peer control requests
 currently return an explicit unsupported result, and native-child stderr is
-inherited rather than sent through the managed logging relay. Linux-native
-peer children and supervision, listener-side peer ownership, other transports,
+inherited rather than sent through the managed logging relay. The Linux child
+uses the same no-file JSON admission path and currently admits only outbound
+TCP without TUN or proxy ownership. Listener-side peer ownership, other transports,
 broader peer-control qualification, live peer configuration, terminal status,
 and shared-TUN routing/data IPC remain open; there is no shared-TUN worker yet.
 The peer control stream is not yet the common cross-runtime worker protocol:

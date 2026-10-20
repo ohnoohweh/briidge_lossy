@@ -1518,8 +1518,6 @@ class Runner:
             raise ValueError("unsupported peer worker implementation")
         if peer_mode in {"python", "native"} and (ios_admin_ui or sys.platform not in {"darwin", "linux"}):
             raise ValueError("peer workers require desktop macOS or Linux")
-        if peer_mode == "native" and sys.platform != "darwin":
-            raise ValueError("native peer workers are not available on this platform")
         peer_config = self._peer_stack_config() if peer_mode in {"python", "native"} else None
         self._loop = asyncio.get_running_loop()
         self._install_async_task_factory(self._loop)
