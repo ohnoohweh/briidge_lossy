@@ -152,7 +152,7 @@ final class ObstacleBridgeHostRunner {
     private var reconnectCount = 0
     private var shutdownRequestedAt: Date?
     private var sharedChannelMuxUdpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
-    private var sharedChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime()
+    private var sharedChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(allocation: .peerClient())
     private var udpServiceListeners: [Int: NWListener] = [:]
     private var catalogUDPServiceListeners: [Int: NWListener] = [:]
     private var udpConnectionStates: [Int: [String: Any]] = [:]
@@ -2161,7 +2161,7 @@ final class ObstacleBridgeHostRunner {
 
     private func startOwnServers() throws {
         sharedChannelMuxUdpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: 0, connectionSeq: 0)
-        sharedChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime()
+        sharedChannelMuxTcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(allocation: .peerClient())
         for spec in ownServerSpecs where spec.listenProtocol == "udp" && spec.targetProtocol == "udp" {
             try startUDPService(spec)
         }

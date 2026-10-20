@@ -35,13 +35,13 @@ def _git(root: pathlib.Path, *args: str) -> str:
         stderr=subprocess.PIPE,
         text=True,
     )
-    return completed.stdout.strip()
+    return completed.stdout
 
 
 def expected_build_identity(root: pathlib.Path | None = None) -> dict[str, Any]:
     root = root or _repository_root()
     try:
-        commit = _git(root, "rev-parse", "--short=12", "HEAD")
+        commit = _git(root, "rev-parse", "--short=12", "HEAD").strip()
         dirty = bool(_git(root, "status", "--porcelain"))
         diff_sha = _git(root, "diff", "--binary", "HEAD")
     except (OSError, subprocess.CalledProcessError) as error:
@@ -83,24 +83,24 @@ def _identity_matches(actual: dict[str, Any] | None, expected: dict[str, Any]) -
 
 
 def ensure_linux_swift_tun_helper() -> str:
-    """Return a current Linux helper, rebuilding absent, stale, or dirty worktrees.
+    """Return a Linux helper whose embedded identity matches this checkout.
 
-    A dirty checkout is deliberately never reused.  It preserves the operator's
-    request that startup recompiles a helper after any uncommitted source state.
+    The diff digest is part of the identity, so a matching dirty artifact is
+    safe to reuse.  This matters when both peers start at once: rebuilding an
+    already matching dirty artifact serializes on SwiftPM's lock and can make
+    either peer miss its startup deadline.
     """
     if not sys.platform.startswith("linux"):
         raise RuntimeError("linux-swift helper backend is only available on Linux")
     root = _repository_root()
     expected = expected_build_identity(root)
     artifact = _artifact_path(root)
-    if expected["dirty"] or not _identity_matches(_embedded_build_identity(artifact), expected):
+    if not _identity_matches(_embedded_build_identity(artifact), expected):
         script = root / "scripts" / "build_linux_app.sh"
         try:
             subprocess.run([str(script)], cwd=root, check=True, stdin=subprocess.DEVNULL)
         except (OSError, subprocess.CalledProcessError) as error:
             raise RuntimeError("failed to build the Linux Swift TUN helper") from error
-        # A dirty checkout remains dirty by design, but still must produce a
-        # binary whose embedded identity precisely describes this checkout.
         if not _identity_matches(_embedded_build_identity(artifact), expected):
             raise RuntimeError("built Linux Swift TUN helper has an unexpected embedded build identity")
     return str(artifact)

@@ -161,6 +161,8 @@ public enum ObstacleBridgeLinuxShutdownSignal: String, Sendable {
 
 public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     public var onSnapshot: ((ObstacleBridgeLinuxLiveRuntimeSnapshot) -> Void)?
+    public var onDiagnostic: ((String, [String: String]) -> Void)?
+    public var onDebugDiagnostic: ((String, [String: String]) -> Void)?
 
     public let configuredRuntime: ObstacleBridgeLinuxConfiguredRuntime
     private let transportLifecycleOwner: ObstacleBridgeLinuxTransportLifecycleOwner
@@ -214,6 +216,12 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         self.runtimeHealthURL = runtimeHealthURL
         var generator = SystemRandomNumberGenerator()
         self.catalogInstanceID = UInt64.random(in: 1...UInt64.max, using: &generator)
+        runtime.onDiagnostic = { [weak self] event, fields in
+            self?.emitDiagnostic(event, fields: fields)
+        }
+        runtime.onDebugDiagnostic = { [weak self] event, fields in
+            self?.emitDebugDiagnostic(event, fields)
+        }
     }
 
     /// A redacted snapshot that Admin workers may read without touching the
@@ -234,8 +242,13 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let live = liveSnapshotProjection
         statusLock.unlock()
         return .init(
-            transport: base.transport, state: base.state, attempts: base.attempts,
-            failureReason: base.failureReason, configuredCandidates: base.configuredCandidates,
+            // The configured transport is deliberately reset during failed
+            // epoch cleanup.  The coordinator remains the authority for the
+            // live lifecycle, retry count, and actionable failure reason;
+            // publishing the reset projection here hid a terminal connect
+            // failure from the Admin Web UI.
+            transport: base.transport, state: live.state, attempts: live.attempts,
+            failureReason: live.failureReason, configuredCandidates: base.configuredCandidates,
             activeHost: base.activeHost, port: base.port, secureLinkMode: base.secureLinkMode,
             secureLinkState: base.secureLinkState, appReady: base.appReady,
             activeTCPChannels: activeTCPChannels, activeUDPChannels: activeUDPChannels,
@@ -308,15 +321,27 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             self.configuredRuntime.adoptInbound(connectedSession, host: host)
             do {
                 self.session = connectedSession
+                connectedSession.onDebugDiagnostic = { [weak self] event, fields in
+                    self?.emitDebugDiagnostic(event, fields)
+                }
+                connectedSession.onSecureLinkStateChange = { [weak self] in
+                    self?.queue.async { [weak self] in self?.refreshStatusProjection() }
+                }
                 let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: self.configuredRuntime, session: connectedSession)
                 mux.onUnsolicitedFrame = { [weak self] frame in self?.queue.async { [weak self] in self?.routeInboundFrame(frame) } }
                 mux.activateReceiveOwner(); connectedSession.activateReceiveOwner()
                 self.channelMux = mux
-                try self.publishRemoteCatalog(); try self.startOwnServiceOwners()
                 self.refreshStatusProjection()
                 self.apply(self.coordinator.handle(.adoptAuthenticated))
                 guard let epoch = self.coordinator.snapshot.epoch else { return }
                 self.activeCoordinatorEpoch = epoch
+                // An accepted child is a full-duplex authenticated epoch just
+                // like an outbound connection. Start its receiver before
+                // publishing the configured catalog so the child can install
+                // the control message immediately rather than waiting for an
+                // unrelated later read.
+                self.startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
+                try self.publishRemoteCatalog(); try self.startOwnServiceOwners()
             } catch {
                 connectedSession.close(); self.session = nil; self.channelMux = nil
                 self.replaceReceiveWorker(with: nil); self.stopServiceOwners(); self.stopRemoteServiceOwners()
@@ -383,6 +408,40 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         }
     }
 
+    /// Starts a PSK rekey on the current authenticated client epoch. Control
+    /// replies stay with the existing receive owner, preserving channel and
+    /// transport identity rather than turning an operator rekey into a full
+    /// reconnect.
+    public func requestSecureLinkRekey(peerID: String) -> [String: Any] {
+        queue.sync {
+            guard peerID == "configured-peer" else {
+                return ["ok": false, "reason": "unknown_peer_id"]
+            }
+            guard !stopped, !inboundOnly, let session, configuredRuntime.status().appReady else {
+                return ["ok": false, "reason": "transport_not_connected"]
+            }
+            guard session.isProtected else {
+                return ["ok": false, "reason": "secure_link_not_enabled"]
+            }
+            var generator = SystemRandomNumberGenerator()
+            let sessionID = UInt64.random(in: 1...UInt64.max, using: &generator)
+            let nonce = Data((0..<32).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+            do {
+                emitDebugDiagnostic("secure_link.rekey.request", [
+                    "peer": peerID,
+                    "state": configuredRuntime.status().secureLinkState,
+                ])
+                let count = try session.requestSecureLinkRekey(sessionID: sessionID, clientNonce: nonce)
+                emitDebugDiagnostic("secure_link.rekey.frames_emitted", ["count": String(count)])
+                refreshStatusProjection()
+                return ["ok": true, "reason": "rekey_started", "requested": 1, "skipped": 0, "emitted_frames": count]
+            } catch {
+                emitDebugDiagnostic("secure_link.rekey.failed", ["reason": error.localizedDescription])
+                return ["ok": false, "reason": "rekey_request_failed", "detail": error.localizedDescription]
+            }
+        }
+    }
+
     /// Bound ports for configured local services. This supports operational
     /// discovery when a service deliberately requests port zero in tests or a
     /// managed deployment; it contains no peer, payload, or secret material.
@@ -436,6 +495,75 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         ]
     }
 
+    /// Redacted packet-tunnel state for the shared Admin routing panel.
+    public func tunRoutingForAdmin() -> [String: Any] {
+        queue.sync { tunRoutingForAdminLocked() }
+    }
+
+    private func tunRoutingForAdminLocked() -> [String: Any] {
+            let configured = configuredRuntime.configuration
+            return [
+                "ok": true,
+                "configured": configured.packetTunnelEnabled,
+                "enabled": tunDevice != nil && tunNetworkApplied,
+                "startup_enabled": configured.packetTunnelPlan?.enabledOnStartup ?? false,
+                "helper_configured": configured.tunHelperSocketPath != nil,
+                "managed_helper": configured.launchSwiftTunHelper,
+                "managed_helper_running": managedTunHelper?.isRunning ?? false,
+                "device_open": tunDevice != nil,
+                "network_policy_applied": tunNetworkApplied,
+            ]
+    }
+
+    /// Applies or removes only the selected configuration's helper-owned TUN
+    /// plan. It never accepts route or helper credentials from HTTP.
+    public func requestTunEnabled(_ enabled: Bool) -> [String: Any] {
+        queue.sync {
+            let configured = configuredRuntime.configuration
+            guard configured.packetTunnelEnabled, configured.packetTunnelPlan != nil else {
+                return ["ok": false, "enabled": false, "reason": "packet_tunnel_not_configured"]
+            }
+            do {
+                if enabled {
+                    guard status().appReady else {
+                        return ["ok": false, "enabled": false, "reason": "overlay_not_ready"]
+                    }
+                    try startPacketDeviceIfNeeded()
+                } else {
+                    stopPacketDevice()
+                }
+                var result = tunRoutingForAdminLocked()
+                result["ok"] = true
+                return result
+            } catch {
+                appendRuntimeHealth(event: "tun_admin_control_failed: \(error.localizedDescription)")
+                return ["ok": false, "enabled": false, "reason": "tun_control_failed", "detail": error.localizedDescription]
+            }
+        }
+    }
+
+    /// Repairs the existing helper/device lifecycle without accepting a new
+    /// socket, token, route set, or hook from the browser.
+    public func repairTunHelperForAdmin() -> [String: Any] {
+        queue.sync {
+            let configured = configuredRuntime.configuration
+            guard configured.packetTunnelEnabled, configured.packetTunnelPlan != nil else {
+                return ["ok": false, "repaired": [], "failed": ["packet_tunnel_not_configured"]]
+            }
+            guard status().appReady else {
+                return ["ok": false, "repaired": [], "failed": ["overlay_not_ready"]]
+            }
+            stopPacketDevice()
+            do {
+                try startPacketDeviceIfNeeded()
+                return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
+            } catch {
+                appendRuntimeHealth(event: "tun_helper_repair_failed: \(error.localizedDescription)")
+                return ["ok": false, "repaired": [], "failed": [error.localizedDescription]]
+            }
+        }
+    }
+
     /// Delivers one authenticated ChannelMux frame from the overlay reader.
     /// The current lower transport supplies replies synchronously; this API is
     /// also the receive-side handoff used by a future duplex reader.
@@ -447,13 +575,39 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         queue.sync { Dictionary(uniqueKeysWithValues: remoteServiceOwners.map { ($0.specification.serviceID, $0.port) }) }
     }
 
+    /// Shared Admin-Web connection-table shape.  A configured local service
+    /// is visible as a listening row even before a client opens a ChannelMux
+    /// channel, which distinguishes a bound port from an absent service.
+    public func connectionsForAdmin() -> [String: Any] {
+        queue.sync {
+            var tcp: [[String: Any]] = []
+            var udp: [[String: Any]] = []
+            for owner in serviceOwners {
+                let rows = owner.adminConnectionRows(peerID: "configured-peer")
+                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
+            }
+            for owner in remoteServiceOwners {
+                let rows = owner.adminConnectionRows(peerID: "configured-peer", catalog: "remote_servers")
+                if owner.specification.listenProtocol == .tcp { tcp.append(contentsOf: rows) } else { udp.append(contentsOf: rows) }
+            }
+            return ["tcp": tcp, "udp": udp, "tun": []]
+        }
+    }
+
     private func openTransport(epoch: UInt64) {
         guard !stopped, coordinator.snapshot.epoch == epoch else { return }
+        var phase = "transport"
         do {
             let sessionID = freshSessionID()
             let nonce = freshNonce()
             let connectedSession = try transportLifecycleOwner.open(epoch: epoch, sessionID: sessionID, clientNonce: nonce)
             session = connectedSession
+            connectedSession.onDebugDiagnostic = { [weak self] event, fields in
+                self?.emitDebugDiagnostic(event, fields)
+            }
+            connectedSession.onSecureLinkStateChange = { [weak self] in
+                self?.queue.async { [weak self] in self?.refreshStatusProjection() }
+            }
             let mux = try ObstacleBridgeLinuxChannelMuxSession(runtime: configuredRuntime, session: connectedSession)
             mux.onUnsolicitedFrame = { [weak self] frame in
                 self?.queue.async { [weak self] in self?.routeInboundFrame(frame) }
@@ -481,19 +635,34 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
             }
             apply(coordinator.handle(.transportConnected(epoch: epoch)))
             apply(coordinator.handle(.authenticated(epoch: epoch)))
+            // The initial Core receive effect is delivered after this
+            // synchronous `openTransport` call returns.  TUN helper elevation
+            // can legitimately pause here for an operator password, so start
+            // the already-admitted receiver before publishing catalog frames
+            // or waiting on that helper.  The deferred Core effect below sees
+            // this same epoch and becomes a no-op.
+            startReceiveWorker(session: connectedSession, mux: mux, coordinatorEpoch: epoch)
+            phase = "remote_catalog"
             try publishRemoteCatalog()
+            phase = "service_owners"
             try startOwnServiceOwners()
+            phase = "packet_tunnel"
             try startPacketDeviceIfNeeded()
+            emitDiagnostic("overlay.post_auth.ready", fields: ["epoch": String(epoch)])
         } catch ObstacleBridgeLinuxOverlayTransportError.cancelled {
             // `stop()` has already interrupted the in-flight lower session.
             // Do not publish a retry that could briefly outlive shutdown.
             return
         } catch {
+            emitDiagnostic("overlay.post_auth.failed", fields: [
+                "epoch": String(epoch), "phase": phase, "reason": error.localizedDescription,
+            ])
             apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
         }
     }
 
     private func scheduleRetry(token: UInt64, afterMilliseconds delay: Int) {
+        emitDiagnostic("overlay.retry.scheduled", fields: ["delay_ms": String(delay)])
         transportLifecycleOwner.scheduleRetry(on: queue, token: token, afterMilliseconds: delay) { [weak self] in
             guard let self else { return }
             self.apply(self.coordinator.handle(.retryTimerFired(token: token)))
@@ -508,6 +677,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     /// owns epoch admission, candidate selection, retry bounds, and stale
     /// callback rejection; this adapter owns Dispatch and socket teardown.
     private func apply(_ transition: ObstacleBridgeOverlayCoordinatorTransition) {
+        // An outbound open can block while the lower transport performs its
+        // SecureLink handshake. Publish Core's transition first so Admin sees
+        // `connecting` and its attempt count instead of the stale `stopped`
+        // snapshot for the whole handshake window.
+        publishCoordinatorSnapshot()
         for effect in transition.effects {
             switch effect {
             case .openTransport(let epoch, _, _):
@@ -568,15 +742,40 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         statusLock.unlock()
     }
 
+    /// Fans a diagnostic out to both the public Admin/log observer and the
+    /// durable runtime-health journal.  The journal must not depend on the
+    /// public callback: the foreground runner installs that callback for the
+    /// Admin log view after this runtime has been constructed.
+    private func emitDiagnostic(_ event: String, fields: [String: String]) {
+        let detail = fields.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
+        appendRuntimeHealth(event: detail.isEmpty ? event : "\(event) \(detail)")
+        onDiagnostic?(event, fields)
+    }
+
     private func startOwnServiceOwners() throws {
         stopServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
-        for spec in configuredRuntime.configuration.ownServices {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
+        let specs = configuredRuntime.configuration.ownServices
+        for (index, spec) in specs.enumerated() {
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .peerClient(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
-            try owner.start()
+            do {
+                try owner.start()
+            } catch {
+                let protocolName: String = spec.listenProtocol == .tcp ? "tcp" : "udp"
+                let fields: [String: String] = [
+                    "service_id": String(spec.serviceID),
+                    "name": spec.name ?? "unnamed",
+                    "host": spec.listenHost,
+                    "port": String(spec.listenPort),
+                    "protocol": protocolName,
+                    "reason": error.localizedDescription,
+                ]
+                emitDiagnostic("service.listener.failed", fields: fields)
+                throw error
+            }
             serviceOwners.append(owner)
         }
     }
@@ -640,14 +839,22 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         tunDevice = device
         tunHelperPacketDevice = device
         tunChannelAdapter = adapter
+        var setupStage = "open_tun"
         do {
             _ = try helper.send(command: .openTun, payload: ["ifname": configuredRuntime.configuration.tunInterfaceName, "mtu": plan.mtu])
+            setupStage = "packet_endpoint"
             try device.start()
+            setupStage = "apply_network"
             _ = try configuredRuntime.configuration.applyPacketTunnelPlanThroughHelper(interfaceName: configuredRuntime.configuration.tunInterfaceName)
             tunNetworkApplied = true
+            setupStage = "overlay_ready"
             adapter.overlayLifecycleChanged(ready: true)
         }
-        catch { stopPacketDevice(); throw error }
+        catch {
+            appendRuntimeHealth(event: "tun_start_failed stage=\(setupStage) reason=\(error.localizedDescription)")
+            stopPacketDevice()
+            throw error
+        }
     }
 
     private func stopPacketDevice() {
@@ -667,8 +874,8 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func startRemoteServiceOwners(_ specs: [ObstacleBridgeLinuxServiceSpec]) throws {
         stopRemoteServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
-        for spec in specs {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence) { [weak self] owner, frames in
+        for (index, spec) in specs.enumerated() {
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .listener(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
@@ -698,9 +905,19 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func sendServiceFrames(_ frames: [ObstacleBridgeChannelMuxFrame], from owner: ObstacleBridgeLinuxServiceSocketOwner) {
         guard !stopped, let channelMux else { return }
         for frame in frames {
+            emitDebugDiagnostic("myudp.channel_mux.send", [
+                "message_type": String(frame.messageType.rawValue),
+                "channel": String(frame.channelID),
+                "body_bytes": String(frame.body.count),
+            ])
             if frame.messageType == .open { channelOwners[channelKey(frame)] = owner }
             do { try channelMux.sendUnsolicited(frame) }
             catch {
+                emitDebugDiagnostic("myudp.channel_mux.send_failed", [
+                    "message_type": String(frame.messageType.rawValue),
+                    "channel": String(frame.channelID),
+                    "reason": error.localizedDescription,
+                ])
                 if let epoch = activeCoordinatorEpoch {
                     apply(coordinator.handle(.transportFailed(epoch: epoch, reason: error.localizedDescription)))
                 }
@@ -712,6 +929,11 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func startReceiveWorker(session: ObstacleBridgeLinuxConfiguredSession, mux: ObstacleBridgeLinuxChannelMuxSession, coordinatorEpoch: UInt64) {
         guard session.supportsDuplexReceive else { return }
         let epoch = configuredRuntime.connectionEpoch
+        if let current = transportLifecycleOwner.receiveSnapshot(),
+           current.epoch == epoch,
+           current.state == "running" {
+            return
+        }
         let worker = ObstacleBridgeLinuxReceiveWorker(
             epoch: epoch,
             receive: {
@@ -757,8 +979,18 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
     private func receiveFailed(workerEpoch: UInt64, coordinatorEpoch: UInt64, reason: String) {
         guard !stopped, configuredRuntime.connectionEpoch == workerEpoch,
               activeCoordinatorEpoch == coordinatorEpoch else { return }
+        emitDebugDiagnostic("overlay.receive_failed", [
+            "worker_epoch": String(workerEpoch),
+            "coordinator_epoch": String(coordinatorEpoch),
+            "reason": reason,
+        ])
         if inboundOnly { apply(coordinator.handle(.stop)) }
         else { apply(coordinator.handle(.receiveFinished(epoch: coordinatorEpoch, reason: reason))) }
+    }
+
+    private func emitDebugDiagnostic(_ event: String, _ fields: @autoclosure () -> [String: String]) {
+        guard configuredRuntime.configuration.debugLoggingEnabled else { return }
+        onDebugDiagnostic?(event, fields())
     }
 
     private func routeInboundFrame(_ frame: ObstacleBridgeChannelMuxFrame) {

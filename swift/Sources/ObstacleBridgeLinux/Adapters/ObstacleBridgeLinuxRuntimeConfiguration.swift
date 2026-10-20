@@ -1,6 +1,139 @@
 import Foundation
 import ObstacleBridgeCore
 
+/// Matches Python's machine-bound `enc:v1:` configuration-secret envelope.
+/// Secret values stay encrypted in the stored JSON but must be decrypted before
+/// they are admitted into the live transport configuration.
+enum ObstacleBridgeLinuxConfigSecretCodec {
+    private static let prefix = "enc:v1:"
+    private static let salt = Data("ObstacleBridge config secret v1".utf8)
+    private static let info = Data("ObstacleBridge config field encryption".utf8)
+    private static let authenticatedData = Data("ObstacleBridge cfg secret".utf8)
+    private static let secretFields: Set<String> = ["admin_web_password", "secure_link_psk"]
+
+    static func decryptPayload(_ root: [String: Any]) throws -> [String: Any] {
+        guard let transformed = try transform(root) as? [String: Any] else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+        }
+        return transformed
+    }
+
+    static func encryptPayload(_ root: [String: Any]) throws -> [String: Any] {
+        guard let transformed = try encryptTransform(root) as? [String: Any] else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+        }
+        return transformed
+    }
+
+    /// Kept deterministic for envelope compatibility vectors.
+    static func encryptForTesting(_ value: String, nonce: Data) throws -> String {
+        try encrypt(value, nonce: nonce)
+    }
+
+    private static func encryptTransform(_ value: Any) throws -> Any {
+        if let object = value as? [String: Any] {
+            var transformed: [String: Any] = [:]
+            for (field, nestedValue) in object {
+                if secretFields.contains(field), let secret = nestedValue as? String {
+                    transformed[field] = try encrypt(secret)
+                } else {
+                    transformed[field] = try encryptTransform(nestedValue)
+                }
+            }
+            return transformed
+        }
+        if let array = value as? [Any] {
+            return try array.map(encryptTransform)
+        }
+        return value
+    }
+
+    private static func encrypt(_ value: String, nonce: Data? = nil) throws -> String {
+        guard !value.isEmpty, !value.hasPrefix(prefix) else { return value }
+        let nonce = try nonce ?? freshNonce()
+        guard nonce.count == 12 else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("configuration secret nonce must be 12 bytes")
+        }
+        let sealed = try ObstacleBridgeCrypto.chaChaPolySeal(
+            plaintext: Data(value.utf8), key: try key(), nonce: nonce,
+            authenticatedData: authenticatedData
+        )
+        return prefix + (nonce + sealed).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
+    private static func freshNonce() throws -> Data {
+        var generator = SystemRandomNumberGenerator()
+        return Data((0..<12).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+    }
+
+    private static func transform(_ value: Any) throws -> Any {
+        if let object = value as? [String: Any] {
+            var transformed: [String: Any] = [:]
+            for (field, nestedValue) in object {
+                if secretFields.contains(field), let secret = nestedValue as? String {
+                    transformed[field] = try decrypt(secret)
+                } else {
+                    transformed[field] = try transform(nestedValue)
+                }
+            }
+            return transformed
+        }
+        if let array = value as? [Any] {
+            return try array.map(transform)
+        }
+        return value
+    }
+
+    private static func decrypt(_ value: String) throws -> String {
+        guard value.hasPrefix(prefix) else { return value }
+        let encoded = String(value.dropFirst(prefix.count))
+        let normalized = encoded
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        let padded = normalized + String(repeating: "=", count: (4 - normalized.count % 4) % 4)
+        guard let envelope = Data(base64Encoded: padded), envelope.count >= 12 + 16 else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("encrypted configuration secret is malformed")
+        }
+        do {
+            let plaintext = try ObstacleBridgeCrypto.chaChaPolyOpen(
+                ciphertextAndTag: Data(envelope.dropFirst(12)), key: try key(),
+                nonce: Data(envelope.prefix(12)), authenticatedData: authenticatedData
+            )
+            guard let decoded = String(data: plaintext, encoding: .utf8) else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("encrypted configuration secret is not UTF-8")
+            }
+            return decoded
+        } catch let error as ObstacleBridgeLinuxRuntimeConfigurationError {
+            throw error
+        } catch {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("encrypted configuration secret could not be authenticated on this machine")
+        }
+    }
+
+    private static func key() throws -> Data {
+        try ObstacleBridgeCrypto.hkdfSHA256(
+            salt: salt, info: info, keyMaterial: machineSeed(), outputByteCount: 32
+        )
+    }
+
+    private static func machineSeed() -> Data {
+        for path in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
+            if let text = try? String(contentsOfFile: path, encoding: .utf8) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { return Data(trimmed.utf8) }
+            }
+        }
+        let hostname = ProcessInfo.processInfo.hostName
+        if !hostname.isEmpty {
+            return Data(hostname.utf8)
+        }
+        return Data("obstacle-bridge".utf8)
+    }
+}
+
 public enum ObstacleBridgeLinuxRuntimeConfigurationError: Error, Equatable, LocalizedError {
     case unreadableFile(String)
     case malformedJSON
@@ -111,6 +244,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     public let quicTrustRootsPath: String?
     public let secureLinkPSK: Data?
     public let receiveIdleTimeoutMilliseconds: Int
+    /// Enables local, payload-free transport diagnostics. This is intentionally
+    /// opt-in because the hot receive/send paths do not format debug fields
+    /// unless an operator asks for them.
+    public let debugLoggingEnabled: Bool
     /// Outbound compression policy. Inbound compressed frames remain accepted
     /// so a listener can safely interoperate with a peer-selected policy.
     public let compressionPolicy: ObstacleBridgeMuxCompressionPolicy
@@ -118,6 +255,9 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// default preserves wire compatibility; smaller values exercise Core's
     /// typed control and UDP-fragment effects without changing socket policy.
     public let channelMuxMaximumApplicationPayload: Int
+    /// Explicitly admits a shared listener's remote catalog as one isolated
+    /// control publication per authenticated child.
+    public let listenerRemoteServicePublicationEnabled: Bool
     public let ownServices: [ObstacleBridgeLinuxServiceSpec]
     public let remoteServices: [ObstacleBridgeLinuxServiceSpec]
     /// Explicit helper-control endpoint. This is admitted independently from
@@ -138,7 +278,7 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     /// before the remote peer authenticates.
     public let proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration
 
-    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
+    public init(transport: ObstacleBridgeLinuxTransport, host: String, port: Int, listenerMode: Bool = false, webSocketPath: String = "/", webSocketPayloadMode: String = "binary", webSocketTLS: Bool = false, webSocketTrustRootsPath: String? = nil, webSocketCertificatePath: String? = nil, webSocketPrivateKeyPath: String? = nil, webSocketProxy: ObstacleBridgeLinuxHTTPProxy = .init(), quicALPN: String = "hq-29", quicInsecure: Bool = false, quicTrustRootsPath: String? = nil, secureLinkPSK: Data? = nil, receiveIdleTimeoutMilliseconds: Int = 5_000, debugLoggingEnabled: Bool = false, compressionPolicy: ObstacleBridgeMuxCompressionPolicy = .init(enabled: false), channelMuxMaximumApplicationPayload: Int = 65_535, listenerRemoteServicePublicationEnabled: Bool = false, ownServices: [ObstacleBridgeLinuxServiceSpec] = [], remoteServices: [ObstacleBridgeLinuxServiceSpec] = [], tunHelperSocketPath: String? = nil, tunHelperSessionToken: String? = nil, launchSwiftTunHelper: Bool = false, tunHelperExecutable: String? = nil, tunInterfaceName: String = "obtun0", packetTunnelEnabled: Bool = false, packetTunnelPlan: ObstacleBridgeRuntimeConfigPort.PacketTunnelPlan? = nil, proxyProvider: ObstacleBridgeLinuxProxyProviderConfiguration = .init()) {
         self.transport = transport
         self.listenerMode = listenerMode
         self.peerCandidates = ObstacleBridgePeerAddressPort.configuredPeerCandidates(host)
@@ -156,8 +296,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         self.quicTrustRootsPath = quicTrustRootsPath
         self.secureLinkPSK = secureLinkPSK
         self.receiveIdleTimeoutMilliseconds = max(1, receiveIdleTimeoutMilliseconds)
+        self.debugLoggingEnabled = debugLoggingEnabled
         self.compressionPolicy = compressionPolicy
         self.channelMuxMaximumApplicationPayload = max(32, min(channelMuxMaximumApplicationPayload, 65_535))
+        self.listenerRemoteServicePublicationEnabled = listenerRemoteServicePublicationEnabled
         self.ownServices = ownServices
         self.remoteServices = remoteServices
         self.tunHelperSocketPath = tunHelperSocketPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? tunHelperSocketPath : nil
@@ -226,9 +368,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
     }
 
     public static func parse(data: Data) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
-        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard let parsedRoot = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
         }
+        let root = try ObstacleBridgeLinuxConfigSecretCodec.decryptPayload(parsedRoot)
         // Core owns grouped-versus-flat precedence and schema scalar coercion.
         // Linux contributes only JSON input and Linux-specific capability gates.
         let flat = ObstacleBridgeRuntimeConfigPort.flatten(root)
@@ -364,6 +507,10 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue(error.localizedDescription)
         }
         let receiveIdleTimeoutMilliseconds = max(1, integer(flat["secure_link_receive_idle_timeout_ms"]) ?? 5_000)
+        let debugLogging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: root)
+        let debugLoggingEnabled = boolean(debugLogging["debug_enabled"]) ?? false
+        let channelMux = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("channel_mux", from: root)
+        let listenerRemoteServicePublicationEnabled = boolean(channelMux["channel_mux_listener_publish_remote_services"]) ?? false
         let candidates = host.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !candidates.isEmpty else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("runtime config requires at least one non-empty \(sessionName).\(peerKey)") }
         return .init(
@@ -383,9 +530,14 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             quicTrustRootsPath: string(session["quic_ca_cert"]),
             secureLinkPSK: psk,
             receiveIdleTimeoutMilliseconds: receiveIdleTimeoutMilliseconds,
+            debugLoggingEnabled: debugLoggingEnabled,
             compressionPolicy: compressionPolicy,
+            listenerRemoteServicePublicationEnabled: listenerRemoteServicePublicationEnabled,
             ownServices: try serviceSpecs(root, key: "own_servers"),
-            remoteServices: try serviceSpecs(root, key: "remote_servers"),
+            remoteServices: ObstacleBridgeListenerServicePolicy.publishesRemoteServices(
+                listenerMode: listenerMode,
+                explicitlyEnabled: listenerRemoteServicePublicationEnabled
+            ) ? try serviceSpecs(root, key: "remote_servers") : [],
             tunHelperSocketPath: tunHelperSocket, tunHelperSessionToken: tunHelperSessionToken,
             launchSwiftTunHelper: launchSwiftTunHelper, tunHelperExecutable: tunHelperExecutable,
             tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan, proxyProvider: proxyProvider

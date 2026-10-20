@@ -57,6 +57,20 @@ public indirect enum ObstacleBridgeJSONValue: Equatable, Sendable {
     }
 }
 
+/// Shared JSON serializer for product-facing Admin payloads. Service and
+/// catalog records pass their protocol key order explicitly; other Admin
+/// documents use lexical canonical order so Linux and Apple never depend on
+/// Foundation dictionary iteration order.
+public enum ObstacleBridgeCanonicalJSON {
+    public static func data(fromJSONObject object: Any, preferredKeyOrder: [String] = []) -> Data? {
+        guard JSONSerialization.isValidJSONObject(object),
+              let encoded = try? JSONSerialization.data(withJSONObject: object),
+              let value = try? ObstacleBridgeJSONValue.parse(encoded)
+        else { return nil }
+        return value.canonicalData(preferredKeyOrder: preferredKeyOrder)
+    }
+}
+
 public struct ObstacleBridgeServiceSpec: Equatable, Sendable {
     public let serviceID: UInt16
     public let name: String?
@@ -86,6 +100,11 @@ public enum ObstacleBridgeServiceCodecError: Error, Equatable, Sendable { case i
 public enum ObstacleBridgeServiceCodec {
     private static let serviceKeyOrder = ["svc_id", "l_proto", "l_bind", "l_port", "r_proto", "r_host", "r_port", "name", "lifecycle_hooks", "options"]
     private static let metadataKeyOrder = ["name", "lifecycle_hooks", "options"]
+
+    public static func canonicalCatalogData(_ services: [ObstacleBridgeServiceSpec]) throws -> Data {
+        try validate(services)
+        return Data(("[" + services.map { String(decoding: serviceJSON($0).canonicalData(preferredKeyOrder: serviceKeyOrder), as: UTF8.self) }.joined(separator: ",") + "]").utf8)
+    }
 
     public static func encodeOpen(instanceID: UInt64, connectionSequence: UInt32, service: ObstacleBridgeServiceSpec) throws -> Data {
         let bind = Data(service.listenHost.utf8), host = Data(service.targetHost.utf8)
@@ -122,8 +141,7 @@ public enum ObstacleBridgeServiceCodec {
     }
 
     public static func encodeRemoteServices(instanceID: UInt64, connectionSequence: UInt32, services: [ObstacleBridgeServiceSpec]) throws -> Data {
-        try validate(services)
-        let rows = Data(("[" + services.map { String(decoding: serviceJSON($0).canonicalData(preferredKeyOrder: serviceKeyOrder), as: UTF8.self) }.joined(separator: ",") + "]").utf8)
+        let rows = try canonicalCatalogData(services)
         guard rows.count <= Int(UInt32.max) else { throw ObstacleBridgeServiceCodecError.payloadTooLarge }
         var writer = ObstacleBridgeBinaryWriter(capacity: 19 + rows.count)
         writer.appendUTF8("RS3"); writer.append(instanceID); writer.append(connectionSequence); writer.append(UInt32(rows.count)); writer.append(rows)

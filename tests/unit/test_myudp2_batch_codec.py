@@ -44,3 +44,14 @@ def test_batch_codec_fills_the_exact_frozen_payload_budget() -> None:
 
     assert len(payload) == 1433
     assert MyUDP2BatchCodec.decode_batch(payload)[0].data == b"x" * 1425
+
+
+def test_protocol_parser_accepts_declared_frame_before_outer_trailing_bytes() -> None:
+    protocol = Protocol(BaseFrameV2)
+    frame = protocol.build_frame(1, MyUDP2BatchCodec.encode_batch([StreamChunk(7, b"payload")]), initial=True)
+
+    parsed = protocol.parse_frame_with_times(frame + b"outer-remainder")
+
+    assert parsed is not None
+    assert parsed[0] == 1
+    assert MyUDP2BatchCodec.decode_batch(parsed[1])[0].data == b"payload"

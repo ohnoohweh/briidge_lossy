@@ -45,4 +45,24 @@ public enum ObstacleBridgeAdminLiveTopicPolicyPort {
     public static func normalizedTopic(_ value: String) -> String? {
         ObstacleBridgeWebAdminLiveTopicPolicy.parseTopics(value).first
     }
+
+    public static var allTopics: [String] {
+        ObstacleBridgeWebAdminLiveTopicPolicy.allTopics
+    }
+
+    public static func interval(_ topic: String) -> TimeInterval {
+        ObstacleBridgeWebAdminLiveTopicPolicy.interval(topic)
+    }
+
+    public static func topicsForControlMessage(
+        subscribe: Any?, activeTabs: [Any]?, currentTopics: Set<String>? = nil
+    ) -> Set<String> {
+        ObstacleBridgeWebAdminLiveTopicPolicy.topicsForControlMessage(
+            subscribe: subscribe, activeTabs: activeTabs, currentTopics: currentTopics
+        )
+    }
+
+    public static func parseTopics(_ value: Any?) -> Set<String> {
+        ObstacleBridgeWebAdminLiveTopicPolicy.parseTopics(value)
+    }
 }

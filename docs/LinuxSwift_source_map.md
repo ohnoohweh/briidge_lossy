@@ -74,16 +74,40 @@ are not generic Linux feature waivers.
 Before a duplicated Swift implementation is removed, its behavior must match
 the Python result for the following already-observed differences:
 
-| Area | Python decision | Current Swift gap |
+| Area | Python decision | Current Swift status |
 | --- | --- | --- |
-| myUDP trailing bytes | Accept a declared frame and let the caller retain outer trailing bytes. | The portable Linux decoder requires exact outer length. |
-| myUDP CONTROL missing list | Derive the bounded list capacity from the wire payload budget. | The portable Linux codec hard-caps the list at 64 entries. |
-| myUDP ring boundary | Use Python half-ring comparison semantics. | The Linux transport differs at distance 32767. |
-| Canonical JSON | Preserve Python protocol byte ordering. | Core service/catalog serialization uses the protocol key order; Linux Admin serialization remains generic until its Core migration. |
+| myUDP trailing bytes | Accept a declared frame and let the caller retain outer trailing bytes. | Matches Python: the portable decoder consumes the declared frame and leaves outer trailing bytes to its caller. |
+| myUDP CONTROL missing list | Derive the bounded list capacity from the wire payload budget. | Matches Python: both implementations admit 713 counters in a 1433-byte payload. |
+| myUDP ring boundary | Use Python half-ring comparison semantics. | Matches Python: the shared Core uses the same 65535-counter ring and half-ring cutoff. The normal 200-frame send window cannot reach this boundary. |
+| Canonical JSON | Preserve Python protocol byte ordering. | Core owns canonical JSON for both protocol service/catalog records and generic Linux/Apple Admin documents; service/catalog records retain their explicit protocol key order. |
+
+Linux service catalogs do not introduce a separate protocol: Linux converts its
+socket records to Core service records and delegates RS3 catalog bytes and
+ChannelMux framing to `ObstacleBridgeServiceCodec`. This is the same canonical
+Python-compatible byte protocol exercised by the wire corpus. Catalog
+incompatibility is therefore not the cause of the current native/Python myUDP
+pressure failure.
+
+For investigation of native failures, `debug_logging.debug_enabled: true`
+enables bounded, payload-free Linux Swift diagnostics in the configured local
+log and `/api/debug/logs`. Disabled is the default; hot paths only construct
+debug fields after the opt-in guard. The diagnostics include transport/receive
+failure causes, ChannelMux message metadata and byte counts, and SecureLink
+protected-record/rekey state transitions. They intentionally exclude packet
+contents, PSKs, nonces, and derived key material.
 
 New observed drift belongs in this table and in a reproducing direct parity test
 before it is fixed. A successful source guard, compilation, or mixed-runtime
 smoke test does not resolve a frozen decision.
+
+The Linux native/Python E2E pressure case
+`test_overlay_e2e_linux_native_python_myudp_window_pressure` sends five
+concurrent 65,535-byte TCP records. At roughly 46 DATA chunks per record, the
+initial demand is about 230 chunks, exceeding the default 200-frame send
+window. It proves queued records drain only after CONTROL acknowledgement
+progress, without reordering or loss at the application boundary. The
+delay/loss harness propagates its generated loopback address to `NO_PROXY`, so
+the Python target dial remains local even on proxy-configured hosts.
 
 ## Evidence scope
 

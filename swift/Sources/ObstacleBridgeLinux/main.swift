@@ -6,6 +6,13 @@ import Glibc
 #endif
 
 enum ObstacleBridgeLinuxMain {
+    private final class ForegroundRestartState: @unchecked Sendable {
+        let lock = NSLock()
+        var requested = false
+    }
+
+    private static let foregroundRestartState = ForegroundRestartState()
+
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
         if let runOptions = ObstacleBridgeLinuxForegroundOptions.parse(arguments) {
@@ -87,16 +94,22 @@ enum ObstacleBridgeLinuxMain {
                 stateURL: URL(fileURLWithPath: socketPath + ".state.json")
             )
             try backend.recoverPersistedPolicy()
+            let stopped = DispatchSemaphore(value: 0)
             let server = try ObstacleBridgeLinuxTunHelperServer(
                 socketPath: socketPath,
                 sessionToken: sessionToken,
                 backend: backend,
-                authenticatedClientIdleTimeout: idleTimeout
+                authenticatedClientIdleTimeout: idleTimeout,
+                onStop: { stopped.signal() }
             )
             try server.start()
             print("{\"socket_path\":\"\(socketPath)\",\"state\":\"listening\",\"backend\":\"linux-swift-native\"}")
             let resources: [Any] = [server, backend]
                 + installForegroundShutdown(stop: { server.stop() }, admin: nil, holdSeconds: nil)
+            DispatchQueue.global().async {
+                stopped.wait()
+                exit(0)
+            }
             withExtendedLifetime(resources) { dispatchMain() }
         } catch {
             writeError("ObstacleBridgeLinux: TUN helper server failed: \(error.localizedDescription)")
@@ -183,25 +196,52 @@ enum ObstacleBridgeLinuxMain {
         do {
             let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.load(path: options.configurationPath)
             let adminConfiguration = try ObstacleBridgeLinuxRuntimeConfiguration.rawConfiguration(path: options.configurationPath)
+            let adminWeb = ObstacleBridgeLinuxAdminWebConfiguration(rawConfiguration: adminConfiguration, portOverride: options.adminPort)
+            guard adminWeb.enabled else { throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("admin_web.admin_web is disabled; enable it to start the Linux native Admin Web server") }
+            if configuration.launchSwiftTunHelper, configuration.packetTunnelEnabled {
+                try ObstacleBridgeLinuxManagedTunHelper.preauthorizeManagedHelperIfNeeded(executable: configuration.tunHelperExecutable)
+            }
+            let staticDirectory = URL(fileURLWithPath: adminWeb.staticDirectory)
             let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration)
-            observability.record("runtime.starting")
+            observability.recordForegroundLifecycle(state: "started", transport: configuration.transport.rawValue)
+            let buildInfo = embeddedBuildInfo()
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore)
-                try admin.start(port: options.adminPort)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, restartHandler: requestForegroundRestart, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo)
+                try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
                 let resources: [Any] = [runtime, admin, observability]
-                    + installForegroundShutdown(stop: { observability.record("runtime.stopped"); observability.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
+                    + installForegroundShutdown(stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
                 withExtendedLifetime(resources) { dispatchMain() }
             }
             let healthURL = URL(fileURLWithPath: options.configurationPath)
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
             let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
-            let admin = ObstacleBridgeLinuxAdminServer(liveRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore)
-            try admin.start(port: options.adminPort)
+            runtime.onDiagnostic = { event, fields in
+                observability.recordDiagnostic(event, fields: fields)
+            }
+            runtime.onDebugDiagnostic = { event, fields in
+                observability.recordDiagnostic("debug.\(event)", fields: fields)
+            }
+            runtime.onSnapshot = { snapshot in
+                observability.recordForegroundLifecycle(state: snapshot.state, transport: configuration.transport.rawValue)
+            }
+            let admin = ObstacleBridgeLinuxAdminServer(
+                liveRuntime: runtime,
+                adminConfiguration: adminConfiguration,
+                configurationStore: adminConfigurationStore,
+                staticDirectory: staticDirectory,
+                reconnectHandler: runtime.reconnect,
+                secureLinkRekeyHandler: runtime.requestSecureLinkRekey,
+                restartHandler: requestForegroundRestart,
+                shutdownHandler: requestForegroundShutdown,
+                debugLogsProvider: observability.recentLogLines,
+                buildInfo: buildInfo
+            )
+            try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
             var resources: [Any] = [observability]
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
@@ -245,7 +285,7 @@ enum ObstacleBridgeLinuxMain {
             let status = "{\"admin_port\":\(admin.port),\"admin_url\":\"http://127.0.0.1:\(admin.port)/\",\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
             resources.append(contentsOf: installForegroundShutdown(
-                stop: { observability.record("runtime.stopped"); observability.stop(); runtime.stop() },
+                stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); runtime.stop() },
                 recordSignal: runtime.recordShutdownSignal,
                 admin: admin,
                 holdSeconds: options.holdSeconds
@@ -255,6 +295,21 @@ enum ObstacleBridgeLinuxMain {
             writeError("ObstacleBridgeLinux: runtime start failed: \(error.localizedDescription)")
             exit(1)
         }
+    }
+
+    /// The executable target owns this generated stamp.  Adapters receive a
+    /// redacted value object so embedded/test hosts never need to fabricate an
+    /// identity merely to serve Admin routes.
+    private static func embeddedBuildInfo() -> [String: Any] {
+        guard let data = ObstacleBridgeLinuxBuildInfo.json().data(using: .utf8),
+              var value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return ["available": false] }
+        let dirty = value["dirty"] as? Bool ?? false
+        value["available"] = true
+        value["tainted"] = dirty
+        value["tracked_changes"] = dirty ? 1 : 0
+        value["untracked_changes"] = 0
+        return value
     }
 
     private static func installForegroundShutdown(
@@ -274,6 +329,7 @@ enum ObstacleBridgeLinuxMain {
                 if let signal { recordSignal?(signal) }
                 stop()
                 admin?.stop()
+                if consumeForegroundRestartRequest() { restartForegroundProcess() }
                 exit(0)
             }
         }
@@ -298,6 +354,42 @@ enum ObstacleBridgeLinuxMain {
             resources.append(timer)
         }
         return resources
+    }
+
+    private static func requestForegroundShutdown() {
+        #if os(Linux)
+        _ = kill(getpid(), SIGTERM)
+        #else
+        exit(0)
+        #endif
+    }
+
+    private static func requestForegroundRestart() {
+        foregroundRestartState.lock.lock()
+        foregroundRestartState.requested = true
+        foregroundRestartState.lock.unlock()
+        requestForegroundShutdown()
+    }
+
+    private static func consumeForegroundRestartRequest() -> Bool {
+        foregroundRestartState.lock.lock()
+        defer { foregroundRestartState.lock.unlock() }
+        let requested = foregroundRestartState.requested
+        foregroundRestartState.requested = false
+        return requested
+    }
+
+    private static func restartForegroundProcess() -> Never {
+        #if os(Linux)
+        let arguments = CommandLine.arguments
+        guard let executable = arguments.first, !executable.isEmpty else { exit(75) }
+        let storage = arguments.map { strdup($0) }
+        guard storage.allSatisfy({ $0 != nil }) else { exit(75) }
+        var argv = storage.map { Optional($0!) }
+        argv.append(nil)
+        executable.withCString { path in _ = execv(path, &argv) }
+        #endif
+        exit(75)
     }
 
     private static func writeError(_ message: String) {

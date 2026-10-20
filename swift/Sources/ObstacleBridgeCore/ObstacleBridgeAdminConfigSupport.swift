@@ -30,13 +30,95 @@ public enum ObstacleBridgeAdminConfigUpdatePort {
 /// Public onboarding HTTP-effect port. Linux owns routing; Core owns token
 /// shape, validation, and preview redaction.
 public enum ObstacleBridgeAdminOnboardingPort {
-    public static func generate(body: Data?, runtimeConfig: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
-        linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
-            method: "POST", body: body, runtimeConfig: runtimeConfig, profiles: [],
-            encryptSecrets: { payload in
-                guard !containsSecret(payload) else { throw NSError(domain: "ObstacleBridgeLinux", code: 1, userInfo: [NSLocalizedDescriptionKey: "Linux onboarding secrets are unavailable"]) }
-                return payload
+    public static func connectionProfiles(runtimeConfig: [String: Any]) -> [[String: Any]] {
+        ObstacleBridgeOnboarding.connectionProfiles(runtimeConfig: ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig))
+    }
+
+    /// Derives the portable service definitions offered by connected peers.
+    ///
+    /// The Admin adapters own their connection snapshots, but the selection,
+    /// validation, and emitted JSON shape must remain identical across hosts.
+    /// A listening row is a local service already bound by this node, not a
+    /// peer-derived candidate for an onboarding invitation.
+    public static func blueprints(connections: [String: Any]) -> [[String: Any]] {
+        var grouped: [String: [[String: Any]]] = [:]
+        for protocolName in ["udp", "tcp"] {
+            for row in connections[protocolName] as? [[String: Any]] ?? [] {
+                if (row["state"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "listening" {
+                    continue
+                }
+                let peerID = (row["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !peerID.isEmpty,
+                      let localPort = validPort(row["local_port"]),
+                      let destination = hostAndPort(row["remote_destination"])
+                else { continue }
+                let specification: [String: Any] = [
+                    "name": "bp-\(peerID)-\(protocolName)-\(localPort)",
+                    "listen": ["protocol": protocolName, "bind": "0.0.0.0", "port": localPort],
+                    "target": ["protocol": protocolName, "host": destination.host, "port": destination.port],
+                ]
+                if !containsEquivalent(specification, in: grouped[peerID] ?? []) {
+                    grouped[peerID, default: []].append(specification)
+                }
             }
+        }
+        return grouped.keys.sorted().compactMap { peerID in
+            guard let specifications = grouped[peerID], !specifications.isEmpty else { return nil }
+            return ["peer_id": peerID, "own_servers": specifications]
+        }
+    }
+
+    private static func validPort(_ value: Any?) -> Int? {
+        let port: Int?
+        if let number = value as? NSNumber { port = number.intValue }
+        else if let text = value as? String { port = Int(text.trimmingCharacters(in: .whitespacesAndNewlines)) }
+        else { port = nil }
+        guard let port, (1...65_535).contains(port) else { return nil }
+        return port
+    }
+
+    private static func hostAndPort(_ value: Any?) -> (host: String, port: Int)? {
+        if let dictionary = value as? [String: Any] {
+            let host = (dictionary["host"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty, let port = validPort(dictionary["port"]) else { return nil }
+            return (host, port)
+        }
+        if let tuple = value as? [Any], tuple.count >= 2 {
+            let host = (tuple[0] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !host.isEmpty, let port = validPort(tuple[1]) else { return nil }
+            return (host, port)
+        }
+        let text = (value as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return nil }
+        if text.hasPrefix("["), let closing = text.firstIndex(of: "]"), text[text.index(after: closing)...].hasPrefix(":") {
+            let host = String(text[text.index(after: text.startIndex)..<closing])
+            let portText = String(text[text.index(closing, offsetBy: 2)...])
+            guard !host.isEmpty, let port = validPort(portText) else { return nil }
+            return (host, port)
+        }
+        guard let separator = text.lastIndex(of: ":") else { return nil }
+        let host = String(text[..<separator]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let portText = String(text[text.index(after: separator)...])
+        guard !host.isEmpty, let port = validPort(portText) else { return nil }
+        return (host, port)
+    }
+
+    private static func containsEquivalent(_ candidate: [String: Any], in values: [[String: Any]]) -> Bool {
+        guard let candidateData = try? JSONSerialization.data(withJSONObject: candidate, options: [.sortedKeys]) else { return false }
+        return values.contains { value in
+            (try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])) == candidateData
+        }
+    }
+
+    public static func generate(body: Data?, runtimeConfig: [String: Any]) -> ObstacleBridgeAdminLinuxResponse {
+        let flattened = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfig)
+        return linuxResponse(ObstacleBridgeAdminConfigSupport.inviteGenerateResponse(
+            method: "POST", body: body, runtimeConfig: flattened, profiles: connectionProfiles(runtimeConfig: flattened),
+            // Invite tokens intentionally carry the peer PSK in the same
+            // portable representation as Python. The recipient's config
+            // store seals it with that recipient's machine-derived key when
+            // the suggested update is applied.
+            encryptSecrets: { $0 }
         ))
     }
     public static func preview(body: Data?) -> ObstacleBridgeAdminLinuxResponse {
@@ -45,11 +127,6 @@ public enum ObstacleBridgeAdminOnboardingPort {
     private static func linuxResponse(_ response: ObstacleBridgeAdminAPIResponse) -> ObstacleBridgeAdminLinuxResponse {
         let code = Int(response.statusLine.split(separator: " ").dropFirst().first ?? "500") ?? 500
         return .init(statusCode: code, body: response.body)
-    }
-    private static func containsSecret(_ value: Any) -> Bool {
-        if let object = value as? [String: Any] { return object.contains { $0.key.lowercased().contains("psk") || $0.key.lowercased().contains("password") || containsSecret($0.value) } }
-        if let values = value as? [Any] { return values.contains(where: containsSecret) }
-        return false
     }
 }
 

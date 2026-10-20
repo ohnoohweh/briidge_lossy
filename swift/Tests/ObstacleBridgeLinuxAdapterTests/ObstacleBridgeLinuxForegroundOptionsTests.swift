@@ -18,4 +18,11 @@ struct ObstacleBridgeLinuxForegroundOptionsTests {
         #expect(ObstacleBridgeLinuxForegroundOptions.parse(["--config", "", "--admin-port", "1"]) == nil)
         #expect(ObstacleBridgeLinuxForegroundOptions.parse(["--config", "client.json", "--hold-sec", "-1"]) == nil)
     }
+
+    @Test func adminWebConfigurationUsesConfiguredPortUnlessOperatorOverridesIt() {
+        let raw: [String: Any] = ["admin_web": ["admin_web_bind": "127.0.0.1", "admin_web_port": 18080, "admin_web_dir": "/srv/obstaclebridge/admin_web"]]
+        #expect(ObstacleBridgeLinuxAdminWebConfiguration(rawConfiguration: raw) == .init(rawConfiguration: raw))
+        #expect(ObstacleBridgeLinuxAdminWebConfiguration(rawConfiguration: raw).port == 18080)
+        #expect(ObstacleBridgeLinuxAdminWebConfiguration(rawConfiguration: raw, portOverride: 19090).port == 19090)
+    }
 }

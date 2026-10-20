@@ -1,5 +1,8 @@
 import Dispatch
 import Foundation
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 import Testing
 #if os(Linux)
 import Glibc
@@ -8,6 +11,60 @@ import ObstacleBridgeCore
 @testable import ObstacleBridgeLinuxAdapters
 
 struct ObstacleBridgeLinuxLiveRuntimeTests {
+    @Test func adminRekeyCompletesAgainstPythonPeerAndKeepsForegroundRuntimeReady() async throws {
+        let peer = try PythonOverlayPeer(mode: "tcp-securelink-admin-rekey")
+        defer { peer.stop() }
+        let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+            transport: .tcp, host: "127.0.0.1", port: peer.port,
+            secureLinkPSK: Data("linux-swift-psk".utf8)
+        ))
+        let connected = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
+        runtime.start()
+        defer { runtime.stop() }
+        #expect(connected.wait(timeout: .now() + 3) == .success)
+
+        let server = ObstacleBridgeLinuxAdminServer(
+            liveRuntime: runtime,
+            adminConfiguration: ["admin_web": ["admin_web_auth_disable": true]],
+            secureLinkRekeyHandler: { runtime.requestSecureLinkRekey(peerID: $0) }
+        )
+        try server.start()
+        defer { server.stop() }
+        var request = URLRequest(url: try #require(URL(string: "http://127.0.0.1:\(server.port)/api/secure-link/rekey")))
+        request.httpMethod = "POST"
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["peer_id": "configured-peer"])
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let (data, response) = try await URLSession.shared.data(for: request)
+        #expect((response as? HTTPURLResponse)?.statusCode == 200)
+        let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(payload["reason"] as? String == "rekey_started")
+        #expect(waitUntil(timeout: 5) {
+            runtime.status().state == "connected" && runtime.status().peer.rekeysCompletedTotal == 1
+        })
+    }
+
+    @Test func publishesConnectingBeforeMyudpHandshakeCompletes() {
+        // Nothing listens on this loopback port, so SecureLink's initial
+        // request waits for the configured receive-idle window.  Admin must
+        // still receive the coordinator's connecting transition immediately.
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(
+                transport: .myudp, host: "127.0.0.1", port: 9,
+                secureLinkPSK: Data("linux-swift-psk".utf8),
+                receiveIdleTimeoutMilliseconds: 1_000
+            ),
+            policy: .init(initialDelayMilliseconds: 1_000, maximumDelayMilliseconds: 1_000, maximumAttempts: 1)
+        )
+        let connecting = DispatchSemaphore(value: 0)
+        runtime.onSnapshot = { snapshot in
+            if snapshot.state == "connecting", snapshot.attempts == 1 { connecting.signal() }
+        }
+        runtime.start()
+        #expect(connecting.wait(timeout: .now() + 0.5) == .success)
+        runtime.stop()
+    }
+
     @Test func runtimeHealthPersistsCleanStopAndClassifiesNextLifetime() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -50,6 +107,24 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.recordShutdownSignal(.terminate)
         #expect(runtime.runtimeHealthRecentRecordsForAdmin().contains(where: {
             $0.event == "shutdown_signal:SIGTERM" && !$0.controlledStop
+        }))
+        runtime.stop()
+    }
+
+    @Test func adminDiagnosticObserverDoesNotReplacePersistentRuntimeHealth() {
+        let runtime = ObstacleBridgeLinuxLiveRuntime(
+            configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1),
+            policy: .init(initialDelayMilliseconds: 250, maximumDelayMilliseconds: 250, maximumAttempts: 1)
+        )
+        let observed = DispatchSemaphore(value: 0)
+        runtime.onDiagnostic = { event, _ in
+            if event == "overlay.connect.attempt" { observed.signal() }
+        }
+
+        runtime.start()
+        #expect(observed.wait(timeout: .now() + 3) == .success)
+        #expect(runtime.runtimeHealthRecentRecordsForAdmin().contains(where: {
+            $0.event.hasPrefix("overlay.connect.attempt")
         }))
         runtime.stop()
     }
@@ -255,46 +330,46 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
     }
 
     @Test func myudpForegroundOwnerRetainsDistinctAuthenticatedPeerProjections() throws {
+        let publishedService = ObstacleBridgeLinuxServiceSpec(
+            serviceID: 1, name: "listener-published", listenProtocol: .tcp,
+            listenHost: "127.0.0.1", listenPort: availableTCPPort(), targetProtocol: .tcp,
+            targetHost: "127.0.0.1", targetPort: 7
+        )
         let configuration = ObstacleBridgeLinuxRuntimeConfiguration(
             transport: .myudp, host: "listener", port: 0, listenerMode: true,
-            secureLinkPSK: Data("linux-swift-psk".utf8)
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            listenerRemoteServicePublicationEnabled: true,
+            remoteServices: [publishedService]
         )
         let listener = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
         defer { listener.stop() }
         listener.start()
-        let connected = DispatchSemaphore(value: 0)
-        let release = DispatchSemaphore(value: 0)
-        let finished = DispatchSemaphore(value: 0)
-        for identifier in 1...2 {
-            DispatchQueue.global().async {
-                let clientConfiguration = ObstacleBridgeLinuxRuntimeConfiguration(
-                    transport: .myudp, host: "127.0.0.1", port: listener.port,
-                    secureLinkPSK: Data("linux-swift-psk".utf8)
-                )
-                let client = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-                guard let session = try? client.connect(
-                    sessionID: UInt64(identifier),
-                    clientNonce: Data(repeating: UInt8(identifier), count: 32)
-                ) else { finished.signal(); return }
-                connected.signal()
-                release.wait()
-                session.close()
-                finished.signal()
-            }
+        let clients = (1...2).map { _ in
+            ObstacleBridgeLinuxLiveRuntime(configuration: .init(
+                transport: .myudp, host: "127.0.0.1", port: listener.port,
+                secureLinkPSK: Data("linux-swift-psk".utf8)
+            ))
         }
-        #expect(connected.wait(timeout: .now() + 3) == .success)
-        #expect(connected.wait(timeout: .now() + 3) == .success)
-        let deadline = Date().addingTimeInterval(3)
-        while listener.peers().count != 2, Date() < deadline {
+        defer { clients.forEach { $0.stop() } }
+        clients[0].start()
+        let firstDeadline = Date().addingTimeInterval(3)
+        while listener.peers().count != 1, Date() < firstDeadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        #expect(listener.activePeerCount == 1)
+        clients[1].start()
+        let secondDeadline = Date().addingTimeInterval(3)
+        while listener.peers().count != 2, Date() < secondDeadline {
             Thread.sleep(forTimeInterval: 0.01)
         }
         #expect(listener.activePeerCount == 2)
         #expect(listener.peers().count == 2)
         #expect(listener.peers().allSatisfy { $0.snapshot.authenticated })
         #expect(listener.status().appReady)
-        release.signal(); release.signal()
-        #expect(finished.wait(timeout: .now() + 3) == .success)
-        #expect(finished.wait(timeout: .now() + 3) == .success)
+        // The test process shares one network namespace, so both clients
+        // cannot bind the same fixed listener port simultaneously. Assert the
+        // portable per-child catalog-control boundary here instead.
+        #expect(waitUntil { clients.allSatisfy { $0.status().receivedFrames > 0 } })
     }
 
     @Test func myudpForegroundOwnerBoundsAuthenticatedPeerAdmission() throws {
@@ -315,9 +390,12 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let session = try first.connect(sessionID: 1, clientNonce: Data(repeating: 1, count: 32))
         defer { session.close() }
         let second = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-        #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EAGAIN)) {
-            _ = try second.connect(sessionID: 2, clientNonce: Data(repeating: 2, count: 32))
-        }
+        // UDP peer admission happens in the listener's asynchronous pump. A
+        // client can create and send from its local socket, while the full
+        // listener deliberately withdraws that unadmitted peer rather than
+        // synchronously reporting its local EAGAIN to the client.
+        let rejectedSession = try second.connect(sessionID: 2, clientNonce: Data(repeating: 2, count: 32))
+        defer { rejectedSession.close() }
         let deadline = Date().addingTimeInterval(1)
         while listener.activePeerCount != 1, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.01)
@@ -326,20 +404,26 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(listener.peers().count == 1)
     }
 
-    @Test func myudpForegroundOwnerRejectsAmbiguousListenerServiceBinds() {
+    @Test func myudpForegroundOwnerRejectsAmbiguousOwnServiceBindsButAdmitsPeerPublishedCatalog() throws {
         let service = ObstacleBridgeLinuxServiceSpec(
             serviceID: 1, name: "ambiguous", listenProtocol: .tcp,
             listenHost: "127.0.0.1", listenPort: 7001, targetProtocol: .tcp,
             targetHost: "127.0.0.1", targetPort: 7002
         )
         #expect(throws: ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport(
-            "myudp listener rejects ambiguous own_servers and remote_servers; omit both"
+            "myudp listener rejects ambiguous own_servers; use peer-published remote_servers with channel_mux_listener_publish_remote_services=true"
         )) {
             _ = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: .init(
                 transport: .myudp, host: "listener", port: 0, listenerMode: true,
                 secureLinkPSK: Data("linux-swift-psk".utf8), ownServices: [service]
             ))
         }
+        let peerPublished = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: .init(
+            transport: .myudp, host: "listener", port: 0, listenerMode: true,
+            secureLinkPSK: Data("linux-swift-psk".utf8),
+            listenerRemoteServicePublicationEnabled: true, remoteServices: [service]
+        ))
+        peerPublished.stop()
     }
 
     @Test func myudpForegroundOwnerExpiresIdleChildWithoutReconnect() throws {
@@ -670,12 +754,25 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.onSnapshot = { if $0.state == "connected" { connected.signal() } }
         runtime.start()
         #expect(connected.wait(timeout: .now() + 3) == .success)
+        let connections = runtime.connectionsForAdmin()
+        let listenerRow = try #require((connections["tcp"] as? [[String: Any]])?.first)
+        #expect(listenerRow["state"] as? String == "listening")
+        #expect(listenerRow["service_name"] as? String == "echo")
+        #expect(listenerRow["local_port"] as? Int == runtime.localServicePorts()[1])
         let fd = try connectTCP(port: try #require(runtime.localServicePorts()[1]))
         let payload = Data("mux-through-python".utf8)
         #expect(payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) } == payload.count)
         var received = [UInt8](repeating: 0, count: payload.count)
         #expect(read(fd, &received, received.count) == payload.count)
         #expect(Data(received) == payload)
+        #expect(waitUntil {
+            let rows = runtime.connectionsForAdmin()["tcp"] as? [[String: Any]] ?? []
+            return rows.contains {
+                ($0["state"] as? String) == "connected" &&
+                ($0["peer_id"] as? String) == "configured-peer" &&
+                ($0["remote_destination"] as? [String: Any])?["port"] as? Int == 7
+            }
+        })
         _ = close(fd)
         #expect(waitUntil { runtime.status().activeTCPChannels == 0 })
         runtime.stop()
@@ -729,8 +826,8 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(Data(received) == payload)
     }
 
-    private func waitUntil(_ predicate: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(2)
+private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if predicate() { return true }
             Thread.sleep(forTimeInterval: 0.01)
@@ -740,6 +837,17 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
 
     private func availableUDPPort() -> Int {
         let fd = socket(AF_INET, Int32(SOCK_DGRAM.rawValue), 0)
+        defer { _ = close(fd) }
+        var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = 0
+        _ = "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }
+        _ = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        var actual = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &actual) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) } }
+        return Int(UInt16(bigEndian: actual.sin_port))
+    }
+
+    private func availableTCPPort() -> Int {
+        let fd = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
         defer { _ = close(fd) }
         var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = 0
         _ = "127.0.0.1".withCString { inet_pton(AF_INET, $0, &address.sin_addr) }

@@ -122,15 +122,14 @@ final class ObstacleBridgeWebAdminServer {
     }
 
     static func jsonBody(_ value: Any) -> Data {
-        if JSONSerialization.isValidJSONObject(value),
-           let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) {
+        if let data = ObstacleBridgeCanonicalJSON.data(fromJSONObject: value) {
             return data
         }
         let fallback: [String: Any] = [
             "ok": false,
             "error": "snapshot was not a valid JSON object",
         ]
-        return (try? JSONSerialization.data(withJSONObject: fallback, options: [.prettyPrinted, .sortedKeys])) ?? Data("{}".utf8)
+        return ObstacleBridgeCanonicalJSON.data(fromJSONObject: fallback) ?? Data("{}".utf8)
     }
 
     private func handle(_ connection: NWConnection) {

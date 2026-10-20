@@ -35,12 +35,20 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
     /// rollover qualification; normal runtime construction uses `1`.
     public init(host: String, port: Int, timeoutMilliseconds: Int = 1_000, nextDataCounter: UInt16 = 1) throws {
         peerRuntime = .init(nextCounter: Int(nextDataCounter))
+        // Configured IPv6 literals commonly retain URI brackets. `getaddrinfo`
+        // accepts the literal itself, not its URI presentation.
+        let resolvedHost: String
+        if host.hasPrefix("[") && host.hasSuffix("]") {
+            resolvedHost = String(host.dropFirst().dropLast())
+        } else {
+            resolvedHost = host
+        }
         var hints = addrinfo()
         hints.ai_family = AF_UNSPEC
         hints.ai_socktype = Int32(SOCK_DGRAM.rawValue)
         hints.ai_protocol = Int32(IPPROTO_UDP)
         var addresses: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, String(port), &hints, &addresses) == 0, let first = addresses else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
+        guard getaddrinfo(resolvedHost, String(port), &hints, &addresses) == 0, let first = addresses else { throw ObstacleBridgeLinuxMyUDPError.resolutionFailed }
         defer { freeaddrinfo(first) }
         var candidate: UnsafeMutablePointer<addrinfo>? = first
         var failure: Error = ObstacleBridgeLinuxMyUDPError.resolutionFailed
@@ -103,8 +111,13 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             }
             try execute(effect.frames)
         }
-        guard let firstCounter else { throw ObstacleBridgeLinuxMyUDPError.invalidReply }
-        return firstCounter
+        // A full send window means the record is now owned by Core's bounded
+        // queue; it is not an I/O failure.  A later CONTROL acknowledgement
+        // causes `receive()` / `serviceTimers()` to flush it.  Counter zero
+        // is outside the wire-valid DATA range and therefore unambiguously
+        // represents an accepted-but-not-yet-emitted record to synchronous
+        // callers.  The duplex ChannelMux path deliberately ignores it.
+        return firstCounter ?? 0
     }
 
     public func receive() throws -> (counter: UInt16, payload: Data) {
@@ -121,7 +134,20 @@ public final class ObstacleBridgeLinuxMyUDPTransportSession {
             stateLock.unlock()
             var buffer = [UInt8](repeating: 0, count: 1_452)
             let received = recv(descriptor, &buffer, buffer.count, 0)
-            guard received > 0 else { throw ObstacleBridgeLinuxMyUDPError.ioFailure(errno) }
+            guard received > 0 else {
+                let code = errno
+                // A receive timeout is the owner’s timer cadence, not a
+                // disconnected UDP peer.  Keep the duplex reader alive and
+                // let Core emit due CONTROL, retransmission, or IDLE frames.
+                // Treating EAGAIN as fatal caused an otherwise healthy quiet
+                // myUDP epoch to reconnect before its first local service
+                // connection could be accepted.
+                if code == EAGAIN || code == EWOULDBLOCK || code == ETIMEDOUT {
+                    try serviceTimers()
+                    continue
+                }
+                throw ObstacleBridgeLinuxMyUDPError.ioFailure(code)
+            }
             let wire = Data(buffer.prefix(Int(received)))
             stateLock.lock()
             let now = DispatchTime.now().uptimeNanoseconds

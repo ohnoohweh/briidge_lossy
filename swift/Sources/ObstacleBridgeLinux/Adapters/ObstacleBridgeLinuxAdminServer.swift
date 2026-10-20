@@ -25,43 +25,118 @@ public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedErro
 public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let statusProvider: () -> ObstacleBridgeLinuxRuntimeStatus
     private let peersProvider: () -> [(identity: String, snapshot: ObstacleBridgeLinuxPeerSnapshot)]
+    private let connectionsProvider: () -> [String: Any]
     private let runtimeHealthProvider: () -> (count: Int, previousClean: Bool?)
     private let runtimeHealthRecordsProvider: () -> [ObstacleBridgeRuntimeHealthRecord]
     private let resourceHealthProvider: () -> [String: Any]
+    private let tunRoutingProvider: () -> [String: Any]
+    private let tunRoutingControlHandler: ((Bool) -> [String: Any])?
+    private let tunHelperRepairHandler: (() -> [String: Any])?
     private let adminConfigurationProvider: () -> [String: Any]
+    private let buildInfoProvider: () -> [String: Any]
+    private let staticDirectory: URL?
     private let configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
+    private let reconnectHandler: (@Sendable () -> Void)?
+    private let secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])?
+    private let restartHandler: (@Sendable () -> Void)?
+    private let shutdownHandler: (@Sendable () -> Void)?
+    private let debugLogsProvider: ((Int) -> [String])?
+    private let security: ObstacleBridgeLinuxAdminSecurity
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
+    private let startedAt = Date()
     private var listener: Int32 = -1
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil) {
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
+        self.connectionsProvider = connectionsProvider
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
+        self.tunRoutingProvider = tunRoutingProvider
+        self.tunRoutingControlHandler = tunRoutingControlHandler
+        self.tunHelperRepairHandler = tunHelperRepairHandler
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.security = Self.makeSecurity(adminConfiguration: adminConfiguration, configurationStore: configurationStore)
+        self.buildInfoProvider = { buildInfo ?? ["available": false] }
+        self.staticDirectory = staticDirectory
+        self.reconnectHandler = reconnectHandler
+        self.secureLinkRekeyHandler = secureLinkRekeyHandler
+        self.restartHandler = restartHandler
+        self.shutdownHandler = shutdownHandler
+        self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
+        self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
         self.runtimeHealthProvider = { liveRuntime.runtimeHealthMetadataForAdmin() }
         self.runtimeHealthRecordsProvider = { liveRuntime.runtimeHealthRecentRecordsForAdmin() }
         self.resourceHealthProvider = { liveRuntime.resourceHealthForAdmin() }
+        self.tunRoutingProvider = { liveRuntime.tunRoutingForAdmin() }
+        self.tunRoutingControlHandler = { liveRuntime.requestTunEnabled($0) }
+        self.tunHelperRepairHandler = { liveRuntime.repairTunHelperForAdmin() }
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.security = Self.makeSecurity(adminConfiguration: adminConfiguration, configurationStore: configurationStore)
+        self.buildInfoProvider = { buildInfo ?? ["available": false] }
+        self.staticDirectory = staticDirectory
+        self.reconnectHandler = reconnectHandler
+        self.secureLinkRekeyHandler = secureLinkRekeyHandler
+        self.restartHandler = restartHandler
+        self.shutdownHandler = shutdownHandler
+        self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
         }
+        self.connectionsProvider = { ["tcp": [], "udp": [], "tun": []] }
         self.runtimeHealthProvider = { (0, nil) }
         self.runtimeHealthRecordsProvider = { [] }
         self.resourceHealthProvider = { [:] }
+        self.tunRoutingProvider = { ["ok": true, "configured": false, "enabled": false] }
+        self.tunRoutingControlHandler = nil
+        self.tunHelperRepairHandler = nil
         self.configurationStore = configurationStore; self.adminConfigurationProvider = { configurationStore?.snapshot() ?? adminConfiguration }
+        self.security = Self.makeSecurity(adminConfiguration: adminConfiguration, configurationStore: configurationStore)
+        self.buildInfoProvider = { buildInfo ?? ["available": false] }
+        self.staticDirectory = staticDirectory
+        self.reconnectHandler = reconnectHandler
+        self.secureLinkRekeyHandler = secureLinkRekeyHandler
+        self.restartHandler = restartHandler
+        self.shutdownHandler = shutdownHandler
+        self.debugLogsProvider = debugLogsProvider
+    }
+
+    private static func makeSecurity(
+        adminConfiguration: [String: Any],
+        configurationStore: ObstacleBridgeLinuxAdminConfigurationStore?
+    ) -> ObstacleBridgeLinuxAdminSecurity {
+        let runtimeConfiguration: () -> [String: Any] = {
+            (try? configurationStore?.runtimeSnapshot()) ?? adminConfiguration
+        }
+        return ObstacleBridgeLinuxAdminSecurity(
+            credentials: {
+                let flat = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfiguration())
+                let authDisabled = (flat["admin_web_auth_disable"] as? Bool) ?? false
+                let username = flat["admin_web_username"] as? String ?? ""
+                let password = flat["admin_web_password"] as? String ?? ""
+                return (!authDisabled && !username.isEmpty && !password.isEmpty, username, password)
+            },
+            scope: {
+                let flat = ObstacleBridgeRuntimeConfigPort.flatten(runtimeConfiguration())
+                return [
+                    flat["admin_web_bind"] as? String ?? "",
+                    String(flat["admin_web_port"] as? Int ?? 0),
+                    flat["admin_web_path"] as? String ?? "",
+                ].joined(separator: "|")
+            }
+        )
     }
 
     public func start(bindHost: String = "127.0.0.1", port requestedPort: Int = 0) throws {
@@ -118,10 +193,12 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         guard let headerEnd = request.range(of: Data("\r\n\r\n".utf8)) else { return }
         let headerData = request[..<headerEnd.lowerBound]
         let headerText = String(data: headerData, encoding: .utf8) ?? ""
-        let contentLength = headerText.split(separator: "\r\n").dropFirst().compactMap { line -> Int? in
+        let headers = headerText.split(separator: "\r\n").dropFirst().reduce(into: [String: String]()) { headers, line in
             let parts = line.split(separator: ":", maxSplits: 1)
-            return parts.count == 2 && parts[0].lowercased() == "content-length" ? Int(parts[1].trimmingCharacters(in: .whitespaces)) : nil
-        }.first ?? 0
+            guard parts.count == 2 else { return }
+            headers[parts[0].trimmingCharacters(in: .whitespaces).lowercased()] = parts[1].trimmingCharacters(in: .whitespaces)
+        }
+        let contentLength = headers["content-length"].flatMap(Int.init) ?? 0
         guard (0...65_536).contains(contentLength) else { return }
         let bodyStart = headerEnd.upperBound
         while request.count - bodyStart < contentLength {
@@ -134,44 +211,211 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let target = parts.dropFirst().first.map(String.init) ?? ""
         let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
         if path == "/api/live", method == "GET", headerText.lowercased().contains("upgrade: websocket") {
+            guard security.isAuthenticated(headers: headers) else {
+                writeResponse(client, response: jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401))
+                return
+            }
             serveLiveWebSocket(client, target: target, headerText: headerText)
             return
         }
         let response: ObstacleBridgeAdminLinuxResponse
-        if method != "GET" && !(method == "POST" && ["/api/config", "/api/onboarding/invite", "/api/onboarding/preview"].contains(path)) {
+        var controlAction: (@Sendable () -> Void)?
+        let authenticationRoutes: Set<String> = ["/api/auth/state", "/api/auth/challenge", "/api/auth/login", "/api/auth/logout", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge"]
+        if path.hasPrefix("/api/"), !authenticationRoutes.contains(path), !security.isAuthenticated(headers: headers) {
+            response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401)
+        } else if method != "GET" && !(method == "POST" && ["/api/auth/login", "/api/auth/logout", "/api/config", "/api/config/challenge", "/api/config/secret/secure-link-psk/challenge", "/api/config/secret/secure-link-psk", "/api/onboarding/invite", "/api/onboarding/preview", "/api/onboarding/invite/generate", "/api/onboarding/invite/preview", "/api/restart", "/api/reconnect", "/api/secure-link/rekey", "/api/secure-link/reload", "/api/tun-routing/control", "/api/tun-helper/repair", "/api/shutdown"].contains(path)) {
             response = .init(statusCode: 405, body: Data("{\"error\":\"method not allowed\"}".utf8))
         } else { switch path {
         case "/", "/index.html":
-            response = .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
+            response = staticResponse(path) ?? .init(statusCode: 200, body: Data(adminDashboard.utf8), contentType: "text/html; charset=utf-8")
         case "/api/status": response = ObstacleBridgeAdminAPI.linuxJSONResponse(statusPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
-        case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(peersPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/logs":
+            let limit = Int(target.split(separator: "?", maxSplits: 1).dropFirst().first?
+                .split(separator: "&").first(where: { $0.hasPrefix("limit=") })?
+                .dropFirst("limit=".count) ?? "400") ?? 400
+            let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "lines": lines, "count": lines.count, "source": "linux-swift", "logger_available": debugLogsProvider != nil, "logger_error": debugLogsProvider == nil ? "native observability unavailable" : ""]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(["peers": peersPayload()]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/connections": response = ObstacleBridgeAdminAPI.linuxJSONResponse(connectionsProvider()) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/meta": response = ObstacleBridgeAdminAPI.linuxJSONResponse(metaPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/live":
             let requestedTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
                 .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
                 .dropFirst("topic=".count).description ?? ""
             let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requestedTopic) ?? ""
-            response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload())
+            response = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload(), connections: connectionsProvider())
                 .flatMap { ObstacleBridgeAdminAPI.linuxJSONResponse($0) } ?? .init(statusCode: 404, body: Data("{}".utf8))
+        case "/api/auth/state":
+            response = jsonResponse(security.state(headers: headers))
+        case "/api/auth/challenge":
+            response = method == "GET" ? jsonResponse(security.issueLoginChallenge()) : jsonResponse(["error": "method not allowed"], statusCode: 405)
+        case "/api/auth/login":
+            response = method == "POST" ? security.login(body: body) : jsonResponse(["error": "method not allowed"], statusCode: 405)
+        case "/api/auth/logout":
+            response = method == "POST" ? security.logout(headers: headers) : jsonResponse(["error": "method not allowed"], statusCode: 405)
         case "/api/config":
             if method == "GET" {
-                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(adminConfigurationProvider())]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(configSnapshotPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
             } else if let updates = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["updates"] as? [String: Any], let configurationStore {
-                do { let saved = try configurationStore.apply(updates: updates); response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "updated_keys": saved.normalizedKeys, "config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(saved.configuration)]) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
-                catch { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": error.localizedDescription], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
+                let authRequired = security.state(headers: headers)["auth_required"] as? Bool ?? false
+                if authRequired, body.isEmpty || ((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["challenge_id"] as? String ?? "").isEmpty || ((try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["proof"] as? String ?? "").isEmpty {
+                    response = jsonResponse(["ok": false, "error": "configuration change confirmation required"], statusCode: 428)
+                } else if authRequired, let error = security.validateConfigChallenge(body: body) {
+                    response = jsonResponse(["ok": false, "error": error], statusCode: 403)
+                } else { do {
+                    let saved = try configurationStore.apply(updates: updates)
+                    if updates.keys.contains(where: { ["admin_web_auth_disable", "admin_web_username", "admin_web_password", "secure_link_psk"].contains($0) }) { security.reset() }
+                    response = ObstacleBridgeAdminAPI.linuxJSONResponse([
+                        "ok": true,
+                        "updated_keys": saved.normalizedKeys,
+                        "config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(ObstacleBridgeRuntimeConfigPort.flatten(saved.configuration)),
+                        "schema": ObstacleBridgeLinuxAdminConfigurationStore.schemaSnapshot(),
+                    ]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                }
+                catch { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": error.localizedDescription], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) } }
             } else { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "invalid JSON body or configuration writes unavailable"], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8)) }
-        case "/api/onboarding/invite":
-            response = ObstacleBridgeAdminOnboardingPort.generate(body: body, runtimeConfig: adminConfigurationProvider())
-        case "/api/onboarding/preview":
+        case "/api/config/challenge":
+            let authRequired = security.state(headers: headers)["auth_required"] as? Bool ?? false
+            if method != "POST" { response = jsonResponse(["error": "method not allowed"], statusCode: 405) }
+            else if !authRequired { response = jsonResponse(["ok": true, "auth_required": false]) }
+            else if !security.isAuthenticated(headers: headers) { response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401) }
+            else if let updates = (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["updates"] as? [String: Any] {
+                do { response = jsonResponse(try security.issueConfigChallenge(updates: updates)) }
+                catch { response = jsonResponse(["ok": false, "error": "updates must be an object"], statusCode: 400) }
+            } else { response = jsonResponse(["ok": false, "error": "updates must be an object"], statusCode: 400) }
+        case "/api/config/secret/secure-link-psk/challenge":
+            let authRequired = security.state(headers: headers)["auth_required"] as? Bool ?? false
+            if method != "POST" { response = jsonResponse(["error": "method not allowed"], statusCode: 405) }
+            else if !authRequired { response = jsonResponse(["ok": false, "error": "admin password authentication is required to reveal secure_link_psk"], statusCode: 403) }
+            else if !security.isAuthenticated(headers: headers) { response = jsonResponse(["ok": false, "authenticated": false, "error": "authentication required"], statusCode: 401) }
+            else { response = jsonResponse(security.issueSecretRevealChallenge(secretName: "secure_link_psk")) }
+        case "/api/config/secret/secure-link-psk":
+            if method != "POST" { response = jsonResponse(["error": "method not allowed"], statusCode: 405) }
+            else {
+                let flat = ObstacleBridgeRuntimeConfigPort.flatten((try? configurationStore?.runtimeSnapshot()) ?? adminConfigurationProvider())
+                response = security.revealSecret(body: body, secretName: "secure_link_psk", secretValue: flat["secure_link_psk"] as? String ?? "")
+            }
+        case "/api/reconnect":
+            guard let reconnectHandler else {
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "reconnect is unavailable for this runtime"], statusCode: 409) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                break
+            }
+            controlAction = reconnectHandler
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "reconnect_requested": true]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/restart":
+            guard let restartHandler else {
+                response = jsonResponse(["ok": false, "error": "restart is unavailable for this runtime"], statusCode: 409)
+                break
+            }
+            controlAction = restartHandler
+            response = jsonResponse(["ok": true, "restarting": true, "restart_embedded": false, "restart_mode": "immediate", "restart_delay_sec": 0])
+        case "/api/secure-link/rekey":
+            guard let secureLinkRekeyHandler else {
+                response = jsonResponse(["ok": false, "reason": "runtime_unavailable"], statusCode: 409)
+                break
+            }
+            guard let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                response = jsonResponse(["ok": false, "error": "invalid JSON body"], statusCode: 400)
+                break
+            }
+            let peerID = (payload["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !peerID.isEmpty else {
+                response = jsonResponse(["ok": false, "error": "peer_id is required"], statusCode: 400)
+                break
+            }
+            let result = secureLinkRekeyHandler(peerID)
+            response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
+        case "/api/secure-link/reload":
+            guard let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+                response = jsonResponse(["ok": false, "error": "invalid JSON body"], statusCode: 400)
+                break
+            }
+            let scope = (payload["scope"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard ["revocation", "local_identity", "all"].contains(scope) else {
+                response = jsonResponse(["ok": false, "error": "scope must be one of revocation, local_identity, all"], statusCode: 400)
+                break
+            }
+            let peerID = (payload["peer_id"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            response = jsonResponse([
+                "ok": false, "scope": scope, "target_peer_id": peerID.isEmpty ? NSNull() : peerID,
+                "requested": 1, "reloaded": 0, "dropped": 0, "failed": 1,
+                "results": [["transport": statusProvider().transport, "peer_ids": ["configured-peer"], "ok": false, "reason": "secure_link_cert_mode_required"]],
+            ], statusCode: 409)
+        case "/api/tun-routing/status":
+            response = jsonResponse(tunRoutingProvider())
+        case "/api/tun-routing/control":
+            guard let tunRoutingControlHandler else {
+                response = jsonResponse(["ok": false, "error": "TUN control is unavailable for this runtime"], statusCode: 409)
+                break
+            }
+            guard let payload = try? JSONSerialization.jsonObject(with: body) as? [String: Any], let enabled = payload["enabled"] as? Bool else {
+                response = jsonResponse(["ok": false, "error": "enabled is required"], statusCode: 400)
+                break
+            }
+            let result = tunRoutingControlHandler(enabled)
+            response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
+        case "/api/tun-helper/repair":
+            guard let tunHelperRepairHandler else {
+                response = jsonResponse(["ok": false, "error": "TUN helper repair is unavailable for this runtime"], statusCode: 409)
+                break
+            }
+            let result = tunHelperRepairHandler()
+            response = jsonResponse(result, statusCode: (result["ok"] as? Bool) == true ? 200 : 409)
+        case "/api/shutdown":
+            guard let shutdownHandler else {
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": "shutdown is unavailable for this runtime"], statusCode: 409) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                break
+            }
+            controlAction = shutdownHandler
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "shutdown_requested": true]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/onboarding/connection-profiles":
+            let profiles = ObstacleBridgeAdminOnboardingPort.connectionProfiles(runtimeConfig: adminConfigurationProvider())
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": profiles.count, "profiles": profiles]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/onboarding/blueprints":
+            let blueprints = ObstacleBridgeAdminOnboardingPort.blueprints(connections: connectionsProvider())
+            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "count": blueprints.count, "blueprints": blueprints]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+        case "/api/onboarding/invite", "/api/onboarding/invite/generate":
+            do {
+                let runtimeConfiguration = try configurationStore?.runtimeSnapshot() ?? adminConfigurationProvider()
+                response = ObstacleBridgeAdminOnboardingPort.generate(body: body, runtimeConfig: runtimeConfiguration)
+            } catch {
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": false, "error": error.localizedDescription], statusCode: 400) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            }
+        case "/api/onboarding/preview", "/api/onboarding/invite/preview":
             response = ObstacleBridgeAdminOnboardingPort.preview(body: body)
         case "/api/admin-ui":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.uiPayload(runtimeConfig: adminConfigurationProvider(), platform: "linux-swift")) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/security-advisor":
             response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminWebPort.securityAdvisorPayload(runtimeConfig: adminConfigurationProvider(), bindHostFallback: "127.0.0.1")) ?? .init(statusCode: 500, body: Data("{}".utf8))
-        default: response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8))
+        default:
+            if method == "GET", let staticAsset = staticResponse(path) { response = staticAsset }
+            else { response = ObstacleBridgeAdminAPI.linuxJSONResponse(["error": "not found"], statusCode: 404) ?? .init(statusCode: 404, body: Data("{}".utf8)) }
         } }
-        let statusText = response.statusCode == 200 ? "200 OK" : response.statusCode == 400 ? "400 Bad Request" : response.statusCode == 404 ? "404 Not Found" : response.statusCode == 405 ? "405 Method Not Allowed" : response.statusCode == 409 ? "409 Conflict" : "500 Internal Server Error"
-        let header = "HTTP/1.1 \(statusText)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\nConnection: close\r\n\r\n"
-        var wire = Data(header.utf8); wire.append(response.body)
+        writeResponse(client, response: response)
+        if let controlAction { DispatchQueue.global(qos: .userInitiated).async(execute: controlAction) }
+    }
+
+    private func jsonResponse(_ payload: [String: Any], statusCode: Int = 200) -> ObstacleBridgeAdminLinuxResponse {
+        ObstacleBridgeAdminAPI.linuxJSONResponse(payload, statusCode: statusCode) ?? .init(statusCode: 500, body: Data("{}".utf8))
+    }
+
+    private func writeResponse(_ client: Int32, response: ObstacleBridgeAdminLinuxResponse) {
+        let statusText: String
+        switch response.statusCode {
+        case 200: statusText = "200 OK"
+        case 400: statusText = "400 Bad Request"
+        case 401: statusText = "401 Unauthorized"
+        case 403: statusText = "403 Forbidden"
+        case 404: statusText = "404 Not Found"
+        case 405: statusText = "405 Method Not Allowed"
+        case 409: statusText = "409 Conflict"
+        case 428: statusText = "428 Precondition Required"
+        default: statusText = "500 Internal Server Error"
+        }
+        let extraHeaders = response.headers.map { "\($0.0): \($0.1)\r\n" }.joined()
+        let header = "HTTP/1.1 \(statusText)\r\nContent-Type: \(response.contentType)\r\nContent-Length: \(response.body.count)\r\n\(extraHeaders)Connection: close\r\n\r\n"
+        var wire = Data(header.utf8)
+        wire.append(response.body)
         _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
     }
 
@@ -181,16 +425,44 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         """
     }
 
+    private func staticResponse(_ requestPath: String) -> ObstacleBridgeAdminLinuxResponse? {
+        guard let base = resolvedStaticDirectory() else { return nil }
+        let relative = (requestPath.isEmpty || requestPath == "/") ? "index.html" : String(requestPath.drop(while: { $0 == "/" }))
+        guard !relative.contains("..") else { return .init(statusCode: 404, body: Data("not found".utf8), contentType: "text/plain; charset=utf-8") }
+        let file = base.appendingPathComponent(relative).standardizedFileURL
+        guard file.path.hasPrefix(base.standardizedFileURL.path + "/"), let body = try? Data(contentsOf: file) else { return nil }
+        let contentType: String
+        switch file.pathExtension.lowercased() {
+        case "html": contentType = "text/html; charset=utf-8"
+        case "css": contentType = "text/css; charset=utf-8"
+        case "js": contentType = "application/javascript; charset=utf-8"
+        case "json": contentType = "application/json; charset=utf-8"
+        case "svg": contentType = "image/svg+xml"
+        case "png": contentType = "image/png"
+        default: contentType = "application/octet-stream"
+        }
+        return .init(statusCode: 200, body: body, contentType: contentType)
+    }
+
+    private func resolvedStaticDirectory() -> URL? {
+        let manager = FileManager.default
+        let candidates = [staticDirectory, URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("admin_web"), CommandLine.arguments.first.map { URL(fileURLWithPath: $0).deletingLastPathComponent().appendingPathComponent("admin_web") }].compactMap { $0 }
+        return candidates.first { manager.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
+    }
+
+    private struct LinuxWebSocketFrame {
+        let opcode: UInt8
+        let payload: Data
+        let final: Bool
+        let consumed: Int
+    }
+
     /// A reconnectable, snapshot-first WebSocket subscription. The Linux
     /// socket owner intentionally keeps protocol framing local while Core
     /// decides topic admission and payload shape.
     private func serveLiveWebSocket(_ client: Int32, target: String, headerText: String) {
         guard let key = headerText.split(separator: "\r\n").first(where: { $0.lowercased().hasPrefix("sec-websocket-key:") })?
-            .split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces),
-              let requested = target.split(separator: "?", maxSplits: 1).dropFirst().first?
-                .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
-                .dropFirst("topic=".count).description,
-              let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(requested)
+            .split(separator: ":", maxSplits: 1).dropFirst().first?.trimmingCharacters(in: .whitespaces)
         else {
             let wire = Data("HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n".utf8)
             _ = wire.withUnsafeBytes { write(client, $0.baseAddress, wire.count) }
@@ -199,17 +471,127 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         let accept = Data(Insecure.SHA1.hash(data: Data("\(key)258EAFA5-E914-47DA-95CA-C5AB0DC85B11".utf8))).base64EncodedString()
         let handshake = Data("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: \(accept)\r\n\r\n".utf8)
         _ = handshake.withUnsafeBytes { write(client, $0.baseAddress, handshake.count) }
-        while let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload()),
-              let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) {
-            var frame = Data([0x81])
-            if body.count < 126 { frame.append(UInt8(body.count)) }
-            else if body.count <= Int(UInt16.max) { frame.append(126); var length = UInt16(body.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
-            else { return }
-            frame.append(body)
-            let sent = frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) }
-            guard sent == frame.count else { return }
-            usleep(250_000)
+        var topics = Set(ObstacleBridgeAdminLiveTopicPolicyPort.allTopics)
+        var nextDue: [String: TimeInterval] = [:]
+        var intervals: [String: Any] = [:]
+        for topic in ObstacleBridgeAdminLiveTopicPolicyPort.allTopics {
+            intervals[topic] = ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
         }
+        guard sendLiveJSON(client, value: ["type": "hello", "topics": Array(topics).sorted(), "intervals_sec": intervals]) else { return }
+        let initialTopic = target.split(separator: "?", maxSplits: 1).dropFirst().first?
+            .split(separator: "&").first(where: { $0.hasPrefix("topic=") })?
+            .dropFirst("topic=".count).description
+        if let initialTopic, let topic = ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(initialTopic) {
+            topics = [topic]
+        }
+        var receiveBuffer = Data()
+        while true {
+            let now = ProcessInfo.processInfo.systemUptime
+            for topic in topics.sorted() where now >= (nextDue[topic] ?? 0) {
+                if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload(), connections: connectionsProvider()) {
+                    guard sendLiveJSON(client, value: ["type": topic, "data": payload]) else { return }
+                }
+                nextDue[topic] = now + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+            }
+            var descriptor = pollfd(fd: client, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&descriptor, 1, 250)
+            guard ready >= 0 else { return }
+            guard ready > 0 else { continue }
+            var buffer = [UInt8](repeating: 0, count: 16 * 1024)
+            let received = read(client, &buffer, buffer.count)
+            guard received > 0 else { return }
+            receiveBuffer.append(buffer, count: Int(received))
+            while let frame = parseLiveWebSocketFrame(receiveBuffer) {
+                receiveBuffer.removeSubrange(0..<frame.consumed)
+                guard frame.final else { return }
+                switch frame.opcode {
+                case 0x1:
+                    guard let object = try? JSONSerialization.jsonObject(with: frame.payload) as? [String: Any] else { continue }
+                    topics = ObstacleBridgeAdminLiveTopicPolicyPort.topicsForControlMessage(
+                        subscribe: object["subscribe"], activeTabs: object["active_tabs"] as? [Any], currentTopics: topics
+                    )
+                    let requested = ObstacleBridgeAdminLiveTopicPolicyPort.parseTopics(object["request"])
+                    for topic in requested.sorted() {
+                        if let payload = ObstacleBridgeAdminLiveTopicPort.payload(topic: topic, status: statusPayload(), peers: peersPayload(), connections: connectionsProvider()) {
+                            guard sendLiveJSON(client, value: ["type": topic, "data": payload]) else { return }
+                        }
+                        nextDue[topic] = ProcessInfo.processInfo.systemUptime + ObstacleBridgeAdminLiveTopicPolicyPort.interval(topic)
+                    }
+                case 0x8:
+                    _ = sendLiveFrame(client, opcode: 0x8, payload: Data())
+                    return
+                case 0x9:
+                    guard sendLiveFrame(client, opcode: 0xA, payload: frame.payload) else { return }
+                default:
+                    continue
+                }
+            }
+        }
+    }
+
+    private func sendLiveJSON(_ client: Int32, value: [String: Any]) -> Bool {
+        guard let body = try? JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]) else { return false }
+        return sendLiveFrame(client, opcode: 0x1, payload: body)
+    }
+
+    private func sendLiveFrame(_ client: Int32, opcode: UInt8, payload: Data) -> Bool {
+        guard payload.count <= Int(UInt16.max) else { return false }
+        var frame = Data([0x80 | opcode])
+        if payload.count < 126 { frame.append(UInt8(payload.count)) }
+        else { frame.append(126); var length = UInt16(payload.count).bigEndian; frame.append(Data(bytes: &length, count: 2)) }
+        frame.append(payload)
+        return frame.withUnsafeBytes { write(client, $0.baseAddress, frame.count) == frame.count }
+    }
+
+    private func parseLiveWebSocketFrame(_ data: Data) -> LinuxWebSocketFrame? {
+        guard data.count >= 2 else { return nil }
+        let first = data[data.startIndex], second = data[data.startIndex + 1]
+        let final = (first & 0x80) != 0, opcode = first & 0x0F
+        var index = 2, length = Int(second & 0x7F)
+        if length == 126 {
+            guard data.count >= index + 2 else { return nil }
+            length = (Int(data[data.startIndex + index]) << 8) | Int(data[data.startIndex + index + 1]); index += 2
+        } else if length == 127 { return nil }
+        let masked = (second & 0x80) != 0
+        var mask: [UInt8] = []
+        if masked {
+            guard data.count >= index + 4 else { return nil }
+            mask = Array(data[(data.startIndex + index)..<(data.startIndex + index + 4)]); index += 4
+        }
+        guard length <= 16 * 1024, data.count >= index + length else { return nil }
+        var payload = Data(data[(data.startIndex + index)..<(data.startIndex + index + length)])
+        if masked {
+            var bytes = Array(payload)
+            for offset in bytes.indices { bytes[offset] ^= mask[offset % 4] }
+            payload = Data(bytes)
+        }
+        return .init(opcode: opcode, payload: payload, final: final, consumed: index + length)
+    }
+
+    /// Matches the Python Admin API: values are flattened for form fields,
+    /// while schema retains its section grouping for rendering.
+    private func configSnapshotPayload() -> [String: Any] {
+        let flattened = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())
+        return [
+            "ok": true,
+            "config": ObstacleBridgeRuntimeConfigPort.redactedConfiguration(flattened),
+            "schema": ObstacleBridgeLinuxAdminConfigurationStore.schemaSnapshot(),
+        ]
+    }
+
+    private func metaPayload() -> [String: Any] {
+        let configuration = ObstacleBridgeRuntimeConfigPort.flatten(adminConfigurationProvider())
+        return [
+            "app": "ObstacleBridgeLinux",
+            "pid": ProcessInfo.processInfo.processIdentifier,
+            "uptime_sec": max(0, Int(Date().timeIntervalSince(startedAt))),
+            "admin_web_name": configuration["admin_web_name"] as? String ?? "",
+            "overlay_transport": statusProvider().transport,
+            "dashboard_enabled": true,
+            "milestone": "C",
+            "build": buildInfoProvider(),
+            "runtime_dependencies": ["ok": true, "missing": [], "install_hint": ""],
+        ]
     }
 
     private func statusPayload() -> [String: Any] {
@@ -259,6 +641,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 "failure_reason": status.receiveFailureReason as Any,
             ],
             "peer": peerPayload(status.peer),
+            "build": buildInfoProvider(),
         ]
         return payload
     }
@@ -351,7 +734,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         ]
     }
 
-    private func json(_ object: Any) -> Data { (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8) }
+    private func json(_ object: Any) -> Data { ObstacleBridgeCanonicalJSON.data(fromJSONObject: object) ?? Data("{}".utf8) }
 
     private func ipv4Address(_ host: String) -> in_addr? {
         var address = in_addr()

@@ -1,161 +1,71 @@
-# Linux Swift Client Design
+# Linux Swift Deviation Ledger
 
-## Current runtime
+This document records only differences between the Linux native product,
+applicable requirements, and the Python reference runtime. Delivered behavior
+is specified and evidenced elsewhere; it is not repeated here. A work package
+is removed from this ledger when its definition of done (DoD) is met and its
+evidence is traceable.
 
-`ObstacleBridgeLinux` is a foreground SwiftPM client. Normal invocation reads
-`ObstacleBridge.cfg`, while `--config <path>` selects another sectioned runtime
-configuration; each starts the admitted Linux stack without a Python runtime
-dependency. The Linux product build is `./scripts/build_linux_app.sh`.
-The startup record includes the loopback Admin URL; `GET /` serves its native
-dashboard and `GET /api/status` remains available while an overlay attempt is
-in progress.
+## Requirement deviations
 
-`ObstacleBridgeCore` owns portable codecs, SecureLink and myudp state,
-compression policy, ChannelMux service transitions, service-catalog replacement,
-and packet-model validation. Core APIs exchange typed records and effects only;
-they do not contain sockets, packet devices, framework callbacks, or platform
-handles. Linux translates those effects to POSIX/NIO resources. Apple translates
-the same contracts to its URLSession, Security, Network, and packet-tunnel
-resources. This is the cross-platform seam: a resource owner may change, but
-the protocol and lifecycle owner does not.
-
-Linux calls each admitted SC.1 Core surface through a Linux adapter. The
-ChannelMux TCP/UDP runtimes own service-channel admission and epoch withdrawal;
-the Linux socket owner performs only descriptor, peer-address, and byte-I/O
-work. Remaining product qualifications are recorded under their applicable
-work packages below rather than as an unadopted Core surface.
-
-## SC.2 Linux admission map
-
-Linux consumes portable policy only through explicit Core ports. The resource
-owner supplies POSIX/NIO mechanics and redacted snapshots; it does not recreate
-portable selection or topic policy.
-
-| Contract | Linux admission | Linux-host evidence |
+| Package | Requirement deviation | Definition of done |
 | --- | --- | --- |
-| Configured peer candidates | `ObstacleBridgePeerAddressPort` | `corePeerAddressPortNormalizesLinuxCandidateLists` |
-| Admin snapshot envelopes | `ObstacleBridgeAdminSnapshotSupport` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
-| Admin live topics | `ObstacleBridgeAdminLiveTopicPort` | `statusAndPeersAreRedactedAndDescribeLayeredState` |
-| Local proxy provider | Native HTTP CONNECT and SOCKS5 CONNECT listeners use system egress and start before overlay authentication. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
-| TUN diagnostics | Not admitted; no Linux probe-packet injection scheduler is selected. | `rejectsUnsafeRuntimeChoicesBeforeNetworking` |
-| Persisted secret envelopes | Not admitted; the Linux foreground runtime has no configuration-write/key-material owner. | Read-only Admin routes and redaction coverage above. |
+| `LSW-005` | Packet-device access has adapter evidence, but full privileged Linux TUN data-plane qualification is incomplete. | An authorized-host test proves `/dev/net/tun` ingress and egress across an authenticated ChannelMux peer, including epoch teardown, with no packet acceptance before readiness and no fallback to Python. |
+| `LSW-006` | Native helper route, DNS, underlay-preservation, firewall, and teardown behavior lacks complete end-to-end kernel qualification with the native TUN data path. | An authorized-host test proves configured address, IPv4/IPv6 routes, peer exclusions, DNS, optional firewall, hook apply/remove, and clean recovery after interruption; it verifies traffic through the created TUN and leaves no helper-owned kernel state after controlled stop or recovery. |
+| `LSW-TEL-001` | Local lifecycle logging and private bounded spool persistence are implemented, but Linux has no end-to-end collector qualification for its HTTPS/mTLS delivery path. | A Linux client with generated credentials delivers ordered batches to the reference HTTPS collector, retries a rejected/unavailable collector without blocking runtime callbacks, acknowledges only accepted ranges, and exposes only bounded/redacted delivery state. |
+| `LSW-005B.2` | QUIC is limited to an outbound reliable-stream boundary. Listener ownership, custom trust-root interoperability, multi-candidate peer-family mapping, and reconnect/stale-completion qualification remain absent. The native client also cannot negotiate a supported TLS signature algorithm with the Python aioquic listener used by the interoperability harness, so cases 10--11 are excluded from the routine Linux-native matrix while remaining explicitly selectable for diagnosis. | The selected backend passes Python-peer interoperability for configured trust roots and multi-candidate IPv4/IPv6 family policy; safe listener ownership and authenticated ChannelMux service flow have integration evidence, or unsupported portions remain explicitly rejected with a documented product decision. |
+| `LSW-PROXY-001` | Proxy support is limited to one HTTP CONNECT bootstrap. Proxy authentication challenges, proxy chains, and HTTP/2 proxy transport are unavailable. | Each supported advanced proxy mode has explicit configuration admission, credential redaction, failure diagnostics, and Python-peer integration coverage; modes intentionally not supported fail before connection with actionable diagnostics. |
+| `LSW-PKG-001` | The Linux archive/installer has no repository metadata, automated upgrade, or privilege-provisioning path. | The supported packaging format declares artifact identity, upgrade/rollback behavior, unprivileged foreground and scoped-helper privilege provisioning, state/config ownership, and an install/upgrade/uninstall qualification test. |
 
-The non-admitted rows are product capabilities, not Linux-local substitutes:
-their resource ownership remains with the authenticated helper and the
-Admin/product packages that own those resources.
+## Python reference deviations
 
-## Resource ownership decisions
-
-- A Linux listener or dial owner exclusively owns its descriptor/channel and
-  serializes its I/O. Core owns portable channel identifiers, counters, pending
-  buffers, frame validation, and reconnect/epoch state.
-- The service socket owner drives public Core TCP and UDP ChannelMux effects for
-  both locally accepted services and admitted remote OPENs. The remote target is
-  obtained from Core's admitted service specification; Linux does not parse or
-  re-decide that target. Core epoch withdrawal invalidates channels and the
-  Linux owner closes the matching descriptors.
-- A shared myudp listener is the sole UDP reader. It keeps a Linux-local opaque
-  endpoint key and address for routing outbound effects; Core receives the
-  stable key and transport epoch, never a socket address as peer identity.
-- The WebSocket resource owner owns TCP/TLS, HTTP upgrade, WebSocket frames,
-  proxy CONNECT, and close. It hands authenticated bytes to SecureLink. This is
-  deliberately equivalent to Apple
-  `ObstacleBridgeWebSocketOverlayTransportOwner`, whose URLSession/Security task
-  has the same bounded ownership.
-- WSS verification is mandatory. A configured PEM root extends the platform
-  trust store; it never replaces it. Proxy user-info is decoded only to create a
-  CONNECT `Proxy-Authorization` header, and status/logging retain host and port
-  only. This applies equally to manual proxy configuration and
-  `HTTP_PROXY`/`HTTPS_PROXY`.
-- Linux packaging treats systemd as an external supervisor, not a protocol
-  mode. The archive, unit template, and explicit installer select binary,
-  configuration, account, state location, and Admin port.
-
-## Present boundaries
-
-The local Admin projection contains redacted lifecycle, readiness, retry,
-SecureLink, session, compression, and resource-ownership counters. It never
-contains secrets, keys, plaintext, nonces, or packet traffic. Runtime health
-uses the Core bounded record schema and is persisted by each platform owner;
-an unclean prior lifetime is a classification, not an inferred crash cause.
-`/api/status` includes redacted Linux operator capability guidance for TUN,
-effective `CAP_NET_ADMIN`, address/route, DNS, and firewall tooling. It also
-correlates the packet-tunnel helper/device/policy and local/remote service
-socket state with the bounded health tail; helper socket paths and session
-tokens are never projected. Foreground `SIGINT` and `SIGTERM` are recorded as
-fixed health origins before controlled shutdown.
-
-The authenticated Swift TUN helper is the Linux owner of `/dev/net/tun` and
-the complete packet-policy lifecycle. It applies and rolls back address,
-route, underlay-preserving exclusion, `resolvectl` DNS, optional WAN-scoped
-firewall, and explicitly configured absolute hook effects; it persists a
-mode-600 redacted policy snapshot and cleans prior helper-owned state before
-accepting new ownership. The foreground runtime either attaches to an explicit
-endpoint or, when `tun_helper_backend` is `linux-native` with no supplied
-credentials, creates a one-use authenticated socket/token and launches its
-Swift helper child. It retains one authenticated packet/event channel. The
-privileged Linux product qualification runs with
-`OBSTACLEBRIDGE_PRIVILEGED_TUN=1` on an authorized host and verifies real
-TUN address/route, `resolvectl` DNS, and absolute-hook apply/remove cleanup.
-
-The Linux WSS client supports direct, environment-selected, and manual HTTP
-proxies. It completes CONNECT before TLS and HTTP upgrade, so proxy bytes are
-not exposed to WebSocket, SecureLink, or ChannelMux. WSS listener certificates
-are operator-provided PEM identity files and the listener is loopback-only;
-it is not a proxy or automated certificate issuer.
-
-The selected Linux QUIC backend is pinned `swift-nio-quic` 0.4.1. The admitted
-surface is a verified outbound single reliable stream with `hq-29`; the overlay
-envelope remains above the NIO boundary. Listener configuration stays
-fail-closed because upstream stream ownership aborts on first inbound stream,
-and a SecureLink multi-exchange client stream also aborts on this dependency
-graph.
-
-## Open work packages
-
-Only incomplete packages appear below. The DoD column records the present
-design/evidence boundary rather than restating product requirements; the
-adjacent field is the known gap that keeps the package open.
-
-| Package | DoD / current design | Known gap |
+| Package | Difference from `python -m obstacle_bridge` | Definition of done |
 | --- | --- | --- |
-| `LSW-SC.2` | Mixed Apple sources are split through typed Core ports, leaving Apple framework and ABI handling in adapters. The remote-service catalog facade plus native-service, listener-hook, CIDR, tunnel-routing, UDP-peer, overlay-planning, first-start, Admin authentication/configuration-change challenge orchestration, TUN-helper protocol/state/loopback semantics, ChannelMux TUN state/effect policy, overlay-channel coordination, and TUN-probe diagnostic state/reply accounting are Core-owned; Apple owners receive only accepted catalog effects and apply platform configuration, Darwin route normalization, POSIX resolution, packet-device I/O, or macOS helper-process effects. Linux Admin owns validated configuration persistence, redacted exports, Core onboarding admission, and live-topic subscriptions; secret-bearing onboarding is fail-closed without a Linux key owner. | Linux callers for the remaining extracted Core contracts are planned in `LSW-SC.2L-D` through `LSW-SC.2L-F` and `LSW-SC.2L-K` through `LSW-SC.2L-L`. The completed H boundary admits a configured Unix helper-control socket without admitting privileged TUN startup; the completed I boundary maps POSIX TUN-probe inputs into its Core-owned runtime while packet-device access remains fail-closed under `LSW-005`; the completed J boundary retains its packet-device owner injection and therefore does not qualify privileged device setup. |
-| `LSW-SC.3` | `ObstacleBridgeAppleShared` is constrained to Apple-resource adapters; portable behavior belongs in Core. | The retained Apple-file set still needs per-file dependency classification and an enforced repository boundary. |
-| `LSW-SC.4` | The source inventory remains the ownership authority while transition work is active. | Transitional shims, flat Xcode references, and inventory/traceability cleanup depend on SC.2 and SC.3. |
-| `LSW-SC.2L-F` | Implement separate Linux TCP, QUIC, and WebSocket lifecycle owners for the Core runtime contracts. **DoD:** each owner translates its own Core connect/send/receive/close/timer effects into POSIX/NIO operations and reports completion, EOF, TLS/proxy/QUIC failure, and monotonic time back as typed inputs; each has independent cancellation and epoch fencing; tests prove no owner wraps or delegates lifecycle to `ObstacleBridgeLinuxReconnectSupervisor`, and Python-peer qualification covers reconnect plus stale-completion rejection for all three transports. | The live runtime selects TCP/QUIC/WebSocket lifecycle owners that construct their lower POSIX/NIO sessions and retain independent candidate rotation, authenticated-session, cancellation, epoch admission, receive-worker, and retry-timer state; `ObstacleBridgeLinuxConfiguredRuntime` publishes only the active redacted projection. TCP connection-failure retry, WebSocket HTTP-upgrade rejection, and TCP/WebSocket immediate-EOF close handling are qualified, and the live-owner Python-peer test directly qualifies retired protected-frame rejection after reconnect for TCP and WebSocket. A Python `aioquic` peer proves the QUIC owner can reconnect. QUIC protected stale-frame qualification is explicitly deferred: the attempted SwiftNIO/aioquic SecureLink exchange fails in lower QUIC packet parsing before the SecureLink callback runs. |
-| `LSW-SC.2L-G` | Qualify the admitted Linux SC.2 composition after `LSW-SC.2L-C` through `LSW-SC.2L-F`. **DoD:** the Linux-host suite runs Admin, service-catalog, SecureLink, UDP, TCP, QUIC, and WebSocket caller evidence against a Python peer; the inventory maps every Core contract to caller and test; unsupported TUN, proxy-provider, and persisted-secret capabilities remain fail-closed with explicit diagnostics. | The inventory maps each admitted lifecycle caller and current evidence. TCP/WebSocket direct protected stale-frame rejection and immediate-EOF close handling are qualified; TCP connection-failure retry and WebSocket HTTP-upgrade rejection are also qualified, with receive/retry effects owned by the selected lifecycle-owner instance. QUIC is deferred because its SwiftNIO/aioquic SecureLink test fails below the SecureLink callback during QUIC packet parsing. The full overlay matrix is workflow-dispatch-only; final G qualification cannot be claimed until the deferred QUIC lifecycle condition is complete. |
-| `LSW-005B.2` | QUIC remains a bounded outbound reliable-stream client boundary. | No safe Linux listener, custom-trust-root interoperability, peer-family mapping, or ChannelMux service-flow qualification exists on the pinned backend. |
-| `LSW-R007.5` | Bounded admission and retained redacted health records are implemented across runtime owners. | Signed physical iPhone and released-host sustained-load evidence, including external termination correlation, is unavailable. |
-| `LSW-R007.6` | Runtime owners provide bounded controlled-stop and prior-lifetime state. | Linux privileged TUN, signed macOS, and physical iOS common-path restart qualification remains unavailable; server shutdown can still leave a bridge child alive. |
-| `LSW-009` | Python helper mode selects `linux-swift` and `darwin-swift`. Both artifacts expose embedded commit, dirty flag, and diff digest through `--helper-build-info`; startup rebuilds an absent, mismatched, or dirty checkout before launching the authenticated protocol-v1 Unix-socket server. The Linux native helper places each full-tunnel default in an isolated policy table and keeps every kernel-connected local subnet, including bridge and host-only interfaces, on the main table; persisted policy records support crash recovery. Core owns the shared frame and JSON-control codec. The macOS server forwards authenticated helper-originated packet and event frames and translates Python routing payloads, including the omitted-gateway subnet-peer default, into its bundled Darwin hook contract. | Signed macOS qualification remains required for real `utun` packet carry and route/DNS cleanup. The Linux host cannot compile or exercise the Darwin-only server and privileged hook path. |
+| `LSW-005` / `LSW-006` | Python has the established Linux TUN route/DNS lifecycle qualification; native Swift lacks equivalent full kernel packet-carry evidence. | Native Swift passes the same intent-level elevated qualification: authenticated packet carriage, routing/DNS policy, interruption recovery, and cleanup. |
+| `LSW-TEL-001` | Python has reference collector/client integration evidence; Linux has only local spool and adapter-level acknowledgement evidence. | The Linux HTTPS/mTLS client completes the reference collector qualification without moving network I/O onto forwarding or packet callbacks. |
+| `LSW-PROXY-001` | Python supports proxy behaviors outside Linux's single CONNECT bootstrap. | Linux supports the selected Python modes with equivalent redaction/failure semantics, or the requirements explicitly narrow the common product contract. |
+| `LSW-R007.6` | Python has broader restart/lifecycle qualification. Linux still lacks common-path privileged-TUN restart evidence and can leave a bridge child after server shutdown. | Native shutdown and restart tests prove child reaping and controlled-stop records for normal and privileged-helper paths; authorized Linux, signed macOS, and physical iOS qualifications cover their applicable owners. |
 
-## Known product limitations
+## Architecture and qualification deviations
 
-- Linux records foreground lifecycle events to the configured local log file
-  and, when `telemetry_client.telemetry_enabled` is set, to the shared bounded
-  private telemetry spool and drains it through an HTTPS mTLS uploader when
-  the configured client certificate directory is present.
-- Listener-mode myudp rejects `own_servers` and `remote_servers`: a listener
-  does not infer a target peer or bind a competing service map per child.
-- Packet policy does not admit IPv6 jumbograms or encrypted payloads, and its
-  packet-device-independent delivery/discard effects are not yet exposed.
-- Catalog listener connection-drain behavior has not been qualified across all
-  Apple resource owners.
-- Proxy challenges, chained proxies, and HTTP/2 proxy transports are outside
-  the single CONNECT bootstrap owner.
-- The archive and installer intentionally omit repository metadata, automatic
-  upgrades, and privilege provisioning; operators choose enablement and
-  capabilities explicitly.
+| Package | Deviation | Definition of done |
+| --- | --- | --- |
+| `LSW-SC.2L-F` | QUIC and WebSocket lack direct protected stale-completion qualification and complete owner-specific Core-effect translation evidence. The current QUIC SecureLink test stops below the SecureLink callback in lower packet parsing. | TCP, WebSocket, and QUIC each translate typed Core connect/send/receive/close/timer effects through their own owner; Python-peer tests prove reconnect, stale-completion rejection, cancellation, and epoch fencing for all three. |
+| `LSW-SC.2L-G` | The Linux SC.2 composition cannot receive final full-overlay qualification while `LSW-SC.2L-F` remains open. | The Linux-host matrix covers Admin, service catalog, SecureLink, UDP, TCP, QUIC, and WebSocket callers against Python peers; the source inventory maps every admitted contract to caller and test. |
+| `LSW-SC.3` | Apple resource adapters still need per-file dependency classification and an enforced repository boundary. | Every retained Apple file has a classification, the boundary is machine-checked, and no portable behavior remains in an Apple-only adapter. |
+| `LSW-SC.4` | Transitional shims, flat Xcode references, and source inventory/traceability cleanup remain. | The inventory is the enforced ownership authority; transitional shims and obsolete references are removed, and CI rejects boundary regressions. |
+| `LSW-R007.5` | Sustained-load and external-termination correlation evidence is absent on signed physical iPhone and released Linux hosts. | Authorized released-host and physical-device lanes publish bounded-load, termination, and retained-health evidence with clear environment qualifications. |
+| `LSW-009` | The Darwin Swift helper cannot receive signed macOS real-`utun` packet-carry and route/DNS cleanup qualification from the Linux host. | A signed macOS lane proves helper packet carriage, route/DNS apply/remove, and cleanup; its result is tracked independently of Linux compilation. |
 
-## Evidence and inventory
+## Completion rule
 
-`LinuxSwift_r001_inventory.json` and `LinuxSwift_source_map.md` remain the
-machine-readable and reviewable source-ownership maps. The focused Linux
-adapter suite exercises the admitted Core-to-resource-owner paths; the product
-build and inventory guard are the routine structural checks:
+Do not retain a completed work package in this document. Move its durable
+contract and evidence to the relevant requirement, test guide, and source
+inventory, then remove its row from this ledger.
 
-```bash
-./scripts/build_linux_app.sh
-swift test --package-path swift --filter ObstacleBridgeLinuxAdapterTests
-./.venv/bin/python scripts/check_linux_swift_r001_inventory.py
-```
+## Linux native/Python overlay interoperability matrix
+
+The `bridge-py-integration-gate` runs the same `test_overlay_e2e.py --mode
+basic` catalog in `python-python` and
+`python-server-linux-native-client` modes. The catalog is the supported
+single-client, Python-listener boundary. Both modes run myUDP cases 01--05,
+TCP cases 06--07, and WebSocket cases 08--09. Python/Python additionally runs
+outbound QUIC cases 10--11. The Linux-native mode excludes those QUIC cases
+until its client can negotiate a supported TLS signature algorithm with the
+Python aioquic listener; explicit case selection remains available for focused
+qualification. The selected cases cover IPv4 and IPv6 overlay endpoints plus
+UDP and TCP application services without changing either product for the test
+harness.
+
+The same CI matrix additionally runs the focused `tc11` myUDP send-window
+qualification for the Python-listener/Linux-native-client pair. It opens five
+concurrent 65,535-byte TCP application records, exceeding the default
+200-frame transport window. The native TCP owner segments a stream read at the
+eight-byte ChannelMux envelope boundary, so every lower myUDP application
+record remains within its 65,535-byte wire limit while the peer receives the
+unchanged TCP byte stream.
+
+The localhost reconnect variants and the two-client/listener catalogs do not
+run in this matrix. They require native restart, listener, or multi-peer
+orchestration that the client-only runtime mode does not represent. They remain
+separate work, rather than being treated as coverage supplied by this matrix.

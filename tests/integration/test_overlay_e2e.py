@@ -34,6 +34,10 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
+if str(ROOT) not in sys.path:
+    # The harness is also a user-invocable script; Python otherwise starts
+    # with tests/integration on sys.path and cannot import its test fixtures.
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
@@ -52,7 +56,9 @@ _SECURE_LINK_CERT_FIXTURE_TMPDIR = tempfile.TemporaryDirectory()
 
 def peer_endpoint_text(value: Any) -> str:
     if isinstance(value, dict):
-        host = str(value.get('host') or value.get('bind') or value.get('ifname') or '').strip()
+        host = str(
+            value.get('host') or value.get('active_host') or value.get('bind') or value.get('ifname') or ''
+        ).strip()
         port = value.get('port')
         if host and port not in (None, ''):
             port_s = str(port).strip()
@@ -86,6 +92,7 @@ BRIDGE_RUNTIME_MODE_CHOICES = (
     'python-python',
     'swift-server-python-client',
     'python-server-swift-client',
+    'python-server-linux-native-client',
 )
 
 try:
@@ -138,6 +145,8 @@ class MyudpDelayLossCase:
     duplicate_client_to_server_data: tuple[int, ...] = ()
     reorder_client_to_server_data: tuple[int, ...] = ()
     drop_client_to_server_min_chunks: int = 0
+    bulk_tcp_records: int = 0
+    native_receive_idle_timeout_ms: int = 0
 
 
 class LinuxSwiftSecureLinkPeer:
@@ -1444,6 +1453,23 @@ MYUDP_DELAY_LOSS_CASES: Dict[str, MyudpDelayLossCase] = {
         drop_client_to_server_data=tuple(range(1, CONTROL_MAX_MISSED + 3)),
         tcp_application_stream=True,
         tcp_expected_request_bytes=32768,
+        bulk_tcp_records=16,
+    ),
+    # One max-size stream record needs approximately 46 myUDP DATA chunks.
+    # Five simultaneous records therefore exceed the default 200-frame send
+    # window and must drain in order as CONTROL acknowledgements make room.
+    'tc11_64k_records_exceed_default_send_window': MyudpDelayLossCase(
+        name='tc11_64k_records_exceed_default_send_window',
+        direction='client_to_server',
+        payload=b'W' * 65535,
+        # This case isolates send-window draining.  The general delay/loss
+        # cases retain their 300 ms impairment; applying it here makes the
+        # native receive-owner idle before the workload begins.
+        delay_ms=0,
+        tcp_application_stream=True,
+        tcp_expected_request_bytes=65535,
+        bulk_tcp_records=5,
+        native_receive_idle_timeout_ms=60_000,
     ),
 }
 
@@ -1499,6 +1525,11 @@ CASES.update({
 })
 
 BASIC_CASES = list(BASE_CASES)
+# Native QUIC cannot yet negotiate a supported signature algorithm with the
+# Python aioquic listener used by this harness. Keep explicit QUIC selection
+# available for diagnosis, but do not present these known-failing cases as
+# routine Python/Linux-native interoperability coverage.
+LINUX_NATIVE_BASIC_CASES = [name for name in BASIC_CASES if not name.startswith('case10_') and not name.startswith('case11_')]
 RECONNECT_CASES = list(BASE_CASES) + list(LOCALHOST_CASES)
 ALL_CASES = list(CASES.keys())
 
@@ -2394,6 +2425,8 @@ def _bridge_runtime_sides(runtime_mode: str) -> Tuple[str, str]:
         return 'swift', 'python'
     if normalized == 'python-server-swift-client':
         return 'python', 'swift'
+    if normalized == 'python-server-linux-native-client':
+        return 'python', 'linux-native'
     raise ValueError(f'Unsupported bridge runtime mode: {runtime_mode!r}')
 
 
@@ -2455,6 +2488,7 @@ def _runtime_config_from_bridge_args(
         '--quic-key': ('quic_key', str),
         '--peer-resolve-family': ('peer_resolve_family', str),
         '--client-restart-if-disconnected': ('client_restart_if_disconnected', float),
+        '--secure-link-receive-idle-timeout-ms': ('secure_link_receive_idle_timeout_ms', int),
         '--overlay-reconnect-retry-delay-ms': ('overlay_reconnect_retry_delay_ms', int),
         '--secure-link-mode': ('secure_link_mode', str),
         '--secure-link-psk': ('secure_link_psk', str),
@@ -2547,6 +2581,119 @@ def _swift_bridge_command(
     ]
 
 
+def _linux_native_runtime_config(
+    args: List[str],
+    *,
+    log_dir: Path,
+    case_name: str,
+    side: str,
+    admin_port: int,
+) -> Dict[str, Any]:
+    """Translate the overlay harness CLI subset into the Linux product config.
+
+    The Linux executable deliberately consumes the persisted, grouped config
+    shape used by its users.  Keep this adapter in the test harness so the
+    Python CLI/runtime remains entirely untouched.
+    """
+    flat = _runtime_config_from_bridge_args(
+        args,
+        log_dir=log_dir,
+        case_name=case_name,
+        side=side,
+        admin_port=admin_port,
+    )
+    transport = str(flat['overlay_transport']).strip().lower()
+    session_name = {
+        'myudp': 'udp_session',
+        'tcp': 'tcp_session',
+        'ws': 'ws_session',
+        'quic': 'quic_session',
+    }.get(transport)
+    if session_name is None:
+        raise RuntimeError(f'Unsupported Linux-native overlay transport: {transport!r}')
+    session_prefix = 'udp' if transport == 'myudp' else transport
+    session_keys = (
+        f'{session_prefix}_bind',
+        f'{session_prefix}_peer',
+        f'{session_prefix}_peer_port',
+        f'{session_prefix}_own_port',
+    )
+    session = {key: flat[key] for key in session_keys if key in flat}
+    for key in ('ws_path', 'ws_payload_mode', 'ws_tls', 'ws_proxy_mode', 'quic_alpn', 'quic_insecure'):
+        if key in flat:
+            session[key] = flat[key]
+    secure = {
+        key: flat[key]
+        for key in ('secure_link_mode', 'secure_link_psk')
+        if key in flat
+    }
+    if not secure:
+        secure['secure_link_mode'] = 'off'
+    runtime_config: Dict[str, Any] = {
+        'admin_web': {
+            'admin_web': True,
+            'admin_web_bind': _admin_host_for_port(admin_port),
+            'admin_web_port': int(admin_port),
+        },
+        'runner': {
+            'overlay_transport': transport,
+            # This CLI mode intentionally puts the native executable in the
+            # client role. Linux myUDP listener admission requires PSK auth,
+            # whereas the original cleartext smoke case is a Python listener.
+            'listener_mode': False,
+        },
+        session_name: session,
+        'secure_link': secure,
+        'own_servers': flat['own_servers'],
+        'remote_servers': flat['remote_servers'],
+        'tun_execution': {'tun_execution_mode': 'inline'},
+    }
+    if os.environ.get('OBSTACLEBRIDGE_NATIVE_DEBUG_LOGGING') == '1':
+        # Keep native debug diagnostics out of normal CI workloads.  When an
+        # operator explicitly enables them, retain the redacted records beside
+        # the other child-process logs so a failed mixed-runtime case is
+        # diagnosable from its uploaded artifact.
+        runtime_config['debug_logging'] = {
+            'debug_enabled': True,
+            'log_file': str(log_dir / f'{case_name}_{side}_linux_native_debug.log'),
+        }
+    if 'secure_link_receive_idle_timeout_ms' in flat:
+        runtime_config['secure_link_receive_idle_timeout_ms'] = flat['secure_link_receive_idle_timeout_ms']
+    for key in ('compress_layer', 'compress_layer_algo', 'compress_layer_level', 'compress_layer_min_bytes', 'compress_layer_types'):
+        if key in flat:
+            runtime_config[key] = flat[key]
+    return runtime_config
+
+
+def _linux_native_bridge_command(
+    args: List[str],
+    *,
+    log_dir: Path,
+    case_name: str,
+    side: str,
+    admin_port: int,
+) -> List[str]:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux-native overlay runtime mode requires Linux')
+    binary_path = _linux_swift_runner_binary()
+    runtime_config = _linux_native_runtime_config(
+        args,
+        log_dir=log_dir,
+        case_name=case_name,
+        side=side,
+        admin_port=admin_port,
+    )
+    runtime_config_path = log_dir / f'{case_name}_{side}_linux_native_runtime.json'
+    runtime_config_path.write_text(json.dumps(runtime_config, sort_keys=True), encoding='utf-8')
+    return [
+        str(binary_path),
+        '--runtime-config', str(runtime_config_path),
+        '--run',
+        '--admin-port', str(admin_port),
+        '--hold-sec', '180',
+    ]
+
+
 def build_bridge_command(
     runtime: str,
     *,
@@ -2561,6 +2708,14 @@ def build_bridge_command(
         return [sys.executable, str(BRIDGE)] + materialize_args(bridge_args, log_dir, case_name, side)
     if normalized_runtime == 'swift':
         return _swift_bridge_command(
+            bridge_args,
+            log_dir=log_dir,
+            case_name=case_name,
+            side=side,
+            admin_port=admin_port,
+        )
+    if normalized_runtime == 'linux-native':
+        return _linux_native_bridge_command(
             bridge_args,
             log_dir=log_dir,
             case_name=case_name,
@@ -3024,6 +3179,13 @@ def build_commands(
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_env = dict(case.server_env)
     client_env = dict(case.client_env)
+    # The worker-isolated 127/8 endpoint is a local service target. Keep a
+    # host HTTP proxy from being mistaken for it; proxy-specific tests replace
+    # these variables explicitly after command construction.
+    local_host = _loopback_ipv4_host(case_index)
+    for env in (server_env, client_env):
+        env['NO_PROXY'] = _append_csv_token(env.get('NO_PROXY', ''), local_host)
+        env['no_proxy'] = _append_csv_token(env.get('no_proxy', ''), local_host)
     server_args = list(case.bridge_server_args)
     client_args = list(case.bridge_client_args)
     if server_runtime == 'python' and client_runtime == 'python':
@@ -3817,7 +3979,7 @@ def wait_peer_endpoint_visible(admin_port: int, timeout: float = 12.0, label: st
         for row in rows:
             if str(row.get('transport', '')).strip().lower() != normalized_transport:
                 continue
-            peer = peer_endpoint_text(row.get('peer'))
+            peer = peer_endpoint_text(row.get('peer') or row)
             if peer and peer.lower() != 'n/a':
                 who = f' {label}' if label else ''
                 log.info(f'[PEERS]{who} port={admin_port} transport={normalized_transport} peer={peer}')
@@ -4386,6 +4548,18 @@ def status_state(doc: dict) -> str:
     transport_runtime = _status_transport_runtime(doc)
     if bool(transport_runtime.get('overlay_connected')):
         return 'CONNECTED'
+    # The foreground Linux-native status schema reports the active state at
+    # the document root instead of under Python's transport_runtime object.
+    # Accept that public product schema so a mixed-runtime E2E case waits for
+    # both sides rather than timing out after they have connected.
+    native_state = str(doc.get('transport_state') or '').strip().upper()
+    if native_state:
+        return native_state
+    native_peer = doc.get('peer') or {}
+    if isinstance(native_peer, dict):
+        native_peer_state = str(native_peer.get('state') or '').strip().upper()
+        if native_peer_state:
+            return native_peer_state
     runtime_status = str((doc.get('bootstrap_state') or {}).get('status') or '').strip().upper()
     if runtime_status:
         return runtime_status
@@ -4625,6 +4799,7 @@ def run_case(
     )
     try:
         bounce.start()
+        server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
         check_exact_bytes = case.name in EXACT_BYTES_CASES
         overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', 'myudp')).strip().lower()
         for name, cmd, env, admin_port in build_commands(
@@ -4651,7 +4826,11 @@ def run_case(
         for proc in procs:
             assert_running(proc)
 
-        if case.name.startswith('case01_'):
+        # The Python myUDP listener does not publish an accepted-peer row
+        # before the first application datagram from the Linux native client.
+        # The following probe supplies that datagram and the shared byte
+        # counters assert its bidirectional transfer afterwards.
+        if case.name.startswith('case01_') and 'linux-native' not in (server_runtime, client_runtime):
             for proc in procs:
                 wait_peer_endpoint_visible(proc.admin_port or 0, timeout=10.0, label=proc.name, transport='myudp')
 
@@ -4664,12 +4843,20 @@ def run_case(
 
             def _request_connections_before_close() -> None:
                 for admin_port, proc_name in admin_ports_with_name:
-                    wait_tcp_connections_exact_transferred_bytes(
-                        admin_port,
-                        expected_bytes=expected_bytes,
-                        timeout=3.0,
-                        label=f'{proc_name} before-close',
-                    )
+                    if 'linux-native' in (server_runtime, client_runtime) and proc_name.endswith('bridge_client'):
+                        wait_exact_transferred_bytes(
+                            admin_port,
+                            expected_bytes=expected_bytes,
+                            timeout=3.0,
+                            label=f'{proc_name} before-close',
+                        )
+                    else:
+                        wait_tcp_connections_exact_transferred_bytes(
+                            admin_port,
+                            expected_bytes=expected_bytes,
+                            timeout=3.0,
+                            label=f'{proc_name} before-close',
+                        )
 
             before_tcp_close = _request_connections_before_close
         probe_timeout = 12.0 if case.name == 'case09_overlay_ws_ipv6' else 8.0
@@ -4830,7 +5017,10 @@ def run_case_myudp_delay_loss(
         '--log', 'INFO', '--log-channel-mux', 'DEBUG', '--log-udp-session', 'DEBUG',
         '--log-file', str(log_dir / f'{loss_case.name}_bridge_client.txt'),
         '--config', missing_cfg, '--admin-web-port', '0', '--client-restart-if-disconnected', '5',
-    ] + admin_args(client_admin)
+    ] + (
+        ['--secure-link-receive-idle-timeout-ms', str(loss_case.native_receive_idle_timeout_ms)]
+        if loss_case.native_receive_idle_timeout_ms else []
+    ) + admin_args(client_admin)
     server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
     server_cmd = build_bridge_command(
         server_runtime,
@@ -4876,19 +5066,37 @@ def run_case_myudp_delay_loss(
         proxy.start()
 
         phase('2. Start myudp bridge server and client through proxy')
-        server_proc = start_proc(f'{loss_case.name}_bridge_server', server_cmd, log_dir, admin_port=server_admin)
-        client_proc = start_proc(f'{loss_case.name}_bridge_client', client_cmd, log_dir, admin_port=client_admin)
+        local_bypass_env = {'NO_PROXY': loopback_v4, 'no_proxy': loopback_v4}
+        server_proc = start_proc(
+            f'{loss_case.name}_bridge_server', server_cmd, log_dir,
+            env_extra=local_bypass_env, admin_port=server_admin,
+        )
+        client_proc = start_proc(
+            f'{loss_case.name}_bridge_client', client_cmd, log_dir,
+            env_extra=local_bypass_env, admin_port=client_admin,
+        )
         wait_admin_up(server_admin, timeout=10.0)
         wait_admin_up(client_admin, timeout=10.0)
 
         phase('3. Wait for both peers to become CONNECTED')
         server_proc, client_proc = wait_both_connected(server_proc, client_proc, log_dir, timeout=30.0)
-        wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
-        wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
+        # The native foreground projection is validated by its dedicated
+        # status-schema tests.  Start the window-pressure workload as soon as
+        # both transport states are connected so its result is about bounded
+        # queue draining, rather than an intentionally idle preamble.
+        if runtime_mode != 'python-server-linux-native-client':
+            wait_peer_endpoint_visible(server_admin, timeout=12.0, label='server', transport='myudp')
+            wait_peer_endpoint_visible(client_admin, timeout=12.0, label='client', transport='myudp')
 
         if loss_case.name == 'tc0_idle_connectivity':
             time.sleep(1.5)
             return
+
+        if loss_case.tcp_application_stream:
+            # The Linux-native client publishes local TCP services after the
+            # overlay readiness transition.  Wait for the real bind before
+            # issuing concurrent max-size records.
+            wait_tcp_listen(loopback_v4, client_probe_port, timeout=12.0)
 
         phase('4. Execute bidirectional app probes across the delayed/lossy myudp overlay')
         if loss_case.name == 'tc5_concurrent_bidir':
@@ -4958,11 +5166,17 @@ def run_case_myudp_delay_loss(
                     )
             return
 
-        if loss_case.name == 'tc10_full_missed_list_pressure':
-            payloads = [
-                (f'Z{i:03d}-'.encode('ascii') + b'Z' * (32768 - 5))
-                for i in range(16)
-            ]
+        if loss_case.bulk_tcp_records:
+            if loss_case.name == 'tc10_full_missed_list_pressure':
+                payloads = [
+                    (f'Z{i:03d}-'.encode('ascii') + b'Z' * (32768 - 5))
+                    for i in range(loss_case.bulk_tcp_records)
+                ]
+            else:
+                payloads = [
+                    (f'W{i:03d}-'.encode('ascii') + loss_case.payload[5:])
+                    for i in range(loss_case.bulk_tcp_records)
+                ]
             results: list[Optional[bytes]] = [None] * len(payloads)
             errors: list[tuple[int, Exception]] = []
 
@@ -7216,11 +7430,32 @@ def test_overlay_e2e_basic_mixed_runtime_myudp(case_name: str, runtime_mode: str
     )
 
 
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_server_linux_native_client_myudp_basic(tmp_path: Path) -> None:
+    """The user-facing myUDP TCP-service smoke case with the built Linux CLI."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux-native overlay runtime mode requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux-native overlay runtime mode requires swift on PATH')
+    run_case(
+        CASES['case04_tcp_over_own_udp_clients_ipv4'],
+        tmp_path,
+        case_index=CASE_INDEX_BASE_BASIC + ALL_CASES.index('case04_tcp_over_own_udp_clients_ipv4'),
+        runtime_mode='python-server-linux-native-client',
+    )
+
+
 MIXED_RUNTIME_MYUDP_DELAY_LOSS_CASES = [
     'tc1a_drop_first_data_client_to_server',
     'tc5a_small_records_batched_and_recovered',
     'tc5b_small_records_reordered_and_duplicated',
     'tc10_full_missed_list_pressure',
+]
+
+
+LINUX_NATIVE_MYUDP_WINDOW_PRESSURE_CASES = [
+    'tc11_64k_records_exceed_default_send_window',
 ]
 
 
@@ -7235,6 +7470,23 @@ def test_overlay_e2e_mixed_runtime_myudp_delay_loss(case_name: str, runtime_mode
         tmp_path,
         CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
         runtime_mode=runtime_mode,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+@pytest.mark.parametrize('case_name', LINUX_NATIVE_MYUDP_WINDOW_PRESSURE_CASES)
+def test_overlay_e2e_linux_native_python_myudp_window_pressure(case_name: str, tmp_path: Path) -> None:
+    """Python listener and Linux client drain max-size records beyond one send window."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux-native overlay runtime mode requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux-native overlay runtime mode requires swift on PATH')
+    run_case_myudp_delay_loss(
+        MYUDP_DELAY_LOSS_CASES[case_name],
+        tmp_path,
+        CASE_INDEX_BASE_MYUDP_DELAY_LOSS + list(MYUDP_DELAY_LOSS_CASES.keys()).index(case_name),
+        runtime_mode='python-server-linux-native-client',
     )
 
 
@@ -7966,7 +8218,9 @@ def test_overlay_e2e_linux_swift_listener_python_runtime_service_round_trip(tmp_
         layers = status['connection_layers']
         assert isinstance(layers, list)
         assert next(layer for layer in layers if layer['name'] == 'secure_link')['authenticated'] is True
-        _code, peers = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
+        _code, peers_doc = fetch_json(f'http://127.0.0.1:{swift_admin}/api/peers', timeout=0.5)
+        peers = peers_doc.get('peers', peers_doc) if isinstance(peers_doc, dict) else peers_doc
+        assert isinstance(peers, list)
         assert len(peers) == 1
         assert {key: peers[0][key] for key in ('peer_id', 'transport', 'state', 'app_ready', 'configured_candidates', 'active_host', 'port', 'failure_reason')} == {
             'peer_id': 'configured-peer', 'transport': overlay_transport,
@@ -12630,6 +12884,17 @@ def test_overlay_e2e_cli_routing_keeps_explicit_mode_override() -> None:
     assert selected_mode == 'reconnect'
 
 
+def test_overlay_e2e_linux_native_basic_mode_excludes_known_quic_incompatibility() -> None:
+    args = parse_args(['--mode', 'basic', '--runtime-mode', 'python-server-linux-native-client'])
+    selected_cases, selected_mode = resolve_selected_cases_and_mode(args)
+
+    assert selected_mode == 'basic'
+    assert selected_cases == LINUX_NATIVE_BASIC_CASES
+    assert 'case10_overlay_quic_ipv4' not in selected_cases
+    assert 'case11_overlay_quic_ipv6' not in selected_cases
+    assert 'case10_overlay_quic_ipv4' in BASIC_CASES
+
+
 def test_overlay_e2e_materialize_case_ports_shifts_overlay_and_service_ports(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv('PYTEST_XDIST_WORKER', raising=False)
     monkeypatch.delenv('PYTEST_XDIST_WORKER_COUNT', raising=False)
@@ -12759,6 +13024,14 @@ def test_overlay_e2e_try_get_status_uses_registered_admin_loopback_host(monkeypa
     assert seen_urls == [f"http://127.88.77.67:{port}/api/status"]
 
 
+def test_overlay_e2e_status_state_accepts_linux_native_schema() -> None:
+    assert status_state({'transport_state': 'connected', 'peer': {'state': 'connected'}}) == 'CONNECTED'
+
+
+def test_overlay_e2e_peer_endpoint_text_accepts_linux_native_schema() -> None:
+    assert peer_endpoint_text({'active_host': '127.0.0.1', 'port': 14443}) == '127.0.0.1:14443'
+
+
 def test_overlay_e2e_case_port_offset_stays_in_range_for_many_workers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('PYTEST_XDIST_WORKER', 'gw15')
     monkeypatch.setenv('PYTEST_XDIST_WORKER_COUNT', '16')
@@ -12782,6 +13055,38 @@ def test_overlay_e2e_secure_link_port_slots_stay_above_regular_band() -> None:
     assert case.bounce_port < 65535
     assert case.probe_port < 65535
     assert case.bounce_port >= CASES['case08_overlay_ws_ipv4'].bounce_port + SECURE_LINK_PORT_OFFSET_BASE
+
+
+def test_overlay_e2e_linux_native_client_runtime_mode_uses_grouped_user_config(tmp_path: Path) -> None:
+    assert _bridge_runtime_sides('python-server-linux-native-client') == ('python', 'linux-native')
+    config = _linux_native_runtime_config(
+        CASES['case04_tcp_over_own_udp_clients_ipv4'].bridge_client_args + [
+            '--config', str(tmp_path / 'missing.cfg'), '--admin-web-port', '0',
+        ],
+        log_dir=tmp_path,
+        case_name='linux_native_config',
+        side='bridge_client',
+        admin_port=18080,
+    )
+
+    assert config['runner'] == {'overlay_transport': 'myudp', 'listener_mode': False}
+    assert config['admin_web'] == {
+        'admin_web': True,
+        'admin_web_bind': '127.0.0.1',
+        'admin_web_port': 18080,
+    }
+    assert config['udp_session'] == {
+        'udp_bind': '0.0.0.0',
+        'udp_peer': '127.0.0.1',
+        'udp_peer_port': 14443,
+        'udp_own_port': 0,
+    }
+    assert config['secure_link'] == {'secure_link_mode': 'off'}
+    assert config['tun_execution'] == {'tun_execution_mode': 'inline'}
+    assert config['own_servers'] == [{
+        'listen': {'protocol': 'tcp', 'bind': '0.0.0.0', 'port': 43129},
+        'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 43128},
+    }]
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -12813,7 +13118,12 @@ def infer_mode_from_cases(selected_cases: List[str]) -> str:
 
 def resolve_selected_cases_and_mode(args: argparse.Namespace) -> Tuple[List[str], str]:
     if args.mode is not None:
-        selected_cases = list(args.cases) if args.cases is not None else list(DEFAULT_CASES[args.mode])
+        if args.cases is not None:
+            selected_cases = list(args.cases)
+        elif args.mode == 'basic' and args.runtime_mode == 'python-server-linux-native-client':
+            selected_cases = list(LINUX_NATIVE_BASIC_CASES)
+        else:
+            selected_cases = list(DEFAULT_CASES[args.mode])
         return selected_cases, args.mode
 
     if args.cases is None:

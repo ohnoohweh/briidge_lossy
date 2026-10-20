@@ -89,6 +89,15 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(try adapter.send(command: .stop, payload: [:])["stopping"] as? Bool == true)
     }
 
+    @Test func controlExchangeIgnoresHelperEventBeforeItsResponse() throws {
+        let backend = SwiftHelperBackend(emitEventBeforeReply: true)
+        let path = "/tmp/obstaclebridge-swift-helper-event-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
+        try server.start(); defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        #expect(try adapter.send(command: .applyNetwork, payload: [:])["applied"] as? Bool == true)
+    }
+
     @Test func swiftHelperServerStopsAfterAuthenticatedClientIdleWindow() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-idle-\(UUID().uuidString).sock"
@@ -137,6 +146,26 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.1", "dev", "eth0", "src", "192.0.2.2"]))
         _ = try backend.removeNetwork([:])
         #expect(commands.contains(["ip", "-4", "route", "del", "203.0.113.9/32"]))
+    }
+
+    @Test func nativeSwiftHelperAppliesIPv6ExclusionsWithoutAnIPv6UnderlayDefaultRoute() throws {
+        var commands: [[String]] = []
+        let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
+            commands.append(arguments)
+            // This host has an IPv4 Internet default only.  IPv6 loopback and
+            // link-local routes are still valid main-table exclusions.
+            if arguments == ["ip", "-j", "-4", "route", "show", "default"] {
+                return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]"
+            }
+            return arguments.contains("-j") ? "[]" : ""
+        })
+        #expect(try backend.applyNetwork(["ifname": "obtest0", "tun_routing": [
+            "tunnel_address6": "fd20:106::2", "tunnel_prefix6": 64,
+            "tunnel_gateway6": "fd20:106::1", "included_routes6": ["::/0"],
+            "excluded_routes6": ["::1/128", "fe80::/10"],
+        ]])["applied"] as? Bool == true)
+        #expect(commands.contains(["ip", "-6", "rule", "add", "pref", "11000", "to", "::1/128", "lookup", "main"]))
+        #expect(commands.contains(["ip", "-6", "route", "replace", "table", "21205", "default", "via", "fd20:106::1", "dev", "obtest0", "metric", "1", "onlink"]))
     }
 
     @Test func nativeSwiftHelperFullTunnelRetainsEveryKernelConnectedLocalLAN() throws {
@@ -236,12 +265,29 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
     @Test func nativeSwiftHelperRecoversPersistedPolicyBeforeNewOwnership() throws {
         let path = URL(fileURLWithPath: "/tmp/obstaclebridge-native-recovery-\(UUID().uuidString).json")
         defer { try? FileManager.default.removeItem(at: path) }
-        let writer = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in arguments.contains("-j") ? "[]" : "" })
-        _ = try writer.applyNetwork(["ifname": "obtest0", "tun_routing": ["included_routes": ["10.0.0.0/8"]]])
+        let writer = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in
+            if arguments == ["ip", "-j", "-4", "route", "show", "default"] { return "[{\"gateway\":\"192.0.2.1\",\"dev\":\"eth0\"}]" }
+            if arguments == ["ip", "-j", "-4", "route", "show", "203.0.113.9/32"] { return "[{\"dst\":\"203.0.113.9/32\",\"gateway\":\"192.0.2.9\",\"dev\":\"eth1\"}]" }
+            return arguments.contains("-j") ? "[]" : ""
+        })
+        _ = try writer.applyNetwork([
+            "ifname": "obtest0", "hook_path": "/opt/obstaclebridge/tun-hook",
+            "listener_hook_env": ["WAN_IF": "eth0"],
+            "tun_routing": [
+                "tunnel_address": "198.18.0.1", "tunnel_prefix": 24,
+                "included_routes": ["10.0.0.0/8"], "excluded_routes": ["203.0.113.9/32"],
+                "dns_servers": ["1.1.1.1"],
+            ],
+        ])
         var commands: [[String]] = []
         let recovery = ObstacleBridgeLinuxNativeTunHelperBackend(stateURL: path, commandRunner: { arguments, _ in commands.append(arguments); return "" })
         try recovery.recoverPersistedPolicy()
         #expect(commands.contains(["ip", "-4", "route", "del", "10.0.0.0/8", "dev", "obtest0"]))
+        #expect(commands.contains(["ip", "-4", "route", "replace", "203.0.113.9/32", "via", "192.0.2.9", "dev", "eth1"]))
+        #expect(commands.contains(["resolvectl", "revert", "obtest0"]))
+        #expect(commands.contains(["iptables", "-D", "FORWARD", "-i", "obtest0", "-o", "eth0", "-j", "ACCEPT"]))
+        #expect(commands.contains(["/opt/obstaclebridge/tun-hook", "down", "obtest0"]))
+        #expect(commands.contains(["ip", "-4", "addr", "del", "198.18.0.1/24", "dev", "obtest0"]))
         #expect(!FileManager.default.fileExists(atPath: path.path))
     }
 
@@ -279,44 +325,169 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         let directory = URL(fileURLWithPath: "/tmp/obstaclebridge-swift-hook-\(UUID().uuidString)", isDirectory: true)
         let hook = directory.appendingPathComponent("hook.sh")
         let marker = directory.appendingPathComponent("events")
+        let socket = directory.appendingPathComponent("helper.sock")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try Data("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$2\" >> '\(marker.path)'\n".utf8).write(to: hook)
         guard chmod(hook.path, 0o700) == 0 else { throw POSIXError(.EPERM) }
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend()
-        defer { backend.stop() }
-        _ = try backend.openTun(["ifname": name, "mtu": 1400])
-        let interface = try #require(backend.snapshot()["ifname"] as? String)
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: socket.path, sessionToken: "privileged-swift-helper-token", backend: backend)
+        try server.start()
+        defer { server.stop() }
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: socket.path, sessionToken: "privileged-swift-helper-token")
+        let opened = try adapter.send(command: .openTun, payload: ["ifname": name, "mtu": 1400])
+        let interface = try #require(opened["ifname"] as? String)
         // This opt-in test runs concurrently with the basic privileged
         // route test, so its host policy must not compete for that route.
         let route = "198.21.0.0/16"
+        let route6 = "fd21:106::/64"
+        let peerExclusion = "203.0.113.254/32"
         let address = "198.20.0.1"
-        _ = try backend.applyNetwork(["ifname": interface, "hook_path": hook.path, "tun_routing": [
+        let address6 = "fd20:106::1"
+        _ = try adapter.send(command: .applyNetwork, payload: ["ifname": interface, "hook_path": hook.path, "tun_routing": [
             "tunnel_address": address, "tunnel_prefix": 24,
-            "included_routes": [route], "dns_servers": ["192.0.2.53"],
+            "tunnel_address6": address6, "tunnel_prefix6": 64,
+            "included_routes": [route], "included_routes6": [route6],
+            "excluded_routes": [peerExclusion], "dns_servers": ["192.0.2.53"],
         ]])
+        // This is the packet path used by the unprivileged foreground after
+        // it authenticates to the helper.  The helper counter proves the
+        // packet reached the real TUN owner rather than merely a test socket.
+        _ = try adapter.sendPacketToHelper(Data([0x45, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 198, 20, 0, 1, 198, 21, 0, 1]))
+        let deadline = Date().addingTimeInterval(1)
+        var packetSnapshot: [String: Any] = [:]
+        while Date() < deadline {
+            packetSnapshot = try adapter.send(command: .snapshot, payload: [:])
+            if (packetSnapshot["packets_from_runtime"] as? Int ?? 0) == 1 { break }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        #expect(packetSnapshot["packets_from_runtime"] as? Int == 1)
         #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "addr", "show", "dev", interface], false).contains(address))
         #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", route], false).contains(interface))
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "addr", "show", "dev", interface], false).contains(address6))
+        #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "route", "show", route6], false).contains(interface))
+        #expect(!(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", peerExclusion], false)).contains(interface))
         #expect(try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["resolvectl", "dns", interface], false).contains("192.0.2.53"))
-        _ = try backend.removeNetwork([:])
+        _ = try adapter.send(command: .removeNetwork, payload: [:])
         let addressesAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "addr", "show", "dev", interface], false)
         let routesAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", route], false)
+        let addresses6AfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "addr", "show", "dev", interface], false)
+        let routes6AfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-6", "route", "show", route6], false)
+        let peerExclusionAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", peerExclusion], false)
         let dnsAfterRemoval = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["resolvectl", "dns", interface], false)
         #expect(!addressesAfterRemoval.contains(address))
         #expect(!routesAfterRemoval.contains(interface))
+        #expect(!addresses6AfterRemoval.contains(address6))
+        #expect(!routes6AfterRemoval.contains(interface))
+        #expect(!peerExclusionAfterRemoval.contains(interface))
         #expect(!dnsAfterRemoval.contains("192.0.2.53"))
         #expect(String(decoding: try Data(contentsOf: marker), as: UTF8.self) == "up:\(interface)\ndown:\(interface)\n")
         #endif
+    }
+
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1" && ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_LINUX_TEST_HELPER_EXECUTABLE"] != nil))
+    func privilegedNativeSwiftHelperRecoversPolicyAfterHelperProcessLoss() throws {
+        #if os(Linux)
+        let executable = try #require(ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_LINUX_TEST_HELPER_EXECUTABLE"])
+        #expect(FileManager.default.isExecutableFile(atPath: executable))
+        let directory = URL(fileURLWithPath: "/tmp/obstaclebridge-swift-recovery-\(UUID().uuidString)", isDirectory: true)
+        let socket = directory.appendingPathComponent("helper.sock")
+        let state = URL(fileURLWithPath: socket.path + ".state.json")
+        let hook = directory.appendingPathComponent("hook.sh")
+        let marker = directory.appendingPathComponent("events")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data("#!/bin/sh\nprintf '%s:%s\\n' \"$1\" \"$2\" >> '\(marker.path)'\n".utf8).write(to: hook)
+        guard chmod(hook.path, 0o700) == 0 else { throw POSIXError(.EPERM) }
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let wanInterface = try #require(try defaultIPv4Interface())
+        let token = "privileged-recovery-token"
+        let first = try launchNativeHelper(executable: executable, socketPath: socket.path, token: token)
+        defer { terminate(first) }
+        let firstAdapter = try waitForNativeHelper(socketPath: socket.path, token: token, process: first)
+        let opened = try firstAdapter.send(command: .openTun, payload: ["ifname": "obkr\(getpid() % 10_000)", "mtu": 1400])
+        let interface = try #require(opened["ifname"] as? String)
+        let address = "198.20.1.1"
+        _ = try firstAdapter.send(command: .applyNetwork, payload: [
+            "ifname": interface, "hook_path": hook.path,
+            "listener_hook_env": ["WAN_IF": wanInterface],
+            "tun_routing": [
+                "tunnel_address": address, "tunnel_prefix": 24,
+                "included_routes": ["198.22.0.0/16"], "dns_servers": ["192.0.2.53"],
+            ],
+        ])
+        #expect(FileManager.default.fileExists(atPath: state.path))
+        let forwardBeforeLoss = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["iptables", "-S", "FORWARD"], false)
+        #expect(forwardBeforeLoss.contains("-i \(interface) -o \(wanInterface) -j ACCEPT"))
+
+        // SIGKILL models an interrupted helper: no in-process STOP/rollback is
+        // allowed to run, so the successor must consume the persisted policy.
+        _ = kill(first.processIdentifier, SIGKILL)
+        first.waitUntilExit()
+        #expect(FileManager.default.fileExists(atPath: state.path))
+
+        let replacement = try launchNativeHelper(executable: executable, socketPath: socket.path, token: token)
+        defer { terminate(replacement) }
+        let replacementAdapter = try waitForNativeHelper(socketPath: socket.path, token: token, process: replacement)
+        #expect(!FileManager.default.fileExists(atPath: state.path))
+        #expect(try replacementAdapter.send(command: .snapshot, payload: [:])["network_applied"] as? Bool == false)
+        let forwardAfterRecovery = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["iptables", "-S", "FORWARD"], false)
+        #expect(!forwardAfterRecovery.contains("-i \(interface) -o \(wanInterface) -j ACCEPT"))
+        #expect(String(decoding: try Data(contentsOf: marker), as: UTF8.self) == "up:\(interface)\ndown:\(interface)\n")
+
+        _ = try replacementAdapter.send(command: .stop, payload: [:])
+        let stoppedDeadline = Date().addingTimeInterval(2)
+        while replacement.isRunning && Date() < stoppedDeadline { Thread.sleep(forTimeInterval: 0.02) }
+        #expect(!replacement.isRunning)
+        #endif
+    }
+
+    private func defaultIPv4Interface() throws -> String? {
+        let text = try ObstacleBridgeLinuxNativeTunHelperBackend.runProcess(["ip", "-j", "-4", "route", "show", "default"], false)
+        guard let routes = try JSONSerialization.jsonObject(with: Data(text.utf8)) as? [[String: Any]] else { return nil }
+        return routes.first?["dev"] as? String
+    }
+
+    private func launchNativeHelper(executable: String, socketPath: String, token: String) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: executable)
+        process.arguments = ["--tun-helper-server", socketPath, token, "--idle-sec", "30"]
+        process.standardOutput = Pipe()
+        process.standardError = Pipe()
+        try process.run()
+        return process
+    }
+
+    private func waitForNativeHelper(socketPath: String, token: String, process: Process) throws -> ObstacleBridgeLinuxTunHelperAdapter {
+        let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: socketPath, sessionToken: token, timeoutMilliseconds: 100)
+        let deadline = Date().addingTimeInterval(3)
+        while process.isRunning && Date() < deadline {
+            if (try? adapter.send(command: .snapshot, payload: [:])) != nil { return adapter }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("native Swift helper did not become available")
+    }
+
+    private func terminate(_ process: Process) {
+        if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+        process.waitUntilExit()
     }
 }
 
 private final class SwiftHelperBackend: ObstacleBridgeLinuxTunHelperServerBackend, @unchecked Sendable {
     private let lock = NSLock(); private var receivedPackets: [Data] = []
     private let receivedPacket = DispatchSemaphore(value: 0)
+    private let emitEventBeforeReply: Bool
+    private var eventSink: (String) -> Void = { _ in }
+    init(emitEventBeforeReply: Bool = false) { self.emitEventBeforeReply = emitEventBeforeReply }
     var packets: [Data] { lock.lock(); defer { lock.unlock() }; return receivedPackets }
     func openTun(_ payload: [String: Any]) throws -> [String: Any] { ["opened": true] }
-    func applyNetwork(_ payload: [String: Any]) throws -> [String: Any] { ["applied": true] }
+    func setEventSink(_ sink: @escaping (String) -> Void) { eventSink = sink }
+    func applyNetwork(_ payload: [String: Any]) throws -> [String: Any] {
+        if emitEventBeforeReply { eventSink("network apply started") }
+        return ["applied": true]
+    }
     func removeNetwork(_ payload: [String: Any]) throws -> [String: Any] { ["removed": true] }
     func setTunEnabled(_ payload: [String: Any]) throws -> [String: Any] { ["enabled": true] }
     func writePacket(_ packet: Data) throws { lock.lock(); receivedPackets.append(packet); lock.unlock(); receivedPacket.signal() }

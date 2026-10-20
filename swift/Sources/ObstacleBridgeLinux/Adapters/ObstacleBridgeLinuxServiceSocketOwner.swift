@@ -5,12 +5,27 @@ import Glibc
 #endif
 import ObstacleBridgeCore
 
-public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable {
+public enum ObstacleBridgeLinuxServiceSocketOwnerError: Error, Equatable, LocalizedError {
     case unsupportedProtocol
     case socketFailure(Int32)
     case bindFailure(Int32)
     case listenFailure(Int32)
     case targetConnectFailure(Int32)
+
+    public var errorDescription: String? {
+        switch self {
+        case .unsupportedProtocol:
+            return "service socket uses an unsupported protocol pairing"
+        case .socketFailure(let code):
+            return "service socket creation failed (errno=\(code): \(String(cString: strerror(code)))"
+        case .bindFailure(let code):
+            return "service listener bind failed (errno=\(code): \(String(cString: strerror(code)))"
+        case .listenFailure(let code):
+            return "service listener listen failed (errno=\(code): \(String(cString: strerror(code)))"
+        case .targetConnectFailure(let code):
+            return "service target connect failed (errno=\(code): \(String(cString: strerror(code)))"
+        }
+    }
 }
 
 /// The Linux resource-owner result of replacing an overlay transport epoch.
@@ -27,8 +42,17 @@ public struct ObstacleBridgeLinuxServiceSocketOwnerEpochReset: Equatable, Sendab
 public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     public typealias FrameSink = (ObstacleBridgeLinuxServiceSocketOwner, [ObstacleBridgeChannelMuxFrame]) -> Void
 
+    private struct ChannelTraffic {
+        var rxBytes = 0
+        var txBytes = 0
+        var rxMessages = 0
+        var txMessages = 0
+    }
+
     private var spec: ObstacleBridgeLinuxServiceSpec
     private let frameSink: FrameSink
+    private let debugEnabled: Bool
+    private let debugSink: ((String, [String: String]) -> Void)?
     private let queue: DispatchQueue
     private let tcpRuntime: ObstacleBridgeChannelMuxTcpRuntime
     private let udpRuntime: ObstacleBridgeChannelMuxUdpRuntime
@@ -42,6 +66,8 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private var coreUDPChannels: Set<UInt16> = []
     private var coreTCPClientChannels: Set<UInt16> = []
     private var coreUDPClientChannels: Set<UInt16> = []
+    private var channelTraffic: [UInt16: ChannelTraffic] = [:]
+    private var completedTraffic = ChannelTraffic()
     private var openedTCPChannels = 0
     private var openedUDPChannels = 0
     private var malformedFrames = 0
@@ -63,20 +89,17 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
 
     public var port: Int {
         queue.sync {
-            guard listener >= 0 else { return 0 }
-            var address = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-            _ = withUnsafeMutablePointer(to: &address) { pointer in
-                pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) }
-            }
-            return Int(UInt16(bigEndian: address.sin_port))
+            listener >= 0 ? boundPort(listener) : 0
         }
     }
 
-    public init(spec: ObstacleBridgeLinuxServiceSpec, maximumQueuedFrames: Int = 128, maximumApplicationPayload: Int = 65_535, instanceID: UInt64 = 0, connectionSequence: UInt32 = 0, frameSink: @escaping FrameSink) {
+    public init(spec: ObstacleBridgeLinuxServiceSpec, maximumQueuedFrames: Int = 128, maximumApplicationPayload: Int = 65_535, instanceID: UInt64 = 0, connectionSequence: UInt32 = 0, channelIDAllocation: ObstacleBridgeChannelMuxChannelIDAllocation = .peerClient(), debugEnabled: Bool = false, debugSink: ((String, [String: String]) -> Void)? = nil, frameSink: @escaping FrameSink) {
         self.spec = spec
         self.frameSink = frameSink
+        self.debugEnabled = debugEnabled
+        self.debugSink = debugSink
         self.queue = DispatchQueue(label: "org.obstaclebridge.linux.service.\(spec.serviceID)")
-        self.tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(instanceID: instanceID, connectionSeq: connectionSequence, sessionMaxAppPayload: maximumApplicationPayload)
+        self.tcpRuntime = ObstacleBridgeChannelMuxTcpRuntime(instanceID: instanceID, connectionSeq: connectionSequence, allocation: channelIDAllocation, sessionMaxAppPayload: maximumApplicationPayload)
         self.udpRuntime = ObstacleBridgeChannelMuxUdpRuntime(instanceID: instanceID, connectionSeq: connectionSequence, sessionMaxAppPayload: maximumApplicationPayload)
     }
 
@@ -139,6 +162,54 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         }
     }
 
+    /// Admin-Web projection of this listener and its currently active mux
+    /// channels.  The descriptor owner is the only Linux layer that can
+    /// distinguish a configured listener from a connection accepted through
+    /// that listener; exposing both makes the shared onboarding policy behave
+    /// like Python's connection snapshot.
+    public func adminConnectionRows(peerID: String, catalog: String = "own_servers") -> [[String: Any]] {
+        queue.sync {
+            let boundListenerPort = listener >= 0 ? boundPort(listener) : 0
+            let base: [String: Any] = [
+                "peer_id": peerID,
+                "svc_id": Int(spec.serviceID),
+                "service_name": spec.name ?? "",
+                "role": "client",
+                "source": spec.listenHost,
+                "local": ["host": spec.listenHost, "port": boundListenerPort],
+                "local_port": boundListenerPort,
+                "remote_destination": ["host": spec.targetHost, "port": spec.targetPort],
+                "catalog": catalog,
+                "stats": [
+                    "rx_bytes": completedTraffic.rxBytes,
+                    "tx_bytes": completedTraffic.txBytes,
+                    "rx_msgs": completedTraffic.rxMessages,
+                    "tx_msgs": completedTraffic.txMessages,
+                ],
+                "throttle": ["active": false],
+            ]
+            var listenerRow = base
+            listenerRow["chan_id"] = NSNull()
+            listenerRow["state"] = "listening"
+            var rows = [listenerRow]
+            let channels = (spec.listenProtocol == .tcp ? coreTCPChannels.union(coreTCPClientChannels) : coreUDPChannels.union(coreUDPClientChannels)).sorted()
+            for channelID in channels {
+                var row = base
+                row["chan_id"] = Int(channelID)
+                row["state"] = "connected"
+                let traffic = channelTraffic[channelID] ?? .init()
+                row["stats"] = [
+                    "rx_bytes": traffic.rxBytes,
+                    "tx_bytes": traffic.txBytes,
+                    "rx_msgs": traffic.rxMessages,
+                    "tx_msgs": traffic.txMessages,
+                ]
+                rows.append(row)
+            }
+            return rows
+        }
+    }
+
     private func listenerReadable() {
         guard !stopped else { return }
         if spec.listenProtocol == .tcp { acceptTCP() } else { receiveUDP() }
@@ -151,6 +222,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
               let channelID = UInt16(exactly: snapshot.chanID) else { if fd >= 0 { _ = close(fd) }; return }
         descriptors[channelID] = fd
         coreTCPChannels.insert(channelID)
+        channelTraffic[channelID] = .init()
         openedTCPChannels += 1
         installReadSource(fd: fd, channelID: channelID, isUDP: false)
         emitCoreWires(snapshot.frames)
@@ -171,7 +243,12 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         udpChannels[addressData] = channelID
         udpPeers[channelID] = (addressData, length)
         coreUDPChannels.insert(channelID)
+        // A UDP peer reuses its Core channel for subsequent datagrams.  Do
+        // not reset its accumulated accounting on each readable event.
+        if channelTraffic[channelID] == nil { channelTraffic[channelID] = .init() }
+        recordLocalRead(channelID: channelID, bytes: Int(count))
         if snapshot.allocatedChannel { openedUDPChannels += 1 }
+        debug("service.udp.local_datagram", ["channel": String(channelID), "bytes": String(count), "allocated": snapshot.allocatedChannel ? "true" : "false", "peer": addressData.base64EncodedString()])
         emitCoreWires(snapshot.frames)
     }
 
@@ -189,6 +266,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         let count = read(fd, &bytes, bytes.count)
         if count > 0 {
             let payload = Data(bytes.prefix(Int(count)))
+            recordLocalRead(channelID: channelID, bytes: Int(count))
             if coreTCPChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalServerData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
                 emitCoreWires(snapshot.frames)
             } else if coreTCPClientChannels.contains(channelID), let snapshot = try? tcpRuntime.handleLocalClientData(chanID: Int(channelID), payload: payload, overlayConnected: true) {
@@ -218,6 +296,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 do {
                     try connectTarget(channelID: frame.channelID, spec: target)
                     coreTCPClientChannels.insert(frame.channelID)
+                    channelTraffic[frame.channelID] = .init()
                     openedTCPChannels += 1
                     _ = tcpRuntime.handleClientConnected(chanID: Int(frame.channelID))
                 } catch {
@@ -236,6 +315,7 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
                 do {
                     try connectTarget(channelID: frame.channelID, spec: target)
                     coreUDPClientChannels.insert(frame.channelID)
+                    channelTraffic[frame.channelID] = .init()
                     openedUDPChannels += 1
                     _ = udpRuntime.handleClientConnected(chanID: Int(frame.channelID))
                 } catch {
@@ -319,15 +399,24 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
     private func writeLocal(channelID: UInt16, payload: Data) {
         guard !payload.isEmpty else { return }
         if let (address, length) = udpPeers[channelID] {
-            _ = address.withUnsafeBytes { bytes in
+            let written = address.withUnsafeBytes { bytes in
                 bytes.baseAddress!.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(listener, payload.withUnsafeBytes { $0.baseAddress }, payload.count, 0, $0, length) }
             }
+            if written > 0 { recordLocalWrite(channelID: channelID, bytes: Int(written)) }
+            debug("service.udp.local_write", ["channel": String(channelID), "bytes": String(written)])
         } else if let fd = descriptors[channelID] {
-            _ = payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) }
+            let written = payload.withUnsafeBytes { write(fd, $0.baseAddress, payload.count) }
+            if written > 0 { recordLocalWrite(channelID: channelID, bytes: Int(written)) }
         }
     }
 
     private func closeChannel(_ channelID: UInt16) {
+        if let traffic = channelTraffic[channelID] {
+            completedTraffic.rxBytes += traffic.rxBytes
+            completedTraffic.txBytes += traffic.txBytes
+            completedTraffic.rxMessages += traffic.rxMessages
+            completedTraffic.txMessages += traffic.txMessages
+        }
         connectionSources.removeValue(forKey: channelID)?.cancel()
         descriptors.removeValue(forKey: channelID)
         udpPeers.removeValue(forKey: channelID)
@@ -336,6 +425,23 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         coreUDPChannels.remove(channelID)
         coreTCPClientChannels.remove(channelID)
         coreUDPClientChannels.remove(channelID)
+        channelTraffic.removeValue(forKey: channelID)
+    }
+
+    private func recordLocalRead(channelID: UInt16, bytes: Int) {
+        guard bytes > 0 else { return }
+        var traffic = channelTraffic[channelID] ?? .init()
+        traffic.rxBytes += bytes
+        traffic.rxMessages += 1
+        channelTraffic[channelID] = traffic
+    }
+
+    private func recordLocalWrite(channelID: UInt16, bytes: Int) {
+        guard bytes > 0 else { return }
+        var traffic = channelTraffic[channelID] ?? .init()
+        traffic.txBytes += bytes
+        traffic.txMessages += 1
+        channelTraffic[channelID] = traffic
     }
 
     private func nativeSpec() -> ObstacleBridgeNativeServiceSpec {
@@ -352,32 +458,62 @@ public final class ObstacleBridgeLinuxServiceSocketOwner: @unchecked Sendable {
         if !frames.isEmpty { frameSink(self, frames) }
     }
 
+    private func debug(_ event: String, _ fields: @autoclosure () -> [String: String]) {
+        guard debugEnabled else { return }
+        debugSink?(event, fields())
+    }
+
     private func bindSocket(host: String, port: Int, type: __socket_type) throws -> Int32 {
-        let fd = socket(AF_INET, Int32(type.rawValue), 0); guard fd >= 0 else { throw ObstacleBridgeLinuxServiceSocketOwnerError.socketFailure(errno) }
+        let family = addressFamily(for: host)
+        let fd = socket(family, Int32(type.rawValue), 0); guard fd >= 0 else { throw ObstacleBridgeLinuxServiceSocketOwnerError.socketFailure(errno) }
         var reuse: Int32 = 1; _ = withUnsafePointer(to: &reuse) { setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, $0, socklen_t(MemoryLayout<Int32>.size)) }
-        var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = in_port_t(UInt16(port).bigEndian)
-        guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else { _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EINVAL) }
-        let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        let result: Int32
+        if family == AF_INET6 {
+            var address = sockaddr_in6(); address.sin6_family = sa_family_t(AF_INET6); address.sin6_port = in_port_t(UInt16(port).bigEndian)
+            guard host.withCString({ inet_pton(AF_INET6, $0, &address.sin6_addr) }) == 1 else { _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EINVAL) }
+            result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) } }
+        } else {
+            var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = in_port_t(UInt16(port).bigEndian)
+            guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else { _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EINVAL) }
+            result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        }
         guard result == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(code) }
         return fd
     }
 
     private func boundPort(_ fd: Int32) -> Int {
-        var address = sockaddr_in(); var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        var address = sockaddr_storage(); var length = socklen_t(MemoryLayout<sockaddr_storage>.size)
         guard withUnsafeMutablePointer(to: &address, { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &length) }
         }) == 0 else { return 0 }
-        return Int(UInt16(bigEndian: address.sin_port))
+        if Int32(address.ss_family) == AF_INET6 {
+            return withUnsafePointer(to: &address) { pointer in
+                pointer.withMemoryRebound(to: sockaddr_in6.self, capacity: 1) { Int(UInt16(bigEndian: $0.pointee.sin6_port)) }
+            }
+        }
+        return withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { Int(UInt16(bigEndian: $0.pointee.sin_port)) }
+        }
     }
 
     private func connectSocket(host: String, port: Int, type: __socket_type) throws -> Int32 {
-        let fd = socket(AF_INET, Int32(type.rawValue), 0); guard fd >= 0 else { throw ObstacleBridgeLinuxServiceSocketOwnerError.socketFailure(errno) }
-        var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = in_port_t(UInt16(port).bigEndian)
-        guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else { _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.targetConnectFailure(EINVAL) }
-        let result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        let family = addressFamily(for: host)
+        let fd = socket(family, Int32(type.rawValue), 0); guard fd >= 0 else { throw ObstacleBridgeLinuxServiceSocketOwnerError.socketFailure(errno) }
+        let result: Int32
+        if family == AF_INET6 {
+            var address = sockaddr_in6(); address.sin6_family = sa_family_t(AF_INET6); address.sin6_port = in_port_t(UInt16(port).bigEndian)
+            guard host.withCString({ inet_pton(AF_INET6, $0, &address.sin6_addr) }) == 1 else { _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.targetConnectFailure(EINVAL) }
+            result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) } }
+        } else {
+            var address = sockaddr_in(); address.sin_family = sa_family_t(AF_INET); address.sin_port = in_port_t(UInt16(port).bigEndian)
+            guard host.withCString({ inet_pton(AF_INET, $0, &address.sin_addr) }) == 1 else { _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.targetConnectFailure(EINVAL) }
+            result = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        }
         guard result == 0 else { let code = errno; _ = close(fd); throw ObstacleBridgeLinuxServiceSocketOwnerError.targetConnectFailure(code) }
         return fd
     }
+
+    private func addressFamily(for host: String) -> Int32 { host.contains(":") ? AF_INET6 : AF_INET }
 
     deinit { stop() }
 }

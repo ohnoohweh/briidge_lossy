@@ -16,7 +16,7 @@ class SwiftTunHelperBuildTests(unittest.TestCase):
         self.assertFalse(swift_helper._identity_matches({**expected, "dirty": True}, expected))
         self.assertFalse(swift_helper._identity_matches({**expected, "diff_sha": "other"}, expected))
 
-    def test_dirty_checkout_rebuilds_even_when_embedded_identity_matches(self):
+    def test_dirty_checkout_reuses_matching_embedded_identity(self):
         root = pathlib.Path("/repo")
         artifact = root / "build/linux/ObstacleBridgeLinux"
         expected = {"commit": "abc123", "dirty": True, "diff_sha": "def456"}
@@ -28,7 +28,7 @@ class SwiftTunHelperBuildTests(unittest.TestCase):
              mock.patch.object(swift_helper, "_embedded_build_identity", return_value=dict(expected)), \
              mock.patch.object(swift_helper.subprocess, "run", return_value=completed) as run:
             self.assertEqual(swift_helper.ensure_linux_swift_tun_helper(), str(artifact))
-        self.assertEqual(run.call_args.args[0], [str(root / "scripts/build_linux_app.sh")])
+        run.assert_not_called()
 
     def test_clean_matching_checkout_reuses_embedded_artifact(self):
         root = pathlib.Path("/repo")

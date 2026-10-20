@@ -8,6 +8,32 @@ import Glibc
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxServiceSocketOwnerTests {
+    @Test func ipv6UDPListenerBindsAndReportsItsEphemeralPort() throws {
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(
+            serviceID: 99, name: "ipv6", listenProtocol: .udp,
+            listenHost: "::1", listenPort: 0,
+            targetProtocol: .udp, targetHost: "::1", targetPort: 7
+        )) { _, _ in }
+        try owner.start()
+        defer { owner.stop() }
+        #expect(owner.port > 0)
+    }
+
+    @Test func duplicateListenerReportsBindErrno() throws {
+        let first = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp)) { _, _ in }
+        try first.start()
+        defer { first.stop() }
+        let second = ObstacleBridgeLinuxServiceSocketOwner(spec: .init(
+            serviceID: 11, name: "duplicate", listenProtocol: .tcp,
+            listenHost: "127.0.0.1", listenPort: first.port,
+            targetProtocol: .tcp, targetHost: "127.0.0.1", targetPort: 7
+        )) { _, _ in }
+        #expect(throws: ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EADDRINUSE)) {
+            try second.start()
+        }
+        #expect(ObstacleBridgeLinuxServiceSocketOwnerError.bindFailure(EADDRINUSE).localizedDescription.contains("Address already in use"))
+    }
+
     @Test func coreServerRuntimeEffectsArePublicToLinuxAdapters() throws {
         let service = ObstacleBridgeNativeServiceSpec(
             svcID: 9,
@@ -66,7 +92,7 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
     @Test func tcpListenerPublishesOpenAndDataFrames() throws {
         let received = LockedFrames()
         let ready = DispatchSemaphore(value: 0)
-        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp)) { _, frames in
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .tcp), channelIDAllocation: .peerClient(ownerIndex: 2, ownerCount: 3)) { _, frames in
             received.append(frames)
             if received.all.count >= 2 { ready.signal() }
         }
@@ -79,6 +105,7 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(ready.wait(timeout: .now() + 3) == .success)
         let frames = received.all
         #expect(frames.map(\.messageType) == [.open, .data])
+        #expect(frames.allSatisfy { $0.channelID == 5 })
         if frames.count == 2 { #expect(frames[1].body == payload) }
     }
 
@@ -99,6 +126,35 @@ struct ObstacleBridgeLinuxServiceSocketOwnerTests {
         #expect(received.all.map(\.messageType) == [.open, .data])
         #expect(received.all[0].protocolType == .udp)
         #expect(received.all[1].body == payload)
+    }
+
+    @Test func udpListenerRoutesInboundReplyOnlyToTheOriginatingPeer() throws {
+        let received = LockedFrames()
+        let emitted = DispatchSemaphore(value: 0)
+        let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: service(protocolType: .udp)) { _, frames in
+            received.append(frames)
+            if received.all.count >= 2 { emitted.signal() }
+        }
+        try owner.start()
+        defer { owner.stop() }
+
+        let client = try connect(port: owner.port, type: SOCK_DGRAM)
+        defer { _ = close(client) }
+        let request = Data("udp-request".utf8)
+        #expect(request.withUnsafeBytes { send(client, $0.baseAddress, request.count, 0) } == request.count)
+        #expect(emitted.wait(timeout: .now() + 3) == .success)
+        let frames = received.all
+        let channelID = try #require(frames.first?.channelID)
+        owner.handleInbound(.init(channelID: channelID, protocolType: .udp, counter: 1, messageType: .data, body: Data("udp-reply".utf8)))
+
+        var bytes = [UInt8](repeating: 0, count: 64)
+        #expect(recv(client, &bytes, bytes.count, 0) == 9)
+        #expect(Data(bytes.prefix(9)) == Data("udp-reply".utf8))
+        // A reply is sent to the local client, never re-admitted as another
+        // listener datagram (which would allocate a new overlay channel).
+        let frameCount = received.all.count
+        Thread.sleep(forTimeInterval: 0.15)
+        #expect(received.all.count == frameCount)
     }
 
     @Test func tcpRemoteOpenDialsCoreAdmittedTargetAndDeliversData() throws {

@@ -4,7 +4,65 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxRuntimeConfigurationTests {
-    @Test func observabilityWritesLifecycleLogAndBoundedTelemetrySpool() throws {
+    @Test func debugLoggingIsOptInFromTheGroupedConfiguration() throws {
+        let base: [String: Any] = [
+            "runner": ["overlay_transport": "myudp"],
+            "udp_session": ["udp_peer": "127.0.0.1", "udp_peer_port": 4444],
+        ]
+        let disabled = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: base)
+        )
+        #expect(!disabled.debugLoggingEnabled)
+
+        var enabled = base
+        enabled["debug_logging"] = ["debug_enabled": true]
+        let configured = try ObstacleBridgeLinuxRuntimeConfiguration.parse(
+            data: try JSONSerialization.data(withJSONObject: enabled)
+        )
+        #expect(configured.debugLoggingEnabled)
+    }
+
+    @Test func managedTunHelperElevatesOnlyTheSeparateHelperProcess() {
+        let elevated = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
+            executable: "/opt/obstaclebridge/ObstacleBridgeLinux",
+            socketPath: "/tmp/helper.sock",
+            sessionToken: "test-token",
+            elevated: true
+        )
+        #expect(elevated.path == "/usr/bin/sudo")
+        #expect(elevated.arguments == ["-n", "--", "/opt/obstaclebridge/ObstacleBridgeLinux", "--tun-helper-server", "/tmp/helper.sock", "test-token", "--idle-sec", "30"])
+
+        let direct = ObstacleBridgeLinuxManagedTunHelper.launchCommand(
+            executable: "/opt/obstaclebridge/ObstacleBridgeLinux",
+            socketPath: "/tmp/helper.sock",
+            sessionToken: "test-token",
+            elevated: false
+        )
+        #expect(direct.path == "/opt/obstaclebridge/ObstacleBridgeLinux")
+        #expect(direct.arguments.first == "--tun-helper-server")
+        #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: true) == 60)
+        #expect(ObstacleBridgeLinuxManagedTunHelper.socketReadyTimeout(elevated: false) == 2)
+        let authorization = ObstacleBridgeLinuxManagedTunHelper.authorizationCommand()
+        #expect(authorization.path == "/usr/bin/sudo")
+        #expect(authorization.arguments == ["-v"])
+    }
+
+    @Test func managedTunHelperAuthorizationKeepsAllSudoStreamsOnOneRawTerminal() {
+        let descriptors = ObstacleBridgeLinuxManagedTunHelper.authorizationTerminalDescriptors(42)
+        #expect(descriptors.input == 42)
+        #expect(descriptors.output == 42)
+        #expect(descriptors.error == 42)
+    }
+
+    @Test func managedTunHelperMatchesPythonCapabilityBasedPrivilegeAdmission() {
+        #expect(!ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 0, fileCapabilityDescription: ""))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 1 << 12, fileCapabilityDescription: ""))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 1 << 21, fileCapabilityDescription: ""))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 0, fileCapabilityDescription: "/opt/ObstacleBridgeLinux cap_net_admin=ep"))
+        #expect(ObstacleBridgeLinuxManagedTunHelper.canLaunchWithoutSudo(effectiveCapabilityMask: 0, fileCapabilityDescription: "/opt/ObstacleBridgeLinux cap_sys_admin=ep"))
+    }
+
+    @Test func observabilityWritesForegroundLifecycleToConfiguredLogAndBoundedTelemetrySpool() throws {
         let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-observability-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: directory) }
         let log = directory.appendingPathComponent("runtime.log")
@@ -12,9 +70,20 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
             "debug_logging": ["log_file": log.path],
             "telemetry_client": ["telemetry_enabled": true, "telemetry_spool_directory": directory.appendingPathComponent("spool").path],
         ], sessionID: "test-session")
-        producer.record("runtime.starting")
-        #expect(String(decoding: try Data(contentsOf: log), as: UTF8.self).contains("runtime.starting"))
-        #expect(producer.telemetryStatus()["pending_events"] as? Int == 1)
+        let spoolDirectory = directory.appendingPathComponent("spool")
+        producer.recordForegroundLifecycle(state: "started", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "connecting", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "connecting", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "connected", transport: "myudp")
+        producer.recordForegroundLifecycle(state: "stopped", transport: "myudp")
+
+        let logContents = String(decoding: try Data(contentsOf: log), as: UTF8.self)
+        #expect(logContents.contains("runtime.lifecycle"))
+        #expect(logContents.contains("state=connected"))
+        let events = try ObstacleBridgeTelemetrySpool(directory: spoolDirectory).recover()
+        #expect(events.map(\.event) == ["runtime.lifecycle", "runtime.lifecycle", "runtime.lifecycle", "runtime.lifecycle"])
+        #expect(events.compactMap { $0.fields["state"] } == [.string("started"), .string("connecting"), .string("connected"), .string("stopped")])
+        #expect(events.allSatisfy { $0.fields["transport"] == .string("myudp") })
     }
 
     @Test func admitsExplicitHelperControlSocketWithoutAdmittingTunStartup() throws {
@@ -129,6 +198,18 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.host == "127.0.0.1")
         #expect(config.port == 4242)
         #expect(config.secureLinkPSK == Data("test-secret".utf8))
+    }
+
+    @Test func decryptsPythonCompatibleEncryptedSecureLinkPSKBeforeAdmission() throws {
+        let encrypted = try ObstacleBridgeLinuxConfigSecretCodec.encryptForTesting(
+            "native-peer-secret", nonce: Data(repeating: 7, count: 12)
+        )
+        let config = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json([
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": encrypted],
+        ]))
+        #expect(config.secureLinkPSK == Data("native-peer-secret".utf8))
     }
 
     @Test func parsesTcpListenerConfigurationWithoutOutboundPeer() throws {
@@ -287,6 +368,25 @@ struct ObstacleBridgeLinuxRuntimeConfigurationTests {
         #expect(config.port == 4242)
         #expect(config.host == "listener")
         #expect(config.secureLinkPSK == Data("listener-secret".utf8))
+    }
+
+    @Test func myudpListenerAdmitsRemoteCatalogOnlyWhenExplicitlyEnabled() throws {
+        let service: [String: Any] = [
+            "name": "peer-side-http", "listen": ["protocol": "tcp", "bind": "127.0.0.1", "port": 8088],
+            "target": ["protocol": "tcp", "host": "127.0.0.1", "port": 80],
+        ]
+        let base: [String: Any] = [
+            "runner": ["overlay_transport": "myudp", "listener_mode": true],
+            "udp_session": ["udp_own_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "listener-secret"],
+            "channel_mux": ["remote_servers": [service]],
+        ]
+        #expect(try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(base)).remoteServices.isEmpty)
+        var admitted = base
+        admitted["channel_mux"] = ["remote_servers": [service], "channel_mux_listener_publish_remote_services": true]
+        let configuration = try ObstacleBridgeLinuxRuntimeConfiguration.parse(data: json(admitted))
+        #expect(configuration.listenerRemoteServicePublicationEnabled)
+        #expect(configuration.remoteServices.count == 1)
     }
 
     @Test func parsesStructuredOwnAndRemoteServices() throws {

@@ -181,20 +181,33 @@ public final class ObstacleBridgeLinuxTunHelperAdapter: @unchecked Sendable {
     }
 
     private func readControlResponse(expectedOperation: String, from fd: Int32) throws -> [String: Any] {
-        let (kind, body) = try readFrame(from: fd)
-        guard kind == .controlResponse else { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned malformed protocol-v1 response") }
-        let control: (operation: String, payload: [String: Any])
-        do { control = try ObstacleBridgeTunHelperProtocolV1.decodeControl(body) }
-        catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned malformed protocol-v1 response") }
-        let operation = control.operation
-        let payload = control.payload
-        if operation == "ERROR" {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper rejected \(expectedOperation): \(payload["detail"] as? String ?? "unspecified error")")
+        // The helper broadcasts packet and EVENT frames to every authenticated
+        // client. A bounded control exchange can therefore observe an
+        // unsolicited frame before its own response when TUN traffic begins.
+        // Those frames belong to the long-lived packet endpoint, so discard
+        // them here and keep reading within the socket's bounded timeout.
+        while true {
+            let (kind, body) = try readFrame(from: fd)
+            switch kind {
+            case .packetFromHelper, .event:
+                continue
+            case .controlResponse:
+                let control: (operation: String, payload: [String: Any])
+                do { control = try ObstacleBridgeTunHelperProtocolV1.decodeControl(body) }
+                catch { throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned an invalid protocol-v1 control response") }
+                let operation = control.operation
+                let payload = control.payload
+                if operation == "ERROR" {
+                    throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper rejected \(expectedOperation): \(payload["detail"] as? String ?? "unspecified error")")
+                }
+                guard operation == expectedOperation else {
+                    throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned \(operation), expected \(expectedOperation)")
+                }
+                return payload.merging(["ok": true, "op": expectedOperation]) { _, response in response }
+            default:
+                throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned unexpected \(kind.rawValue) frame while awaiting \(expectedOperation)")
+            }
         }
-        guard operation == expectedOperation else {
-            throw ObstacleBridgeLinuxTunHelperAdapterError.malformedReply("Linux TUN helper returned \(operation), expected \(expectedOperation)")
-        }
-        return payload.merging(["ok": true, "op": expectedOperation]) { _, response in response }
     }
 
     fileprivate func connectSocket() throws -> Int32 {

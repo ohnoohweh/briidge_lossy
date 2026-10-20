@@ -7,6 +7,19 @@ import Testing
 @testable import ObstacleBridgeCore
 
 struct ObstacleBridgeLinuxAdminServerTests {
+    @Test func logsEndpointReturnsBoundedRedactedNativeDiagnostics() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let server = ObstacleBridgeLinuxAdminServer(
+            runtime: runtime,
+            debugLogsProvider: { limit in Array(["attempt candidate=example.test", "failed reason=timeout"].suffix(limit)) }
+        )
+        try server.start(); defer { server.stop() }
+        let payload = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/logs?limit=1") as? [String: Any])
+        #expect(payload["ok"] as? Bool == true)
+        #expect(payload["logger_available"] as? Bool == true)
+        #expect(payload["lines"] as? [String] == ["failed reason=timeout"])
+    }
+
     @Test func configurationStoreUsesCoreValidationAndPersistsOnlyAcceptedUpdates() throws {
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
             "admin_web": ["admin_web_auth_disable": false, "admin_web_first_tab": "home"],
@@ -36,6 +49,29 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(preservedAdmin["admin_web_username"] as? String == "")
     }
 
+    @Test func configurationStorePersistsPythonCompatibleEncryptedSecrets() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("ObstacleBridge.cfg").path
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "old-secret"],
+            "admin_web": ["admin_web_password": "old-admin-password"],
+        ], path: path)
+
+        let saved = try store.apply(updates: ["secure_link_psk": "new-secret", "admin_web_password": "new-admin-password"])
+        let persisted = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(!persisted.contains("old-secret"))
+        #expect(!persisted.contains("new-secret"))
+        #expect(!persisted.contains("old-admin-password"))
+        #expect(!persisted.contains("new-admin-password"))
+        #expect(persisted.contains("enc:v1:"))
+        #expect((saved.configuration["secure_link"] as? [String: Any])?["secure_link_psk"] as? String != "new-secret")
+        #expect(try ObstacleBridgeLinuxRuntimeConfiguration.load(path: path).secureLinkPSK == Data("new-secret".utf8))
+    }
+
     @Test func configHTTPUpdatePersistsValidatedFieldsAndRejectsInvalidInput() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: ["admin_web": ["admin_web_auth_disable": false]])
@@ -57,7 +93,151 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
     }
 
-    @Test func onboardingHTTPUsesCoreTokenPolicyAndFailsClosedForSecrets() async throws {
+    @Test func adminAuthenticationUsesSharedCoreChallengesAndGuardsNativeRoutes() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "admin_web": ["admin_web_auth_disable": false, "admin_web_username": "operator", "admin_web_password": "secret"],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "linux-reveal-secret"],
+        ])
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, configurationStore: store)
+        try server.start()
+        defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let denied = try await requestJSON(base + "/api/status", method: "GET", body: [:])
+        #expect(denied.status == 401)
+        #expect((denied.body as? [String: Any])?["error"] as? String == "authentication required")
+
+        let challenge = try #require((try await requestJSON(base + "/api/auth/challenge", method: "GET", body: [:])).body as? [String: Any])
+        let challengeID = try #require(challenge["challenge_id"] as? String)
+        let seed = try #require(challenge["seed"] as? String)
+        let proof = digest("\(seed):operator:secret")
+        let login = try await requestJSON(base + "/api/auth/login", method: "POST", body: ["challenge_id": challengeID, "proof": proof])
+        #expect(login.status == 200)
+        let cookie = try #require(login.headers["Set-Cookie"]?.split(separator: ";").first.map(String.init))
+
+        let admitted = try await requestJSON(base + "/api/status", method: "GET", body: [:], headers: ["Cookie": cookie])
+        #expect(admitted.status == 200)
+        let unconfirmed = try await requestJSON(base + "/api/config", method: "POST", body: ["updates": ["admin_web_name": "Updated"]], headers: ["Cookie": cookie])
+        #expect(unconfirmed.status == 428)
+
+        let updates: [String: Any] = ["admin_web_name": "Updated"]
+        let configChallenge = try #require((try await requestJSON(base + "/api/config/challenge", method: "POST", body: ["updates": updates], headers: ["Cookie": cookie])).body as? [String: Any])
+        let configID = try #require(configChallenge["challenge_id"] as? String)
+        let configSeed = try #require(configChallenge["seed"] as? String)
+        let updatesDigest = try #require(configChallenge["updates_digest"] as? String)
+        let configProof = digest("\(configSeed):operator:secret:\(updatesDigest)")
+        let saved = try await requestJSON(base + "/api/config", method: "POST", body: ["updates": updates, "challenge_id": configID, "proof": configProof], headers: ["Cookie": cookie])
+        #expect(saved.status == 200)
+        #expect((saved.body as? [String: Any])?["ok"] as? Bool == true)
+        #expect((store.snapshot()["admin_web"] as? [String: Any])?["admin_web_name"] as? String == "Updated")
+        let effectiveConfiguration = try store.runtimeSnapshot()
+        #expect((effectiveConfiguration["secure_link"] as? [String: Any])?["secure_link_psk"] as? String == "linux-reveal-secret")
+
+        let revealChallenge = try #require((try await requestJSON(base + "/api/config/secret/secure-link-psk/challenge", method: "POST", body: [:], headers: ["Cookie": cookie])).body as? [String: Any])
+        let revealID = try #require(revealChallenge["challenge_id"] as? String)
+        let revealSeed = try #require(revealChallenge["seed"] as? String)
+        let revealProof = digest("\(revealSeed):operator:secret:secure_link_psk")
+        let revealed = try #require((try await requestJSON(base + "/api/config/secret/secure-link-psk", method: "POST", body: ["challenge_id": revealID, "proof": revealProof], headers: ["Cookie": cookie])).body as? [String: Any])
+        let envelope = try #require(revealed["encrypted"] as? [String: Any])
+        #expect(String(describing: envelope).contains("linux-reveal-secret") == false)
+        let saltText = try #require(envelope["salt"] as? String)
+        let nonceText = try #require(envelope["nonce"] as? String)
+        let ciphertextText = try #require(envelope["ciphertext"] as? String)
+        let aadText = try #require(envelope["aad"] as? String)
+        let salt = try #require(Data(base64Encoded: saltText))
+        let nonce = try #require(Data(base64Encoded: nonceText))
+        let ciphertext = try #require(Data(base64Encoded: ciphertextText))
+        let aad = try #require(Data(base64Encoded: aadText))
+        let key = try ObstacleBridgeCrypto.pbkdf2SHA256(password: Data("secret".utf8), salt: salt, iterations: 200_000, outputByteCount: 32)
+        let plaintext = try ObstacleBridgeCrypto.aesGCMOpen(ciphertextAndTag: ciphertext, key: key, nonce: nonce, authenticatedData: aad)
+        #expect(String(decoding: plaintext, as: UTF8.self) == "linux-reveal-secret")
+    }
+
+    @Test func adminWebConfigurationAndLifecycleControlsMatchThePythonClientContract() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let store = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "admin_web": ["admin_web_auth_disable": true, "admin_web_name": "Linux native"],
+        ])
+        let reconnected = DispatchSemaphore(value: 0)
+        let rekeyed = DispatchSemaphore(value: 0)
+        let restarted = DispatchSemaphore(value: 0)
+        let shutdownRequested = DispatchSemaphore(value: 0)
+        let tunControls = DispatchSemaphore(value: 0)
+        let tunRepairs = DispatchSemaphore(value: 0)
+        let server = ObstacleBridgeLinuxAdminServer(
+            runtime: runtime,
+            configurationStore: store,
+            reconnectHandler: { reconnected.signal() },
+            secureLinkRekeyHandler: { peerID in
+                guard peerID == "configured-peer" else { return ["ok": false, "reason": "unknown_peer_id"] }
+                rekeyed.signal()
+                return ["ok": true, "reason": "rekey_started"]
+            },
+            restartHandler: { restarted.signal() },
+            shutdownHandler: { shutdownRequested.signal() },
+            tunRoutingProvider: { ["ok": true, "configured": true, "enabled": false, "network_policy_applied": false] },
+            tunRoutingControlHandler: { enabled in
+                tunControls.signal()
+                return ["ok": true, "configured": true, "enabled": enabled, "network_policy_applied": enabled]
+            },
+            tunHelperRepairHandler: {
+                tunRepairs.signal()
+                return ["ok": true, "repaired": ["packet_tunnel", "helper_connection"], "failed": []]
+            }
+        )
+        try server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let configuration = try #require(try await getJSON(base + "/api/config") as? [String: Any])
+        #expect(configuration["ok"] as? Bool == true)
+        let values = try #require(configuration["config"] as? [String: Any])
+        #expect(values["admin_web_name"] as? String == "Linux native")
+        let schema = try #require(configuration["schema"] as? [String: Any])
+        #expect(schema["admin_web"] as? [[String: Any]] != nil)
+
+        let challenge = try #require(try await requestJSON(base + "/api/config/challenge", method: "POST", body: ["updates": ["admin_web_name": "Updated"]]).body as? [String: Any])
+        #expect(challenge["ok"] as? Bool == true)
+        #expect(challenge["auth_required"] as? Bool == false)
+        let saved = try #require(try await requestJSON(base + "/api/config", method: "POST", body: ["updates": ["admin_web_name": "Updated"]]).body as? [String: Any])
+        #expect((saved["config"] as? [String: Any])?["admin_web_name"] as? String == "Updated")
+
+        let reconnect = try await requestJSON(base + "/api/reconnect", method: "POST", body: [:])
+        #expect(reconnect.status == 200)
+        #expect((reconnect.body as? [String: Any])?["ok"] as? Bool == true)
+        #expect(reconnected.wait(timeout: .now() + 1) == .success)
+        let rekey = try await requestJSON(base + "/api/secure-link/rekey", method: "POST", body: ["peer_id": "configured-peer"])
+        #expect(rekey.status == 200)
+        #expect((rekey.body as? [String: Any])?["reason"] as? String == "rekey_started")
+        #expect(rekeyed.wait(timeout: .now() + 1) == .success)
+        let reload = try await requestJSON(base + "/api/secure-link/reload", method: "POST", body: ["scope": "all"])
+        #expect(reload.status == 409)
+        #expect((reload.body as? [String: Any])?["scope"] as? String == "all")
+        #expect((((reload.body as? [String: Any])?["results"] as? [[String: Any]])?.first?["reason"] as? String) == "secure_link_cert_mode_required")
+        let invalidReload = try await requestJSON(base + "/api/secure-link/reload", method: "POST", body: ["scope": "bad"])
+        #expect(invalidReload.status == 400)
+        let tunStatus = try #require(try await getJSON(base + "/api/tun-routing/status") as? [String: Any])
+        #expect(tunStatus["configured"] as? Bool == true)
+        let tunEnabled = try await requestJSON(base + "/api/tun-routing/control", method: "POST", body: ["enabled": true])
+        #expect(tunEnabled.status == 200)
+        #expect((tunEnabled.body as? [String: Any])?["enabled"] as? Bool == true)
+        #expect(tunControls.wait(timeout: .now() + 1) == .success)
+        let missingTunEnabled = try await requestJSON(base + "/api/tun-routing/control", method: "POST", body: [:])
+        #expect(missingTunEnabled.status == 400)
+        let repaired = try await requestJSON(base + "/api/tun-helper/repair", method: "POST", body: [:])
+        #expect(repaired.status == 200)
+        #expect(tunRepairs.wait(timeout: .now() + 1) == .success)
+        let restart = try await requestJSON(base + "/api/restart", method: "POST", body: [:])
+        #expect(restart.status == 200)
+        #expect((restart.body as? [String: Any])?["restarting"] as? Bool == true)
+        #expect(restarted.wait(timeout: .now() + 1) == .success)
+        let shutdown = try await requestJSON(base + "/api/shutdown", method: "POST", body: [:])
+        #expect(shutdown.status == 200)
+        #expect((shutdown.body as? [String: Any])?["shutdown_requested"] as? Bool == true)
+        #expect(shutdownRequested.wait(timeout: .now() + 1) == .success)
+    }
+
+    @Test func onboardingHTTPUsesCoreTokenPolicyAndCarriesSecretsForRecipientOwnedPersistence() async throws {
         let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
         let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
             "runner": ["overlay_transport": "tcp"],
@@ -73,11 +253,103 @@ struct ObstacleBridgeLinuxAdminServerTests {
         ).body as? [String: Any])
         #expect(preview["ok"] as? Bool == true)
 
-        let secretServer = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: ["secure_link_psk": "no-linux-key-owner"])
+        let secretServer = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "portable-peer-secret"],
+        ])
         try secretServer.start(); defer { secretServer.stop() }
-        let rejected = try await requestJSON("http://127.0.0.1:\(secretServer.port)/api/onboarding/invite", method: "POST", body: [:])
-        #expect(rejected.status == 400)
-        #expect((rejected.body as? [String: Any])?["ok"] as? Bool == false)
+        let secretInvite = try await requestJSON("http://127.0.0.1:\(secretServer.port)/api/onboarding/invite", method: "POST", body: [:])
+        #expect(secretInvite.status == 200)
+        let secretToken = try #require((secretInvite.body as? [String: Any])?["invite_token"] as? String)
+        let secretPreview = try #require(try await requestJSON(
+            "http://127.0.0.1:\(secretServer.port)/api/onboarding/preview", method: "POST", body: ["invite_token": secretToken]
+        ).body as? [String: Any])
+        let suggested = try #require(secretPreview["suggested_updates"] as? [String: Any])
+        #expect(suggested["secure_link_psk"] as? String == "portable-peer-secret")
+    }
+
+    @Test func secretBearingInviteApplyPersistsForReceivingLinuxMachine() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let path = directory.appendingPathComponent("ObstacleBridge.cfg").path
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let source = ObstacleBridgeLinuxAdminServer(runtime: runtime, adminConfiguration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "198.51.100.10", "tcp_peer_port": 4242],
+            "secure_link": ["secure_link_mode": "psk", "secure_link_psk": "invite-secret"],
+        ])
+        let recipientStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: [
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "127.0.0.1", "tcp_peer_port": 1],
+        ], path: path)
+        let recipient = ObstacleBridgeLinuxAdminServer(runtime: runtime, configurationStore: recipientStore)
+        try source.start(); defer { source.stop() }
+        try recipient.start(); defer { recipient.stop() }
+
+        let invite = try #require(try await requestJSON(
+            "http://127.0.0.1:\(source.port)/api/onboarding/invite", method: "POST", body: [:]
+        ).body as? [String: Any])
+        let token = try #require(invite["invite_token"] as? String)
+        let preview = try #require(try await requestJSON(
+            "http://127.0.0.1:\(recipient.port)/api/onboarding/preview", method: "POST", body: ["invite_token": token]
+        ).body as? [String: Any])
+        let updates = try #require(preview["suggested_updates"] as? [String: Any])
+        let applied = try await requestJSON(
+            "http://127.0.0.1:\(recipient.port)/api/config", method: "POST", body: ["updates": updates]
+        )
+        #expect(applied.status == 200)
+        let persisted = try String(contentsOfFile: path, encoding: .utf8)
+        #expect(!persisted.contains("invite-secret"))
+        #expect(persisted.contains("enc:v1:"))
+        #expect(try ObstacleBridgeLinuxRuntimeConfiguration.load(path: path).secureLinkPSK == Data("invite-secret".utf8))
+    }
+
+    @Test func metaAndOnboardingRoutesMatchTheShippedAdminWebContract() async throws {
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let configuration: [String: Any] = [
+            "admin_web": ["admin_web_name": "Linux Admin"],
+            "runner": ["overlay_transport": "tcp"],
+            "tcp_session": ["tcp_peer": "198.51.100.10", "tcp_peer_port": 4433],
+        ]
+        let server = ObstacleBridgeLinuxAdminServer(
+            runtime: runtime, adminConfiguration: configuration,
+            buildInfo: ["available": true, "commit": "0123456789ab", "build_timestamp_utc": "2026-10-18T00:00:00Z", "tainted": false, "tracked_changes": 0, "untracked_changes": 0],
+            connectionsProvider: {
+                ["tcp": [
+                    ["peer_id": "peer-b", "state": "connected", "local_port": 31_28, "remote_destination": "198.51.100.5:8080"],
+                    ["peer_id": "peer-b", "state": "connected", "local_port": 31_28, "remote_destination": "198.51.100.5:8080"],
+                    ["peer_id": "peer-b", "state": "listening", "local_port": 9_999, "remote_destination": "198.51.100.6:80"],
+                ], "udp": [
+                    ["peer_id": "peer-a", "state": "open", "local_port": "5353", "remote_destination": ["2001:db8::5", 5353]],
+                ]]
+            }
+        )
+        try server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+
+        let meta = try #require(try await getJSON(base + "/api/meta") as? [String: Any])
+        #expect(meta["admin_web_name"] as? String == "Linux Admin")
+        #expect((meta["build"] as? [String: Any])?["available"] as? Bool == true)
+        #expect((meta["build"] as? [String: Any])?["commit"] as? String == "0123456789ab")
+        let profiles = try #require(try await getJSON(base + "/api/onboarding/connection-profiles") as? [String: Any])
+        let profile = try #require((profiles["profiles"] as? [[String: Any]])?.first)
+        #expect(profile["transport"] as? String == "tcp")
+        #expect(profile["peer_host"] as? String == "198.51.100.10")
+        let blueprints = try #require(try await getJSON(base + "/api/onboarding/blueprints") as? [String: Any])
+        let blueprintRows = try #require(blueprints["blueprints"] as? [[String: Any]])
+        #expect(blueprintRows.count == 2)
+        let peerA = try #require(blueprintRows.first { $0["peer_id"] as? String == "peer-a" })
+        let peerASpec = try #require((peerA["own_servers"] as? [[String: Any]])?.first)
+        #expect((peerASpec["target"] as? [String: Any])?["host"] as? String == "2001:db8::5")
+        let peerB = try #require(blueprintRows.first { $0["peer_id"] as? String == "peer-b" })
+        #expect((peerB["own_servers"] as? [[String: Any]])?.count == 1)
+
+        let generated = try #require(try await requestJSON(base + "/api/onboarding/invite/generate", method: "POST", body: ["connection_id": profile["id"] as? String ?? ""]).body as? [String: Any])
+        let token = try #require(generated["invite_token"] as? String)
+        let preview = try #require(try await requestJSON(base + "/api/onboarding/invite/preview", method: "POST", body: ["invite_token": token]).body as? [String: Any])
+        #expect(preview["ok"] as? Bool == true)
     }
 
     @Test func statusAndPeersAreRedactedAndDescribeLayeredState() async throws {
@@ -117,34 +389,49 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(capabilities["guidance"] as? [String] != nil)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: status), as: UTF8.self).contains("never-expose-this"))
 
-        let peers = try await getJSON("http://127.0.0.1:\(server.port)/api/peers")
-        let rows = peers as? [[String: Any]]
+        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let rows = peers["peers"] as? [[String: Any]]
         #expect(rows?.first?["configured_candidates"] as? [String] == ["first.example", "second.example"])
         #expect(rows?.first?["failure_reason"] is NSNull)
+        let connections = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/connections") as? [String: Any])
+        #expect((connections["tcp"] as? [[String: Any]])?.isEmpty == true)
+        #expect((connections["udp"] as? [[String: Any]])?.isEmpty == true)
         let live = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/live?topic=status") as? [String: Any])
         #expect(live["overlay_transport"] as? String == "tcp")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic(" PeErS ") == "peers")
         #expect(ObstacleBridgeAdminLiveTopicPolicyPort.normalizedTopic("unknown") == nil)
-        for _ in 0..<2 {
-            let socket = URLSession.shared.webSocketTask(with: try #require(URL(string: "ws://127.0.0.1:\(server.port)/api/live?topic=status")))
-            socket.resume()
-            for _ in 0..<2 {
-                let message = try await socket.receive()
-                let data: Data
-                switch message {
-                case .data(let value): data = value
-                case .string(let value): data = Data(value.utf8)
-                @unknown default: throw URLError(.badServerResponse)
-                }
-                #expect((try JSONSerialization.jsonObject(with: data) as? [String: Any])?["overlay_transport"] as? String == "tcp")
+        // The shared browser opens `/api/live` without a query string, then
+        // controls topics with masked WebSocket messages.  Linux must use the
+        // same subscription protocol and `{ type, data }` envelopes as Apple
+        // and Python rather than treating this as a one-topic HTTP endpoint.
+        let socket = URLSession.shared.webSocketTask(with: try #require(URL(string: "ws://127.0.0.1:\(server.port)/api/live")))
+        socket.resume()
+        try await socket.send(.string("{\"subscribe\":[\"status\",\"peers\"],\"active_tabs\":[\"status\"],\"request\":[\"status\",\"peers\"]}"))
+        var liveTypes = Set<String>()
+        for _ in 0..<4 {
+            let message = try await socket.receive()
+            let data: Data
+            switch message {
+            case .data(let value): data = value
+            case .string(let value): data = Data(value.utf8)
+            @unknown default: throw URLError(.badServerResponse)
             }
-            socket.cancel()
+            let document = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+            if let type = document["type"] as? String { liveTypes.insert(type) }
+            if document["type"] as? String == "status" {
+                #expect((document["data"] as? [String: Any])?["overlay_transport"] as? String == "tcp")
+            }
+            if liveTypes.isSuperset(of: ["hello", "status", "peers"]) { break }
         }
+        #expect(liveTypes.contains("hello"))
+        #expect(liveTypes.contains("status"))
+        #expect(liveTypes.contains("peers"))
+        socket.cancel()
         let config = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/config") as? [String: Any])
         let exported = try #require(config["config"] as? [String: Any])
-        let secure = try #require(exported["secure_link"] as? [String: Any])
-        #expect(secure["secure_link_psk"] as? String == "***hidden***")
-        #expect(secure["secure_link_psk_present"] as? Bool == true)
+        #expect(exported["secure_link_psk"] as? String == "***hidden***")
+        #expect(exported["secure_link_psk_present"] as? Bool == true)
+        #expect(config["schema"] as? [String: Any] != nil)
         #expect(!String(decoding: try JSONSerialization.data(withJSONObject: config), as: UTF8.self).contains("never-expose-this"))
         let advisor = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/security-advisor") as? [String: Any])
         #expect(advisor["highest_severity"] as? String == "recommended")
@@ -209,7 +496,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
 
         let session = try runtime.connect(sessionID: 77, clientNonce: Data(repeating: 7, count: 32))
         #expect(try session.send(Data("projection".utf8)) == Data("python:projection".utf8))
-        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let peers = try #require(peersDocument["peers"] as? [[String: Any]])
         let row = try #require(peers.first)
         let secureLink = try #require(row["secure_link"] as? [String: Any])
         let compression = try #require(row["compression_layer"] as? [String: Any])
@@ -249,7 +537,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         let frame = ObstacleBridgeChannelMuxFrame(channelID: 1, protocolType: .udp, counter: 1, messageType: .data, body: Data(repeating: 0x41, count: 256))
         #expect(try mux.exchange(frame) == frame)
 
-        let peers = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let peers = try #require(peersDocument["peers"] as? [[String: Any]])
         let row = try #require(peers.first)
         let compression = try #require(row["compression_layer"] as? [String: Any])
         #expect(compression["enabled"] as? Bool == true)
@@ -284,7 +573,8 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(connected.wait(timeout: .now() + 3) == .success)
         let deadline = Date().addingTimeInterval(3)
         while listener.peers().count != 2, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        let rows = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [[String: Any]])
+        let peersDocument = try #require(try await getJSON("http://127.0.0.1:\(server.port)/api/peers") as? [String: Any])
+        let rows = try #require(peersDocument["peers"] as? [[String: Any]])
         #expect(rows.count == 2)
         #expect(Set(rows.compactMap { $0["peer_id"] as? String }).count == 2)
         #expect(rows.allSatisfy { ($0["secure_link"] as? [String: Any])?["authenticated"] as? Bool == true })
@@ -302,18 +592,47 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(String(decoding: data, as: UTF8.self).contains("Native runtime Admin dashboard"))
     }
 
+    @Test func configuredAdminWebAssetsAreServedAlongsideTheNativeAPI() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("obstaclebridge-admin-web-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try Data("<html><body>configured admin page</body></html>".utf8).write(to: directory.appendingPathComponent("index.html"))
+        try Data("body{color:green}".utf8).write(to: directory.appendingPathComponent("style.css"))
+        let runtime = ObstacleBridgeLinuxConfiguredRuntime(configuration: .init(transport: .tcp, host: "127.0.0.1", port: 1))
+        let server = ObstacleBridgeLinuxAdminServer(runtime: runtime, staticDirectory: directory)
+        try server.start(); defer { server.stop() }
+        let base = "http://127.0.0.1:\(server.port)"
+        let (page, pageResponse) = try await URLSession.shared.data(from: try #require(URL(string: base + "/")))
+        #expect((pageResponse as? HTTPURLResponse)?.statusCode == 200)
+        #expect(String(decoding: page, as: UTF8.self).contains("configured admin page"))
+        let (style, styleResponse) = try await URLSession.shared.data(from: try #require(URL(string: base + "/style.css")))
+        #expect((styleResponse as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type")?.hasPrefix("text/css") == true)
+        #expect(String(decoding: style, as: UTF8.self).contains("green"))
+        _ = try #require(try await getJSON(base + "/api/status") as? [String: Any])
+    }
+
     private func getJSON(_ text: String) async throws -> Any {
         let (data, response) = try await URLSession.shared.data(from: try #require(URL(string: text)))
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         return try JSONSerialization.jsonObject(with: data)
     }
 
-    private func requestJSON(_ text: String, method: String, body: [String: Any]) async throws -> (status: Int, body: Any) {
+    private func requestJSON(_ text: String, method: String, body: [String: Any], headers: [String: String] = [:]) async throws -> (status: Int, body: Any, headers: [String: String]) {
         var request = URLRequest(url: try #require(URL(string: text)))
         request.httpMethod = method
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if method != "GET" {
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        for (name, value) in headers { request.setValue(value, forHTTPHeaderField: name) }
         let (data, response) = try await URLSession.shared.data(for: request)
-        return (try #require((response as? HTTPURLResponse)?.statusCode), try JSONSerialization.jsonObject(with: data))
+        let httpResponse = try #require(response as? HTTPURLResponse)
+        return (httpResponse.statusCode, try JSONSerialization.jsonObject(with: data), httpResponse.allHeaderFields.reduce(into: [:]) { headers, item in
+            if let key = item.key as? String, let value = item.value as? String { headers[key] = value }
+        })
+    }
+
+    private func digest(_ text: String) -> String {
+        ObstacleBridgeCrypto.sha256(Data(text.utf8)).map { String(format: "%02x", $0) }.joined()
     }
 }

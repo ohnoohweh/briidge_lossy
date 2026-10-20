@@ -452,6 +452,23 @@ def test_channel_mux_tcp_runtime_source_exists() -> None:
     assert "handleLocalClientData(" in runtime
     assert "handleLocalClientEOF(" in runtime
     assert "handleInboundClientClose(" in runtime
+    assert "struct ObstacleBridgeChannelMuxChannelIDAllocation" in runtime
+    assert "case peerClient" in runtime
+    assert "case listener" in runtime
+    assert "public static func peerClient" in runtime
+    assert "public static func listener" in runtime
+
+
+def test_apple_tcp_overlay_owners_use_shared_peer_client_channel_allocation() -> None:
+    for name in (
+        "ObstacleBridgeUdpOverlayTransportOwner.swift",
+        "ObstacleBridgeTcpOverlayTransportOwner.swift",
+        "ObstacleBridgeWebSocketOverlayTransportOwner.swift",
+        "ObstacleBridgeQuicOverlayTransportOwner.swift",
+    ):
+        source = (SHARED_NATIVE_DIR / name).read_text(encoding="utf-8")
+        assert "ObstacleBridgeChannelMuxTcpRuntime(" in source
+        assert "allocation: .peerClient()" in source
 
 
 def test_compress_layer_runtime_source_exists() -> None:
@@ -565,12 +582,15 @@ def test_shared_peer_address_resolver_is_darwin_specific() -> None:
 def test_webadmin_server_source_exists() -> None:
     runtime = (SHARED_NATIVE_DIR / "ObstacleBridgeWebAdminServer.swift").read_text(encoding="utf-8")
     live_policy = (CORE_SWIFT_DIR / "ObstacleBridgeWebAdminLiveTopicPolicy.swift").read_text(encoding="utf-8")
+    service_codec = (CORE_SWIFT_DIR / "ObstacleBridgeServiceCodec.swift").read_text(encoding="utf-8")
 
     assert "final class ObstacleBridgeWebAdminServer" in runtime
     assert "normalizedListenerHost(" in runtime
     assert 'host == "0.0.0.0"' in runtime
     assert 'host == "localhost"' in runtime
     assert '"/api/status"' in runtime
+    assert "ObstacleBridgeCanonicalJSON.data(fromJSONObject: value)" in runtime
+    assert "public enum ObstacleBridgeCanonicalJSON" in service_codec
     assert '"/api/live"' in runtime
     assert "101 Switching Protocols" in runtime
     assert "Sec-WebSocket-Accept" in runtime

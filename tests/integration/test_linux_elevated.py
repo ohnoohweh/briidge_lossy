@@ -776,24 +776,32 @@ def _start_tun_bridge_pair(
         env_extra=server_env,
         admin_port=server_admin,
     )
-    client_proc = overlay_e2e.start_proc(
-        f"{tuned_case.name}_{client_name}",
-        client_cmd,
-        tmp_path,
-        env_extra=client_env,
-        admin_port=client_admin,
-    )
+    uses_swift_tun_helper = "linux-swift" in [str(value).strip().lower() for value in server_cmd + client_cmd]
+    client_proc = None
     try:
+        # A Swift helper may require a one-time local release build.  Starting
+        # both peers concurrently makes them serialize on SwiftPM's lock and
+        # can exceed the normal 10-second admin startup deadline.
+        if uses_swift_tun_helper:
+            overlay_e2e.wait_admin_up(server_proc.admin_port or 0, timeout=90.0)
+        client_proc = overlay_e2e.start_proc(
+            f"{tuned_case.name}_{client_name}",
+            client_cmd,
+            tmp_path,
+            env_extra=client_env,
+            admin_port=client_admin,
+        )
         time.sleep(0.5)
         overlay_e2e.assert_running(server_proc)
         overlay_e2e.assert_running(client_proc)
-        overlay_e2e.wait_admin_up(server_proc.admin_port or 0, timeout=10.0)
+        overlay_e2e.wait_admin_up(server_proc.admin_port or 0, timeout=90.0 if uses_swift_tun_helper else 10.0)
         overlay_e2e.wait_admin_up(client_proc.admin_port or 0, timeout=10.0)
         client_proc = overlay_e2e.wait_status_connected_proc(client_proc, tmp_path, timeout=20.0, label="client")
         overlay_e2e.wait_status_connected(server_proc.admin_port or 0, timeout=20.0, label="server")
         return TunBridgePair(tuned_case, server_proc, client_proc)
     except Exception:
-        overlay_e2e.stop_proc(client_proc)
+        if client_proc is not None:
+            overlay_e2e.stop_proc(client_proc)
         overlay_e2e.stop_proc(server_proc)
         raise
 
@@ -1062,6 +1070,79 @@ def test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry(tm
             dest_ip="198.18.35.2",
             payload=forward_payload,
             port=30501,
+            bind_ifname=client_ifname,
+            peer_ifname=server_ifname,
+        )
+        assert after_total > 0
+    finally:
+        pair.stop()
+
+
+def test_overlay_e2e_linux_elevated_tun_helper_swift_over_myudp_packet_carry(tmp_path: Path) -> None:
+    """Carry a real packet through Python myUDP and the compiled Swift TUN helper."""
+    _require_linux_elevated_runtime()
+    case_tag = "lt315"
+    client_ifname = _tun_name(case_tag, "c")
+    server_ifname = _tun_name(case_tag, "s")
+    helper_args = [
+        "--tun-execution-mode", "helper",
+        "--tun-helper-backend", "linux-swift",
+        "--log-tun-helper", "DEBUG",
+    ]
+    client_routing_args = [
+        "--tunnel-address", "198.18.45.1",
+        "--tunnel-prefix", "24",
+        "--tunnel-address6", "fd20:315::1",
+        "--tunnel-prefix6", "64",
+        "--included-routes", "198.18.46.0/24",
+        "--included-routes6", "fd20:316::/64",
+    ]
+    server_routing_args = [
+        "--tunnel-address", "198.18.45.2",
+        "--tunnel-prefix", "24",
+        "--tunnel-address6", "fd20:315::2",
+        "--tunnel-prefix6", "64",
+        "--included-routes", "198.18.47.0/24",
+        "--included-routes6", "fd20:317::/64",
+    ]
+    pair = _start_tun_bridge_pair(
+        base_case=overlay_e2e.CASES["case01_udp_over_own_udp_ipv4"],
+        tmp_path=tmp_path,
+        case_index=315,
+        client_ifname=client_ifname,
+        server_ifname=server_ifname,
+        mtu=1400,
+        server_extra_args=helper_args + server_routing_args,
+        client_extra_args=helper_args + client_routing_args,
+    )
+    try:
+        _wait_interface_with_bridge_logs(client_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
+        _wait_interface_with_bridge_logs(server_ifname, server_proc=pair.server_proc, client_proc=pair.client_proc)
+        _wait_tun_helper_runtime(
+            pair.client_proc.admin_port or 0,
+            expected_backend="linux-swift-native",
+            expected_ifname=client_ifname,
+        )
+        _wait_tun_helper_runtime(
+            pair.server_proc.admin_port or 0,
+            expected_backend="linux-swift-native",
+            expected_ifname=server_ifname,
+        )
+        _wait_interface_cidr(client_ifname, "198.18.45.1/24", family="-4")
+        _wait_interface_cidr(server_ifname, "198.18.45.2/24", family="-4")
+        _wait_interface_cidr(client_ifname, "fd20:315::1/64", family="-6")
+        _wait_interface_cidr(server_ifname, "fd20:315::2/64", family="-6")
+        _wait_interface_route("198.18.46.0/24", family="-4", dev=client_ifname)
+        _wait_interface_route("198.18.47.0/24", family="-4", dev=server_ifname)
+        _wait_interface_route("fd20:316::/64", family="-6", dev=client_ifname)
+        _wait_interface_route("fd20:317::/64", family="-6", dev=server_ifname)
+
+        forward_payload = b"tun-helper-swift-forward-315"
+        after_total = _assert_tun_one_way(
+            source_ip="198.18.45.1",
+            dest_ip="198.18.45.2",
+            payload=forward_payload,
+            port=31501,
             bind_ifname=client_ifname,
             peer_ifname=server_ifname,
         )
