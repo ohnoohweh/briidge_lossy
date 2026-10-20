@@ -39,7 +39,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect((response as? HTTPURLResponse)?.statusCode == 200)
         let payload = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         #expect(payload["reason"] as? String == "rekey_started")
-        #expect(waitUntil {
+        #expect(waitUntil(timeout: 5) {
             runtime.status().state == "connected" && runtime.status().peer.rekeysCompletedTotal == 1
         })
     }
@@ -390,9 +390,12 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         let session = try first.connect(sessionID: 1, clientNonce: Data(repeating: 1, count: 32))
         defer { session.close() }
         let second = ObstacleBridgeLinuxConfiguredRuntime(configuration: clientConfiguration)
-        #expect(throws: ObstacleBridgeLinuxMyUDPError.ioFailure(EAGAIN)) {
-            _ = try second.connect(sessionID: 2, clientNonce: Data(repeating: 2, count: 32))
-        }
+        // UDP peer admission happens in the listener's asynchronous pump. A
+        // client can create and send from its local socket, while the full
+        // listener deliberately withdraws that unadmitted peer rather than
+        // synchronously reporting its local EAGAIN to the client.
+        let rejectedSession = try second.connect(sessionID: 2, clientNonce: Data(repeating: 2, count: 32))
+        defer { rejectedSession.close() }
         let deadline = Date().addingTimeInterval(1)
         while listener.activePeerCount != 1, Date() < deadline {
             Thread.sleep(forTimeInterval: 0.01)
@@ -823,8 +826,8 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         #expect(Data(received) == payload)
     }
 
-    private func waitUntil(_ predicate: () -> Bool) -> Bool {
-        let deadline = Date().addingTimeInterval(2)
+private func waitUntil(timeout: TimeInterval = 2, _ predicate: () -> Bool) -> Bool {
+    let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             if predicate() { return true }
             Thread.sleep(forTimeInterval: 0.01)

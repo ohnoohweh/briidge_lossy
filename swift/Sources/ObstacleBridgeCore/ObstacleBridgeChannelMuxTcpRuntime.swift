@@ -255,7 +255,7 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         guard overlayConnected, serverActiveChannels.contains(chanID) else {
             return LocalServerDataSnapshot(sent: false, frames: [], nextCounter: counters[chanID] ?? 0, activeChannels: serverActiveChannels.sorted())
         }
-        let frames = try wireFrames(from: serverSession.localData(channelID: UInt16(chanID), payload: payload))
+        let frames = try dataFrames(session: serverSession, channelID: UInt16(chanID), payload: payload)
         guard !frames.isEmpty else {
             return LocalServerDataSnapshot(sent: false, frames: [], nextCounter: counters[chanID] ?? 0, activeChannels: serverActiveChannels.sorted())
         }
@@ -458,11 +458,39 @@ public final class ObstacleBridgeChannelMuxTcpRuntime {
         guard overlayConnected, clientTransports[chanID] != nil else {
             return nil
         }
-        let frames = try wireFrames(from: clientSession.localData(channelID: UInt16(chanID), payload: payload))
+        let frames = try dataFrames(session: clientSession, channelID: UInt16(chanID), payload: payload)
         return LocalClientDataSnapshot(
             frames: frames.map(\.wire),
             nextCounter: Int(clientSession.nextOutboundCounter(channelID: UInt16(chanID)) ?? 0)
         )
+    }
+
+    /// A transport application record includes the eight-byte ChannelMux
+    /// envelope.  TCP reads may be the full 65,535-byte myUDP record limit,
+    /// so forwarding one read as one DATA frame would overflow the lower
+    /// transport by those eight bytes.  TCP is a byte stream: split only at
+    /// this wire boundary and preserve the original byte sequence across the
+    /// resulting ordered DATA frames.
+    private func dataFrames(
+        session: ObstacleBridgeChannelMuxSession,
+        channelID: UInt16,
+        payload: Data
+    ) throws -> [SessionWireFrame] {
+        let maximumBodyBytes = max(1, sessionMaxAppPayload - ObstacleBridgeChannelMuxCodec.muxHeaderSize)
+        if payload.isEmpty {
+            return try wireFrames(from: session.localData(channelID: channelID, payload: payload))
+        }
+        var frames: [SessionWireFrame] = []
+        var offset = 0
+        while offset < payload.count {
+            let end = min(payload.count, offset + maximumBodyBytes)
+            frames.append(contentsOf: try wireFrames(from: session.localData(
+                channelID: channelID,
+                payload: payload.subdata(in: offset..<end)
+            )))
+            offset = end
+        }
+        return frames
     }
 
     public func handleLocalClientEOF(chanID: Int, overlayConnected: Bool) throws -> LocalClientCloseSnapshot {

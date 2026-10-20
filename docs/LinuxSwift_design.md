@@ -57,6 +57,14 @@ qualification. The selected cases cover IPv4 and IPv6 overlay endpoints plus
 UDP and TCP application services without changing either product for the test
 harness.
 
+The same CI matrix additionally runs the focused `tc11` myUDP send-window
+qualification for the Python-listener/Linux-native-client pair. It opens five
+concurrent 65,535-byte TCP application records, exceeding the default
+200-frame transport window. The native TCP owner segments a stream read at the
+eight-byte ChannelMux envelope boundary, so every lower myUDP application
+record remains within its 65,535-byte wire limit while the peer receives the
+unchanged TCP byte stream.
+
 The localhost reconnect variants and the two-client/listener catalogs do not
 run in this matrix. They require native restart, listener, or multi-peer
 orchestration that the client-only runtime mode does not represent. They remain

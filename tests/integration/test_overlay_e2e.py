@@ -2649,7 +2649,14 @@ def _linux_native_runtime_config(
         'tun_execution': {'tun_execution_mode': 'inline'},
     }
     if os.environ.get('OBSTACLEBRIDGE_NATIVE_DEBUG_LOGGING') == '1':
-        runtime_config['debug_logging'] = {'debug_enabled': True}
+        # Keep native debug diagnostics out of normal CI workloads.  When an
+        # operator explicitly enables them, retain the redacted records beside
+        # the other child-process logs so a failed mixed-runtime case is
+        # diagnosable from its uploaded artifact.
+        runtime_config['debug_logging'] = {
+            'debug_enabled': True,
+            'log_file': str(log_dir / f'{case_name}_{side}_linux_native_debug.log'),
+        }
     if 'secure_link_receive_idle_timeout_ms' in flat:
         runtime_config['secure_link_receive_idle_timeout_ms'] = flat['secure_link_receive_idle_timeout_ms']
     for key in ('compress_layer', 'compress_layer_algo', 'compress_layer_level', 'compress_layer_min_bytes', 'compress_layer_types'):
