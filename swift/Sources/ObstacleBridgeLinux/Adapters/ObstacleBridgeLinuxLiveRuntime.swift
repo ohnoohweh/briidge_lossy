@@ -757,7 +757,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         let specs = configuredRuntime.configuration.ownServices
         for (index, spec) in specs.enumerated() {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .peerClient(ownerIndex: index, ownerCount: specs.count)) { [weak self] owner, frames in
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .peerClient(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }
@@ -875,7 +875,7 @@ public final class ObstacleBridgeLinuxLiveRuntime: @unchecked Sendable {
         stopRemoteServiceOwners()
         let sequence = UInt32(truncatingIfNeeded: configuredRuntime.connectionEpoch)
         for (index, spec) in specs.enumerated() {
-            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .listener(ownerIndex: index, ownerCount: specs.count)) { [weak self] owner, frames in
+            let owner = ObstacleBridgeLinuxServiceSocketOwner(spec: spec, maximumApplicationPayload: configuredRuntime.configuration.channelMuxMaximumApplicationPayload, instanceID: catalogInstanceID, connectionSequence: sequence, channelIDAllocation: .listener(ownerIndex: index, ownerCount: specs.count), debugEnabled: configuredRuntime.configuration.debugLoggingEnabled, debugSink: { [weak self] event, fields in self?.emitDebugDiagnostic(event, fields) }) { [weak self] owner, frames in
                 guard let runtime = self else { return }
                 runtime.queue.async { [weak runtime] in runtime?.sendServiceFrames(frames, from: owner) }
             }

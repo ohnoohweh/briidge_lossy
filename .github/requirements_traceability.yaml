@@ -910,6 +910,7 @@ REQ-LIFE-010:
   integration_tests:
     - tests/integration/test_ios_e2e.py::test_ios_extension_shim_swift_udp_myudp_secure_link_remote_tcp_server_reaches_extension_admin_web
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_over_myudp_packet_carry
+    - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_swift_over_myudp_packet_carry
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_reports_helper_death_during_partial_cleanup
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_repairs_stale_firewall_and_routes_after_helper_loss
     - tests/integration/test_linux_elevated.py::test_overlay_e2e_linux_elevated_tun_helper_native_rolls_back_partial_apply_failure
@@ -1021,7 +1022,7 @@ REQ-LIFE-010:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::managedTunHelperAuthorizationKeepsAllSudoStreamsOnOneRawTerminal
     - tests/unit/test_runner_tun_helper.py::test_launch_tun_helper_process_builds_and_launches_swift_protocol_v1_helper
     - tests/unit/test_swift_tun_helper.py::test_identity_matches_only_embedded_commit_dirty_and_diff
-    - tests/unit/test_swift_tun_helper.py::test_dirty_checkout_rebuilds_even_when_embedded_identity_matches
+    - tests/unit/test_swift_tun_helper.py::test_dirty_checkout_reuses_matching_embedded_identity
     - tests/unit/test_swift_tun_helper.py::test_clean_matching_checkout_reuses_embedded_artifact
     - tests/unit/test_swift_tun_helper.py::test_embedded_identity_is_read_from_binary_protocol
     - tests/unit/test_swift_tun_helper.py::test_darwin_selector_builds_packaged_helper_when_identity_is_stale

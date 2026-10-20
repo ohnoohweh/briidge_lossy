@@ -458,18 +458,6 @@ class LinuxTunHelperBackend:
             self._policy_rules6 = stored_specs
 
     def _apply_included_routes(self, payload: dict[str, Any], *, ifname: str) -> None:
-        gateway4 = self._gateway_from_tun_routing(
-            payload,
-            address_key="tunnel_address",
-            prefix_key="tunnel_prefix",
-            gateway_key="tunnel_gateway",
-        )
-        gateway6 = self._gateway_from_tun_routing(
-            payload,
-            address_key="tunnel_address6",
-            prefix_key="tunnel_prefix6",
-            gateway_key="tunnel_gateway6",
-        )
         self._applied_ipv4_routes = self._route_specs_for_helper(
             payload,
             list_key="included_routes",
@@ -483,40 +471,23 @@ class LinuxTunHelperBackend:
         wants_default4 = any(self._is_default_route(item) for item in self._list_from_tun_routing(payload, "included_routes"))
         wants_default6 = any(self._is_default_route(item) for item in self._list_from_tun_routing(payload, "included_routes6"))
         for route_spec in self._applied_ipv4_routes:
-            if gateway4:
-                self._run_ip("-4", "route", "replace", route_spec, "via", gateway4, "dev", ifname, "onlink")
-            else:
-                self._run_ip("-4", "route", "replace", route_spec, "dev", ifname)
+            # A TUN interface is point-to-point rather than an Ethernet link:
+            # application destinations are delivered to its overlay peer, not
+            # resolved through the configured full-tunnel gateway.  A `via`
+            # route therefore fails on Linux even with `onlink` (and differs
+            # from the Swift native helper's device-route behavior).
+            self._run_ip("-4", "route", "replace", route_spec, "dev", ifname)
         for route_spec in self._applied_ipv6_routes:
-            if gateway6:
-                self._run_ip("-6", "route", "replace", route_spec, "via", gateway6, "dev", ifname, "metric", "1", "onlink")
-            else:
-                self._run_ip("-6", "route", "replace", route_spec, "dev", ifname, "metric", "1")
+            self._run_ip("-6", "route", "replace", route_spec, "dev", ifname, "metric", "1")
         if wants_default4:
             self._configure_policy_full_tunnel(payload, ifname=ifname, family_flag="-4")
         if wants_default6:
             self._configure_policy_full_tunnel(payload, ifname=ifname, family_flag="-6")
 
     def _remove_included_routes(self, payload: dict[str, Any], *, ifname: str) -> None:
-        gateway4 = self._gateway_from_tun_routing(
-            payload,
-            address_key="tunnel_address",
-            prefix_key="tunnel_prefix",
-            gateway_key="tunnel_gateway",
-        )
-        gateway6 = self._gateway_from_tun_routing(
-            payload,
-            address_key="tunnel_address6",
-            prefix_key="tunnel_prefix6",
-            gateway_key="tunnel_gateway6",
-        )
         for route_spec in list(self._applied_ipv4_routes):
-            if gateway4:
-                self._run_ip("-4", "route", "del", route_spec, "via", gateway4, "dev", ifname, check=False)
             self._run_ip("-4", "route", "del", route_spec, "dev", ifname, check=False)
         for route_spec in list(self._applied_ipv6_routes):
-            if gateway6:
-                self._run_ip("-6", "route", "del", route_spec, "via", gateway6, "dev", ifname, check=False)
             self._run_ip("-6", "route", "del", route_spec, "dev", ifname, check=False)
         if self._policy_table4 and self._policy_rules4:
             self._delete_policy_rules("-4", self._policy_table4, self._policy_rules4)

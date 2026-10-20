@@ -2643,6 +2643,8 @@ def _linux_native_runtime_config(
         'remote_servers': flat['remote_servers'],
         'tun_execution': {'tun_execution_mode': 'inline'},
     }
+    if os.environ.get('OBSTACLEBRIDGE_NATIVE_DEBUG_LOGGING') == '1':
+        runtime_config['debug_logging'] = {'debug_enabled': True}
     if 'secure_link_receive_idle_timeout_ms' in flat:
         runtime_config['secure_link_receive_idle_timeout_ms'] = flat['secure_link_receive_idle_timeout_ms']
     for key in ('compress_layer', 'compress_layer_algo', 'compress_layer_level', 'compress_layer_min_bytes', 'compress_layer_types'):

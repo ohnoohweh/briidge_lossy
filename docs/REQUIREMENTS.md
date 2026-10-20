@@ -338,6 +338,9 @@ Current implementation note:
   dirty flag, and diff digest emitted from code embedded in that executable,
   builds when the executable is absent or mismatched, and rebuilds rather than
   reusing a dirty checkout.
+  The compiled helper and Python helper shall retain compatible route-policy
+  behavior, and privileged Linux qualification shall prove myUDP packet carry
+  with a Python endpoint and a compiled Swift-helper endpoint.
   Its native full-tunnel policy keeps every kernel-connected local subnet in
   the main routing table before the helper default, including host-only and
   bridge networks such as `vmnet8` and libvirt; the helper persists and
