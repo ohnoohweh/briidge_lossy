@@ -1396,10 +1396,12 @@ final class PythonOverlayPeer {
                 rekey=read_payload(); assert rekey[:2]==b'\\x01\\x05'; sid=int.from_bytes(rekey[4:12],'big'); cn=rekey[20:52]; sn=bytes(range(31,-1,-1)); proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write_payload(header(6,sid,0)+sn+b'\\x01'+proof)
                 salt=hashlib.sha256(psk).digest(); info=b'obstaclebridge-securelink-psk-v1|'+sid.to_bytes(8,'big')+cn+sn; material=expand(hmac.new(salt,psk+cn+sn,hashlib.sha256).digest(),info,64); c2s,s2c=material[:32],material[32:]
                 commit=read_payload(); expected=hmac.new(psk,b'obstaclebridge-securelink-client-rekey-commit-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); assert commit[:2]==b'\\x01\\x07' and commit[20:]==expected; write_payload(header(8,sid,0))
-                # Keep the lower TCP session open long enough for the native
-                # receive owner to consume REKEY_DONE and publish its updated
-                # status, rather than racing it with an immediate EOF.
-                import time; time.sleep(1)
+                # Keep the lower TCP session open until the test's bounded
+                # Admin status observation can consume REKEY_DONE.  Closing
+                # after one second races under the parallel Swift test runner:
+                # EOF resets the live epoch and clears its rekey counter
+                # before the assertion can sample the completed state.
+                import time; time.sleep(10)
             elif MODE.endswith('rekey'):
                 app=read_payload(); plain=ChaCha20Poly1305(c2s).decrypt(b'\\0'*4+(2).to_bytes(8,'big'),app[20:],app[:20]); response=header(4,sid,2); write_payload(response+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),b'python:'+plain,response))
                 rekey=read_payload(); assert rekey[:2]==b'\\x01\\x05'; sid=int.from_bytes(rekey[4:12],'big'); cn=rekey[20:52]; sn=bytes(range(31,-1,-1)); proof=hmac.new(psk,b'obstaclebridge-securelink-server-proof-v1|'+sid.to_bytes(8,'big')+cn+sn,hashlib.sha256).digest(); write_payload(header(6,sid,0)+sn+b'\\x01'+proof)
