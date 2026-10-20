@@ -34,6 +34,10 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / 'src'
+if str(ROOT) not in sys.path:
+    # The harness is also a user-invocable script; Python otherwise starts
+    # with tests/integration on sys.path and cannot import its test fixtures.
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 BRIDGE = ROOT / 'ObstacleBridge.py'
@@ -86,6 +90,7 @@ BRIDGE_RUNTIME_MODE_CHOICES = (
     'python-python',
     'swift-server-python-client',
     'python-server-swift-client',
+    'python-server-linux-native-client',
 )
 
 try:
@@ -2394,6 +2399,8 @@ def _bridge_runtime_sides(runtime_mode: str) -> Tuple[str, str]:
         return 'swift', 'python'
     if normalized == 'python-server-swift-client':
         return 'python', 'swift'
+    if normalized == 'python-server-linux-native-client':
+        return 'python', 'linux-native'
     raise ValueError(f'Unsupported bridge runtime mode: {runtime_mode!r}')
 
 
@@ -2547,6 +2554,108 @@ def _swift_bridge_command(
     ]
 
 
+def _linux_native_runtime_config(
+    args: List[str],
+    *,
+    log_dir: Path,
+    case_name: str,
+    side: str,
+    admin_port: int,
+) -> Dict[str, Any]:
+    """Translate the overlay harness CLI subset into the Linux product config.
+
+    The Linux executable deliberately consumes the persisted, grouped config
+    shape used by its users.  Keep this adapter in the test harness so the
+    Python CLI/runtime remains entirely untouched.
+    """
+    flat = _runtime_config_from_bridge_args(
+        args,
+        log_dir=log_dir,
+        case_name=case_name,
+        side=side,
+        admin_port=admin_port,
+    )
+    transport = str(flat['overlay_transport']).strip().lower()
+    session_name = {
+        'myudp': 'udp_session',
+        'tcp': 'tcp_session',
+        'ws': 'ws_session',
+        'quic': 'quic_session',
+    }.get(transport)
+    if session_name is None:
+        raise RuntimeError(f'Unsupported Linux-native overlay transport: {transport!r}')
+    session_prefix = 'udp' if transport == 'myudp' else transport
+    session_keys = (
+        f'{session_prefix}_bind',
+        f'{session_prefix}_peer',
+        f'{session_prefix}_peer_port',
+        f'{session_prefix}_own_port',
+    )
+    session = {key: flat[key] for key in session_keys if key in flat}
+    for key in ('ws_path', 'ws_payload_mode', 'ws_tls', 'ws_proxy_mode', 'quic_alpn', 'quic_insecure'):
+        if key in flat:
+            session[key] = flat[key]
+    secure = {
+        key: flat[key]
+        for key in ('secure_link_mode', 'secure_link_psk')
+        if key in flat
+    }
+    if not secure:
+        secure['secure_link_mode'] = 'off'
+    runtime_config: Dict[str, Any] = {
+        'admin_web': {
+            'admin_web': True,
+            'admin_web_bind': _admin_host_for_port(admin_port),
+            'admin_web_port': int(admin_port),
+        },
+        'runner': {
+            'overlay_transport': transport,
+            # This CLI mode intentionally puts the native executable in the
+            # client role. Linux myUDP listener admission requires PSK auth,
+            # whereas the original cleartext smoke case is a Python listener.
+            'listener_mode': False,
+        },
+        session_name: session,
+        'secure_link': secure,
+        'own_servers': flat['own_servers'],
+        'remote_servers': flat['remote_servers'],
+        'tun_execution': {'tun_execution_mode': 'inline'},
+    }
+    for key in ('compress_layer', 'compress_layer_algo', 'compress_layer_level', 'compress_layer_min_bytes', 'compress_layer_types'):
+        if key in flat:
+            runtime_config[key] = flat[key]
+    return runtime_config
+
+
+def _linux_native_bridge_command(
+    args: List[str],
+    *,
+    log_dir: Path,
+    case_name: str,
+    side: str,
+    admin_port: int,
+) -> List[str]:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux-native overlay runtime mode requires Linux')
+    binary_path = _linux_swift_runner_binary()
+    runtime_config = _linux_native_runtime_config(
+        args,
+        log_dir=log_dir,
+        case_name=case_name,
+        side=side,
+        admin_port=admin_port,
+    )
+    runtime_config_path = log_dir / f'{case_name}_{side}_linux_native_runtime.json'
+    runtime_config_path.write_text(json.dumps(runtime_config, sort_keys=True), encoding='utf-8')
+    return [
+        str(binary_path),
+        '--runtime-config', str(runtime_config_path),
+        '--run',
+        '--admin-port', str(admin_port),
+        '--hold-sec', '180',
+    ]
+
+
 def build_bridge_command(
     runtime: str,
     *,
@@ -2561,6 +2670,14 @@ def build_bridge_command(
         return [sys.executable, str(BRIDGE)] + materialize_args(bridge_args, log_dir, case_name, side)
     if normalized_runtime == 'swift':
         return _swift_bridge_command(
+            bridge_args,
+            log_dir=log_dir,
+            case_name=case_name,
+            side=side,
+            admin_port=admin_port,
+        )
+    if normalized_runtime == 'linux-native':
+        return _linux_native_bridge_command(
             bridge_args,
             log_dir=log_dir,
             case_name=case_name,
@@ -3024,6 +3141,13 @@ def build_commands(
     missing_cfg = str(log_dir / f'{case.name}_missing.cfg')
     server_env = dict(case.server_env)
     client_env = dict(case.client_env)
+    # The worker-isolated 127/8 endpoint is a local service target. Keep a
+    # host HTTP proxy from being mistaken for it; proxy-specific tests replace
+    # these variables explicitly after command construction.
+    local_host = _loopback_ipv4_host(case_index)
+    for env in (server_env, client_env):
+        env['NO_PROXY'] = _append_csv_token(env.get('NO_PROXY', ''), local_host)
+        env['no_proxy'] = _append_csv_token(env.get('no_proxy', ''), local_host)
     server_args = list(case.bridge_server_args)
     client_args = list(case.bridge_client_args)
     if server_runtime == 'python' and client_runtime == 'python':
@@ -4625,7 +4749,15 @@ def run_case(
     )
     try:
         bounce.start()
-        check_exact_bytes = case.name in EXACT_BYTES_CASES
+        server_runtime, client_runtime = _bridge_runtime_sides(runtime_mode)
+        # The Linux native Admin service-socket projection is intentionally
+        # listener-centric and does not mirror per-channel byte counters into
+        # /api/connections. The actual TCP request/reply probe below remains
+        # the black-box bidirectional transfer assertion for this pairing.
+        check_exact_bytes = (
+            case.name in EXACT_BYTES_CASES
+            and 'linux-native' not in (server_runtime, client_runtime)
+        )
         overlay_transport = str(_arg_value(case.bridge_server_args, '--overlay-transport', 'myudp')).strip().lower()
         for name, cmd, env, admin_port in build_commands(
             case,
@@ -7213,6 +7345,22 @@ def test_overlay_e2e_basic_mixed_runtime_myudp(case_name: str, runtime_mode: str
         tmp_path,
         case_index=CASE_INDEX_BASE_BASIC + ALL_CASES.index(case_name),
         runtime_mode=runtime_mode,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.slow
+def test_overlay_e2e_python_server_linux_native_client_myudp_basic(tmp_path: Path) -> None:
+    """The user-facing myUDP TCP-service smoke case with the built Linux CLI."""
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux-native overlay runtime mode requires Linux')
+    if not shutil.which('swift'):
+        pytest.skip('Linux-native overlay runtime mode requires swift on PATH')
+    run_case(
+        CASES['case04_tcp_over_own_udp_clients_ipv4'],
+        tmp_path,
+        case_index=CASE_INDEX_BASE_BASIC + ALL_CASES.index('case04_tcp_over_own_udp_clients_ipv4'),
+        runtime_mode='python-server-linux-native-client',
     )
 
 
@@ -12782,6 +12930,38 @@ def test_overlay_e2e_secure_link_port_slots_stay_above_regular_band() -> None:
     assert case.bounce_port < 65535
     assert case.probe_port < 65535
     assert case.bounce_port >= CASES['case08_overlay_ws_ipv4'].bounce_port + SECURE_LINK_PORT_OFFSET_BASE
+
+
+def test_overlay_e2e_linux_native_client_runtime_mode_uses_grouped_user_config(tmp_path: Path) -> None:
+    assert _bridge_runtime_sides('python-server-linux-native-client') == ('python', 'linux-native')
+    config = _linux_native_runtime_config(
+        CASES['case04_tcp_over_own_udp_clients_ipv4'].bridge_client_args + [
+            '--config', str(tmp_path / 'missing.cfg'), '--admin-web-port', '0',
+        ],
+        log_dir=tmp_path,
+        case_name='linux_native_config',
+        side='bridge_client',
+        admin_port=18080,
+    )
+
+    assert config['runner'] == {'overlay_transport': 'myudp', 'listener_mode': False}
+    assert config['admin_web'] == {
+        'admin_web': True,
+        'admin_web_bind': '127.0.0.1',
+        'admin_web_port': 18080,
+    }
+    assert config['udp_session'] == {
+        'udp_bind': '0.0.0.0',
+        'udp_peer': '127.0.0.1',
+        'udp_peer_port': 14443,
+        'udp_own_port': 0,
+    }
+    assert config['secure_link'] == {'secure_link_mode': 'off'}
+    assert config['tun_execution'] == {'tun_execution_mode': 'inline'}
+    assert config['own_servers'] == [{
+        'listen': {'protocol': 'tcp', 'bind': '0.0.0.0', 'port': 43129},
+        'target': {'protocol': 'tcp', 'host': '127.0.0.1', 'port': 43128},
+    }]
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:

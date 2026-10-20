@@ -160,6 +160,55 @@ jobs:
       - name: Run full Linux overlay qualification suite
         run: pytest -vv --timeout=90 -n 4 tests/integration/test_overlay_e2e.py -m "not windows_only"
 
+  bridge-py-overlay-runtime-interop:
+    name: "Integration Gate (overlay runtime interop: ${{ matrix.label }})"
+    timeout-minutes: 15
+    needs: detect-bridge-change
+    if: needs.detect-bridge-change.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: python-python
+            runtime_mode: python-python
+            build_native: false
+          - label: python-linux-native
+            runtime_mode: python-server-linux-native-client
+            build_native: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[test]
+
+      - name: Build Linux native runner
+        if: matrix.build_native
+        run: ./scripts/build_linux_app.sh
+
+      - name: Run shared overlay case
+        run: |
+          python tests/integration/test_overlay_e2e.py \
+            --cases case04_tcp_over_own_udp_clients_ipv4 \
+            --runtime-mode "${{ matrix.runtime_mode }}" \
+            --log-dir "artifacts/overlay-runtime-${{ matrix.label }}"
+
+      - name: Upload overlay child-process logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: overlay-runtime-${{ matrix.label }}-logs
+          path: artifacts/overlay-runtime-${{ matrix.label }}
+          if-no-files-found: warn
+
   bridge-py-integration-linux-swift-privileged-tun:
     name: Integration Gate (Linux Swift privileged TUN)
     timeout-minutes: 15
