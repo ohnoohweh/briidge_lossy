@@ -699,7 +699,8 @@ REQ-PRX-001:
   # Desktop Python/native worker selection has recorded passing macOS and Linux
   # qualification; these entries never imply a cross-operating-system pair.
   # The established contract-v1 requires explicit authentication and rejects malformed bind,
-  # protocol, port, authentication, and egress shapes before spawn; the
+  # protocol, port, authentication, and egress shapes before spawn; both
+  # children accept explicit IPv4/IPv6 loopback listener binds, and the
   # optional IPv4/IPv6 egress-family declaration remains accepted. Both
   # supervisors project the redacted lifecycle shape (identity/state/
   # generation/restart/failure/capabilities, listeners, and last_error), and
@@ -730,6 +731,7 @@ REQ-PRX-001:
     - tests/unit/test_proxy_worker.py::test_runner_rejects_unknown_proxy_worker_selection
     - tests/unit/test_proxy_worker.py::test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions
     - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_loopback_listener_traffic
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
     - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
     - tests/unit/test_proxy_worker.py::test_native_proxy_idle_clients_do_not_starve_new_connections

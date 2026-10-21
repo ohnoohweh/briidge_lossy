@@ -37,7 +37,7 @@ class ProxyWorkerStartupError(ValueError):
 def worker_capabilities(implementation: str) -> dict[str, Any]:
     """Redacted, versioned declaration of the selected worker surface."""
     if implementation == "native":
-        bind_families, egress_modes = ["ipv4"], ["direct"]
+        bind_families, egress_modes = ["ipv4", "ipv6"], ["direct"]
     else:
         bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
     return {
@@ -82,7 +82,7 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
         bind_address = ipaddress.ip_address(bind)
     except (TypeError, ValueError):
         raise ValueError("proxy worker bind host is invalid") from None
-    if not bind_address.is_loopback or bind_address.version not in ({4, 6} if implementation == "python" else {4}):
+    if not bind_address.is_loopback or bind_address.version not in {4, 6}:
         raise ValueError("proxy worker bind family is unsupported")
     egress = config.get("egress")
     if (not isinstance(egress, dict) or not set(egress).issubset({"mode", "address_families"})
@@ -95,8 +95,6 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
     mode = egress["mode"].lower()
     if mode not in ({"direct", "system"} if implementation == "python" else {"direct"}):
         raise ValueError("proxy worker egress mode is unsupported")
-    if implementation == "native" and bind != "127.0.0.1":
-        raise ValueError("native proxy worker bind family is unsupported")
     auth = config.get("auth")
     if not isinstance(auth, dict) or not set(auth).issubset({"mode", "username", "token", "password"}):
         raise ValueError("proxy worker authentication configuration is invalid")

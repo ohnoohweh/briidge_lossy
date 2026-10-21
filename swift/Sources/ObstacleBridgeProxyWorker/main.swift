@@ -116,6 +116,7 @@ private func connectDirect(_ host: String, _ port: Int) throws -> Int32 {
 
 private struct ProxySettings: Sendable {
     let configuredPort: Int
+    let bindHost: String
     let socks: Bool
     let username: String?
     let password: String?
@@ -135,19 +136,32 @@ private final class ProxyListener: @unchecked Sendable {
         self.settings = settings
         self.logger = logger
         guard (0...65_535).contains(settings.configuredPort) else { throw WorkerError.invalid }
-        let listener = socket(AF_INET, streamType, 0)
+        let family: Int32 = settings.bindHost == "::1" ? AF_INET6 : AF_INET
+        let listener = socket(family, streamType, 0)
         guard listener >= 0 else { throw WorkerError.io }
         var yes: Int32 = 1
         _ = setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
-        var address = sockaddr_in()
-        address.sin_family = sa_family_t(AF_INET)
-        address.sin_port = UInt16(settings.configuredPort).bigEndian
-        address.sin_addr = in_addr(s_addr: UInt32(0x7f000001).bigEndian)
-        let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
-        guard bound == 0, listen(listener, 64) == 0 else { close(listener); throw WorkerError.io }
-        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
-        guard withUnsafeMutablePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) } }) == 0 else { close(listener); throw WorkerError.io }
-        boundPort = Int(UInt16(bigEndian: address.sin_port))
+        if family == AF_INET {
+            var address = sockaddr_in()
+            address.sin_family = sa_family_t(AF_INET)
+            address.sin_port = UInt16(settings.configuredPort).bigEndian
+            address.sin_addr = in_addr(s_addr: UInt32(0x7f000001).bigEndian)
+            let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+            guard bound == 0, listen(listener, 64) == 0 else { close(listener); throw WorkerError.io }
+            var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+            guard withUnsafeMutablePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) } }) == 0 else { close(listener); throw WorkerError.io }
+            boundPort = Int(UInt16(bigEndian: address.sin_port))
+        } else {
+            var address = sockaddr_in6()
+            address.sin6_family = sa_family_t(AF_INET6)
+            address.sin6_port = UInt16(settings.configuredPort).bigEndian
+            guard withUnsafeMutablePointer(to: &address.sin6_addr, { inet_pton(AF_INET6, settings.bindHost, $0) }) == 1 else { close(listener); throw WorkerError.invalid }
+            let bound = withUnsafePointer(to: &address) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_in6>.size)) } }
+            guard bound == 0, listen(listener, 64) == 0 else { close(listener); throw WorkerError.io }
+            var length = socklen_t(MemoryLayout<sockaddr_in6>.size)
+            guard withUnsafeMutablePointer(to: &address, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(listener, $0, &length) } }) == 0 else { close(listener); throw WorkerError.io }
+            boundPort = Int(UInt16(bigEndian: address.sin6_port))
+        }
         fd = listener
         _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: DispatchQueue(label: "org.obstaclebridge.proxy.accept.\(fd)"))
@@ -162,7 +176,7 @@ private final class ProxyListener: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         return ["accepted_connections": accepted, "active_connections": active, "completed_connections": completed,
                 "failed_connections": failed, "rx_bytes": rx, "tx_bytes": tx, "last_error": lastError,
-                "bind_host": "127.0.0.1", "port": settings.configuredPort, "bound_port": boundPort,
+                "bind_host": settings.bindHost, "port": settings.configuredPort, "bound_port": boundPort,
                 "http_enabled": !settings.socks, "socks5_enabled": settings.socks,
                 "auth_required": settings.username != nil, "egress_mode": "direct"]
     }
@@ -346,7 +360,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     let loggerLevel = (initial["log_levels"] as? [String: Int])?["proxy_provider"] ?? 0
     logger?.level = loggerLevel == 0 ? rootLevel : loggerLevel
     guard initial["kind"] as? String == "proxy.start", let config = initial["config"] as? [String: Any],
-          let bindHost = config["bind"] as? String, bindHost == "127.0.0.1",
+          let bindHost = config["bind"] as? String, ["127.0.0.1", "::1"].contains(bindHost),
           let policy = config["policy"] as? [String: Any], policy.count == 2,
           policy["allow_private_destinations"] as? Bool == true,
           let blocked = policy["blocked_host_patterns"] as? [String], blocked.isEmpty,
@@ -378,16 +392,16 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     var listeners: [String: ProxyListener] = [:]
     defer { listeners.values.forEach { $0.stop() } }
     if !Set(protocols).isDisjoint(with: ["http", "http-connect"]) {
-        listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, socks: false, username: username, password: password), logger: logger)
+        listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, bindHost: bindHost, socks: false, username: username, password: password), logger: logger)
     }
     if !Set(protocols).isDisjoint(with: ["socks5", "socks5-connect"]) {
-        listeners["socks5"] = try ProxyListener(settings: .init(configuredPort: socksPort, socks: true, username: username, password: password), logger: logger)
+        listeners["socks5"] = try ProxyListener(settings: .init(configuredPort: socksPort, bindHost: bindHost, socks: true, username: username, password: password), logger: logger)
     }
     guard !listeners.isEmpty else { throw WorkerError.invalid }
     logger?.emit(20, "[PROXY] listener started")
     defer { logger?.emit(20, "[PROXY] listener stopped") }
     func snapshot() -> [String: Any] { listeners.mapValues { $0.snapshot() } }
-    let capabilities: [String: Any] = ["contract_version": 1, "bind_families": ["ipv4"],
+    let capabilities: [String: Any] = ["contract_version": 1, "bind_families": ["ipv4", "ipv6"],
                                         "protocols": ["http-connect", "socks5-connect"],
                                         "auth_modes": ["none", "basic", "token", "password"],
                                         "egress_modes": ["direct"],

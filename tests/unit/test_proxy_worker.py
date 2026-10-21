@@ -364,6 +364,34 @@ def test_native_proxy_worker_rejects_unimplemented_egress_and_bind(native_proxy_
     asyncio.run(exercise())
 
 
+def test_proxy_worker_ipv6_loopback_listener_traffic(backend):
+    async def exercise():
+        try:
+            target = await asyncio.start_server(_echo, "::1", 0)
+        except OSError:
+            pytest.skip("IPv6 loopback unavailable")
+        worker = ProxyWorker(*backend)
+        try:
+            await worker.start(_config(bind="::1", protocols=["http-connect"]))
+            assert worker.listeners["http"]["bind_host"] == "::1"
+            reader, writer = await asyncio.open_connection("::1", worker.listeners["http"]["bound_port"])
+            token = base64.b64encode(b"user:private-token").decode()
+            target_port = target.sockets[0].getsockname()[1]
+            writer.write(f"CONNECT [::1]:{target_port} HTTP/1.1\r\nProxy-Authorization: Basic {token}\r\n\r\n".encode())
+            await writer.drain()
+            assert (await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)).startswith(b"HTTP/1.1 200")
+            writer.write(b"ipv6-listener")
+            await writer.drain()
+            assert await asyncio.wait_for(reader.readexactly(13), 3) == b"ipv6-listener"
+            writer.close()
+            await writer.wait_closed()
+        finally:
+            await worker.stop()
+            target.close()
+            await target.wait_closed()
+    asyncio.run(exercise())
+
+
 def test_proxy_worker_ipv6_socks_and_password_fallback(backend):
     async def exercise():
         try:
