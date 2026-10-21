@@ -186,7 +186,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
                     guard let owner = self else { return }
                     owner.lock.lock()
                     if !owner.stopping && owner.generation == expectedGeneration {
-                        owner.listeners = [:]; owner.lastError = "proxy worker unavailable"
+                        owner.listeners = [:]; owner.lastError = "unavailable"
                     }
                     owner.lock.unlock()
                 }
@@ -249,6 +249,7 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
     private var stopped = true
     private var generation = 0
     private var failedStarts = 0
+    private var lastError = ""
     private var nextAttempt = Date.distantPast
     private var retryDelay: TimeInterval = 0.25
 
@@ -279,7 +280,7 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
             }
         }
         stateLock.lock()
-        active = worker; configuration = nextConfig; generation = expectedGeneration
+        active = worker; configuration = nextConfig; generation = expectedGeneration; lastError = ""
         stateLock.unlock()
     }
 
@@ -305,7 +306,7 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
             let snapshot = worker.snapshot()
             let state = (snapshot["worker"] as? [String: Any])?["state"] as? String
             guard state != "running" else { return }
-            stateLock.lock(); active = nil; nextAttempt = Date().addingTimeInterval(0.25); stateLock.unlock()
+            stateLock.lock(); active = nil; lastError = "unavailable"; nextAttempt = Date().addingTimeInterval(0.25); stateLock.unlock()
             worker.stop()
             return
         }
@@ -316,7 +317,14 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
             stateLock.lock(); retryDelay = 0.25; stateLock.unlock()
         } catch {
             stateLock.lock()
-            failedStarts += 1; nextAttempt = Date().addingTimeInterval(retryDelay)
+            failedStarts += 1
+            if let failure = error as? ObstacleBridgeProxyWorkerSupervisor.Failure {
+                switch failure {
+                case .invalidConfiguration: lastError = "invalid_configuration"
+                case .invalidFrame, .unavailable, .timeout: lastError = "startup_failed"
+                }
+            } else { lastError = "startup_failed" }
+            nextAttempt = Date().addingTimeInterval(retryDelay)
             retryDelay = min(retryDelay * 2, 5)
             stateLock.unlock()
         }
@@ -324,7 +332,7 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
 
     public func snapshot() -> [String: Any] {
         stateLock.lock()
-        let worker = active, localGeneration = generation, localRestarts = max(0, generation - 1), localFailures = failedStarts, isStopped = stopped
+        let worker = active, localGeneration = generation, localRestarts = max(0, generation - 1), localFailures = failedStarts, localError = lastError, isStopped = stopped
         stateLock.unlock()
         let snapshot = worker?.snapshot() ?? [:]
         stateLock.lock(); let current = !stopped && active === worker && generation == localGeneration; stateLock.unlock()
@@ -335,13 +343,13 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
                            "restarts": localRestarts, "failed_starts": localFailures,
                            "capabilities": running ? (snapshot["capabilities"] ?? [:]) : [:]],
                 "listeners": running ? (snapshot["listeners"] ?? [:]) : [:],
-                "last_error": running || isStopped ? "" : "proxy worker unavailable"]
+                "last_error": running || isStopped ? "" : (localError.isEmpty ? "unavailable" : localError)]
     }
 
     public func stop() {
         lifecycleLock.lock(); defer { lifecycleLock.unlock() }
         timer?.cancel(); timer = nil
-        stateLock.lock(); stopped = true; let worker = active; active = nil; configuration = nil; stateLock.unlock()
+        stateLock.lock(); stopped = true; lastError = ""; let worker = active; active = nil; configuration = nil; stateLock.unlock()
         worker?.stop()
     }
 

@@ -890,8 +890,8 @@ class Runner:
             worker = ProxyWorker(worker_mode, getattr(self.args, "proxy_provider_worker_native_executable", None), supervised=True)
             try:
                 await self._await_with_async_diag("proxy_provider.worker.start", worker.start(cfg))
-            except Exception:
-                self._proxy_provider_last_error = "proxy worker failed to start"
+            except Exception as exc:
+                self._proxy_provider_last_error = getattr(exc, "code", "startup_failed")
                 raise
             self._proxy_provider_worker = worker
             self._proxy_provider_last_error = ""

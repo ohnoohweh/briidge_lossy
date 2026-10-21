@@ -295,9 +295,16 @@ and a retired reader cannot clear or replace the active generation's listener
 or failure state. This fences observation delivery independently of the fresh
 control socket used for every replacement.
 
+The lifecycle projection uses redacted stable failure codes: `unavailable` for
+control or child loss, `startup_failed` when a replacement cannot become ready,
+and `invalid_configuration` when its private startup dictionary is rejected.
+Successful readiness clears the code. Both desktop supervisors retain the
+failed-start count while a retry is pending and expose no listener snapshot for
+an unavailable generation.
+
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `PXY-3B` — lifecycle failure qualification | Qualify supervisor-owned startup, readiness, replacement, shutdown, and backoff. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; each outcome projects the same redacted lifecycle/error schema in Python and native hosts on macOS and Linux. | Both supervisors restart selected children with bounded backoff, but the full outcome/error schema and independently recorded host-local failure matrix are not yet consistent. |
+| `PXY-3B` — lifecycle failure qualification | Qualify supervisor-owned startup, readiness, replacement, shutdown, and backoff. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; each outcome projects the same redacted lifecycle/error schema in Python and native hosts on macOS and Linux. | The shared stable failure-code projection and focused recovery checks exist. Independently recorded macOS/Linux evidence for the full failure matrix, including all parent-loss and shutdown cleanup outcomes, remains required. |
 | `PXY-3C` — Admin and logging observability | Complete equivalent observable worker state and nonblocking local collector delivery. DoD: Admin reports redacted listener, worker and failure state across replacement; Python and native proxy records reach either selected local collector without blocking traffic; collector loss and restart preserve proxy availability and expose bounded drop state on macOS and Linux. | The record-only proxy relay, collector selection, and basic restart checks exist, but equivalent Admin projection, aggregate drop state, and complete collector-loss/restart qualification remain open. |
 | `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
 

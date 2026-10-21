@@ -177,6 +177,7 @@ def test_native_proxy_supervisor_retries_occupied_port(native_supervisor, native
                 await asyncio.sleep(0.05)
             assert current["worker"]["failed_starts"] >= 1
             assert current["worker"]["state"] == "unavailable" and current["listeners"] == {}
+            assert current["last_error"] == "startup_failed"
             assert "secret-not-in-process-arguments" not in json.dumps(current)
             if stop_during_backoff:
                 host.stdin.write(b"stop\n")

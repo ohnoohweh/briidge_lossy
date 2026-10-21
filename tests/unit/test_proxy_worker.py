@@ -270,7 +270,7 @@ def test_runner_reports_lost_proxy_worker_without_in_process_fallback(backend, l
                 await asyncio.sleep(0.05)
             snapshot = runner._proxy_provider_snapshot()
             assert snapshot["worker"]["state"] == "unavailable"
-            assert snapshot["last_error"] == "proxy worker unavailable"
+            assert snapshot["last_error"] == "unavailable"
             assert snapshot["listeners"] == {}
             assert runner._proxy_provider_servers == {}
             for _ in range(160):
@@ -308,6 +308,7 @@ def test_supervised_proxy_retries_busy_port_and_cleans_up(backend):
                     break
                 await asyncio.sleep(0.05)
             assert worker.failed_starts >= 1 and worker.generation == 1
+            assert worker.last_error == "startup_failed"
             reserved.close()
             for _ in range(160):
                 if worker.generation >= 2 and worker.process.returncode is None:

@@ -299,7 +299,7 @@ class ProxyWorker:
                                              "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})
             response = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
             if response.get("kind") == "proxy.error" and response.get("code") in {"invalid_configuration", "startup_failed"}:
-                raise ValueError(f"proxy worker startup failed: {response['code']}")
+                raise ProxyWorkerStartupError(response["code"])
             if (response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation
                     or response.get("generation") != expected_generation
                     or not isinstance(response.get("capabilities"), dict) or not isinstance(response.get("listeners"), dict)):
@@ -334,16 +334,20 @@ class ProxyWorker:
             if self._stopping:
                 return
             self.listeners = {}
-            self.last_error = "proxy worker unavailable"
+            self.last_error = "unavailable"
             await self._stop_child()
             delay = 0.25
             while not self._stopping:
                 await asyncio.sleep(delay)
                 try:
                     await self._start_child(self._restart_config)
+                except ProxyWorkerStartupError as exc:
+                    self.failed_starts += 1
+                    self.last_error = exc.code
+                    delay = min(delay * 2, 5.0)
                 except Exception:
                     self.failed_starts += 1
-                    self.last_error = "proxy worker unavailable"
+                    self.last_error = "startup_failed"
                     delay = min(delay * 2, 5.0)
                 else:
                     self.restarts += 1
@@ -361,7 +365,7 @@ class ProxyWorker:
         except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError, UnicodeError, json.JSONDecodeError):
             if not self._stopping and self.generation == expected_generation:
                 self.listeners = {}
-                self.last_error = "proxy worker unavailable"
+                self.last_error = "unavailable"
 
     async def stop(self) -> None:
         self._stopping = True
