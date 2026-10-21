@@ -32,7 +32,7 @@ complete. No work package below is complete yet.
 | Logging | Python and native collectors are selectable by Python, macOS-native and Linux-native supervisors. Private inherited sockets carry bounded records, correlated log queries and owner-lifetime detection; collectors restart with a new generation. | This is a logging-specific protocol, not the common worker contract. Only selected producers are connected, aggregate drop accounting is incomplete, and cross-host/mixed-worker qualification is incomplete. |
 | Peer stack | A Python supervisor can isolate one outbound TCP stack in a Python child on macOS/Linux or a native child on macOS/Linux. The child owns the transport-through-ChannelMux stack and has generation-fenced snapshots, replacement and owner-loss shutdown. | It is not per accepted/listener peer; it lacks the other transport modes, TUN/catalog ownership and a binary data-plane IPC contract. Native peer control is intentionally limited, and the common worker protocol is absent. |
 | Shared TUN | Python and Swift privileged TUN helpers own device and host-policy operations across protocol-v1 IPC; macOS also has its existing XPC/helper path. | There is no separate shared-TUN routing worker. Peer/channel arbitration, packet routing and exchangeable Python/native ownership still run outside this boundary. |
-| Proxy server | Python and native proxy workers are selectable by the Python, macOS-native and Linux-native hosts. The selected child owns listeners and connections; credentials use private control IPC and restart is supervised. | Native worker scope is deliberately narrower than Python (IPv4 loopback and direct egress), so feature parity and complete mixed-host qualification are open. |
+| Proxy server | Python and native proxy workers are selectable by the Python, macOS-native and Linux-native hosts. The selected child owns listeners and connections; credentials use private control IPC, worker frames are generation-fenced, and restart is supervised. Both workers support IPv4/IPv6 loopback, destination policy, and direct/system egress. | PXY-2 listener qualification is complete. The remaining work is lifecycle-failure qualification plus equivalent Admin/logging observability and the final packaged four-combination matrix. |
 
 ### Design decisions already in force
 
@@ -109,19 +109,18 @@ arguments or the environment. Parent loss closes the child and listeners;
 child loss is reported without falling back to an in-process proxy. Both the
 Python runner and native hosts restart either selected child after process or
 control loss using fresh capabilities and bounded backoff, retaining the first
-bound ports and exposing generation, restart and failed-start counts. Native
-status snapshots reject observations from a retired generation. Existing proxy
-connections are lost during replacement. The native
-worker currently accepts only IPv4 loopback listener binds and direct egress,
-caps each listener at 128 concurrent clients, and uses 30-second socket I/O
-timeouts. Each native session has independent scheduling and a bounded duplex
-poll buffer; half-closes propagate after pending data is delivered. The worker
-fails startup for unsupported settings. Native host supervision bounds startup
-and health reads. Basic macOS and Linux native-host selection and child-loss
-checks run in CI; broader mixed-process qualification remains open. The Python proxy provider
-does not enforce destination-policy restrictions, so the worker refuses to
-start unless the operator explicitly chooses unrestricted destinations and no
-blocked patterns. Complete native/Python parity is not claimed by this process slice.
+bound ports and exposing generation, restart and failed-start counts. A
+supervisor issues a positive generation in `proxy.start`; readiness and periodic
+snapshots must echo it, and both desktop supervisors discard a mismatched or
+retired generation without changing listeners or failure state. Existing proxy
+connections are lost during replacement. Both workers accept IPv4 or IPv6
+loopback listener binds, enforce the same destination policy, and support
+direct and system egress. Each native session has independent scheduling and a
+bounded duplex poll buffer; half-closes propagate after pending data is
+delivered. The worker fails startup for unsupported settings. Native host
+supervision bounds startup and health reads. PXY-2's focused macOS and Linux
+selection/traffic qualification is complete; the broader lifecycle,
+observability, and packaged mixed-process qualification remains open.
 
 The Python runner can select `--admin-web-worker python` to move the existing
 HTTP listener, authentication and UI sessions into a child. A private inherited
@@ -289,9 +288,17 @@ tunnel; a bypass or absent endpoint uses the direct policy-checked path. The
 same listener snapshot and capability declaration report `direct` and
 `system` egress as selectable.
 
+Proxy control frames are generation-fenced at the worker boundary. The
+supervisor assigns a positive generation in `proxy.start`; `proxy.ready` and
+every `proxy.snapshot` echo it. A mismatched readiness or snapshot is invalid,
+and a retired reader cannot clear or replace the active generation's listener
+or failure state. This fences observation delivery independently of the fresh
+control socket used for every replacement.
+
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `PXY-3` — lifecycle, observability and logging | Make worker startup, readiness, replacement, shutdown and log delivery fully supervisor-owned and generation-fenced. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; stale snapshots are rejected; Admin reports equivalent redacted listener, worker and failure state; Python and native proxy records reach the selected local collector without blocking traffic. | Both supervisors restart selected children and proxy logging has a record-only relay, but the shared lifecycle/error schema and all stale-generation cases are not yet qualified consistently on both hosts. |
+| `PXY-3B` — lifecycle failure qualification | Qualify supervisor-owned startup, readiness, replacement, shutdown, and backoff. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; each outcome projects the same redacted lifecycle/error schema in Python and native hosts on macOS and Linux. | Both supervisors restart selected children with bounded backoff, but the full outcome/error schema and independently recorded host-local failure matrix are not yet consistent. |
+| `PXY-3C` — Admin and logging observability | Complete equivalent observable worker state and nonblocking local collector delivery. DoD: Admin reports redacted listener, worker and failure state across replacement; Python and native proxy records reach either selected local collector without blocking traffic; collector loss and restart preserve proxy availability and expose bounded drop state on macOS and Linux. | The record-only proxy relay, collector selection, and basic restart checks exist, but equivalent Admin projection, aggregate drop state, and complete collector-loss/restart qualification remain open. |
 | `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
 
 Completed IPv6-listener, destination-policy, system-egress, and platform-local

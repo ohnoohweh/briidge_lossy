@@ -154,7 +154,9 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
     log_socket = None
     try:
         init = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
-        if init.get("kind") != "proxy.start" or not isinstance(init.get("config"), dict):
+        generation = init.get("generation")
+        if (init.get("kind") != "proxy.start" or not isinstance(init.get("config"), dict)
+                or isinstance(generation, bool) or not isinstance(generation, int) or generation < 1):
             raise ValueError("invalid proxy worker start")
         if log_fd is not None:
             from .bridge_logging_worker import install_child_log_handler
@@ -187,7 +189,7 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
             ))
             await server.start()
             servers[name] = server
-        await _write_frame(writer, {"v": 1, "kind": "proxy.ready", "implementation": "python",
+        await _write_frame(writer, {"v": 1, "kind": "proxy.ready", "implementation": "python", "generation": generation,
                                     "capabilities": worker_capabilities("python"), "listeners": _snapshot(servers)})
         command = asyncio.create_task(_read_frame(reader))
         while True:
@@ -197,7 +199,8 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
                 if request.get("kind") != "proxy.stop":
                     raise ValueError("invalid proxy worker command")
                 break
-            await _write_frame(writer, {"v": 1, "kind": "proxy.snapshot", "listeners": _snapshot(servers)})
+            await _write_frame(writer, {"v": 1, "kind": "proxy.snapshot", "generation": generation,
+                                        "listeners": _snapshot(servers)})
     except (ValueError, KeyError, TypeError):
         # This is deliberately a stable, redacted startup outcome.  Detailed
         # configuration values can contain credentials and never cross back.
@@ -290,25 +293,27 @@ class ProxyWorker:
                 self._log_relay.sender.close()
             parent.setblocking(False)
             reader, self.writer = await asyncio.open_connection(sock=parent)
-            await _write_frame(self.writer, {"v": 1, "kind": "proxy.start", "config": config,
+            expected_generation = self.generation + 1
+            await _write_frame(self.writer, {"v": 1, "kind": "proxy.start", "generation": expected_generation, "config": config,
                                              "log_root_level": logging.getLogger().level,
                                              "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})
             response = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
             if response.get("kind") == "proxy.error" and response.get("code") in {"invalid_configuration", "startup_failed"}:
                 raise ValueError(f"proxy worker startup failed: {response['code']}")
             if (response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation
+                    or response.get("generation") != expected_generation
                     or not isinstance(response.get("capabilities"), dict) or not isinstance(response.get("listeners"), dict)):
                 raise ValueError("invalid proxy worker readiness")
             self.listeners = response["listeners"]
             self.capabilities = response["capabilities"]
-            self._reader_task = asyncio.create_task(self._receive(reader))
+            self.generation = expected_generation
+            self._reader_task = asyncio.create_task(self._receive(reader, expected_generation))
             for name in ("http", "socks5"):
                 key = f"{name}_port"
                 if int(config.get(key) or 0) == 0 and name in self.listeners:
                     port = int(self.listeners[name].get("bound_port") or 0)
                     if port > 0:
                         config[key] = port
-            self.generation += 1
             self.last_error = ""
         except BaseException:
             parent.close()
@@ -344,15 +349,17 @@ class ProxyWorker:
                     self.restarts += 1
                     break
 
-    async def _receive(self, reader: asyncio.StreamReader) -> None:
+    async def _receive(self, reader: asyncio.StreamReader, expected_generation: int) -> None:
         try:
             while True:
                 event = await _read_frame(reader)
-                if event.get("kind") != "proxy.snapshot" or not isinstance(event.get("listeners"), dict):
+                if (event.get("kind") != "proxy.snapshot" or event.get("generation") != expected_generation
+                        or not isinstance(event.get("listeners"), dict)):
                     raise ValueError("invalid proxy worker snapshot")
-                self.listeners = event["listeners"]
+                if self.generation == expected_generation:
+                    self.listeners = event["listeners"]
         except (asyncio.IncompleteReadError, ConnectionError, OSError, ValueError, UnicodeError, json.JSONDecodeError):
-            if not self._stopping:
+            if not self._stopping and self.generation == expected_generation:
                 self.listeners = {}
                 self.last_error = "proxy worker unavailable"
 

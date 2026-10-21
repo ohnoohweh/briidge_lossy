@@ -522,7 +522,8 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     let rootLevel = initial["log_root_level"] as? Int ?? 30
     let loggerLevel = (initial["log_levels"] as? [String: Int])?["proxy_provider"] ?? 0
     logger?.level = loggerLevel == 0 ? rootLevel : loggerLevel
-    guard initial["kind"] as? String == "proxy.start", let config = initial["config"] as? [String: Any],
+    guard initial["kind"] as? String == "proxy.start", let generation = initial["generation"] as? Int, generation > 0,
+          let config = initial["config"] as? [String: Any],
           let bindHost = config["bind"] as? String, ["127.0.0.1", "::1"].contains(bindHost),
           let policy = config["policy"] as? [String: Any], Set(policy.keys) == ["allow_private_destinations", "blocked_host_patterns"],
           let allowPrivateDestinations = policy["allow_private_destinations"] as? Bool,
@@ -570,7 +571,8 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
                                         "auth_modes": ["none", "basic", "token", "password"],
                                         "egress_modes": ["direct", "system"],
                                         "destination_policy": ["enforced": true, "requires_unrestricted": false]]
-    try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "capabilities": capabilities, "listeners": snapshot()])
+    try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "generation": generation,
+                        "capabilities": capabilities, "listeners": snapshot()])
     while true {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let count = poll(&descriptor, 1, 250)
@@ -586,7 +588,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
             }
             break
         }
-        try writeFrame(fd, ["v": 1, "kind": "proxy.snapshot", "listeners": snapshot()])
+        try writeFrame(fd, ["v": 1, "kind": "proxy.snapshot", "generation": generation, "listeners": snapshot()])
     }
 }
 

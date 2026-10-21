@@ -353,6 +353,22 @@ def test_proxy_control_rejects_oversize_header_without_waiting_for_body():
     asyncio.run(exercise())
 
 
+def test_proxy_worker_discards_retired_generation_snapshot():
+    async def exercise():
+        worker = ProxyWorker()
+        worker.generation = 2
+        worker.listeners = {"http": {"bound_port": 2}}
+        reader = asyncio.StreamReader()
+        payload = json.dumps({"v": 1, "kind": "proxy.snapshot", "generation": 1,
+                              "listeners": {"http": {"bound_port": 1}}}, separators=(",", ":")).encode()
+        reader.feed_data(struct.pack("!I", len(payload)) + payload)
+        reader.feed_eof()
+        await worker._receive(reader, 1)
+        assert worker.listeners == {"http": {"bound_port": 2}}
+        assert worker.last_error == ""
+    asyncio.run(exercise())
+
+
 def test_runner_rejects_unknown_proxy_worker_selection():
     async def exercise():
         args = build_runtime_args_from_config({})

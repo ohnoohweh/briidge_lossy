@@ -34,6 +34,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
     private var control: Int32 = -1
     private var listeners: [String: Any] = [:]
     private var capabilities: [String: Any] = [:]
+    private var generation = 0
     private var lastError = ""
     private var stopping = false
     private var logRelay: ObstacleBridgeLogProducerRelay?
@@ -109,11 +110,11 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
     }
 
     /// The bootstrap dictionary is sent only on the inherited control socket.
-    public func start(config: [String: Any]) throws {
+    public func start(config: [String: Any], generation expectedGeneration: Int = 1) throws {
         lock.lock()
         let alreadyStarted = child != nil
         lock.unlock()
-        guard !alreadyStarted else { throw Failure.invalidConfiguration }
+        guard !alreadyStarted, expectedGeneration > 0 else { throw Failure.invalidConfiguration }
         var fds: [Int32] = [-1, -1]
         guard socketpair(AF_UNIX, proxySupervisorStreamType, 0, &fds) == 0 else { throw Failure.unavailable }
         let parentFD = fds[0], childFD = fds[1]
@@ -154,7 +155,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             relay?.releaseChildHandle()
             lock.lock(); child = process; control = parentFD; stopping = false; logRelay = relay; lock.unlock()
             try childInput.close()
-            try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "config": config,
+            try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "generation": expectedGeneration, "config": config,
                                              "log_root_level": 10, "log_levels": ["proxy_provider": loggingWorker?.proxyLogLevel ?? 0]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)
             if response["kind"] as? String == "proxy.error",
@@ -163,9 +164,10 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
                 throw code == "invalid_configuration" ? Failure.invalidConfiguration : Failure.unavailable
             }
             guard response["kind"] as? String == "proxy.ready", response["implementation"] as? String == implementation,
+                  response["generation"] as? Int == expectedGeneration,
                   let advertised = response["capabilities"] as? [String: Any],
                   let initial = response["listeners"] as? [String: Any] else { throw Failure.invalidFrame }
-            lock.lock(); listeners = initial; capabilities = advertised; lastError = ""; lock.unlock()
+            lock.lock(); listeners = initial; capabilities = advertised; generation = expectedGeneration; lastError = ""; lock.unlock()
             readerGroup.enter()
             let group = readerGroup
             DispatchQueue.global().async { [weak self] in
@@ -173,14 +175,19 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
                 do {
                     while true {
                         let event = try Self.readFrame(parentFD, timeout: 3_000_000_000)
-                        guard event["kind"] as? String == "proxy.snapshot", let updated = event["listeners"] as? [String: Any] else { throw Failure.invalidFrame }
+                        guard event["kind"] as? String == "proxy.snapshot", event["generation"] as? Int == expectedGeneration,
+                              let updated = event["listeners"] as? [String: Any] else { throw Failure.invalidFrame }
                         guard let owner = self else { return }
-                        owner.lock.lock(); owner.listeners = updated; owner.lock.unlock()
+                        owner.lock.lock()
+                        if owner.generation == expectedGeneration { owner.listeners = updated }
+                        owner.lock.unlock()
                     }
                 } catch {
                     guard let owner = self else { return }
                     owner.lock.lock()
-                    if !owner.stopping { owner.listeners = [:]; owner.lastError = "proxy worker unavailable" }
+                    if !owner.stopping && owner.generation == expectedGeneration {
+                        owner.listeners = [:]; owner.lastError = "proxy worker unavailable"
+                    }
                     owner.lock.unlock()
                 }
             }
@@ -199,7 +206,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         let running = child?.isRunning == true && lastError.isEmpty && !stopping
         return ["worker": ["implementation": implementation, "state": running ? "running" : "unavailable",
-                            "pid": Int(child?.processIdentifier ?? 0)],
+                            "pid": Int(child?.processIdentifier ?? 0), "generation": generation],
                 "capabilities": running ? capabilities : [:], "listeners": running ? listeners : [:], "last_error": lastError]
     }
 
@@ -258,7 +265,8 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
     /// and in the owner's in-memory configuration; they are never status data.
     private func launch(_ config: [String: Any]) throws {
         let worker = try ObstacleBridgeProxyWorkerSupervisor(implementation: implementation, executable: executable, loggingWorker: loggingWorker)
-        try worker.start(config: config)
+        stateLock.lock(); let expectedGeneration = generation + 1; stateLock.unlock()
+        try worker.start(config: config, generation: expectedGeneration)
         let snapshot = worker.snapshot()
         var nextConfig = config
         let listeners = snapshot["listeners"] as? [String: Any] ?? [:]
@@ -271,7 +279,7 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
             }
         }
         stateLock.lock()
-        active = worker; configuration = nextConfig; generation += 1
+        active = worker; configuration = nextConfig; generation = expectedGeneration
         stateLock.unlock()
     }
 
