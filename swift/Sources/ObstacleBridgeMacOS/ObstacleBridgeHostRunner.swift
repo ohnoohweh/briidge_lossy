@@ -748,12 +748,12 @@ final class ObstacleBridgeHostRunner {
                                           "auth": config.auth, "egress": config.egress, "policy": config.policy])
             } catch let failure as ObstacleBridgeProxyWorkerSupervisor.Failure {
                 switch failure {
-                case .invalidConfiguration: proxyProviderLastError = "invalid_configuration"
-                case .invalidFrame, .unavailable, .timeout: proxyProviderLastError = "startup_failed"
+                case .invalidConfiguration: proxyProviderLastError = ObstacleBridgeProxyLifecycleErrorCode.invalidConfiguration
+                case .invalidFrame, .unavailable, .timeout: proxyProviderLastError = ObstacleBridgeProxyLifecycleErrorCode.startupFailed
                 }
                 throw failure
             } catch {
-                proxyProviderLastError = "startup_failed"
+                proxyProviderLastError = ObstacleBridgeProxyLifecycleErrorCode.startupFailed
                 throw error
             }
             proxyWorker = worker
