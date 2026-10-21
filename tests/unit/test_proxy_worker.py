@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import socket
 import struct
@@ -102,6 +103,8 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
             assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0,
                                        "failed_starts": 0, "capabilities": worker_capabilities(backend[0])}
             assert snap["last_error"] == ""
+            assert snap["configured"]["auth"] == {"mode": "basic", "username": "user"}
+            assert "private-token" not in json.dumps(snap, sort_keys=True)
             http = snap["listeners"]["http"]["bound_port"]
             socks = snap["listeners"]["socks5"]["bound_port"]
             await _http_tunnel(http, target_port, False)

@@ -940,10 +940,14 @@ class Runner:
 
     def _proxy_provider_snapshot(self) -> dict:
         cfg = self._proxy_provider_config_snapshot()
+        configured = copy.deepcopy(cfg)
+        auth = cfg.get("auth")
+        configured["auth"] = ({key: auth[key] for key in ("mode", "username") if key in auth}
+                              if isinstance(auth, Mapping) else {})
         worker = self._proxy_provider_worker
         return {
             "enabled": bool(cfg["enabled"]),
-            "configured": cfg,
+            "configured": configured,
             "listeners": worker.listeners if worker is not None else {
                 name: server.snapshot()
                 for name, server in sorted(self._proxy_provider_servers.items())

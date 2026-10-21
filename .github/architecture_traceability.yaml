@@ -444,8 +444,8 @@ ARC-CMP-004:
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
   # redacted lifecycle projection at worker identity/state/generation/restart/
-  # failure/capabilities plus listeners and last_error; failed listener start
-  # returns a stable private-channel code.
+  # failure/capabilities plus listeners and last_error; configured status omits
+  # authentication secrets and failed listener start returns a stable code.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve
