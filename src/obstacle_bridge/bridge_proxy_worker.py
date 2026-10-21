@@ -85,8 +85,13 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
     if not bind_address.is_loopback or bind_address.version not in ({4, 6} if implementation == "python" else {4}):
         raise ValueError("proxy worker bind family is unsupported")
     egress = config.get("egress")
-    if not isinstance(egress, dict) or set(egress) != {"mode"} or not isinstance(egress.get("mode"), str):
+    if (not isinstance(egress, dict) or not set(egress).issubset({"mode", "address_families"})
+            or not isinstance(egress.get("mode"), str)):
         raise ValueError("proxy worker egress configuration is invalid")
+    if "address_families" in egress and (not isinstance(egress["address_families"], list)
+                                         or not all(isinstance(item, str) for item in egress["address_families"])
+                                         or sorted(egress["address_families"]) != ["ipv4", "ipv6"]):
+        raise ValueError("proxy worker egress address families are invalid")
     mode = egress["mode"].lower()
     if mode not in ({"direct", "system"} if implementation == "python" else {"direct"}):
         raise ValueError("proxy worker egress mode is unsupported")

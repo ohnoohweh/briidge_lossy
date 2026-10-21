@@ -143,6 +143,7 @@ def test_proxy_worker_readiness_advertises_redacted_capabilities(implementation,
     {"protocols": ["http"], "auth": {"mode": "none"}},
     {"protocols": ["socks5"], "auth": {"mode": "token", "username": "user", "token": "private-token"}},
     {"protocols": ["http-connect", "socks5-connect"], "auth": {"mode": "password", "username": "user", "password": "private-token"}},
+    {"egress": {"mode": "direct", "address_families": ["ipv4", "ipv6"]}},
 ])
 def test_proxy_worker_contract_accepts_advertised_configuration_shapes(backend, changes):
     async def exercise():
@@ -167,7 +168,6 @@ def test_proxy_worker_contract_accepts_advertised_configuration_shapes(backend, 
     {"auth": {"mode": "none", "username": 42}},
     {"auth": {"mode": "basic", "username": "user", "token": "", "password": ""}},
     {"auth": {"mode": "basic", "username": "user", "token": "private-token", "extra": "ignored"}},
-    {"egress": {"mode": "direct", "address_families": ["ipv4", "ipv6"]}},
 ])
 def test_proxy_worker_contract_fails_closed_on_invalid_configuration_corpus(backend, changes):
     async def exercise():
