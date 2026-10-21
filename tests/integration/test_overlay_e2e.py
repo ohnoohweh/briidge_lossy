@@ -7433,7 +7433,9 @@ def test_linux_swift_supervises_logging_worker(tmp_path: Path, implementation: s
         assert worker and worker.get('state') == 'running', proc.log_path.read_text(errors='replace')
         assert worker['implementation'] == implementation and worker['pid'] > 1 and worker['pid'] != proc.popen.pid
         _, logs = fetch_json(f'http://127.0.0.1:{admin_port}/api/logs?limit=20')
-        assert logs['available'] and any('runtime.starting' in line for line in logs['lines'])
+        # The private collector receives the canonical lifecycle event; its
+        # structured fields remain in the telemetry/file record paths.
+        assert logs['available'] and any('runtime.lifecycle' in line for line in logs['lines'])
         os.kill(worker['pid'], signal.SIGKILL)
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:

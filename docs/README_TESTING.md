@@ -279,6 +279,7 @@ pytest -q tests/integration/test_overlay_e2e.py -k python_peer_linux_swift_servi
 pytest -q tests/integration/test_overlay_e2e.py -k python_runtime_linux_swift_service_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k linux_swift_listener_python_runtime_service_round_trip
 pytest -q tests/integration/test_overlay_e2e.py -k remote_catalog_listener_round_trip
+pytest -q tests/integration/test_overlay_e2e.py -k 'linux_swift_supervises_logging_worker or linux_swift_proxy_logs_follow_collector or linux_swift_proxy_component_log_level'
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --status
 ./build/linux/ObstacleBridgeLinux --runtime-config path/to/runtime-config.json --runtime-probe cGF5bG9hZA==
@@ -305,6 +306,11 @@ briefly after every protected reply so the Linux runner can drain it without a
 port-close ICMP failure; its fixture-level timing regression runs without a
 Linux Swift toolchain. Coverage includes candidate
 rotation, reconnect supervision, ChannelMux binding, and redacted Admin API snapshots.
+The same native-process lane verifies that both the Python and native private
+logging collectors are supervised, expose their redacted status through
+`/api/status`, and receive the canonical `runtime.lifecycle` event through
+`/api/logs`; it also covers all Python/native proxy-worker and collector
+combinations and component-level proxy log filtering.
 The Admin probe verifies that the Linux peer row is one Core/adapter-derived
 redacted projection: lifecycle/readiness, epoch/session diagnostics, retry
 window, and protected frame counters/totals are published without a PSK,
