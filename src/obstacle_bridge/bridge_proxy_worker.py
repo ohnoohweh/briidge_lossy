@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import ipaddress
 import json
 import logging
 import os
@@ -21,6 +22,32 @@ from typing import Any
 from .bridge_proxy_server import ObstacleBridgeProxyServer, ObstacleBridgeProxyServerConfig, ProxyCredentials
 
 MAX_FRAME = 64 * 1024
+_PROTOCOLS = {"http", "http-connect", "socks5", "socks5-connect"}
+_AUTH_MODES = {"none", "basic", "token", "password"}
+
+
+class ProxyWorkerStartupError(ValueError):
+    """A credential-free startup outcome exposed by the local supervisor."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(f"proxy worker startup failed: {code}")
+        self.code = code
+
+
+def worker_capabilities(implementation: str) -> dict[str, Any]:
+    """Redacted, versioned declaration of the selected worker surface."""
+    if implementation == "native":
+        bind_families, egress_modes = ["ipv4"], ["direct"]
+    else:
+        bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
+    return {
+        "contract_version": 1,
+        "bind_families": bind_families,
+        "protocols": ["http-connect", "socks5-connect"],
+        "auth_modes": ["none", "basic", "token", "password"],
+        "egress_modes": egress_modes,
+        "destination_policy": {"enforced": False, "requires_unrestricted": True},
+    }
 
 
 def validate_worker_policy(config: dict[str, Any]) -> None:
@@ -29,6 +56,62 @@ def validate_worker_policy(config: dict[str, Any]) -> None:
     if (not isinstance(policy, dict) or set(policy) != {"allow_private_destinations", "blocked_host_patterns"}
             or policy.get("allow_private_destinations") is not True or policy.get("blocked_host_patterns") != []):
         raise ValueError("proxy worker requires an explicitly unrestricted destination policy; policy enforcement is not implemented")
+
+
+def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
+    """Reject unsupported startup values before they can be silently ignored.
+
+    This is the contract-v1 configuration corpus boundary.  The native
+    implementation intentionally has a narrower selectable surface; its
+    capability declaration advertises that difference.
+    """
+    if implementation not in {"python", "native"} or not isinstance(config, dict):
+        raise ValueError("invalid proxy worker configuration")
+    validate_worker_policy(config)
+    protocols = config.get("protocols")
+    if not isinstance(protocols, list) or not protocols or not all(isinstance(item, str) for item in protocols):
+        raise ValueError("proxy worker protocols must be a non-empty list")
+    if not set(protocols).issubset(_PROTOCOLS):
+        raise ValueError("proxy worker protocol is unsupported")
+    for key in ("http_port", "socks5_port"):
+        value = config.get(key)
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65535:
+            raise ValueError("proxy worker listener port is invalid")
+    bind = config.get("bind")
+    try:
+        bind_address = ipaddress.ip_address(bind)
+    except (TypeError, ValueError):
+        raise ValueError("proxy worker bind host is invalid") from None
+    if not bind_address.is_loopback or bind_address.version not in ({4, 6} if implementation == "python" else {4}):
+        raise ValueError("proxy worker bind family is unsupported")
+    egress = config.get("egress")
+    if (not isinstance(egress, dict) or not set(egress).issubset({"mode", "address_families"})
+            or not isinstance(egress.get("mode"), str)):
+        raise ValueError("proxy worker egress configuration is invalid")
+    if "address_families" in egress and (not isinstance(egress["address_families"], list)
+                                         or not all(isinstance(item, str) for item in egress["address_families"])
+                                         or sorted(egress["address_families"]) != ["ipv4", "ipv6"]):
+        raise ValueError("proxy worker egress address families are invalid")
+    mode = egress["mode"].lower()
+    if mode not in ({"direct", "system"} if implementation == "python" else {"direct"}):
+        raise ValueError("proxy worker egress mode is unsupported")
+    if implementation == "native" and bind != "127.0.0.1":
+        raise ValueError("native proxy worker bind family is unsupported")
+    auth = config.get("auth")
+    if not isinstance(auth, dict) or not set(auth).issubset({"mode", "username", "token", "password"}):
+        raise ValueError("proxy worker authentication configuration is invalid")
+    auth_mode = auth.get("mode", "none")
+    if not isinstance(auth_mode, str) or auth_mode.lower() not in _AUTH_MODES:
+        raise ValueError("proxy worker authentication mode is unsupported")
+    if auth_mode.lower() == "none":
+        if any(value not in (None, "") for key, value in auth.items() if key != "mode"):
+            raise ValueError("proxy worker credentials require an authentication mode")
+        return
+    username, token, password = auth.get("username"), auth.get("token"), auth.get("password")
+    if not isinstance(username, str) or not username.strip() or (token is not None and not isinstance(token, str)) or (password is not None and not isinstance(password, str)):
+        raise ValueError("proxy worker credentials are invalid")
+    if not ((token or "").strip() or (password or "").strip()):
+        raise ValueError("proxy worker credentials are incomplete")
 
 
 async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any]:
@@ -78,7 +161,7 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
             log_socket = install_child_log_handler(log_fd, int(init.get("log_root_level", logging.WARNING)),
                                                    init.get("log_levels", {}))
         cfg = init["config"]
-        validate_worker_policy(cfg)
+        validate_worker_config(cfg, "python")
         protocols = set(cfg.get("protocols") or [])
         specs = []
         if {"http", "http-connect"} & protocols:
@@ -103,7 +186,8 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
             ))
             await server.start()
             servers[name] = server
-        await _write_frame(writer, {"v": 1, "kind": "proxy.ready", "implementation": "python", "listeners": _snapshot(servers)})
+        await _write_frame(writer, {"v": 1, "kind": "proxy.ready", "implementation": "python",
+                                    "capabilities": worker_capabilities("python"), "listeners": _snapshot(servers)})
         command = asyncio.create_task(_read_frame(reader))
         while True:
             done, _ = await asyncio.wait({command}, timeout=0.25)
@@ -113,6 +197,14 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
                     raise ValueError("invalid proxy worker command")
                 break
             await _write_frame(writer, {"v": 1, "kind": "proxy.snapshot", "listeners": _snapshot(servers)})
+    except (ValueError, KeyError, TypeError):
+        # This is deliberately a stable, redacted startup outcome.  Detailed
+        # configuration values can contain credentials and never cross back.
+        with contextlib.suppress(Exception):
+            await _write_frame(writer, {"v": 1, "kind": "proxy.error", "code": "invalid_configuration"})
+    except OSError:
+        with contextlib.suppress(Exception):
+            await _write_frame(writer, {"v": 1, "kind": "proxy.error", "code": "startup_failed"})
     except (asyncio.IncompleteReadError, ConnectionError, BrokenPipeError):
         pass  # Owner loss revokes the worker's capability.
     finally:
@@ -152,6 +244,7 @@ class ProxyWorker:
         self.generation = 0
         self.restarts = 0
         self.failed_starts = 0
+        self.capabilities: dict[str, Any] = {}
 
     async def start(self, config: dict[str, Any]) -> None:
         if self.process is not None or self._monitor is not None:
@@ -169,16 +262,11 @@ class ProxyWorker:
     async def _start_child(self, config: dict[str, Any]) -> None:
         if os.name != "posix":
             raise RuntimeError("proxy workers require Unix socket pairs")
-        validate_worker_policy(config)
+        try:
+            validate_worker_config(config, self.implementation)
+        except ValueError as exc:
+            raise ProxyWorkerStartupError("invalid_configuration") from exc
         if self.implementation == "native":
-            egress = config.get("egress")
-            if (config.get("bind") != "127.0.0.1" or not isinstance(egress, dict)
-                    or str(egress.get("mode", "")).lower() not in {"direct", "off", "none"}
-                    or not set(egress).issubset({"mode", "address_families"})
-                    or ("address_families" in egress and (not isinstance(egress["address_families"], list)
-                        or not all(isinstance(item, str) for item in egress["address_families"])
-                        or sorted(egress["address_families"]) != ["ipv4", "ipv6"]))):
-                raise ValueError("native proxy worker requires loopback bind and unrestricted direct egress")
             executable = self.native_executable or shutil.which("ObstacleBridgeProxyWorker")
             if not executable:
                 raise ValueError("native proxy worker executable not found")
@@ -205,9 +293,13 @@ class ProxyWorker:
                                              "log_root_level": logging.getLogger().level,
                                              "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})
             response = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
-            if response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation or not isinstance(response.get("listeners"), dict):
+            if response.get("kind") == "proxy.error" and response.get("code") in {"invalid_configuration", "startup_failed"}:
+                raise ValueError(f"proxy worker startup failed: {response['code']}")
+            if (response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation
+                    or not isinstance(response.get("capabilities"), dict) or not isinstance(response.get("listeners"), dict)):
                 raise ValueError("invalid proxy worker readiness")
             self.listeners = response["listeners"]
+            self.capabilities = response["capabilities"]
             self._reader_task = asyncio.create_task(self._receive(reader))
             for name in ("http", "socks5"):
                 key = f"{name}_port"
@@ -297,6 +389,7 @@ class ProxyWorker:
             await asyncio.to_thread(self._log_relay.close)
             self._log_relay = None
         self.listeners = {}
+        self.capabilities = {}
 
 
 def main() -> None:

@@ -351,15 +351,25 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
           policy["allow_private_destinations"] as? Bool == true,
           let blocked = policy["blocked_host_patterns"] as? [String], blocked.isEmpty,
           let egress = config["egress"] as? [String: Any], let mode = egress["mode"] as? String,
-          ["direct", "off", "none"].contains(mode.lowercased()),
-          Set(egress.keys).isSubset(of: ["mode", "address_families"]),
+          mode.lowercased() == "direct", Set(egress.keys).isSubset(of: ["mode", "address_families"]),
           (egress["address_families"] == nil || Set(egress["address_families"] as? [String] ?? []) == ["ipv4", "ipv6"]),
           let protocols = config["protocols"] as? [String],
-          let httpPort = config["http_port"] as? Int, let socksPort = config["socks5_port"] as? Int else { throw WorkerError.invalid }
-    let auth = config["auth"] as? [String: Any] ?? [:]
+          !protocols.isEmpty, Set(protocols).isSubset(of: ["http", "http-connect", "socks5", "socks5-connect"]),
+          let httpPort = config["http_port"] as? Int, (0...65_535).contains(httpPort),
+          let socksPort = config["socks5_port"] as? Int, (0...65_535).contains(socksPort) else { throw WorkerError.invalid }
+    guard let auth = config["auth"] as? [String: Any] else { throw WorkerError.invalid }
     let authMode = (auth["mode"] as? String ?? "none").lowercased()
+    guard Set(auth.keys).isSubset(of: ["mode", "username", "token", "password"]),
+          auth["username"] == nil || auth["username"] is String,
+          auth["token"] == nil || auth["token"] is String,
+          auth["password"] == nil || auth["password"] is String,
+          ["none", "basic", "token", "password"].contains(authMode) else { throw WorkerError.invalid }
     var username: String?, password: String?
-    if !["", "none", "off", "disabled"].contains(authMode) {
+    if authMode == "none" {
+        guard (auth["username"] as? String ?? "").isEmpty,
+              (auth["token"] as? String ?? "").isEmpty,
+              (auth["password"] as? String ?? "").isEmpty else { throw WorkerError.invalid }
+    } else {
         username = (auth["username"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = auth["token"] as? String ?? ""
         password = (token.isEmpty ? auth["password"] as? String : token)?.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -377,7 +387,12 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     logger?.emit(20, "[PROXY] listener started")
     defer { logger?.emit(20, "[PROXY] listener stopped") }
     func snapshot() -> [String: Any] { listeners.mapValues { $0.snapshot() } }
-    try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "listeners": snapshot()])
+    let capabilities: [String: Any] = ["contract_version": 1, "bind_families": ["ipv4"],
+                                        "protocols": ["http-connect", "socks5-connect"],
+                                        "auth_modes": ["none", "basic", "token", "password"],
+                                        "egress_modes": ["direct"],
+                                        "destination_policy": ["enforced": false, "requires_unrestricted": true]]
+    try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "capabilities": capabilities, "listeners": snapshot()])
     while true {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let count = poll(&descriptor, 1, 250)
@@ -411,4 +426,20 @@ while index + 1 < args.count {
     index += 2
 }
 guard index == args.count, let fd = controlFD else { exit(1) }
-do { try run(fd, logFD: logFD); close(fd) } catch { close(fd); exit(1) }
+do {
+    try run(fd, logFD: logFD)
+    close(fd)
+} catch {
+    let code: String
+    if let workerError = error as? WorkerError {
+        switch workerError {
+        case .invalid: code = "invalid_configuration"
+        case .io, .closed: code = "startup_failed"
+        }
+    } else {
+        code = "startup_failed"
+    }
+    try? writeFrame(fd, ["v": 1, "kind": "proxy.error", "code": code])
+    close(fd)
+    exit(1)
+}

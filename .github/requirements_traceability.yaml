@@ -696,6 +696,14 @@ REQ-WSP-013:
     - tests/unit/test_ws_payload_mode.py::test_peer_address_override_rejects_dns_names
 
 REQ-PRX-001:
+  # Desktop Python/native worker selection has recorded passing macOS and Linux
+  # qualification; these entries never imply a cross-operating-system pair.
+  # The established contract-v1 requires explicit authentication and rejects malformed bind,
+  # protocol, port, authentication, and egress shapes before spawn; the
+  # optional IPv4/IPv6 egress-family declaration remains accepted. Both
+  # supervisors project the redacted lifecycle shape (identity/state/
+  # generation/restart/failure/capabilities, listeners, and last_error), and
+  # configured status omits all authentication secret values.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
@@ -712,6 +720,7 @@ REQ-PRX-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::proxyWorkerConfigurationPreservesPolicyAndSelection
     - tests/unit/test_proxy_worker.py::test_runner_proxy_child_owns_http_socks_and_snapshots
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_readiness_advertises_redacted_capabilities
     - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
     - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth
     - tests/unit/test_proxy_worker.py::test_runner_reports_lost_proxy_worker_without_in_process_fallback

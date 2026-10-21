@@ -33,6 +33,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
     private var child: Process?
     private var control: Int32 = -1
     private var listeners: [String: Any] = [:]
+    private var capabilities: [String: Any] = [:]
     private var lastError = ""
     private var stopping = false
     private var logRelay: ObstacleBridgeLogProducerRelay?
@@ -156,9 +157,15 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "config": config,
                                              "log_root_level": 10, "log_levels": ["proxy_provider": loggingWorker?.proxyLogLevel ?? 0]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)
+            if response["kind"] as? String == "proxy.error",
+               let code = response["code"] as? String,
+               ["invalid_configuration", "startup_failed"].contains(code) {
+                throw code == "invalid_configuration" ? Failure.invalidConfiguration : Failure.unavailable
+            }
             guard response["kind"] as? String == "proxy.ready", response["implementation"] as? String == implementation,
+                  let advertised = response["capabilities"] as? [String: Any],
                   let initial = response["listeners"] as? [String: Any] else { throw Failure.invalidFrame }
-            lock.lock(); listeners = initial; lastError = ""; lock.unlock()
+            lock.lock(); listeners = initial; capabilities = advertised; lastError = ""; lock.unlock()
             readerGroup.enter()
             let group = readerGroup
             DispatchQueue.global().async { [weak self] in
@@ -193,7 +200,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         let running = child?.isRunning == true && lastError.isEmpty && !stopping
         return ["worker": ["implementation": implementation, "state": running ? "running" : "unavailable",
                             "pid": Int(child?.processIdentifier ?? 0)],
-                "listeners": running ? listeners : [:], "last_error": lastError]
+                "capabilities": running ? capabilities : [:], "listeners": running ? listeners : [:], "last_error": lastError]
     }
 
     public func stop() {
@@ -214,7 +221,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         }
         process.waitUntilExit()
         relay?.stop()
-        lock.lock(); child = nil; control = -1; listeners = [:]; lock.unlock()
+        lock.lock(); child = nil; control = -1; listeners = [:]; capabilities = [:]; lock.unlock()
     }
 
     deinit { stop() }
@@ -317,7 +324,8 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
         let running = current && inner["state"] as? String == "running"
         return ["worker": ["implementation": implementation, "state": isStopped ? "stopped" : (running ? "running" : "unavailable"),
                            "pid": running ? (inner["pid"] as? Int ?? 0) : 0, "generation": localGeneration,
-                           "restarts": localRestarts, "failed_starts": localFailures],
+                           "restarts": localRestarts, "failed_starts": localFailures,
+                           "capabilities": running ? (snapshot["capabilities"] ?? [:]) : [:]],
                 "listeners": running ? (snapshot["listeners"] ?? [:]) : [:],
                 "last_error": running || isStopped ? "" : "proxy worker unavailable"]
     }

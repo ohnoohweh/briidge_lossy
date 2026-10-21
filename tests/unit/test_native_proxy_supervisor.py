@@ -14,6 +14,8 @@ import sys
 
 import pytest
 
+from obstacle_bridge.bridge_proxy_worker import worker_capabilities
+
 pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="desktop Unix workers")
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,8 +63,13 @@ def test_swift_supervisor_owns_python_or_native_proxy(native_supervisor, native_
             host.stdin.write((json.dumps({"implementation": implementation, "executable": executable, "config": _config()}) + "\n").encode())
             await host.stdin.drain()
             ready = json.loads(await asyncio.wait_for(host.stdout.readline(), 10))
+            assert set(ready) == {"worker", "listeners", "last_error"}
+            assert {"implementation", "state", "generation", "restarts", "failed_starts", "capabilities"} <= set(ready["worker"])
             assert ready["worker"]["state"] == "running"
             assert ready["worker"]["pid"] > 1 and ready["worker"]["pid"] != host.pid
+            assert ready["worker"]["capabilities"] == worker_capabilities(implementation)
+            assert "capabilities" not in ready
+            assert ready["last_error"] == ""
             port = ready["listeners"]["http"]["bound_port"]
             command = subprocess.check_output(["ps", "-p", str(ready["worker"]["pid"]), "-o", "command="], text=True)
             assert "secret-not-in-process-arguments" not in command

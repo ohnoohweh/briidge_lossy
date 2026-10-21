@@ -940,10 +940,14 @@ class Runner:
 
     def _proxy_provider_snapshot(self) -> dict:
         cfg = self._proxy_provider_config_snapshot()
+        configured = copy.deepcopy(cfg)
+        auth = cfg.get("auth")
+        configured["auth"] = ({key: auth[key] for key in ("mode", "username") if key in auth}
+                              if isinstance(auth, Mapping) else {})
         worker = self._proxy_provider_worker
         return {
             "enabled": bool(cfg["enabled"]),
-            "configured": cfg,
+            "configured": configured,
             "listeners": worker.listeners if worker is not None else {
                 name: server.snapshot()
                 for name, server in sorted(self._proxy_provider_servers.items())
@@ -952,7 +956,8 @@ class Runner:
             **({"worker": {"implementation": worker.implementation,
                             "state": "running" if worker.process is not None and worker.process.returncode is None and not worker.last_error else "unavailable",
                             "generation": worker.generation, "restarts": worker.restarts,
-                            "failed_starts": worker.failed_starts}} if worker is not None else {}),
+                            "failed_starts": worker.failed_starts,
+                            "capabilities": worker.capabilities}} if worker is not None else {}),
         }
 
     async def _start_tun_helper(self) -> None:

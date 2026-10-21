@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
 import socket
 import struct
@@ -11,7 +12,7 @@ import sys
 import pytest
 
 from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
-from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, _read_frame
+from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, ProxyWorkerStartupError, _read_frame, worker_capabilities
 
 pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="proxy worker requires desktop Unix sockets")
 
@@ -98,7 +99,12 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
             command = subprocess.check_output(["ps", "-p", str(worker.process.pid), "-o", "command="], text=True)
             assert "private-token" not in command
             snap = runner._proxy_provider_snapshot()
-            assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0, "failed_starts": 0}
+            assert {"enabled", "configured", "listeners", "last_error", "worker"} <= set(snap)
+            assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0,
+                                       "failed_starts": 0, "capabilities": worker_capabilities(backend[0])}
+            assert snap["last_error"] == ""
+            assert snap["configured"]["auth"] == {"mode": "basic", "username": "user"}
+            assert "private-token" not in json.dumps(snap, sort_keys=True)
             http = snap["listeners"]["http"]["bound_port"]
             socks = snap["listeners"]["socks5"]["bound_port"]
             await _http_tunnel(http, target_port, False)
@@ -122,6 +128,59 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
     asyncio.run(exercise())
 
 
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_proxy_worker_readiness_advertises_redacted_capabilities(implementation, native_proxy_worker_executable):
+    async def exercise():
+        executable = native_proxy_worker_executable if implementation == "native" else None
+        worker = ProxyWorker(implementation, executable)
+        try:
+            await worker.start(_config(protocols=["http-connect"]))
+            assert worker.capabilities == worker_capabilities(implementation)
+            assert "private-token" not in repr(worker.capabilities)
+        finally:
+            await worker.stop()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("changes", [
+    {"protocols": ["http"], "auth": {"mode": "none"}},
+    {"protocols": ["socks5"], "auth": {"mode": "token", "username": "user", "token": "private-token"}},
+    {"protocols": ["http-connect", "socks5-connect"], "auth": {"mode": "password", "username": "user", "password": "private-token"}},
+    {"egress": {"mode": "direct", "address_families": ["ipv4", "ipv6"]}},
+])
+def test_proxy_worker_contract_accepts_advertised_configuration_shapes(backend, changes):
+    async def exercise():
+        worker = ProxyWorker(*backend)
+        try:
+            await worker.start(_config(**changes))
+            assert worker.capabilities == worker_capabilities(backend[0])
+        finally:
+            await worker.stop()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("changes", [
+    {"protocols": []},
+    {"protocols": ["http-connect", "not-a-proxy-protocol"]},
+    {"http_port": -1},
+    {"socks5_port": 65536},
+    {"bind": "0.0.0.0"},
+    {"auth": None},
+    {"auth": {"mode": "unknown", "username": "user", "token": "private-token"}},
+    {"auth": {"mode": "none", "username": "user"}},
+    {"auth": {"mode": "none", "username": 42}},
+    {"auth": {"mode": "basic", "username": "user", "token": "", "password": ""}},
+    {"auth": {"mode": "basic", "username": "user", "token": "private-token", "extra": "ignored"}},
+])
+def test_proxy_worker_contract_fails_closed_on_invalid_configuration_corpus(backend, changes):
+    async def exercise():
+        worker = ProxyWorker(*backend)
+        with pytest.raises(ProxyWorkerStartupError, match="invalid_configuration"):
+            await worker.start(_config(**changes))
+        assert worker.process is None
+    asyncio.run(exercise())
+
+
 def test_proxy_worker_owner_loss_closes_listeners(backend):
     async def exercise():
         worker = ProxyWorker(*backend)
@@ -139,14 +198,14 @@ def test_proxy_worker_owner_loss_closes_listeners(backend):
 def test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth(backend):
     async def exercise():
         worker = ProxyWorker(*backend)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="invalid_configuration"):
             await worker.start(_config(auth={"mode": "basic", "username": "user", "token": ""}))
-        assert worker.process.returncode is not None
+        assert worker.process is None
         with socket.socket() as reserved:
             reserved.bind(("127.0.0.1", 0))
             reserved.listen()
             worker = ProxyWorker(*backend)
-            with pytest.raises(Exception):
+            with pytest.raises(ValueError, match="startup_failed"):
                 await worker.start(_config(socks5_port=reserved.getsockname()[1]))
             assert worker.process.returncode is not None
     asyncio.run(exercise())
@@ -280,7 +339,7 @@ def test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions(bac
                        {"allow_private_destinations": True, "blocked_host_patterns": ["*.example"]},
                        {"allow_private_destinations": True, "blocked_host_patterns": [], "future_rule": True}):
             worker = ProxyWorker(*backend)
-            with pytest.raises(ValueError, match="policy"):
+            with pytest.raises(ProxyWorkerStartupError, match="invalid_configuration"):
                 await worker.start(_config(policy=policy))
             assert worker.process is None
         args = build_runtime_args_from_config({"proxy_provider": {"proxy_provider_enabled": True,
@@ -299,7 +358,7 @@ def test_native_proxy_worker_rejects_unimplemented_egress_and_bind(native_proxy_
                         {"egress": {"mode": "direct", "address_families": ["ipv4"]}},
                         {"egress": {"mode": "direct", "proxy_host": "host"}}):
             worker = ProxyWorker("native", native_proxy_worker_executable)
-            with pytest.raises(ValueError, match="loopback bind and unrestricted direct egress"):
+            with pytest.raises(ProxyWorkerStartupError, match="invalid_configuration"):
                 await worker.start(_config(**changes))
             assert worker.process is None
     asyncio.run(exercise())
