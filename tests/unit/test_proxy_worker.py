@@ -161,7 +161,7 @@ def test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth(back
             reserved.bind(("127.0.0.1", 0))
             reserved.listen()
             worker = ProxyWorker(*backend)
-            with pytest.raises(Exception):
+            with pytest.raises(ValueError, match="startup_failed"):
                 await worker.start(_config(socks5_port=reserved.getsockname()[1]))
             assert worker.process.returncode is not None
     asyncio.run(exercise())
