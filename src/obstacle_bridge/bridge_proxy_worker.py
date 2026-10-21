@@ -37,7 +37,7 @@ class ProxyWorkerStartupError(ValueError):
 def worker_capabilities(implementation: str) -> dict[str, Any]:
     """Redacted, versioned declaration of the selected worker surface."""
     if implementation == "native":
-        bind_families, egress_modes = ["ipv4"], ["direct"]
+        bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
     else:
         bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
     return {
@@ -46,16 +46,18 @@ def worker_capabilities(implementation: str) -> dict[str, Any]:
         "protocols": ["http-connect", "socks5-connect"],
         "auth_modes": ["none", "basic", "token", "password"],
         "egress_modes": egress_modes,
-        "destination_policy": {"enforced": False, "requires_unrestricted": True},
+        "destination_policy": {"enforced": True, "requires_unrestricted": False},
     }
 
 
 def validate_worker_policy(config: dict[str, Any]) -> None:
-    """Do not silently ignore restrictions that this provider cannot enforce."""
+    """Accept only the policy shape both selected workers enforce."""
     policy = config.get("policy")
     if (not isinstance(policy, dict) or set(policy) != {"allow_private_destinations", "blocked_host_patterns"}
-            or policy.get("allow_private_destinations") is not True or policy.get("blocked_host_patterns") != []):
-        raise ValueError("proxy worker requires an explicitly unrestricted destination policy; policy enforcement is not implemented")
+            or not isinstance(policy.get("allow_private_destinations"), bool)
+            or not isinstance(policy.get("blocked_host_patterns"), list)
+            or any(not isinstance(pattern, str) or not pattern.strip() for pattern in policy["blocked_host_patterns"])):
+        raise ValueError("proxy worker destination policy is invalid")
 
 
 def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
@@ -82,7 +84,7 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
         bind_address = ipaddress.ip_address(bind)
     except (TypeError, ValueError):
         raise ValueError("proxy worker bind host is invalid") from None
-    if not bind_address.is_loopback or bind_address.version not in ({4, 6} if implementation == "python" else {4}):
+    if not bind_address.is_loopback or bind_address.version not in {4, 6}:
         raise ValueError("proxy worker bind family is unsupported")
     egress = config.get("egress")
     if (not isinstance(egress, dict) or not set(egress).issubset({"mode", "address_families"})
@@ -93,10 +95,8 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
                                          or sorted(egress["address_families"]) != ["ipv4", "ipv6"]):
         raise ValueError("proxy worker egress address families are invalid")
     mode = egress["mode"].lower()
-    if mode not in ({"direct", "system"} if implementation == "python" else {"direct"}):
+    if mode not in {"direct", "system"}:
         raise ValueError("proxy worker egress mode is unsupported")
-    if implementation == "native" and bind != "127.0.0.1":
-        raise ValueError("native proxy worker bind family is unsupported")
     auth = config.get("auth")
     if not isinstance(auth, dict) or not set(auth).issubset({"mode", "username", "token", "password"}):
         raise ValueError("proxy worker authentication configuration is invalid")
@@ -183,6 +183,7 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
             server = ObstacleBridgeProxyServer(ObstacleBridgeProxyServerConfig(
                 bind_host=str(cfg["bind"]), port=port, credentials=credentials,
                 allow_http=http, allow_socks5=socks, egress=cfg.get("egress"),
+                policy=cfg.get("policy"),
             ))
             await server.start()
             servers[name] = server

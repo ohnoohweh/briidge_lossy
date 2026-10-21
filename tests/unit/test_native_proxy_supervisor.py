@@ -48,7 +48,7 @@ def _config():
             "egress": {"mode": "direct"}, "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}}
 
 
-@pytest.mark.parametrize("implementation", ["python", "native"])
+@pytest.mark.parametrize("implementation", ["python", "native"], ids=lambda value: f"{sys.platform}-native-supervisor-{value}-worker")
 def test_swift_supervisor_owns_python_or_native_proxy(native_supervisor, native_proxy_worker_executable, implementation):
     async def exercise():
         async def echo(reader, writer):
@@ -351,11 +351,13 @@ def test_native_proxy_child_honors_component_log_level(native_supervisor, native
 
 
 @pytest.mark.parametrize("implementation", ["python", "native"])
-def test_restricted_policy_fails_closed(native_supervisor, native_proxy_worker_executable, implementation):
+def test_restricted_policy_starts_with_enforcement(native_supervisor, native_proxy_worker_executable, implementation):
     config = _config()
     config["policy"]["allow_private_destinations"] = False
     executable = sys.executable if implementation == "python" else native_proxy_worker_executable
     result = subprocess.run([native_supervisor], input=json.dumps({"implementation": implementation, "executable": executable, "config": config}) + "\n", text=True, capture_output=True, timeout=10)
-    assert result.returncode != 0
-    assert json.loads(result.stdout) == {"error": "worker startup failed"}
+    assert result.returncode == 0
+    snapshot = json.loads(result.stdout)
+    assert snapshot["worker"]["capabilities"]["destination_policy"] == {"enforced": True, "requires_unrestricted": False}
+    assert snapshot["listeners"]["http"]["destination_policy_enforced"] is True
     assert "secret-not-in-process-arguments" not in result.stderr
