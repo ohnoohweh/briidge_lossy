@@ -436,8 +436,10 @@ ARC-CMP-003:
 ARC-CMP-004:
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
-  # Desktop worker isolation and Python/native exchangeability remain planned;
-  # the existing process evidence below does not by itself qualify that plan.
+  # Desktop process evidence covers delivered component-specific worker slices.
+  # Proxy completion qualifies Python/native selections on each host locally;
+  # it does not require or assert a macOS-to-Linux process pairing.
+  # The evidence does not qualify the remaining common IPC plan.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

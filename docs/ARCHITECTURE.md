@@ -19,7 +19,40 @@ The peer-address protocol is a delivered transport-adjacent layer. It obtains th
 
 ## Desktop process isolation and exchangeability
 
-### Current ownership and gaps
+### Status at a glance
+
+This table is the authoritative desktop process-isolation snapshot. “Delivered
+slice” means the stated process boundary exists in production code and has
+focused evidence; it does not imply that the target exchangeability model is
+complete. No work package below is complete yet.
+
+| Boundary | Current ownership and delivered slice | Remaining gap before the target boundary is complete |
+| --- | --- | --- |
+| Admin Web | The Python runner can supervise a Python Admin child over private, correlated Unix-stream IPC. It owns the HTTP listener, authentication and browser sessions; replacement is bounded and retains the original bound port. | No native Admin worker or native supervisor selection exists. API/live-session parity, generation fencing for every operation, and mixed Python/native host qualification remain open. |
+| Logging | Python and native collectors are selectable by Python, macOS-native and Linux-native supervisors. Private inherited sockets carry bounded records, correlated log queries and owner-lifetime detection; collectors restart with a new generation. | This is a logging-specific protocol, not the common worker contract. Only selected producers are connected, aggregate drop accounting is incomplete, and cross-host/mixed-worker qualification is incomplete. |
+| Peer stack | A Python supervisor can isolate one outbound TCP stack in a Python child on macOS/Linux or a native child on macOS/Linux. The child owns the transport-through-ChannelMux stack and has generation-fenced snapshots, replacement and owner-loss shutdown. | It is not per accepted/listener peer; it lacks the other transport modes, TUN/catalog ownership and a binary data-plane IPC contract. Native peer control is intentionally limited, and the common worker protocol is absent. |
+| Shared TUN | Python and Swift privileged TUN helpers own device and host-policy operations across protocol-v1 IPC; macOS also has its existing XPC/helper path. | There is no separate shared-TUN routing worker. Peer/channel arbitration, packet routing and exchangeable Python/native ownership still run outside this boundary. |
+| Proxy server | Python and native proxy workers are selectable by the Python, macOS-native and Linux-native hosts. The selected child owns listeners and connections; credentials use private control IPC and restart is supervised. | Native worker scope is deliberately narrower than Python (IPv4 loopback and direct egress), so feature parity and complete mixed-host qualification are open. |
+
+### Design decisions already in force
+
+- The desktop supervisor owns configuration, identity, startup order, worker
+  selection, restart policy and aggregate status. A worker owns only its
+  component I/O and protocol state.
+- The privileged TUN helper and the planned shared-TUN routing worker are
+  separate boundaries: privilege remains with the helper; routing and
+  peer/channel arbitration belong to the shared-TUN worker.
+- Private inherited descriptors are capabilities, not ambient loopback ports.
+  They carry secrets and control frames without command-line or environment
+  exposure, and owner loss closes the corresponding worker.
+- A selected worker is never silently replaced by an in-process fallback.
+  Replacement uses fresh capabilities and a new generation; existing browser,
+  proxy and peer connections do not survive it.
+- The current component-specific IPC mechanisms are intentionally transitional.
+  The target is one versioned, language-neutral desktop worker protocol used by
+  Python and native implementations on both macOS and Linux.
+
+### Implementation evidence and current limits
 
 On macOS and Linux, the Python runner and native hosts presently compose the
 peer stack, Admin Web and proxy listeners by default, and most shared-TUN
@@ -194,6 +227,14 @@ protocol type or test harness exists. Mixed-runtime evidence must cover Python
 and native implementations on both macOS and Linux, including both directions
 of supervisor/worker selection where applicable.
 
+Proxy separation is the active implementation focus. Its ordered, platform-local
+packages are defined below. `IPC-1` remains the later convergence point that
+replaces component-specific IPC across all worker roles; it is not a prerequisite
+for completing the proxy's selected-worker ownership boundary. Every package in
+this table is open. A completed package is removed from this table and its
+durable ownership decision is retained above instead of being restated as a
+completed plan item.
+
 | Package | Remaining work and definition of done |
 | --- | --- |
 | `IPC-1` — common transport and supervision | Define and implement the bounded authenticated local control/data protocol, capability negotiation, worker generation fencing, startup handoff, and supervised teardown in Python and Swift. DoD: Python/native peers exchange requests, responses, events and binary data in both directions; malformed, oversized, unauthenticated, timed-out and stale-generation input fails closed; parent/child loss and restart do not leak workers, credentials or sockets on macOS and Linux. |
@@ -201,8 +242,28 @@ of supervisor/worker selection where applicable.
 | `IPC-3` — Admin Web worker | Move HTTP/UI/auth/session ownership to an exchangeable process connected to supervisor and workers through IPC. DoD: existing APIs, live subscriptions, config confirmation/secrets, logs, restart and reconnect operations retain their security and semantics; worker failures and concurrent clients remain bounded and observable; Python/native Admin works with either supervisor on both hosts. |
 | `IPC-4` — per-peer stack workers | Isolate each peer's full transport-through-ChannelMux stack and provide explicit listener/accepted-peer ownership. DoD: all supported desktop transports, security modes, compression and TCP/UDP/TUN services interoperate with existing peers; peer-specific operations, snapshots, epochs, backpressure and reconnect survive independent worker failures without cross-peer state or plaintext leakage, for each Python/native pairing on both hosts. |
 | `IPC-5` — shared TUN worker | Move shared-interface routing, ownership and peer/channel arbitration into a separate exchangeable worker while retaining the privileged helper boundary. DoD: real bidirectional TUN traffic, simultaneous peers, route/DNS lifecycle, authenticated readiness, restart fencing, helper loss and cleanup are verified with Python/native worker and helper combinations on authorized macOS and Linux hosts. |
-| `IPC-6` — proxy worker | Move the explicit HTTP/SOCKS proxy listeners and connection owners into an exchangeable process. DoD: listener/auth/destination policy, egress, stream backpressure, status and cleanup match existing behavior; either desktop supervisor can run Python or native proxy workers, with failed starts and worker loss isolated and tested on both hosts. |
+| `IPC-6` — proxy worker | Active focus; its completion is decomposed into the ordered `PXY-*` packages below. This umbrella package is removed when the final `PXY-*` package is removed. |
 | `IPC-7` — integrated qualification and migration | Wire configuration, packaging, installation, process health and operator diagnostics into both desktop products. DoD: all supported Python/native worker combinations pass automated cross-process and mixed-overlay traffic, kill/restart, shutdown and resource-leak tests; privileged and signed-host evidence is recorded, existing deployments have a documented migration/rollback path, and no production path silently falls back to in-process ownership. |
+
+### Proxy separation work packages
+
+These packages deliberately use a platform-local acceptance model. A macOS
+case runs only macOS processes; a Linux case runs only Linux processes. “Mixed”
+means a Python and a native process on the same operating system, never a
+macOS-to-Linux process pairing. A package requires independently recorded
+passing macOS and Linux evidence before it is removed. The work packages run in
+the listed order.
+
+| Package | Scope and definition of done | Gap to close |
+| --- | --- | --- |
+| `PXY-1` — worker contract and configuration | Freeze the proxy worker's versioned startup, snapshot, error and shutdown contract, including explicit capability reporting for bind family, protocols, authentication, egress and destination policy. DoD: Python and native workers accept the same supported configuration shape or fail closed with the same stable capability/error result; credentials remain off command lines, environment and status; Python and native supervisors on each host select either local worker and expose the same redacted lifecycle fields. | The v1 channel has start/ready/snapshot/stop frames, but ready/snapshot frames advertise no capabilities and startup failure is only a local process failure. Python and Swift validate overlapping but independently implemented subsets, and their lifecycle payloads do not share a pinned schema. |
+| `PXY-2` — listener and egress capability parity | Close the native/Python behavior gap for HTTP CONNECT and SOCKS5 listeners, authentication, bind-family selection, destination policy, egress modes, backpressure and half-close behavior. DoD: every proxy configuration advertised by `PXY-1` behaves equivalently for Python and native workers, or is removed from the shared selectable surface; IPv4 and IPv6 loopback traffic, allowed and denied destinations, authentication failures, large duplex transfers and idle-client isolation pass locally on macOS and Linux. | Native selection is intentionally limited to IPv4 loopback and direct egress; the Python worker has a broader listener/egress implementation. Destination-policy enforcement is not implemented by the Python worker, so it currently admits only an explicitly unrestricted policy. |
+| `PXY-3` — lifecycle, observability and logging | Make worker startup, readiness, replacement, shutdown and log delivery fully supervisor-owned and generation-fenced. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; stale snapshots are rejected; Admin reports equivalent redacted listener, worker and failure state; Python and native proxy records reach the selected local collector without blocking traffic. | Both supervisors restart selected children and proxy logging has a record-only relay, but the shared lifecycle/error schema and all stale-generation cases are not yet qualified consistently on both hosts. |
+| `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
+
+`PXY-1` is the next implementation slice. When its DoD is met, remove its row
+and update the status matrix and proxy design evidence with the resulting
+durable contract; do not retain it as completed-plan history.
 
 ## Connection lifecycle propagation and rotation
 
