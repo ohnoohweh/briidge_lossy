@@ -112,6 +112,7 @@ keeping credentials out of endpoint diagnostics and persisted status.
 - Desktop proxy-worker lifecycle errors use only the redacted stable codes `unavailable`, `startup_failed`, and `invalid_configuration`; a successful replacement clears the code while retaining the generation and failed-start counters.
 - Native desktop host projections preserve those same proxy-worker lifecycle codes, sourced from the shared Apple proxy vocabulary, rather than substituting descriptive startup-error text.
 - Proxy status `enabled` reflects configuration through the shared Apple status projection; listener, worker state, and `last_error` are the independent runtime projection on Python and native desktop hosts.
+- Python and native Admin status project the selected logging collector's redacted lifecycle and bounded `dropped_records` count.
 - Portability boundary: desktop subprocess supervision is shared between the macOS and Linux hosts; it does not authorize spawning worker processes from iOS extensions.
 
 Implementation note: shared Swift Core owns HTTP/SOCKS request parsing,

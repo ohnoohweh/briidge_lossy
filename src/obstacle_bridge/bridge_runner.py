@@ -2253,6 +2253,8 @@ class Runner:
             "compression_saving_ratio": savings_ratio,
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
+        from .bridge_logging_worker import managed_logging_status
+        payload["logging_worker"] = managed_logging_status()
         admin_worker = self.admin_web
         implementation = getattr(admin_worker, "implementation", "") or str(getattr(self.args, "admin_web_worker", "off") or "off")
         if implementation != "off":

@@ -17,7 +17,7 @@ from unittest import mock
 import pytest
 
 from obstacle_bridge.bridge_logging_ipc import fetch_remote_log_lines
-from obstacle_bridge.bridge_logging_worker import ChildLogRelay, ManagedLoggingWorker, SupervisedLoggingWorker, _PrivateLogHandler, activate_managed_logging
+from obstacle_bridge.bridge_logging_worker import ChildLogRelay, ManagedLoggingWorker, SupervisedLoggingWorker, _PrivateLogHandler, activate_managed_logging, managed_logging_status
 from obstacle_bridge.bridge_proxy_worker import ProxyWorker
 from obstacle_bridge.bridge_peer_worker import PeerStackWorker
 from obstacle_bridge.bridge import AdminWebUI
@@ -343,6 +343,15 @@ def test_supervisor_discards_reply_from_retired_generation():
     result = supervisor.fetch(10)
     assert result["available"] is False
     assert result["lines"] == []
+
+
+def test_managed_logging_status_is_redacted_when_no_collector_is_selected():
+    root = logging.getLogger()
+    with mock.patch.object(root, "handlers", []):
+        assert managed_logging_status() == {
+            "state": "off", "implementation": "", "pid": 0, "generation": 0,
+            "restarts": 0, "failed_starts": 0, "dropped_records": 0,
+        }
 
 
 @pytest.mark.parametrize("implementation", ["python", "native"])

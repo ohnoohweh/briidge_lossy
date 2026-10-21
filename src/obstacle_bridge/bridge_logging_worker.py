@@ -344,6 +344,15 @@ def open_child_log_relay() -> Optional[ChildLogRelay]:
     return None
 
 
+def managed_logging_status() -> dict[str, Any]:
+    """Return the selected collector's redacted Admin status, if any."""
+    for handler in logging.getLogger().handlers:
+        if isinstance(handler, _SupervisedLogHandler):
+            return handler._supervisor.status()
+    return {"state": "off", "implementation": "", "pid": 0, "generation": 0,
+            "restarts": 0, "failed_starts": 0, "dropped_records": 0}
+
+
 def install_child_log_handler(fd: int, root_level: int, logger_levels: dict[str, int]) -> socket.socket:
     """Replace child sinks with its inherited nonblocking record-only socket."""
     sock = socket.socket(fileno=fd)
