@@ -942,7 +942,7 @@ To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--pr
 
 Desktop proxy-worker and native-host status use the shared redacted lifecycle errors `unavailable`, `startup_failed`, and `invalid_configuration`; recovery clears the error and retains generation and failed-start counters.
 Proxy `enabled` reports configured intent through the shared Apple status projection; listener and worker fields report the independently changing runtime state.
-Admin status includes the selected logging collector lifecycle and bounded dropped-record count.
+Admin status includes the selected logging collector lifecycle and bounded dropped-record count; a native child record waits behind a concurrent collector lifecycle transition rather than being silently discarded.
 PXY-3 lifecycle and collector qualification runs in separately named Linux proxy-collector and macOS proxy-collector/host gates.
 
 On desktop Linux and macOS, the Python runner supports the experimental `--peer-stack-worker python --no-tun-enabled-on-startup` for a single outbound TCP peer. `--peer-stack-worker native --peer-stack-worker-native-executable /path/to/ObstacleBridgeHostRunner` on macOS or `/path/to/ObstacleBridgeLinux` on Linux selects a native child (or resolves the platform executable on `PATH`). The child owns the peer stack and TCP/UDP services, and the supervisor replaces it after failure. Native mode has generation-fenced snapshots but currently rejects reconnect, rekey and reload controls; it does not start Admin, proxy, telemetry or TUN. Both modes reject TUN services and peer configuration updates. Listener peers and other overlay transports remain unqualified. Existing connections are lost when the child is replaced.

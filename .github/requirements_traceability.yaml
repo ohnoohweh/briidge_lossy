@@ -712,7 +712,9 @@ REQ-PRX-001:
   # shared Apple vocabulary, use the stable redacted unavailable/startup_failed codes.
   # Enabled is configured intent through the shared Apple projection; listener,
   # worker, and error fields are runtime state.
-  # Python and native Admin both project selected collector lifecycle/drop state.
+  # Python and native Admin both project selected collector lifecycle/drop state;
+  # native child records serialize behind a collector lifecycle transition rather
+  # than being silently discarded.
   # PXY-3 lifecycle and exact proxy-collector evidence is recorded independently per host.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
