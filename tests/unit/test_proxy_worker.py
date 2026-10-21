@@ -11,7 +11,7 @@ import sys
 import pytest
 
 from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
-from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, _read_frame
+from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, _read_frame, worker_capabilities
 
 pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="proxy worker requires desktop Unix sockets")
 
@@ -98,7 +98,8 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
             command = subprocess.check_output(["ps", "-p", str(worker.process.pid), "-o", "command="], text=True)
             assert "private-token" not in command
             snap = runner._proxy_provider_snapshot()
-            assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0, "failed_starts": 0}
+            assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0,
+                                       "failed_starts": 0, "capabilities": worker_capabilities(backend[0])}
             http = snap["listeners"]["http"]["bound_port"]
             socks = snap["listeners"]["socks5"]["bound_port"]
             await _http_tunnel(http, target_port, False)
@@ -119,6 +120,20 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
         assert worker.process.returncode == 0
         with pytest.raises(OSError):
             await asyncio.open_connection("127.0.0.1", http)
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_proxy_worker_readiness_advertises_redacted_capabilities(implementation, native_proxy_worker_executable):
+    async def exercise():
+        executable = native_proxy_worker_executable if implementation == "native" else None
+        worker = ProxyWorker(implementation, executable)
+        try:
+            await worker.start(_config(protocols=["http-connect"]))
+            assert worker.capabilities == worker_capabilities(implementation)
+            assert "private-token" not in repr(worker.capabilities)
+        finally:
+            await worker.stop()
     asyncio.run(exercise())
 
 

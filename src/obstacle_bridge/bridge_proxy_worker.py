@@ -23,6 +23,22 @@ from .bridge_proxy_server import ObstacleBridgeProxyServer, ObstacleBridgeProxyS
 MAX_FRAME = 64 * 1024
 
 
+def worker_capabilities(implementation: str) -> dict[str, Any]:
+    """Redacted, versioned declaration of the selected worker surface."""
+    if implementation == "native":
+        bind_families, egress_modes = ["ipv4"], ["direct"]
+    else:
+        bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
+    return {
+        "contract_version": 1,
+        "bind_families": bind_families,
+        "protocols": ["http-connect", "socks5-connect"],
+        "auth_modes": ["none", "basic", "token", "password"],
+        "egress_modes": egress_modes,
+        "destination_policy": {"enforced": False, "requires_unrestricted": True},
+    }
+
+
 def validate_worker_policy(config: dict[str, Any]) -> None:
     """Do not silently ignore restrictions that this provider cannot enforce."""
     policy = config.get("policy")
@@ -103,7 +119,8 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
             ))
             await server.start()
             servers[name] = server
-        await _write_frame(writer, {"v": 1, "kind": "proxy.ready", "implementation": "python", "listeners": _snapshot(servers)})
+        await _write_frame(writer, {"v": 1, "kind": "proxy.ready", "implementation": "python",
+                                    "capabilities": worker_capabilities("python"), "listeners": _snapshot(servers)})
         command = asyncio.create_task(_read_frame(reader))
         while True:
             done, _ = await asyncio.wait({command}, timeout=0.25)
@@ -152,6 +169,7 @@ class ProxyWorker:
         self.generation = 0
         self.restarts = 0
         self.failed_starts = 0
+        self.capabilities: dict[str, Any] = {}
 
     async def start(self, config: dict[str, Any]) -> None:
         if self.process is not None or self._monitor is not None:
@@ -205,9 +223,11 @@ class ProxyWorker:
                                              "log_root_level": logging.getLogger().level,
                                              "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})
             response = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
-            if response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation or not isinstance(response.get("listeners"), dict):
+            if (response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation
+                    or not isinstance(response.get("capabilities"), dict) or not isinstance(response.get("listeners"), dict)):
                 raise ValueError("invalid proxy worker readiness")
             self.listeners = response["listeners"]
+            self.capabilities = response["capabilities"]
             self._reader_task = asyncio.create_task(self._receive(reader))
             for name in ("http", "socks5"):
                 key = f"{name}_port"
@@ -297,6 +317,7 @@ class ProxyWorker:
             await asyncio.to_thread(self._log_relay.close)
             self._log_relay = None
         self.listeners = {}
+        self.capabilities = {}
 
 
 def main() -> None:

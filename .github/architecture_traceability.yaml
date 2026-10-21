@@ -440,6 +440,8 @@ ARC-CMP-004:
   # Proxy completion qualifies Python/native selections on each host locally;
   # it does not require or assert a macOS-to-Linux process pairing.
   # The evidence does not qualify the remaining common IPC plan.
+  # PXY-1 readiness capability declarations are covered for both local worker
+  # implementations before protocol feature parity is attempted.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

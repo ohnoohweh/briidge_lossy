@@ -377,7 +377,12 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     logger?.emit(20, "[PROXY] listener started")
     defer { logger?.emit(20, "[PROXY] listener stopped") }
     func snapshot() -> [String: Any] { listeners.mapValues { $0.snapshot() } }
-    try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "listeners": snapshot()])
+    let capabilities: [String: Any] = ["contract_version": 1, "bind_families": ["ipv4"],
+                                        "protocols": ["http-connect", "socks5-connect"],
+                                        "auth_modes": ["none", "basic", "token", "password"],
+                                        "egress_modes": ["direct"],
+                                        "destination_policy": ["enforced": false, "requires_unrestricted": true]]
+    try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "capabilities": capabilities, "listeners": snapshot()])
     while true {
         var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
         let count = poll(&descriptor, 1, 250)

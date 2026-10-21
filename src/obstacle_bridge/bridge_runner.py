@@ -952,7 +952,8 @@ class Runner:
             **({"worker": {"implementation": worker.implementation,
                             "state": "running" if worker.process is not None and worker.process.returncode is None and not worker.last_error else "unavailable",
                             "generation": worker.generation, "restarts": worker.restarts,
-                            "failed_starts": worker.failed_starts}} if worker is not None else {}),
+                            "failed_starts": worker.failed_starts,
+                            "capabilities": worker.capabilities}} if worker is not None else {}),
         }
 
     async def _start_tun_helper(self) -> None:
