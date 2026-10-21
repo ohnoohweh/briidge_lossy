@@ -130,6 +130,14 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
                     raise ValueError("invalid proxy worker command")
                 break
             await _write_frame(writer, {"v": 1, "kind": "proxy.snapshot", "listeners": _snapshot(servers)})
+    except (ValueError, KeyError, TypeError):
+        # This is deliberately a stable, redacted startup outcome.  Detailed
+        # configuration values can contain credentials and never cross back.
+        with contextlib.suppress(Exception):
+            await _write_frame(writer, {"v": 1, "kind": "proxy.error", "code": "invalid_configuration"})
+    except OSError:
+        with contextlib.suppress(Exception):
+            await _write_frame(writer, {"v": 1, "kind": "proxy.error", "code": "startup_failed"})
     except (asyncio.IncompleteReadError, ConnectionError, BrokenPipeError):
         pass  # Owner loss revokes the worker's capability.
     finally:
@@ -223,6 +231,8 @@ class ProxyWorker:
                                              "log_root_level": logging.getLogger().level,
                                              "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})
             response = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
+            if response.get("kind") == "proxy.error" and response.get("code") in {"invalid_configuration", "startup_failed"}:
+                raise ValueError(f"proxy worker startup failed: {response['code']}")
             if (response.get("kind") != "proxy.ready" or response.get("implementation") != self.implementation
                     or not isinstance(response.get("capabilities"), dict) or not isinstance(response.get("listeners"), dict)):
                 raise ValueError("invalid proxy worker readiness")

@@ -154,7 +154,7 @@ def test_proxy_worker_owner_loss_closes_listeners(backend):
 def test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth(backend):
     async def exercise():
         worker = ProxyWorker(*backend)
-        with pytest.raises(Exception):
+        with pytest.raises(ValueError, match="invalid_configuration"):
             await worker.start(_config(auth={"mode": "basic", "username": "user", "token": ""}))
         assert worker.process.returncode is not None
         with socket.socket() as reserved:

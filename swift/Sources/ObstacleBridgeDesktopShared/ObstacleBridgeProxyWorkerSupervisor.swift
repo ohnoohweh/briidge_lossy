@@ -157,6 +157,11 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "config": config,
                                              "log_root_level": 10, "log_levels": ["proxy_provider": loggingWorker?.proxyLogLevel ?? 0]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)
+            if response["kind"] as? String == "proxy.error",
+               let code = response["code"] as? String,
+               ["invalid_configuration", "startup_failed"].contains(code) {
+                throw code == "invalid_configuration" ? Failure.invalidConfiguration : Failure.unavailable
+            }
             guard response["kind"] as? String == "proxy.ready", response["implementation"] as? String == implementation,
                   let advertised = response["capabilities"] as? [String: Any],
                   let initial = response["listeners"] as? [String: Any] else { throw Failure.invalidFrame }

@@ -416,4 +416,20 @@ while index + 1 < args.count {
     index += 2
 }
 guard index == args.count, let fd = controlFD else { exit(1) }
-do { try run(fd, logFD: logFD); close(fd) } catch { close(fd); exit(1) }
+do {
+    try run(fd, logFD: logFD)
+    close(fd)
+} catch {
+    let code: String
+    if let workerError = error as? WorkerError {
+        switch workerError {
+        case .invalid: code = "invalid_configuration"
+        case .io, .closed: code = "startup_failed"
+        }
+    } else {
+        code = "startup_failed"
+    }
+    try? writeFrame(fd, ["v": 1, "kind": "proxy.error", "code": code])
+    close(fd)
+    exit(1)
+}
