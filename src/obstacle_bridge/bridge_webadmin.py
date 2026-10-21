@@ -1918,6 +1918,7 @@ class AdminWebUI:
             self._call_runner_soon(self.runner.request_restart, reason="admin_web:/api/config restart_after_save")
 
     async def _handle_logs(self, writer, raw_path: str):
+        from .admin_api_contract import logs_payload
         limit = 400
         with contextlib.suppress(Exception):
             if "?" in raw_path:
@@ -1942,9 +1943,10 @@ class AdminWebUI:
             remote = remote or {"available": False, "lines": [], "error": "logger unavailable"}
             result = {
                 "lines": list(remote.get("lines", [])),
-                "source": "private_worker" if private_worker else "remote_udp",
-                "logger_available": bool(remote.get("available", False)),
-                "logger_error": str(remote.get("error", "") or ""),
+                "source": "managed" if private_worker else "remote_udp",
+                "available": bool(remote.get("available", False)),
+                "error": str(remote.get("error", "") or ""),
+                "worker": remote.get("worker_status"),
             }
         else:
             try:
@@ -1952,17 +1954,13 @@ class AdminWebUI:
             except concurrent.futures.TimeoutError:
                 await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
                 return
-            result = {"lines": lines, "source": "local", "logger_available": True, "logger_error": ""}
-        payload = {"ok": True, "lines": result["lines"], "count": len(result["lines"]),
-                   "source": result["source"], "logger_available": result["logger_available"],
-                   "logger_error": result["logger_error"]}
-        if private_worker and isinstance(remote.get("worker_status"), dict):
-            payload["logger_worker"] = remote["worker_status"]
+            result = {"lines": lines, "source": "local", "available": True, "error": "", "worker": None}
+        payload = logs_payload(lines=result["lines"], available=result["available"], source=result["source"], error=result["error"], logging_worker=result["worker"])
         # Logging the returned lines recursively republishes the log buffer,
         # potentially including sensitive application messages, as a new log.
         self._log_api_response("/api/logs", 200,
                                {"ok": True, "count": payload["count"], "source": payload["source"],
-                                "logger_available": payload["logger_available"]},
+                                "available": payload["available"]},
                                summary=f"count={len(result['lines'])}")
         await self._send_json(writer, 200, payload)
 
@@ -2733,6 +2731,7 @@ class AdminWebUI:
         )
 
     def _build_status_payload_now(self) -> dict:
+        from .admin_api_contract import logging_worker_status
         payload = self.runner.get_status_snapshot()
         connections_snapshot = self.runner.get_connections_snapshot() or {}
         for aggregate_key in ("open_connections", "traffic", "compress_layer"):
@@ -2745,6 +2744,8 @@ class AdminWebUI:
         payload["admin_ui"] = self._build_admin_ui_payload()
         payload["security_advisor"] = self._build_security_advisor_payload()
         payload["build"] = _detect_build_info()
+        provider = getattr(self.runner.args, "_admin_logging_worker_status", None)
+        payload["logging_worker"] = logging_worker_status(provider() if callable(provider) else None)
         return payload
 
     def _build_status_payload(self) -> dict:

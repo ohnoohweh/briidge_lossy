@@ -761,6 +761,7 @@ ARC-CMP-005:
   # summaries; it never reflects telemetry event payloads or credentials.
   # The Linux native foreground owner exposes a collector lifecycle snapshot
   # in status and its canonical lifecycle event through the bounded log query.
+  # Python and native owners share the same public worker-envelope fields.
   unit_tests:
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector

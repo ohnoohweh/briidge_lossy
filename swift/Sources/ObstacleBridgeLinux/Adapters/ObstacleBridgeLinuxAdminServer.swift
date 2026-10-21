@@ -239,10 +239,11 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
                 .split(separator: "&").first(where: { $0.hasPrefix("limit=") })?
                 .dropFirst("limit=".count) ?? "400") ?? 400
             if let logWorker {
-                response = ObstacleBridgeAdminAPI.linuxJSONResponse(logWorker.fetch(limit: max(1, min(limit, 10_000)))) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                let fetched = logWorker.fetch(limit: max(1, min(limit, 10_000)))
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminAPI.logsPayload(lines: fetched["lines"] as? [String] ?? [], available: fetched["available"] as? Bool ?? false, source: "managed", error: fetched["error"] as? String ?? "logger unavailable", loggingWorker: logWorker.status())) ?? .init(statusCode: 500, body: Data("{}".utf8))
             } else {
                 let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
-                response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "lines": lines, "count": lines.count, "source": "linux-swift", "logger_available": debugLogsProvider != nil, "logger_error": debugLogsProvider == nil ? "native observability unavailable" : ""]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminAPI.logsPayload(lines: lines, available: debugLogsProvider != nil, source: "local", error: debugLogsProvider == nil ? "native observability unavailable" : "")) ?? .init(statusCode: 500, body: Data("{}".utf8))
             }
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(["peers": peersPayload()]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/connections": response = ObstacleBridgeAdminAPI.linuxJSONResponse(connectionsProvider()) ?? .init(statusCode: 500, body: Data("{}".utf8))
@@ -629,7 +630,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             // Keep the common desktop Admin status contract: `/api/logs` is
             // backed by this supervisor, and operators also need its
             // lifecycle state from the status snapshot.
-            "logging_worker": logWorker?.status() ?? ["state": "off"],
+            "logging_worker": ObstacleBridgeAdminAPI.loggingWorkerStatus(logWorker?.status()),
             "operator_capabilities": operatorCapabilities(),
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],

@@ -2262,6 +2262,12 @@ extension PacketTunnelProvider: ObstacleBridgeAdminAPIStateProvider {
         return Array(lines.suffix(max(1, min(limit, 1000))))
     }
 
+    func adminLoggingWorkerStatus() -> [String: Any] {
+        // iOS has no private desktop collector, but preserves the shared
+        // Admin shape so WebAdmin never branches by product.
+        ["state": "off"]
+    }
+
     func adminRequestRestart() -> [String: Any] {
         scheduleEmbeddedRuntimeReload(action: "restart")
         return [

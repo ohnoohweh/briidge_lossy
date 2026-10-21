@@ -3615,6 +3615,7 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
         status_url = f"http://127.0.0.1:{status_port}/api/status"
         status = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
         worker = status["logging_worker"]
+        assert {"state", "implementation", "pid", "generation", "restarts", "failed_starts", "dropped_records"} <= worker.keys()
         assert worker["implementation"] == implementation and worker["pid"] > 1 and worker["pid"] != process.pid
         logs = _wait_http_condition(f"http://127.0.0.1:{status_port}/api/logs?limit=20", lambda item: any("runtime.started" in line for line in item.get("lines", [])), timeout_sec=10)
         assert any("runtime.started" in line for line in logs["lines"])

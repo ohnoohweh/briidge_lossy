@@ -198,9 +198,14 @@ class SupervisedLoggingWorker:
         state = "stopped" if self._stop.is_set() else (
             "running" if child is not None and child.process.poll() is None else "restarting"
         )
+        try:
+            pid = int(child.process.pid) if child is not None and child.process.poll() is None else 0
+        except (TypeError, ValueError):
+            pid = 0
         return {
             "state": state,
             "implementation": self.implementation,
+            "pid": pid,
             "generation": self._generation,
             "restarts": self._restart_count,
             "failed_starts": self._failed_starts,
@@ -378,6 +383,7 @@ def activate_managed_logging(args):
         return
     executable = getattr(args, "log_worker_native_executable", None) or shutil.which("ObstacleBridgeLogCollector")
     worker = SupervisedLoggingWorker(implementation, native_executable=executable)
+    setattr(args, "_admin_logging_worker_status", worker.status)
     root = logging.getLogger()
     previous_handlers = list(root.handlers)
     previous_query = swap_admin_log_query_client(worker)
@@ -391,4 +397,5 @@ def activate_managed_logging(args):
         for handler in previous_handlers:
             root.addHandler(handler)
         swap_admin_log_query_client(previous_query)
+        setattr(args, "_admin_logging_worker_status", None)
         worker.close()

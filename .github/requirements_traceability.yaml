@@ -1590,6 +1590,7 @@ REQ-ADM-001:
   # Linux native-process coverage reads the collector through `/api/logs` and
   # asserts its canonical `runtime.lifecycle` record, while worker lifecycle
   # state remains observable through `/api/status`.
+  # Python contract tests pin the same public worker fields and log envelope.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service

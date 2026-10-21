@@ -91,10 +91,10 @@ def test_python_runner_admin_queries_managed_worker_and_restores_sinks():
         worker.handler.emit(logging.LogRecord("private.test", logging.WARNING, __file__, 1, "admin message", (), None))
         asyncio.run(ui._handle_logs(mock.Mock(), "/api/logs?limit=10"))
         result = ui._send_json.await_args.args[2]
-        assert result["source"] == "private_worker"
-        assert result["logger_available"]
-        assert result["logger_worker"]["state"] == "running"
-        assert result["logger_worker"]["generation"] == 1
+        assert result["source"] == "managed"
+        assert result["available"]
+        assert result["logging_worker"]["state"] == "running"
+        assert result["logging_worker"]["generation"] == 1
         assert any("admin message" in line for line in result["lines"])
         ui._call_runner.assert_not_called()
     assert root.handlers == before

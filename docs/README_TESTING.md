@@ -311,6 +311,7 @@ logging collectors are supervised, expose their redacted status through
 `/api/status`, and receive the canonical `runtime.lifecycle` event through
 `/api/logs`; it also covers all Python/native proxy-worker and collector
 combinations and component-level proxy log filtering.
+Focused Python worker tests pin the same normalized worker-status and log-envelope keys as the Core-owned native Admin API.
 The Admin probe verifies that the Linux peer row is one Core/adapter-derived
 redacted projection: lifecycle/readiness, epoch/session diagnostics, retry
 window, and protected frame counters/totals are published without a PSK,

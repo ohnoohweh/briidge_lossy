@@ -1570,7 +1570,7 @@ final class ObstacleBridgeHostRunner {
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
             "proxy_provider": proxyProviderSnapshot(),
-            "logging_worker": loggingWorkerSnapshot(),
+            "logging_worker": ObstacleBridgeAdminAPI.loggingWorkerStatus(loggingWorkerSnapshot()),
             "telemetry": telemetryStatusSnapshot(),
             "secure_link_material_generation": 0,
             "secure_link_last_reload_unix_ts": NSNull(),
@@ -4260,6 +4260,10 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
 
     func adminLogLines(limit: Int) -> [String] {
         readLogLines(limit: limit)
+    }
+
+    func adminLoggingWorkerStatus() -> [String: Any] {
+        loggingWorkerSnapshot()
     }
 
     func adminRequestRestart() -> [String: Any] {
