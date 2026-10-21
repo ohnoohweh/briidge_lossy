@@ -318,8 +318,9 @@ def test_admin_child_queries_python_logging_child(monkeypatch):
             await worker.start()
             try:
                 status, data = await _request(worker.port, "/api/logs")
-                assert status == 200 and data["logger_available"]
-                assert data["source"] == "private_worker"
+                assert status == 200 and data["available"]
+                assert data["source"] == "managed"
+                assert data["logging_worker"]["state"] == "running"
                 assert any("child query marker" in line for line in data["lines"])
                 await _request(worker.port, "/api/config")
                 await _request(worker.port, "/api/auth/state")

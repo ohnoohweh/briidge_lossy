@@ -116,7 +116,12 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
         var fds: [Int32] = [-1, -1]
         guard socketpair(AF_UNIX, proxySupervisorStreamType, 0, &fds) == 0 else { throw Failure.unavailable }
         let parentFD = fds[0], childFD = fds[1]
-        guard fcntl(parentFD, F_SETFD, FD_CLOEXEC) == 0, fcntl(childFD, F_SETFD, FD_CLOEXEC) == 0 else {
+        // The parent end must not leak into the worker.  The child end is
+        // deliberately left inheritable: Foundation's macOS Process adapter
+        // installs this descriptor as standard input during exec.  Marking it
+        // close-on-exec made that hand-off platform dependent and caused the
+        // private proxy worker to exit before its ready frame.
+        guard fcntl(parentFD, F_SETFD, FD_CLOEXEC) == 0 else {
             close(parentFD); close(childFD); throw Failure.unavailable
         }
         let flags = fcntl(parentFD, F_GETFL)

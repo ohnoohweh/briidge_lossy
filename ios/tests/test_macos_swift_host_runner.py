@@ -56,6 +56,7 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift") == 2
     assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift") == 2
     assert '"${APP_MACOS_DIR}/ObstacleBridgeLogCollector"' in build_script
+    assert '"${APP_MACOS_DIR}/ObstacleBridgeProxyWorker"' in build_script
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
@@ -71,6 +72,14 @@ def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_on
     assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
     assert "native peer worker cannot own shared desktop services" in runner
+
+
+def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
+    supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
+
+    assert "fcntl(parentFD, F_SETFD, FD_CLOEXEC) == 0" in supervisor
+    assert "fcntl(childFD, F_SETFD, FD_CLOEXEC)" not in supervisor
+    assert "private proxy worker to exit before its ready frame" in supervisor
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
