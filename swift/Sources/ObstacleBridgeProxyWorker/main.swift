@@ -351,15 +351,21 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
           policy["allow_private_destinations"] as? Bool == true,
           let blocked = policy["blocked_host_patterns"] as? [String], blocked.isEmpty,
           let egress = config["egress"] as? [String: Any], let mode = egress["mode"] as? String,
-          ["direct", "off", "none"].contains(mode.lowercased()),
-          Set(egress.keys).isSubset(of: ["mode", "address_families"]),
-          (egress["address_families"] == nil || Set(egress["address_families"] as? [String] ?? []) == ["ipv4", "ipv6"]),
+          mode.lowercased() == "direct", Set(egress.keys) == Set(["mode"]),
           let protocols = config["protocols"] as? [String],
-          let httpPort = config["http_port"] as? Int, let socksPort = config["socks5_port"] as? Int else { throw WorkerError.invalid }
+          !protocols.isEmpty, Set(protocols).isSubset(of: ["http", "http-connect", "socks5", "socks5-connect"]),
+          let httpPort = config["http_port"] as? Int, (0...65_535).contains(httpPort),
+          let socksPort = config["socks5_port"] as? Int, (0...65_535).contains(socksPort) else { throw WorkerError.invalid }
     let auth = config["auth"] as? [String: Any] ?? [:]
     let authMode = (auth["mode"] as? String ?? "none").lowercased()
+    guard Set(auth.keys).isSubset(of: ["mode", "username", "token", "password"]),
+          ["none", "basic", "token", "password"].contains(authMode) else { throw WorkerError.invalid }
     var username: String?, password: String?
-    if !["", "none", "off", "disabled"].contains(authMode) {
+    if authMode == "none" {
+        guard (auth["username"] as? String ?? "").isEmpty,
+              (auth["token"] as? String ?? "").isEmpty,
+              (auth["password"] as? String ?? "").isEmpty else { throw WorkerError.invalid }
+    } else {
         username = (auth["username"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
         let token = auth["token"] as? String ?? ""
         password = (token.isEmpty ? auth["password"] as? String : token)?.trimmingCharacters(in: .whitespacesAndNewlines)

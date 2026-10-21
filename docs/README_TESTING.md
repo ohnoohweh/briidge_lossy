@@ -79,7 +79,7 @@ The active testing focus on this branch is:
 - configuration and hook-contract derivation from `TUN_routing`
 - authenticated admin and SecureLink reload/recovery flows
 - privacy-safe address fixtures drawn from IANA-reserved documentation ranges rather than live deployment endpoints
-- desktop proxy-worker readiness capability declarations and redacted startup-error codes for Python and native implementations, including invalid-configuration and occupied-listener failures plus the common `worker.capabilities` supervisor projection
+- desktop proxy-worker contract-v1 corpus for accepted protocol/authentication shapes and rejected port/protocol/authentication/egress shapes, readiness capability declarations, redacted startup-error codes, and the common `worker.capabilities` supervisor projection
 
 Representative anchors for those areas:
 

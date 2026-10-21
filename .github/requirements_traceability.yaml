@@ -698,7 +698,8 @@ REQ-WSP-013:
 REQ-PRX-001:
   # Desktop Python/native worker selection is qualified independently on macOS
   # and Linux; these entries never imply a cross-operating-system process pair.
-  # The worker contract pins redacted error codes for invalid credentials and
+  # Contract-v1 rejects malformed protocol, port, authentication, and egress
+  # shapes before spawn. It pins redacted errors for invalid credentials and
   # occupied listeners, and both supervisors project capabilities at
   # worker.capabilities rather than propagating configuration in parent errors.
   integration_tests:
