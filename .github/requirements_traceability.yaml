@@ -738,8 +738,8 @@ REQ-PRX-001:
     - tests/unit/test_proxy_worker.py::test_proxy_worker_system_egress_selects_and_bypasses_env_proxy
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_loopback_listener_traffic
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
-    - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
-    - tests/unit/test_proxy_worker.py::test_native_proxy_idle_clients_do_not_starve_new_connections
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_concurrent_half_close_with_large_replies
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_idle_clients_do_not_starve_new_connections
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_absolute_form_matches_pproxy_rewrite
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_http_connect_authority_and_basic_auth_match_pproxy
     - ios/tests/test_proxy_server_swift_parity.py::test_swift_proxy_socks5_connect_forms_match_pproxy_address_parser

@@ -18,7 +18,10 @@ from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, ProxyWor
 pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="proxy worker requires desktop Unix sockets")
 
 
-@pytest.fixture(params=["python", "native"])
+@pytest.fixture(params=[
+    pytest.param("python", id=f"{sys.platform}-python-worker"),
+    pytest.param("native", id=f"{sys.platform}-native-worker"),
+])
 def backend(request):
     return request.param, request.getfixturevalue("native_proxy_worker_executable") if request.param == "native" else None
 
@@ -536,7 +539,7 @@ def test_proxy_worker_ipv6_socks_and_password_fallback(backend):
     asyncio.run(exercise())
 
 
-def test_native_proxy_concurrent_half_close_with_large_replies(native_proxy_worker_executable):
+def test_proxy_worker_concurrent_half_close_with_large_replies(backend):
     async def exercise():
         reply = b"large-response" * 20_000
 
@@ -551,7 +554,7 @@ def test_native_proxy_concurrent_half_close_with_large_replies(native_proxy_work
                 await writer.wait_closed()
 
         target = await asyncio.start_server(target_handler, "127.0.0.1", 0)
-        worker = ProxyWorker("native", native_proxy_worker_executable)
+        worker = ProxyWorker(*backend)
         await worker.start(_config())
         try:
             async def client():
@@ -578,10 +581,10 @@ def test_native_proxy_concurrent_half_close_with_large_replies(native_proxy_work
     asyncio.run(exercise())
 
 
-def test_native_proxy_idle_clients_do_not_starve_new_connections(native_proxy_worker_executable):
+def test_proxy_worker_idle_clients_do_not_starve_new_connections(backend):
     async def exercise():
         target = await asyncio.start_server(_echo, "127.0.0.1", 0)
-        worker = ProxyWorker("native", native_proxy_worker_executable)
+        worker = ProxyWorker(*backend)
         await worker.start(_config())
         idle = []
         try:

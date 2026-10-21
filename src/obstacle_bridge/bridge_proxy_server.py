@@ -674,7 +674,11 @@ class _ProxySession:
         while True:
             data = await reader.read(64 * 1024)
             if not data:
-                writer.close()
+                if writer.can_write_eof():
+                    writer.write_eof()
+                    await writer.drain()
+                else:
+                    writer.close()
                 return
             writer.write(data)
             await writer.drain()

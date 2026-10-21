@@ -135,13 +135,13 @@ jobs:
       - name: Test isolated Python peer stack
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
-      - name: Test private proxy worker
+      - name: Qualify PXY-2 proxy worker matrix (Linux)
         run: |
-          pytest -q tests/unit/test_proxy_worker.py
-          pytest -q tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+          pytest -vv tests/unit/test_proxy_worker.py
+          pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
-      - name: Test native proxy supervision
-        run: pytest -q tests/unit/test_native_proxy_supervisor.py
+      - name: Qualify PXY-2 native-supervisor matrix (Linux)
+        run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
       - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py
@@ -424,13 +424,13 @@ jobs:
       - name: Test isolated Python peer stack
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
-      - name: Test private proxy worker
+      - name: Qualify PXY-2 proxy worker matrix (macOS)
         run: |
-          pytest -q tests/unit/test_proxy_worker.py
-          pytest -q tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+          pytest -vv tests/unit/test_proxy_worker.py
+          pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
-      - name: Test native proxy supervision
-        run: pytest -q tests/unit/test_native_proxy_supervisor.py
+      - name: Qualify PXY-2 native-supervisor matrix (macOS)
+        run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
       - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py

@@ -73,8 +73,8 @@ ARC-CMP-001:
     - tests/unit/test_proxy_worker.py::test_proxy_worker_system_egress_selects_and_bypasses_env_proxy
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_loopback_listener_traffic
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
-    - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
-    - tests/unit/test_proxy_worker.py::test_native_proxy_idle_clients_do_not_starve_new_connections
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_concurrent_half_close_with_large_replies
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_idle_clients_do_not_starve_new_connections
     - tests/unit/test_proxy_server.py::test_python_proxy_server_default_system_egress_auth_is_platform_scoped
     - tests/unit/test_proxy_server.py::test_python_proxy_server_rewrites_http_absolute_form
     - tests/unit/test_proxy_server.py::test_python_proxy_server_system_egress_uses_upstream_connect_proxy

@@ -48,7 +48,7 @@ def _config():
             "egress": {"mode": "direct"}, "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}}
 
 
-@pytest.mark.parametrize("implementation", ["python", "native"])
+@pytest.mark.parametrize("implementation", ["python", "native"], ids=lambda value: f"{sys.platform}-native-supervisor-{value}-worker")
 def test_swift_supervisor_owns_python_or_native_proxy(native_supervisor, native_proxy_worker_executable, implementation):
     async def exercise():
         async def echo(reader, writer):
