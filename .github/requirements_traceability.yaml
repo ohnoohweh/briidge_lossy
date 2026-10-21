@@ -713,6 +713,7 @@ REQ-PRX-001:
   # Enabled is configured intent through the shared Apple projection; listener,
   # worker, and error fields are runtime state.
   # Python and native Admin both project selected collector lifecycle/drop state.
+  # PXY-3 lifecycle and collector evidence is recorded independently per host.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5

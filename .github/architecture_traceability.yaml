@@ -454,7 +454,8 @@ ARC-CMP-004:
   # authentication secrets and failed listener start returns a stable code.
   # The shared Apple status projection keeps enabled as configured intent,
   # independently of the runtime projection.
-  # Python Admin also projects the selected collector's bounded drop state.
+  # Python Admin also projects the selected collector's bounded drop state;
+  # PXY-3 CI matrices record lifecycle/collector evidence separately per host.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

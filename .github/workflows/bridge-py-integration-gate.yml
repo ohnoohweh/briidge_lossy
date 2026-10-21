@@ -135,15 +135,15 @@ jobs:
       - name: Test isolated Python peer stack
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
-      - name: Qualify PXY-2 proxy worker matrix (Linux)
+      - name: Qualify PXY-3B lifecycle matrix (Linux)
         run: |
           pytest -vv tests/unit/test_proxy_worker.py
           pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
-      - name: Qualify PXY-2 native-supervisor matrix (Linux)
+      - name: Qualify PXY-3B native-supervisor matrix (Linux)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
-      - name: Test native logging supervision
+      - name: Qualify PXY-3C collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_supervisor.py
 
       - name: Test private Admin worker
@@ -424,15 +424,15 @@ jobs:
       - name: Test isolated Python peer stack
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
-      - name: Qualify PXY-2 proxy worker matrix (macOS)
+      - name: Qualify PXY-3B lifecycle matrix (macOS)
         run: |
           pytest -vv tests/unit/test_proxy_worker.py
           pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
-      - name: Qualify PXY-2 native-supervisor matrix (macOS)
+      - name: Qualify PXY-3B native-supervisor matrix (macOS)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
-      - name: Test native logging supervision
+      - name: Qualify PXY-3C collector matrix (macOS)
         run: pytest -q tests/unit/test_native_log_supervisor.py
 
       - name: Test macOS host proxy worker selection
