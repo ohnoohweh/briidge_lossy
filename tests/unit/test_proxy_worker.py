@@ -98,8 +98,10 @@ def test_runner_proxy_child_owns_http_socks_and_snapshots(backend):
             command = subprocess.check_output(["ps", "-p", str(worker.process.pid), "-o", "command="], text=True)
             assert "private-token" not in command
             snap = runner._proxy_provider_snapshot()
+            assert {"enabled", "configured", "listeners", "last_error", "worker"} <= set(snap)
             assert snap["worker"] == {"implementation": backend[0], "state": "running", "generation": 1, "restarts": 0,
                                        "failed_starts": 0, "capabilities": worker_capabilities(backend[0])}
+            assert snap["last_error"] == ""
             http = snap["listeners"]["http"]["bound_port"]
             socks = snap["listeners"]["socks5"]["bound_port"]
             await _http_tunnel(http, target_port, False)

@@ -440,10 +440,10 @@ ARC-CMP-004:
   # Proxy completion qualifies Python/native selections on each host locally;
   # it does not require or assert a macOS-to-Linux process pairing.
   # The evidence does not qualify the remaining common IPC plan.
-  # PXY-1's contract-v1 corpus rejects malformed configuration before spawn,
-  # and readiness declarations reach both supervisors at worker.capabilities
-  # before protocol feature parity is attempted. Invalid configuration and
-  # failed listener start return redacted stable codes on the same channel.
+  # PXY-1's contract-v1 corpus rejects malformed configuration before spawn.
+  # Both supervisors expose the same redacted lifecycle projection at worker
+  # identity/state/generation/restart/failure/capabilities plus listeners and
+  # last_error; failed listener start returns a stable private-channel code.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve
