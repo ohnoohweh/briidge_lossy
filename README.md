@@ -4,7 +4,7 @@ ObstacleBridge is a cross-platform overlay and channel-multiplexing toolkit for 
 The project currently targets six platform families:
 
 - **Linux Python CLI/runtime**: the primary server and automation-friendly runtime, including `/dev/net/tun`, lifecycle hook based routing, proxy egress, and elevated integration coverage.
-- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, bounded local telemetry-spool, and explicit per-child listener remote-catalog paths backed by shared Core protocol codecs. Set `debug_logging.debug_enabled` for bounded, payload-free myUDP/ChannelMux/SecureLink and UDP service-socket diagnostics in the local log and `/api/debug/logs`; elevated mixed Python/native helper tests qualify packet carry over myUDP. See the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
+- **Linux native CLI**: the compiled Swift command-line product provides native Linux overlay, service, TUN-helper, configured lifecycle logging, bounded local telemetry-spool, and explicit per-child listener remote-catalog paths backed by shared Core protocol codecs. Its private Python/native log collectors expose the same redacted lifecycle status in `/api/status` and bounded canonical lifecycle records in `/api/logs`, including through the isolated Admin-worker path. Set `debug_logging.debug_enabled` for bounded, payload-free myUDP/ChannelMux/SecureLink and UDP service-socket diagnostics in the local log and `/api/debug/logs`; elevated mixed Python/native helper tests qualify packet carry over myUDP. See the [Linux Swift design](docs/LinuxSwift_design.md) for current scope and known limitations.
 - **Windows Python CLI/runtime**: the Python runtime with WinTun support, Windows proxy/PAC integration, and Windows-specific elevated TUN coverage.
 - **macOS Python CLI/runtime and Swift app**: macOS can run the normal Python product, while the native Swift app and host runner share protocol behavior with Python and own macOS app lifecycle plus native packet/routing integration.
 - **iOS Swift app/extension**: the native companion app and packet tunnel extension provide the iOS product path, with protocol parity and interop checked against the Python implementation.
@@ -938,6 +938,10 @@ Operational notes:
 
 ObstacleBridge can expose a first-party local proxy provider for browser or application traffic. The provider is separate from the overlay peer connection: it listens on local loopback ports, accepts explicit proxy clients, and then opens direct outbound connections from the ObstacleBridge runtime.
 
+To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--proxy-provider-worker native` and `--proxy-provider-policy '{"allow_private_destinations":true,"blocked_host_patterns":[]}'`. This explicitly allows private destinations and provides no destination blocklist; use it only where that policy is appropriate. Build the native executable with `swift build --product ObstacleBridgeProxyWorker` and supply its path with `--proxy-provider-worker-native-executable`. The native child currently requires a `127.0.0.1` bind and `--proxy-provider-egress '{"mode":"direct"}'`; unsupported settings fail startup. The supervisor replaces a lost child; active proxy connections do not survive replacement.
+
+On desktop Linux and macOS, the Python runner supports the experimental `--peer-stack-worker python --no-tun-enabled-on-startup` for a single outbound TCP peer. `--peer-stack-worker native --peer-stack-worker-native-executable /path/to/ObstacleBridgeHostRunner` on macOS or `/path/to/ObstacleBridgeLinux` on Linux selects a native child (or resolves the platform executable on `PATH`). The child owns the peer stack and TCP/UDP services, and the supervisor replaces it after failure. Native mode has generation-fenced snapshots but currently rejects reconnect, rekey and reload controls; it does not start Admin, proxy, telemetry or TUN. Both modes reject TUN services and peer configuration updates. Listener peers and other overlay transports remain unqualified. Existing connections are lost when the child is replaced.
+
 The default local ports are:
 
 - HTTP and HTTPS proxy traffic through HTTP absolute-form and `CONNECT`: `127.0.0.1:13881`
@@ -1588,9 +1592,9 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `65` | `1019` |
-| macOS Swift app | `1` | `72` |
-| iOS app/extension | `32` | `209` |
+| Python CLI/runtime, including macOS Python | `74` | `1107` |
+| macOS Swift app | `1` | `78` |
+| iOS app/extension | `32` | `210` |
 
 #### Requirement traceability
 
@@ -1626,6 +1630,7 @@ This top-level section is intentionally compact and honest. Keep the detailed be
 Current snapshot from `python3 scripts/report_python_swift_drift.py`:
 
 This section is intentionally narrower than product coverage. It shows the evidence we have that Python and Swift are functionally aligned, not a claim that the two implementations are fully equivalent.
+Desktop-only process ownership is reviewed across macOS and Linux; iOS extensions retain their separate execution boundary.
 
 | Evidence lane | Meaning | Integration covered | Unit covered | Any covered |
 | --- | --- | ---: | ---: | ---: |

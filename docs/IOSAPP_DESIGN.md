@@ -43,9 +43,9 @@ Important interpretation:
 
 Local implementation samples reviewed:
 
-- `/Users/ohnoohweh/ios_vpn_samples/proxypin`
-- `/Users/ohnoohweh/ios_vpn_samples/SimpleTunnel`
-- `/Users/ohnoohweh/ios_vpn_samples/NEPacketTunnelVPNDemo`
+- `~/ios_vpn_samples/proxypin`
+- `~/ios_vpn_samples/SimpleTunnel`
+- `~/ios_vpn_samples/NEPacketTunnelVPNDemo`
 
 Sample-derived implementation recipes:
 
@@ -573,7 +573,7 @@ Design impact:
 - the iOS build path must be validated against actual staged bundle contents, not only source-tree assumptions
 - the containing app's WebView must be allowed to load the extension-owned local WebAdmin endpoint over loopback HTTP, currently `http://127.0.0.1:18080/`; Briefcase packaging therefore needs the iOS `Info.plist` App Transport Security key `NSAppTransportSecurity.NSAllowsLocalNetworking=true`
 
-This App Transport Security exception is intentionally narrow. It allows local networking for the containing iOS app so the WebView can reach the on-device WebAdmin service, but it does not grant broad arbitrary WebView HTTP loading. The current source guard for this packaging contract is [ios/tests/test_m3_native_sources.py](/home/ohnoohweh/quic_br/ios/tests/test_m3_native_sources.py), which reads [ios/pyproject.toml](/home/ohnoohweh/quic_br/ios/pyproject.toml) and pins the `NSAllowsLocalNetworking` entry.
+This App Transport Security exception is intentionally narrow. It allows local networking for the containing iOS app so the WebView can reach the on-device WebAdmin service, but it does not grant broad arbitrary WebView HTTP loading. The current source guard for this packaging contract is [ios/tests/test_m3_native_sources.py](../ios/tests/test_m3_native_sources.py), which reads [ios/pyproject.toml](../ios/pyproject.toml) and pins the `NSAllowsLocalNetworking` entry.
 
 ### Outcome 7: The iOS App Now Delivers Real Tunnel User Value
 

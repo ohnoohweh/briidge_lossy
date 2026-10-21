@@ -3,9 +3,23 @@ import PackageDescription
 
 var products: [Product] = [
     .library(name: "ObstacleBridgeCore", targets: ["ObstacleBridgeCore"]),
+    .executable(name: "ObstacleBridgeLogCollector", targets: ["ObstacleBridgeLogCollector"]),
+    .executable(name: "ObstacleBridgeProxyWorker", targets: ["ObstacleBridgeProxyWorker"]),
 ]
 
 var targets: [Target] = [
+    .target(
+        name: "ObstacleBridgeDesktopShared",
+        path: "swift/Sources/ObstacleBridgeDesktopShared"
+    ),
+    .executableTarget(
+        name: "ObstacleBridgeProxyWorker",
+        path: "swift/Sources/ObstacleBridgeProxyWorker"
+    ),
+    .executableTarget(
+        name: "ObstacleBridgeLogCollector",
+        path: "swift/Sources/ObstacleBridgeLogCollector"
+    ),
     .systemLibrary(
         name: "CZlib",
         // The checked-in module map declares the standard zlib header and
@@ -59,6 +73,7 @@ targets += [
         name: "ObstacleBridgeLinuxAdapters",
         dependencies: [
             "ObstacleBridgeCore",
+            "ObstacleBridgeDesktopShared",
             .product(name: "Crypto", package: "swift-crypto"),
             .product(name: "Logging", package: "swift-log"),
             .product(name: "NIOCore", package: "swift-nio"),
@@ -71,7 +86,7 @@ targets += [
     ),
     .executableTarget(
         name: "ObstacleBridgeLinux",
-        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
+        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore", "ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeLinux",
         exclude: ["Adapters"]
     ),

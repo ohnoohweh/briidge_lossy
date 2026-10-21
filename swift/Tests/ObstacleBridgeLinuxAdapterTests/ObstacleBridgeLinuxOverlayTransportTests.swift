@@ -800,6 +800,7 @@ final class PythonOverlayPeer {
     let port: Int
     let trustRootsPath: String?
     private let forceStop: Bool
+    private let input: FileHandle
     private var stopped = false
 
     init(mode: String) throws {
@@ -809,6 +810,7 @@ final class PythonOverlayPeer {
         let script = Self.script(for: mode)
         let process = Process()
         let stdout = Pipe()
+        let stdin = Pipe()
         let workingDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let virtualEnvironmentPython = [
             workingDirectory.appendingPathComponent(".venv/bin/python").path,
@@ -825,6 +827,7 @@ final class PythonOverlayPeer {
         process.arguments = ["-u", "-c", script]
         process.standardOutput = stdout
         process.standardError = Pipe()
+        process.standardInput = stdin
         try process.run()
         let line = String(data: stdout.fileHandleForReading.availableData, encoding: .utf8) ?? ""
         let fields = line.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "|", maxSplits: 1).map(String.init)
@@ -836,8 +839,13 @@ final class PythonOverlayPeer {
         self.process = process
         self.port = port
         self.trustRootsPath = fields.count == 2 ? fields[1] : nil
+        self.input = stdin.fileHandleForWriting
         self.forceStop = mode == "quic" || mode == "wss" || mode == "wss-proxy" || mode.hasPrefix("ws-")
         started = true
+    }
+
+    func advanceCatalog() throws {
+        try input.write(contentsOf: Data("next\n".utf8))
     }
 
     func stop() {
@@ -1371,7 +1379,8 @@ final class PythonOverlayPeer {
             elif MODE.endswith('duplex'):
                 if MODE == 'tcp-securelink-catalog-duplex' or MODE == 'tcp-securelink-catalog-replace-duplex':
                     import json
-                    rows=[{'svc_id':7,'l_proto':'udp','l_bind':'127.0.0.1','l_port':49100,'r_proto':'udp','r_host':'127.0.0.1','r_port':7,'name':'peer','lifecycle_hooks':None,'options':None}]
+                    temporary=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); temporary.bind(('127.0.0.1',0)); listener_port=temporary.getsockname()[1]; temporary.close()
+                    rows=[{'svc_id':7,'l_proto':'udp','l_bind':'127.0.0.1','l_port':listener_port,'r_proto':'udp','r_host':'127.0.0.1','r_port':7,'name':'peer','lifecycle_hooks':None,'options':None}]
                     body=json.dumps(rows,separators=(',',':')).encode()
                     catalog=b'RS3'+(1).to_bytes(8,'big')+(1).to_bytes(4,'big')+len(body).to_bytes(4,'big')+body
                     first_plain=b'\\0\\0\\0\\0\\0\\x04'+len(catalog).to_bytes(2,'big')+catalog
@@ -1383,9 +1392,10 @@ final class PythonOverlayPeer {
                     first_plain=b'\\0\\x07\\0\\0\\x01\\0\\0\\x05hello' if MODE.endswith('mux-duplex') else b'python-first'
                 first=header(4,sid,2); write_payload(first+ChaCha20Poly1305(s2c).encrypt(b'\\0'*4+(2).to_bytes(8,'big'),first_plain,first))
                 if MODE == 'tcp-securelink-catalog-replace-duplex':
-                    import time
-                    time.sleep(0.15)
-                    rows=[{'svc_id':8,'l_proto':'udp','l_bind':'127.0.0.1','l_port':49101,'r_proto':'udp','r_host':'127.0.0.1','r_port':7,'name':'replacement','lifecycle_hooks':None,'options':None}]
+                    import sys, time
+                    assert sys.stdin.readline().strip() == 'next'
+                    temporary=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); temporary.bind(('127.0.0.1',0)); listener_port=temporary.getsockname()[1]; temporary.close()
+                    rows=[{'svc_id':8,'l_proto':'udp','l_bind':'127.0.0.1','l_port':listener_port,'r_proto':'udp','r_host':'127.0.0.1','r_port':7,'name':'replacement','lifecycle_hooks':None,'options':None}]
                     body=json.dumps(rows,separators=(',',':')).encode()
                     catalog=b'RS3'+(1).to_bytes(8,'big')+(2).to_bytes(4,'big')+len(body).to_bytes(4,'big')+body
                     replacement=b'\\0\\0\\0\\0\\0\\x04'+len(catalog).to_bytes(2,'big')+catalog

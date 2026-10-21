@@ -150,6 +150,14 @@ def configure_admin_log_query(target: Optional[str]) -> bool:
         return False
 
 
+def swap_admin_log_query_client(client):
+    """Replace the bounded query client and return the preceding client."""
+    global _admin_query_client
+    previous = _admin_query_client
+    _admin_query_client = client
+    return previous
+
+
 def fetch_remote_log_lines(limit: int) -> Optional[dict[str, Any]]:
     if _admin_query_client is None:
         return None
@@ -159,12 +167,15 @@ def fetch_remote_log_lines(limit: int) -> Optional[dict[str, Any]]:
 class UdpLogReceiver:
     """Receive JSON log datagrams and deliver them to local logging handlers."""
 
-    def __init__(self, bind: str, max_datagram_bytes: int = DEFAULT_MAX_DATAGRAM_BYTES):
-        host, port = parse_udp_endpoint(bind, allow_zero=True)
-        family, _, _, _, address = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
-        self._socket = socket.socket(family, socket.SOCK_DGRAM)
-        self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._socket.bind(address)
+    def __init__(self, bind: str, max_datagram_bytes: int = DEFAULT_MAX_DATAGRAM_BYTES, *, connected_socket=None):
+        if connected_socket is None:
+            host, port = parse_udp_endpoint(bind, allow_zero=True)
+            family, _, _, _, address = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM, flags=socket.AI_PASSIVE)[0]
+            self._socket = socket.socket(family, socket.SOCK_DGRAM)
+            self._socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._socket.bind(address)
+        else:
+            self._socket = connected_socket
         self._socket.setblocking(False)
         self.max_datagram_bytes = max(512, min(int(max_datagram_bytes), 65507))
         self.malformed_datagrams = 0
@@ -173,17 +184,21 @@ class UdpLogReceiver:
         try:
             payload = json.loads(data.decode("utf-8"))
             if payload.get("v") == LOG_WIRE_VERSION and payload.get("kind") == "logs.query":
-                if address is None:
-                    raise ValueError("query sender missing")
                 limit = max(1, min(int(payload.get("limit", 400)), 1000))
                 lines = [str(line) for line in list(_debug_log_ring())[-limit:]]
                 reply_payload = {"v": LOG_WIRE_VERSION, "kind": "logs.reply", "ok": True, "lines": lines}
+                request_id = payload.get("request_id")
+                if isinstance(request_id, str) and len(request_id) <= 64:
+                    reply_payload["request_id"] = request_id
                 reply = json.dumps(reply_payload, ensure_ascii=False, separators=(",", ":"), default=repr).encode("utf-8")
                 while len(reply) > self.max_datagram_bytes and lines:
                     lines.pop(0)
                     reply_payload["lines"] = lines
                     reply = json.dumps(reply_payload, ensure_ascii=False, separators=(",", ":"), default=repr).encode("utf-8")
-                self._socket.sendto(reply, address)
+                if address is None:
+                    self._socket.send(reply)
+                else:
+                    self._socket.sendto(reply, address)
                 return True
             if not isinstance(payload, dict) or payload.get("v") != LOG_WIRE_VERSION:
                 raise ValueError("unsupported log wire payload")
@@ -226,9 +241,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="ObstacleBridge best-effort UDP log receiver")
     parser.add_argument("--bind", default="127.0.0.1:15140", help="UDP listen address (default 127.0.0.1:15140)")
     parser.add_argument("--max-datagram-bytes", type=int, default=DEFAULT_MAX_DATAGRAM_BYTES)
+    parser.add_argument("--private-fds", nargs=2, type=int, metavar=("DATA_FD", "LIFETIME_FD"), help=argparse.SUPPRESS)
     DebugLoggingConfigurator.register_cli(parser)
     args = parser.parse_args(argv)
     DebugLoggingConfigurator.from_args(args).apply()
+    if args.private_fds is not None:
+        from .bridge_logging_worker import serve_private_receiver
+
+        return serve_private_receiver(*args.private_fds)
     receiver = UdpLogReceiver(args.bind, args.max_datagram_bytes)
     logging.getLogger("logging_ipc").info("UDP log receiver listening on %s", args.bind)
     receiver.serve_forever()

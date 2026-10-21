@@ -386,7 +386,11 @@ class TunHelperServer:
                     break
                 buffer += chunk
                 while True:
-                    decoded = try_decode_frame(buffer)
+                    try:
+                        decoded = try_decode_frame(buffer)
+                    except ValueError:
+                        self._log.warning("[TUN/HELPER] closing connection with invalid frame header")
+                        return
                     if decoded is None:
                         break
                     kind, payload, remainder = decoded

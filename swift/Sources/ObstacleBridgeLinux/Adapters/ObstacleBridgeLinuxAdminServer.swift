@@ -2,6 +2,7 @@ import Dispatch
 import Foundation
 import Crypto
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
@@ -41,6 +42,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private let restartHandler: (@Sendable () -> Void)?
     private let shutdownHandler: (@Sendable () -> Void)?
     private let debugLogsProvider: ((Int) -> [String])?
+    private let logWorker: ObstacleBridgeLogWorkerSupervisor?
     private let security: ObstacleBridgeLinuxAdminSecurity
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.admin")
     private let startedAt = Date()
@@ -48,7 +50,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     private var source: DispatchSourceRead?
     public private(set) var port: Int = 0
 
-    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil) {
+    public init(runtime: ObstacleBridgeLinuxConfiguredRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, connectionsProvider: @escaping () -> [String: Any] = { ["tcp": [], "udp": [], "tun": []] }, tunRoutingProvider: @escaping () -> [String: Any] = { ["ok": true, "configured": false, "enabled": false] }, tunRoutingControlHandler: ((Bool) -> [String: Any])? = nil, tunHelperRepairHandler: (() -> [String: Any])? = nil, logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
+        self.logWorker = logWorker
         self.statusProvider = { runtime.status() }
         self.peersProvider = { [("configured-peer", runtime.status().peer)] }
         self.connectionsProvider = connectionsProvider
@@ -69,7 +72,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
+    public init(liveRuntime: ObstacleBridgeLinuxLiveRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
+        self.logWorker = logWorker
         self.statusProvider = { liveRuntime.status() }
         self.peersProvider = { [("configured-peer", liveRuntime.status().peer)] }
         self.connectionsProvider = { liveRuntime.connectionsForAdmin() }
@@ -90,7 +94,8 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
         self.debugLogsProvider = debugLogsProvider
     }
 
-    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil) {
+    public init(myudpListenerRuntime: ObstacleBridgeLinuxMyUDPListenerRuntime, adminConfiguration: [String: Any] = [:], configurationStore: ObstacleBridgeLinuxAdminConfigurationStore? = nil, staticDirectory: URL? = nil, reconnectHandler: (@Sendable () -> Void)? = nil, secureLinkRekeyHandler: (@Sendable (String) -> [String: Any])? = nil, restartHandler: (@Sendable () -> Void)? = nil, shutdownHandler: (@Sendable () -> Void)? = nil, debugLogsProvider: ((Int) -> [String])? = nil, buildInfo: [String: Any]? = nil, logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
+        self.logWorker = logWorker
         self.statusProvider = { myudpListenerRuntime.status() }
         self.peersProvider = {
             myudpListenerRuntime.peers().map { ($0.identity, $0.snapshot) }
@@ -233,8 +238,13 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             let limit = Int(target.split(separator: "?", maxSplits: 1).dropFirst().first?
                 .split(separator: "&").first(where: { $0.hasPrefix("limit=") })?
                 .dropFirst("limit=".count) ?? "400") ?? 400
-            let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
-            response = ObstacleBridgeAdminAPI.linuxJSONResponse(["ok": true, "lines": lines, "count": lines.count, "source": "linux-swift", "logger_available": debugLogsProvider != nil, "logger_error": debugLogsProvider == nil ? "native observability unavailable" : ""]) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            if let logWorker {
+                let fetched = logWorker.fetch(limit: max(1, min(limit, 10_000)))
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminAPI.logsPayload(lines: fetched["lines"] as? [String] ?? [], available: fetched["available"] as? Bool ?? false, source: "managed", error: fetched["error"] as? String ?? "logger unavailable", loggingWorker: logWorker.status())) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            } else {
+                let lines = debugLogsProvider?(max(1, min(limit, 10_000))) ?? []
+                response = ObstacleBridgeAdminAPI.linuxJSONResponse(ObstacleBridgeAdminAPI.logsPayload(lines: lines, available: debugLogsProvider != nil, source: "local", error: debugLogsProvider == nil ? "native observability unavailable" : "")) ?? .init(statusCode: 500, body: Data("{}".utf8))
+            }
         case "/api/peers": response = ObstacleBridgeAdminAPI.linuxJSONResponse(["peers": peersPayload()]) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/connections": response = ObstacleBridgeAdminAPI.linuxJSONResponse(connectionsProvider()) ?? .init(statusCode: 500, body: Data("{}".utf8))
         case "/api/meta": response = ObstacleBridgeAdminAPI.linuxJSONResponse(metaPayload()) ?? .init(statusCode: 500, body: Data("{}".utf8))
@@ -617,6 +627,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,
             "resource_health": resourceHealthProvider(),
+            // Keep the common desktop Admin status contract: `/api/logs` is
+            // backed by this supervisor, and operators also need its
+            // lifecycle state from the status snapshot.
+            "logging_worker": ObstacleBridgeAdminAPI.loggingWorkerStatus(logWorker?.status()),
             "operator_capabilities": operatorCapabilities(),
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],

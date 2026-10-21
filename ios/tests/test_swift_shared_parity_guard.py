@@ -30,6 +30,12 @@ def test_ios_only_swift_change_requires_shared_or_macos_peer_update() -> None:
 
     assert len(errors) == 1
     assert "iOS-specific Swift runtime files changed" in errors[0]
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeiOS/PacketTunnelProvider.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift",
+        "ios/tests/test_m3_native_sources.py",
+    ])
 
 
 def test_macos_only_swift_change_requires_shared_or_ios_peer_update() -> None:
@@ -40,6 +46,18 @@ def test_macos_only_swift_change_requires_shared_or_ios_peer_update() -> None:
 
     assert len(errors) == 1
     assert "macOS-specific Swift runtime files changed" in errors[0]
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ])
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeMacOS/AnotherRuntime.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ])
 
 
 def test_shared_swift_change_requires_parity_source_tests() -> None:
@@ -71,6 +89,28 @@ def test_both_platform_specific_swift_changes_with_one_parity_test_pass() -> Non
     ])
 
     assert errors == []
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ]) == []
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ]) == []
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift",
+        "ios/tests/test_macos_swift_host_runner.py",
+    ])
+    assert validate_swift_shared_parity([
+        "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift",
+        "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift",
+        "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift",
+    ])
 
 
 def test_non_swift_changes_do_not_trigger_guard() -> None:

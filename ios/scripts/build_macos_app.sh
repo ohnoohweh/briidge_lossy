@@ -15,6 +15,8 @@ GENERATED_BUILD_STAMP_SWIFT="${GENERATED_SWIFT_DIR}/ObstacleBridgeGeneratedBuild
 BINARY_PATH="${BUILD_DIR}/ObstacleBridgeHostRunner"
 BUILD_INFO_JSON="${BUILD_DIR}/ObstacleBridgeHostRunner.build-info.json"
 HELPER_BINARY_PATH="${BUILD_DIR}/ObstacleBridgeTunHelper"
+PROXY_WORKER_BINARY_PATH="${BUILD_DIR}/ObstacleBridgeProxyWorker"
+LOG_WORKER_BINARY_PATH="${BUILD_DIR}/ObstacleBridgeLogCollector"
 APP_BUNDLE="${BUILD_DIR}/ObstacleBridge.app"
 APP_CONTENTS_DIR="${APP_BUNDLE}/Contents"
 APP_MACOS_DIR="${APP_CONTENTS_DIR}/MacOS"
@@ -162,6 +164,8 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift" \
@@ -211,6 +215,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeNativePeerWorker.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunnerMain.swift"
 
 echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
@@ -226,6 +231,12 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeTunPrivilegedHelperMain.swift"
+
+echo "[build_macos_app] compiling macOS proxy worker"
+"${SWIFTC_CMD}" -o "${PROXY_WORKER_BINARY_PATH}" "${REPO_ROOT}/swift/Sources/ObstacleBridgeProxyWorker/main.swift"
+
+echo "[build_macos_app] compiling macOS log collector"
+"${SWIFTC_CMD}" -o "${LOG_WORKER_BINARY_PATH}" "${REPO_ROOT}/swift/Sources/ObstacleBridgeLogCollector/main.swift"
 
 echo "[build_macos_app] preparing macOS app bundle"
 rm -rf "${APP_BUNDLE}"
@@ -273,6 +284,8 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayConnectionPolicy.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeProxyServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeProxyProtocolPolicy.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift" \
@@ -322,6 +335,7 @@ echo "[build_macos_app] compiling macOS app executable"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeQuicOverlayRuntime.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeQuicOverlayTransportOwner.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeNativePeerWorker.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacAppMain.swift"
 
@@ -373,6 +387,10 @@ cp "${BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
 chmod 755 "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
 cp "${HELPER_BINARY_PATH}" "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"
 chmod 755 "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"
+cp "${PROXY_WORKER_BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeProxyWorker"
+chmod 755 "${APP_MACOS_DIR}/ObstacleBridgeProxyWorker"
+cp "${LOG_WORKER_BINARY_PATH}" "${APP_MACOS_DIR}/ObstacleBridgeLogCollector"
+chmod 755 "${APP_MACOS_DIR}/ObstacleBridgeLogCollector"
 
 cat > "${HELPER_PLIST}" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -407,6 +425,10 @@ if [ "${APP_CODESIGN_IDENTITY}" != "off" ]; then
   codesign --force --sign "${APP_CODESIGN_IDENTITY}" --identifier "${APP_BUNDLE_ID}.HostRunner" --timestamp=none "${APP_MACOS_DIR}/ObstacleBridgeHostRunner"
   echo "[build_macos_app] codesigning macOS TUN helper"
   codesign --force --sign "${APP_CODESIGN_IDENTITY}" --identifier "${HELPER_BUNDLE_ID}" --timestamp=none "${APP_MACOS_DIR}/${HELPER_EXECUTABLE_NAME}"
+  echo "[build_macos_app] codesigning macOS proxy worker"
+  codesign --force --sign "${APP_CODESIGN_IDENTITY}" --identifier "${APP_BUNDLE_ID}.ProxyWorker" --timestamp=none "${APP_MACOS_DIR}/ObstacleBridgeProxyWorker"
+  echo "[build_macos_app] codesigning macOS log collector"
+  codesign --force --sign "${APP_CODESIGN_IDENTITY}" --identifier "${APP_BUNDLE_ID}.LogCollector" --timestamp=none "${APP_MACOS_DIR}/ObstacleBridgeLogCollector"
   echo "[build_macos_app] codesigning app bundle"
   CODESIGN_ARGS=(
     --force

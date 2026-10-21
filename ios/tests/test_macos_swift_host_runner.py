@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import os
+import signal
 import shutil
 import socket
 import struct
@@ -29,6 +30,8 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
+from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
+from obstacle_bridge.bridge_peer_worker import PeerStackWorker
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
 from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
@@ -50,7 +53,89 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayEnvelope.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayBackpressure.swift" in build_script
     assert "swift/Sources/ObstacleBridgeCore/ObstacleBridgeCompression.swift" in build_script
+    assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift") == 2
+    assert build_script.count("swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift") == 2
+    assert '"${APP_MACOS_DIR}/ObstacleBridgeLogCollector"' in build_script
+    assert '"${APP_MACOS_DIR}/ObstacleBridgeProxyWorker"' in build_script
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
+
+
+def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_only() -> None:
+    build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
+    entrypoint = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
+    worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
+    runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+
+    assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
+    assert '"--peer-worker-control-fd"' in entrypoint
+    assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
+    assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
+    assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
+    assert "native peer worker cannot own shared desktop services" in runner
+
+
+def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
+    supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
+
+    assert "fcntl(parentFD, F_SETFD, FD_CLOEXEC) == 0" in supervisor
+    assert "fcntl(childFD, F_SETFD, FD_CLOEXEC)" not in supervisor
+    assert "private proxy worker to exit before its ready frame" in supervisor
+
+
+def test_macos_log_worker_control_descriptors_survive_exec() -> None:
+    supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeLogWorkerSupervisor.swift").read_text(encoding="utf-8")
+
+    assert "fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0" in supervisor
+    assert "fcntl(descriptors[1], F_SETFD, FD_CLOEXEC)" not in supervisor
+    assert "standard input or standard error during exec" in supervisor
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
+def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener() -> None:
+    async def exercise() -> None:
+        artifact = build_macos_swift_artifact()
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            overlay_port = int(reservation.getsockname()[1])
+        secret = "macos-native-peer-worker-test-secret"
+        listener_args = build_runtime_args_from_config({
+            "runner": {"overlay_transport": "tcp"},
+            "tcp_session": {"tcp_bind": "127.0.0.1", "tcp_own_port": overlay_port},
+            "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
+            "TUN_routing": {"enabled_on_startup": False},
+        })
+        listener_args.admin_web = listener_args.status = False
+        listener = Runner(listener_args)
+        worker = PeerStackWorker(
+            "macos-native-peer", implementation="native", native_executable=str(artifact.binary_path)
+        )
+        try:
+            await listener.start()
+            await worker.start({
+                "runner": {"overlay_transport": "tcp"},
+                "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
+                "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
+                "TUN_routing": {"enabled_on_startup": False},
+            })
+            process = worker.process
+            assert process is not None and process.pid != os.getpid()
+            command = subprocess.check_output(["ps", "-p", str(process.pid), "-o", "command="], text=True)
+            assert secret not in command
+            for _ in range(100):
+                snapshot = await worker.snapshot()
+                runtime = snapshot.get("transport_runtime", {}).get("tcp", {})
+                if runtime.get("app_ready") is True:
+                    break
+                await asyncio.sleep(0.05)
+            else:
+                pytest.fail("native peer worker did not establish SecureLink with Python listener")
+            assert secret not in json.dumps(snapshot)
+            assert (await worker.control("rekey"))["reason"] == "native_peer_control_not_supported"
+        finally:
+            await worker.stop()
+            await listener.stop(reason="macos-native-peer-worker-test")
+
+    asyncio.run(exercise())
 
 
 def test_macos_webadmin_uses_core_canonical_json_serializer() -> None:
@@ -59,6 +144,8 @@ def test_macos_webadmin_uses_core_canonical_json_serializer() -> None:
 
     assert "ObstacleBridgeCanonicalJSON.data(fromJSONObject: value)" in webadmin
     assert "public enum ObstacleBridgeCanonicalJSON" in service_codec
+    assert "guard value.isFinite else { return \"null\" }" in service_codec
+    assert "value <= Double(Int64.max)" in service_codec
 
 
 def test_macos_build_includes_mtls_telemetry_transport() -> None:
@@ -3529,6 +3616,171 @@ def test_macos_swift_host_runner_bootstraps_ws_stack_and_serves_status(tmp_path:
             raise AssertionError(
                 f"macOS Swift host runner exited unexpectedly with code {process.returncode}:\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
             )
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": implementation, "log_worker_python_executable": sys.executable},
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        status_url = f"http://127.0.0.1:{status_port}/api/status"
+        status = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
+        worker = status["logging_worker"]
+        assert {"state", "implementation", "pid", "generation", "restarts", "failed_starts", "dropped_records"} <= worker.keys()
+        assert worker["implementation"] == implementation and worker["pid"] > 1 and worker["pid"] != process.pid
+        logs = _wait_http_condition(f"http://127.0.0.1:{status_port}/api/logs?limit=20", lambda item: any("runtime.started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert any("runtime.started" in line for line in logs["lines"])
+        os.kill(worker["pid"], signal.SIGKILL)
+        recovered = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item["logging_worker"]["generation"] > worker["generation"], timeout_sec=20)
+        assert recovered["logging_worker"]["restarts"] >= 1
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("implementation", ["python", "native"])
+def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    proxy_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "proxy_provider": {
+            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "socks5_port": 0, "protocols": ["http-connect"], "worker": implementation,
+            "worker_python_executable": sys.executable,
+            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+            "egress": {"mode": "direct"},
+            "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
+        },
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = f"http://127.0.0.1:{status_port}/api/status"
+        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        proxy = status["proxy_provider"]
+        assert proxy["worker"]["implementation"] == implementation
+        assert proxy["worker"]["pid"] > 1 and proxy["worker"]["pid"] != process.pid
+        assert proxy["listeners"]["http"]["bound_port"] == proxy_port
+        assert "private-proxy-token" not in json.dumps(status)
+        os.kill(proxy["worker"]["pid"], signal.SIGKILL)
+        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item["proxy_provider"]["worker"]["generation"] > proxy["worker"]["generation"], timeout_sec=20)
+        assert status["proxy_provider"]["worker"]["restarts"] >= 1
+        assert status["proxy_provider"]["listeners"]["http"]["bound_port"] == proxy_port
+        with socket.create_connection(("127.0.0.1", proxy_port), timeout=2) as conn:
+            conn.sendall(b"CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n")
+            assert conn.recv(1024).startswith(b"HTTP/1.1 407")
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("proxy_implementation", ["python", "native"])
+@pytest.mark.parametrize("log_implementation", ["python", "native"])
+def test_macos_host_proxy_logs_follow_collector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proxy_implementation: str, log_implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port = _unused_tcp_port()
+    proxy_port = _unused_tcp_port()
+    while proxy_port == status_port:
+        proxy_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
+        "proxy_provider": {
+            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
+            "worker_python_executable": sys.executable,
+            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+            "egress": {"mode": "direct"},
+            "policy": {"allow_private_destinations": True, "blocked_host_patterns": []},
+        },
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = f"http://127.0.0.1:{status_port}/api/status"
+        logs_url = f"http://127.0.0.1:{status_port}/api/logs?limit=100"
+        status = _wait_http_condition(url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        logger, proxy = status["logging_worker"], status["proxy_provider"]["worker"]
+        assert logger["implementation"] == log_implementation and proxy["implementation"] == proxy_implementation
+        logs = _wait_http_condition(logs_url, lambda item: any("[PROXY] listener started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert "private-proxy-token" not in json.dumps(logs)
+        assert logger["pid"] > 1 and logger["pid"] != process.pid
+        os.kill(logger["pid"], signal.SIGKILL)
+        status = _wait_http_condition(url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item["logging_worker"]["generation"] > logger["generation"], timeout_sec=20)
+        assert status["proxy_provider"]["worker"]["pid"] == proxy["pid"]
+        assert proxy["pid"] > 1 and proxy["pid"] != process.pid
+        os.kill(proxy["pid"], signal.SIGKILL)
+        _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item["proxy_provider"]["worker"]["generation"] > proxy["generation"], timeout_sec=20)
+        logs = _wait_http_condition(logs_url, lambda item: any("[PROXY] listener started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert "private-proxy-token" not in json.dumps(logs)
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
+
+
+@pytest.mark.parametrize("proxy_implementation", ["python", "native"])
+@pytest.mark.parametrize("log_implementation", ["python", "native"])
+def test_macos_host_proxy_component_log_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, proxy_implementation: str, log_implementation: str) -> None:
+    monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    artifact = build_macos_swift_artifact()
+    status_port, proxy_port = _unused_tcp_port(), _unused_tcp_port()
+    while proxy_port == status_port:
+        proxy_port = _unused_tcp_port()
+    config_path = tmp_path / "runtime.json"
+    config_path.write_text(json.dumps({
+        "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": log_implementation, "log_worker_python_executable": sys.executable},
+        "proxy_provider": {"enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
+            "socks5_port": 0, "protocols": ["http-connect"], "worker": proxy_implementation,
+            "worker_python_executable": sys.executable, "log_proxy_provider": "WARNING",
+            "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
+            "egress": {"mode": "direct"}, "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}},
+    }), encoding="utf-8")
+    process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        url = f"http://127.0.0.1:{status_port}/api/status"
+        _wait_http_condition(url, lambda item: item.get("logging_worker", {}).get("state") == "running" and item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        with socket.create_connection(("127.0.0.1", proxy_port), timeout=2) as client:
+            client.sendall(b"invalid-request\r\n\r\n")
+            client.shutdown(socket.SHUT_WR)
+            client.recv(4096)
+        logs = _wait_http_condition(f"http://127.0.0.1:{status_port}/api/logs?limit=100", lambda item: any("[PROXY] client failed" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert not any("[PROXY] listener started" in line for line in logs["lines"])
+        assert "private-proxy-token" not in json.dumps(logs)
+    finally:
+        process.terminate()
+        try:
+            process.communicate(timeout=8)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.communicate(timeout=5)
 
 
 def test_macos_swift_host_runner_empty_config_serves_onboarding_without_peer(tmp_path: Path) -> None:

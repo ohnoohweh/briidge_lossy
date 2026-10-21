@@ -13,6 +13,18 @@ struct ObstacleBridgeTunPingTests {
         #expect(decoded.operation == "HELLO")
         #expect(decoded.payload["token"] as? String == "test-token")
     }
+    @Test func protocolV1EnforcesPythonCompatibleFrameLimit() throws {
+        let limit = ObstacleBridgeTunHelperProtocolV1.maximumFrameBytes
+        let frame = try ObstacleBridgeTunHelperProtocolV1.frame(kind: .packetToHelper, body: Data(repeating: 1, count: limit))
+        let header = try ObstacleBridgeTunHelperProtocolV1.header(Data(frame.prefix(ObstacleBridgeTunHelperProtocolV1.headerBytes)))
+        #expect(header.bodyLength == limit)
+        #expect(throws: ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge) {
+            try ObstacleBridgeTunHelperProtocolV1.frame(kind: .packetToHelper, body: Data(repeating: 1, count: limit + 1))
+        }
+        #expect(throws: ObstacleBridgeTunHelperProtocolV1.Error.frameTooLarge) {
+            try ObstacleBridgeTunHelperProtocolV1.header(Data([4, 0, 0x10, 0, 1]))
+        }
+    }
     @Test func buildsBoundedIPv4ProbePacket() throws {
         let payload = ObstacleBridgeTunPing.probePayload(
             probeKind: ObstacleBridgeTunPing.probeKindPeer,

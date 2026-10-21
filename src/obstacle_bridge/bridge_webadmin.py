@@ -88,6 +88,10 @@ class AdminWebUI:
     def register_cli(p):
         g = p.add_argument_group("admin_web")
         g.add_argument(
+            "--admin-web-worker", choices=["off", "python"], default="off",
+            help="Run desktop Admin Web in a private Python worker process.",
+        )
+        g.add_argument(
             "--admin-web",
             action="store_true",
             default=True,
@@ -413,6 +417,22 @@ class AdminWebUI:
             return asyncio.run(coro)
         fut = asyncio.run_coroutine_threadsafe(coro, runner_loop)
         return fut.result(timeout=timeout)
+
+    async def _call_peer_control(self, method: str, **kwargs):
+        async_method = getattr(self.runner, method + "_async", None)
+        if not callable(async_method):
+            return self._call_runner(getattr(self.runner, method), timeout=1.0, **kwargs)
+        coroutine = async_method(**kwargs)
+        runner_loop = self._runner_loop
+        if runner_loop is None or runner_loop is asyncio.get_running_loop():
+            return await asyncio.wait_for(coroutine, 3.5)
+        future = asyncio.run_coroutine_threadsafe(coroutine, runner_loop)
+        return await asyncio.wait_for(asyncio.wrap_future(future), 3.5)
+
+    def _peer_control_unavailable_payload(self) -> dict:
+        if str(getattr(self.args, "peer_stack_worker", "off") or "off") == "python":
+            return {"ok": False, "error": "peer control unavailable or outcome unknown"}
+        return {"ok": False, "error": "runner busy", "retryable": True}
 
     def _cache_snapshot(self, topic: str, payload: dict) -> None:
         with self._snapshot_cache_lock:
@@ -1814,7 +1834,9 @@ class AdminWebUI:
             except concurrent.futures.TimeoutError:
                 await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
                 return
-            self._log_api_response("/api/config", 200, payload, summary="config snapshot")
+            # Configuration contains nested credentials beyond the dedicated
+            # write-only fields; never replicate the snapshot into logs.
+            self._log_api_response("/api/config", 200, {"ok": True}, summary="config snapshot")
             await self._send_json(writer, 200, payload)
             return
 
@@ -1888,7 +1910,7 @@ class AdminWebUI:
         self._log_api_response(
             "/api/config",
             200,
-            payload,
+            {"ok": True, "restart_requested": bool(restart_after_save)},
             summary=f"updated keys={list(updates.keys())} restart_after_save={restart_after_save}",
         )
         await self._send_json(writer, 200, payload)
@@ -1896,6 +1918,7 @@ class AdminWebUI:
             self._call_runner_soon(self.runner.request_restart, reason="admin_web:/api/config restart_after_save")
 
     async def _handle_logs(self, writer, raw_path: str):
+        from .admin_api_contract import logs_payload
         limit = 400
         with contextlib.suppress(Exception):
             if "?" in raw_path:
@@ -1907,7 +1930,8 @@ class AdminWebUI:
                     if k == "limit":
                         limit = int(v)
                         break
-        if bool(getattr(self.args, "log_udp_only", False)):
+        private_worker = str(getattr(self.args, "log_worker", "off") or "off") != "off"
+        if private_worker or bool(getattr(self.args, "log_udp_only", False)):
             try:
                 from .bridge_logging_ipc import fetch_remote_log_lines
 
@@ -1919,9 +1943,10 @@ class AdminWebUI:
             remote = remote or {"available": False, "lines": [], "error": "logger unavailable"}
             result = {
                 "lines": list(remote.get("lines", [])),
-                "source": "remote_udp",
-                "logger_available": bool(remote.get("available", False)),
-                "logger_error": str(remote.get("error", "") or ""),
+                "source": "managed" if private_worker else "remote_udp",
+                "available": bool(remote.get("available", False)),
+                "error": str(remote.get("error", "") or ""),
+                "worker": remote.get("worker_status"),
             }
         else:
             try:
@@ -1929,11 +1954,14 @@ class AdminWebUI:
             except concurrent.futures.TimeoutError:
                 await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
                 return
-            result = {"lines": lines, "source": "local", "logger_available": True, "logger_error": ""}
-        payload = {"ok": True, "lines": result["lines"], "count": len(result["lines"]),
-                   "source": result["source"], "logger_available": result["logger_available"],
-                   "logger_error": result["logger_error"]}
-        self._log_api_response("/api/logs", 200, payload, summary=f"count={len(result['lines'])}")
+            result = {"lines": lines, "source": "local", "available": True, "error": "", "worker": None}
+        payload = logs_payload(lines=result["lines"], available=result["available"], source=result["source"], error=result["error"], logging_worker=result["worker"])
+        # Logging the returned lines recursively republishes the log buffer,
+        # potentially including sensitive application messages, as a new log.
+        self._log_api_response("/api/logs", 200,
+                               {"ok": True, "count": payload["count"], "source": payload["source"],
+                                "available": payload["available"]},
+                               summary=f"count={len(result['lines'])}")
         await self._send_json(writer, 200, payload)
 
     async def _handle_telemetry(self, writer):
@@ -1969,9 +1997,9 @@ class AdminWebUI:
             await self._send_json(writer, 400, {"ok": False, "error": "peer_id is required"})
             return
         try:
-            payload = self._call_runner(self.runner.request_secure_link_rekey, target_peer_id=target_peer_id, timeout=1.0)
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            payload = await self._call_peer_control("request_secure_link_rekey", target_peer_id=target_peer_id)
+        except (concurrent.futures.TimeoutError, asyncio.TimeoutError, RuntimeError, OSError):
+            await self._send_json(writer, 503, self._peer_control_unavailable_payload())
             return
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
@@ -1997,14 +2025,13 @@ class AdminWebUI:
             return
         target_peer_id = str(req.get("peer_id", "") or "").strip()
         try:
-            payload = self._call_runner(
-                self.runner.request_secure_link_reload,
+            payload = await self._call_peer_control(
+                "request_secure_link_reload",
                 scope=scope,
                 target_peer_id=target_peer_id or None,
-                timeout=1.0,
             )
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+        except (concurrent.futures.TimeoutError, asyncio.TimeoutError, RuntimeError, OSError):
+            await self._send_json(writer, 503, self._peer_control_unavailable_payload())
             return
         code = 200 if bool(payload.get("ok")) else 409
         self._log_api_response(
@@ -2119,9 +2146,9 @@ class AdminWebUI:
                 return
         target_peer_id = str(req.get("peer_id", "") or "").strip() or None
         try:
-            payload = self._call_runner(self.runner.request_overlay_reconnect, target_peer_id=target_peer_id, timeout=1.0)
-        except concurrent.futures.TimeoutError:
-            await self._send_json(writer, 503, {"ok": False, "error": "runner busy", "retryable": True})
+            payload = await self._call_peer_control("request_overlay_reconnect", target_peer_id=target_peer_id)
+        except (concurrent.futures.TimeoutError, asyncio.TimeoutError, RuntimeError, OSError):
+            await self._send_json(writer, 503, self._peer_control_unavailable_payload())
             return
         code = 200 if bool(payload.get("ok")) else (404 if payload.get("reason") == "unknown_peer_id" else 409)
         self._log_api_response(
@@ -2704,6 +2731,7 @@ class AdminWebUI:
         )
 
     def _build_status_payload_now(self) -> dict:
+        from .admin_api_contract import logging_worker_status
         payload = self.runner.get_status_snapshot()
         connections_snapshot = self.runner.get_connections_snapshot() or {}
         for aggregate_key in ("open_connections", "traffic", "compress_layer"):
@@ -2716,6 +2744,8 @@ class AdminWebUI:
         payload["admin_ui"] = self._build_admin_ui_payload()
         payload["security_advisor"] = self._build_security_advisor_payload()
         payload["build"] = _detect_build_info()
+        provider = getattr(self.runner.args, "_admin_logging_worker_status", None)
+        payload["logging_worker"] = logging_worker_status(provider() if callable(provider) else None)
         return payload
 
     def _build_status_payload(self) -> dict:

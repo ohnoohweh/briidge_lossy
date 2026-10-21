@@ -370,6 +370,7 @@ struct ObstacleBridgeLinuxAdminServerTests {
         #expect(status["overlay_transport"] as? String == "tcp")
         #expect(status["transport_state"] as? String == "disconnected")
         #expect(status["app_ready"] as? Bool == false)
+        #expect((status["logging_worker"] as? [String: Any])?["state"] as? String == "off")
         let layers = status["connection_layers"] as? [[String: Any]]
         #expect(layers?.count == 2)
         let mux = status["channel_mux"] as? [String: Any]

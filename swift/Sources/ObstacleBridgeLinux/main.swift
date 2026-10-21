@@ -1,6 +1,7 @@
 import Foundation
 import ObstacleBridgeLinuxAdapters
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
@@ -15,6 +16,10 @@ enum ObstacleBridgeLinuxMain {
 
     static func main() {
         let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments.count == 2, arguments[0] == "--peer-worker-control-fd", let fd = Int32(arguments[1]) {
+            do { try ObstacleBridgeLinuxNativePeerWorker.run(controlFD: fd) } catch { exit(2) }
+            return
+        }
         if let runOptions = ObstacleBridgeLinuxForegroundOptions.parse(arguments) {
             runForeground(options: runOptions)
             return
@@ -202,24 +207,26 @@ enum ObstacleBridgeLinuxMain {
                 try ObstacleBridgeLinuxManagedTunHelper.preauthorizeManagedHelperIfNeeded(executable: configuration.tunHelperExecutable)
             }
             let staticDirectory = URL(fileURLWithPath: adminWeb.staticDirectory)
-            let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration)
+            let logWorker = try ObstacleBridgeLogWorkerSupervisor.configured(from: adminConfiguration)
+            try logWorker?.start()
+            let observability = ObstacleBridgeLinuxObservability(configuration: adminConfiguration, logWorker: logWorker)
             observability.recordForegroundLifecycle(state: "started", transport: configuration.transport.rawValue)
             let buildInfo = embeddedBuildInfo()
             let adminConfigurationStore = ObstacleBridgeLinuxAdminConfigurationStore(configuration: adminConfiguration, path: options.configurationPath)
             if configuration.listenerMode, configuration.transport == .myudp {
                 let runtime = try ObstacleBridgeLinuxMyUDPListenerRuntime(configuration: configuration)
-                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, restartHandler: requestForegroundRestart, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo)
+                let admin = ObstacleBridgeLinuxAdminServer(myudpListenerRuntime: runtime, adminConfiguration: adminConfiguration, configurationStore: adminConfigurationStore, staticDirectory: staticDirectory, restartHandler: requestForegroundRestart, shutdownHandler: requestForegroundShutdown, buildInfo: buildInfo, logWorker: logWorker)
                 try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
                 runtime.start()
                 print("{\"admin_port\":\(admin.port),\"state\":\"starting\",\"listener_mode\":true}")
                 let resources: [Any] = [runtime, admin, observability]
-                    + installForegroundShutdown(stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
+                    + installForegroundShutdown(stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); logWorker?.stop(); runtime.stop() }, admin: admin, holdSeconds: options.holdSeconds)
                 withExtendedLifetime(resources) { dispatchMain() }
             }
             let healthURL = URL(fileURLWithPath: options.configurationPath)
                 .deletingLastPathComponent()
                 .appendingPathComponent(".ObstacleBridgeLinux.runtime-health-v1.json")
-            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL)
+            let runtime = ObstacleBridgeLinuxLiveRuntime(configuration: configuration, runtimeHealthURL: healthURL, loggingWorker: logWorker)
             runtime.onDiagnostic = { event, fields in
                 observability.recordDiagnostic(event, fields: fields)
             }
@@ -239,10 +246,12 @@ enum ObstacleBridgeLinuxMain {
                 restartHandler: requestForegroundRestart,
                 shutdownHandler: requestForegroundShutdown,
                 debugLogsProvider: observability.recentLogLines,
-                buildInfo: buildInfo
+                buildInfo: buildInfo,
+                logWorker: logWorker
             )
             try admin.start(bindHost: adminWeb.bindHost, port: adminWeb.port)
             var resources: [Any] = [observability]
+            if let logWorker { resources.append(logWorker) }
             if configuration.listenerMode {
                 guard let psk = configuration.secureLinkPSK else { throw ObstacleBridgeLinuxRuntimeConfigurationError.missingPSK }
                 let acceptSession: @Sendable (Data) throws -> ObstacleBridgeLinuxConfiguredSession
@@ -285,7 +294,7 @@ enum ObstacleBridgeLinuxMain {
             let status = "{\"admin_port\":\(admin.port),\"admin_url\":\"http://127.0.0.1:\(admin.port)/\",\"state\":\"starting\",\"listener_mode\":\(configuration.listenerMode)}"
             print(status)
             resources.append(contentsOf: installForegroundShutdown(
-                stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); runtime.stop() },
+                stop: { observability.recordForegroundLifecycle(state: "stopped", transport: configuration.transport.rawValue); observability.stop(); logWorker?.stop(); runtime.stop() },
                 recordSignal: runtime.recordShutdownSignal,
                 admin: admin,
                 holdSeconds: options.holdSeconds

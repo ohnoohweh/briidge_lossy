@@ -37,6 +37,7 @@ protocol ObstacleBridgeAdminAPIStateProvider: AnyObject {
     func adminRequestSecureLinkRekey(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminRequestShutdown(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
     func adminLogLines(limit: Int) -> [String]
+    func adminLoggingWorkerStatus() -> [String: Any]
     func adminOnboardingConnectionProfiles() -> [[String: Any]]
     func adminOnboardingBlueprints() -> [[String: Any]]
     func adminOnboardingInviteGenerate(request: ObstacleBridgeAdminAPIRequest) -> ObstacleBridgeAdminAPIResponse
@@ -210,6 +211,8 @@ extension ObstacleBridgeAdminAPIStateProvider {
         return []
     }
 
+    func adminLoggingWorkerStatus() -> [String: Any] { [:] }
+
     func adminOnboardingConnectionProfiles() -> [[String: Any]] {
         []
     }
@@ -282,6 +285,34 @@ public struct ObstacleBridgeAdminLinuxResponse {
 }
 
 public enum ObstacleBridgeAdminAPI {
+    /// Stable, product-neutral projection for the optional private collector.
+    /// Hosts may own process supervision differently, but Admin consumers must
+    /// never need to infer that from their status or log-response shape.
+    public static func loggingWorkerStatus(_ raw: [String: Any]? = nil) -> [String: Any] {
+        let source = raw ?? [:]
+        let requested = String(describing: source["state"] ?? "off").lowercased()
+        let state = ["off", "running", "restarting", "unavailable", "stopped"].contains(requested) ? requested : "unavailable"
+        func integer(_ key: String) -> Int { (source[key] as? Int) ?? (source[key] as? NSNumber)?.intValue ?? 0 }
+        return [
+            "state": state,
+            "implementation": source["implementation"] as? String ?? "",
+            "pid": integer("pid"),
+            "generation": integer("generation"),
+            "restarts": integer("restarts"),
+            "failed_starts": integer("failed_starts"),
+            "dropped_records": integer("dropped_records"),
+        ]
+    }
+
+    /// Stable envelope shared by all Admin `/api/logs` implementations.
+    public static func logsPayload(lines: [String], available: Bool, source: String, error: String = "", loggingWorker: [String: Any]? = nil) -> [String: Any] {
+        [
+            "ok": true, "available": available, "lines": lines, "count": lines.count,
+            "source": source, "error": error,
+            "logging_worker": loggingWorkerStatus(loggingWorker),
+        ]
+    }
+
     public static func linuxJSONResponse(_ payload: Any, statusCode: Int = 200) -> ObstacleBridgeAdminLinuxResponse? {
         guard let body = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else { return nil }
         return .init(statusCode: statusCode, body: body)
@@ -340,7 +371,7 @@ public enum ObstacleBridgeAdminAPI {
         case ("POST", "/api/config"):
             return provider.adminUpdateConfig(request: request)
         case ("GET", "/api/logs"):
-            return jsonResponse(["lines": provider.adminLogLines(limit: queryLimit(from: request.path) ?? 500)])
+            return jsonResponse(logsPayload(lines: provider.adminLogLines(limit: queryLimit(from: request.path) ?? 500), available: true, source: "local", loggingWorker: provider.adminLoggingWorkerStatus()))
         case ("POST", "/api/restart"):
             return provider.adminRequestRestart(request: request)
         case ("POST", "/api/reconnect"):
@@ -553,6 +584,7 @@ public enum ObstacleBridgeAdminAPI {
 
     static func statusSnapshot(status: [String: Any], connections: [String: Any]) -> [String: Any] {
         var payload = status
+        payload["logging_worker"] = loggingWorkerStatus(status["logging_worker"] as? [String: Any])
         let tunRows = connections["tun"] as? [[String: Any]] ?? []
         let helper = status["tun_helper"] as? [String: Any] ?? [:]
         let helperRuntime = helper["runtime"] as? [String: Any] ?? [:]

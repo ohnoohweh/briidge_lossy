@@ -173,6 +173,10 @@ final class ObstacleBridgeHostRunner {
     private var sharedQuicOverlayTransportOwner: ObstacleBridgeOverlayTransportOwning?
     private var sharedUdpOverlayTransportOwner: ObstacleBridgeUdpOverlayTransportOwner?
     private var proxyServers: [String: ObstacleBridgeProxyServer] = [:]
+    private var proxyWorker: ObstacleBridgeSupervisedProxyWorker?
+    private let loggingWorkerLock = NSLock()
+    private var loggingWorker: ObstacleBridgeLogWorkerSupervisor?
+    private var loggingWorkerConfigured = false
     private var proxyProviderLastError = ""
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
     private var macOSTunHelperRuntimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
@@ -265,6 +269,75 @@ final class ObstacleBridgeHostRunner {
         self.statusPort = statusPortOverride ?? configuredPort ?? 18080
         self.macOSTunHelperClientFactory = macOSTunHelperClientFactory ?? Self.makeDefaultMacOSTunHelperClient
         serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
+    }
+
+    /// Initializes the narrowly scoped native peer child from its inherited
+    /// control capability. The configuration is intentionally never written to
+    /// a file by this path.
+    init(peerWorkerConfiguration decoded: [String: Any]) throws {
+        try Self.validatePeerWorkerConfiguration(decoded)
+        self.runtimeConfigPath = "<peer-worker-ipc>"
+        self.runtimeConfigRaw = decoded
+        self.runtimeConfig = ObstacleBridgeRuntimeConfig.flatten(decoded)
+        self.configStore = ObstacleBridgeConfigStore(
+            configPath: self.runtimeConfigPath,
+            groupedConfig: decoded,
+            runtimeConfig: self.runtimeConfig
+        )
+        self.ownServerSpecs = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
+        self.remoteServerSpecs = ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: runtimeConfig).map { $0.nativeServiceSpec() }
+        self.bindHost = "127.0.0.1"
+        self.statusPort = 0
+        self.macOSTunHelperClientFactory = Self.makeDefaultMacOSTunHelperClient
+        serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
+    }
+
+    private static func validatePeerWorkerConfiguration(_ grouped: [String: Any]) throws {
+        let flat = ObstacleBridgeRuntimeConfig.flatten(grouped)
+        guard stringValue(from: flat["overlay_transport"])?.lowercased() == "tcp",
+              let peer = stringValue(from: flat["tcp_peer"]), !peer.isEmpty,
+              (intValue(from: flat["tcp_peer_port"]) ?? 0) > 0
+        else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("native peer worker requires one outbound TCP peer")
+        }
+        guard boolValue(from: flat["enabled_on_startup"]) != true,
+              boolValue(from: flat["proxy_provider_enabled"]) != true,
+              boolValue(from: flat["telemetry_enabled"]) != true,
+              boolValue(from: flat["telemetry_collector_enabled"]) != true
+        else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("native peer worker cannot own shared desktop services")
+        }
+        let services = ObstacleBridgeRuntimeConfig.ownServerSpecs(from: flat)
+            + ObstacleBridgeRuntimeConfig.remoteServerSpecs(from: flat)
+        guard services.allSatisfy({ $0.listenProtocol != "tun" && $0.targetProtocol != "tun" }) else {
+            throw ObstacleBridgeHostRunnerError.invalidArgument("native peer worker cannot own TUN services")
+        }
+    }
+
+    func startPeerWorker() throws {
+        prepareSharedOverlayBootstrap()
+        try startOwnServers()
+        startSharedTCPOverlayTransportOwnerIfNeeded()
+        bootstrapState["startup_status"] = "ready"
+    }
+
+    func stopPeerWorker() {
+        sharedTcpOverlayTransportOwner?.stop()
+        sharedTcpOverlayTransportOwner = nil
+        stopOwnServers()
+    }
+
+    func peerWorkerSnapshotBundle() -> [String: Any] {
+        let status = snapshotUncached()
+        let connections = connectionsSnapshotUncached()
+        return [
+            "status": status,
+            "connections": connections,
+            "peers": ["peers": peersSnapshotUncached(
+                connections: connections,
+                transportRuntime: status["transport_runtime"] as? [String: Any]
+            )],
+        ]
     }
 
     private static func makeDefaultMacOSTunHelperClient(
@@ -394,6 +467,7 @@ final class ObstacleBridgeHostRunner {
 
     private func reloadRuntimeStateForControlAction() throws {
         try reloadRuntimeConfigFromDisk()
+        try startLoggingWorkerIfConfigured()
         stopProxyProvider()
         stopOwnServers()
         prepareSharedOverlayBootstrap()
@@ -451,6 +525,7 @@ final class ObstacleBridgeHostRunner {
         prepareSharedOverlayBootstrap()
         var startupFailed = false
         do {
+            try startLoggingWorkerIfConfigured()
             try startProxyProviderIfConfigured()
             try startOwnServers()
             startSharedWebSocketOverlayTransportOwnerIfNeeded()
@@ -494,6 +569,7 @@ final class ObstacleBridgeHostRunner {
         stopRuntimeHealthHeartbeat()
         stopTelemetry()
         appendRuntimeHealth(event: "runtime_stopped", controlledStop: true)
+        stopLoggingWorker()
     }
 
     private var runtimeHealthURL: URL {
@@ -587,6 +663,35 @@ final class ObstacleBridgeHostRunner {
             return runtimeHealthSequence
         }
         enqueueTelemetryHealth(state: event, counter: sequence)
+        activeLoggingWorker()?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
+    }
+
+    private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
+        loggingWorkerLock.lock(); defer { loggingWorkerLock.unlock() }
+        return loggingWorker
+    }
+
+    private func stopLoggingWorker() {
+        loggingWorkerLock.lock(); let previous = loggingWorker; loggingWorker = nil; loggingWorkerLock.unlock()
+        previous?.stop()
+    }
+
+    private func startLoggingWorkerIfConfigured() throws {
+        stopLoggingWorker()
+        let section = runtimeConfigRaw["debug_logging"] as? [String: Any] ?? [:]
+        let selected = section["log_worker"] ?? runtimeConfigRaw["log_worker"]
+        loggingWorkerLock.lock()
+        loggingWorkerConfigured = selected != nil && ((selected as? String)?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? "invalid") != "off"
+        loggingWorkerLock.unlock()
+        guard let worker = try ObstacleBridgeLogWorkerSupervisor.configured(from: runtimeConfigRaw) else { return }
+        try worker.start()
+        loggingWorkerLock.lock(); loggingWorker = worker; loggingWorkerLock.unlock()
+        worker.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: "runtime.started")
+    }
+
+    private func loggingWorkerSnapshot() -> [String: Any] {
+        loggingWorkerLock.lock(); let worker = loggingWorker; let configured = loggingWorkerConfigured; loggingWorkerLock.unlock()
+        return worker?.status() ?? ["state": configured ? "unavailable" : "off"]
     }
 
     private func runtimeHealthMetadata() -> (count: Int, previousClean: Bool?) {
@@ -622,6 +727,32 @@ final class ObstacleBridgeHostRunner {
         let config = proxyProviderConfiguration()
         guard config.enabled else {
             proxyProviderLastError = ""
+            return
+        }
+
+        if config.worker != "off" {
+            let executable: String
+            switch config.worker {
+            case "python":
+                executable = config.pythonExecutable
+            case "native":
+                executable = config.nativeExecutable ?? (Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]))
+                    .deletingLastPathComponent().appendingPathComponent("ObstacleBridgeProxyWorker").path
+            default:
+                throw ObstacleBridgeProxyWorkerSupervisor.Failure.invalidConfiguration
+            }
+            let worker = try ObstacleBridgeSupervisedProxyWorker(implementation: config.worker, executable: executable, loggingWorker: activeLoggingWorker())
+            do {
+                try worker.start(config: ["bind": config.bindHost, "http_port": config.httpPort,
+                                          "socks5_port": config.socks5Port, "protocols": config.protocols,
+                                          "auth": config.auth, "egress": config.egress, "policy": config.policy])
+            } catch {
+                proxyProviderLastError = "proxy worker startup failed"
+                throw error
+            }
+            proxyWorker = worker
+            proxyProviderLastError = ""
+            bootstrapState["proxy_provider"] = "ready"
             return
         }
 
@@ -669,9 +800,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func stopProxyProvider() {
-        guard !proxyServers.isEmpty else {
-            return
-        }
+        proxyWorker?.stop()
+        proxyWorker = nil
         for server in proxyServers.values {
             server.stop()
         }
@@ -680,6 +810,13 @@ final class ObstacleBridgeHostRunner {
 
     private func proxyProviderSnapshot() -> [String: Any] {
         let config = proxyProviderConfiguration()
+        if let worker = proxyWorker {
+            let snapshot = worker.snapshot()
+            let state = snapshot["worker"] as? [String: Any] ?? [:]
+            return ["enabled": state["state"] as? String == "running", "configured": config.configuredPayload(),
+                    "listeners": snapshot["listeners"] ?? [:], "last_error": snapshot["last_error"] ?? "",
+                    "worker": state]
+        }
         var listeners: [String: Any] = [:]
         for key in proxyServers.keys.sorted() {
             if let server = proxyServers[key] {
@@ -704,6 +841,9 @@ final class ObstacleBridgeHostRunner {
         let egress: [String: Any]
         let policy: [String: Any]
         let credentials: ObstacleBridgeProxyServer.Credentials?
+        let worker: String
+        let nativeExecutable: String?
+        let pythonExecutable: String
 
         var httpEnabled: Bool {
             protocols.contains("http-connect") || protocols.contains("http")
@@ -720,9 +860,10 @@ final class ObstacleBridgeHostRunner {
                 "http_port": httpPort,
                 "socks5_port": socks5Port,
                 "protocols": protocols,
-                "auth": auth,
-                "egress": egress,
-                "policy": policy,
+                "auth": auth.filter { ["mode", "username"].contains($0.key) },
+                "egress": egress.filter { ["mode", "address_families"].contains($0.key) },
+                "policy": policy.filter { ["allow_private_destinations", "blocked_host_patterns"].contains($0.key) },
+                "worker": worker,
             ]
         }
     }
@@ -765,7 +906,10 @@ final class ObstacleBridgeHostRunner {
             auth: auth,
             egress: egress,
             policy: policy,
-            credentials: credentials
+            credentials: credentials,
+            worker: (ObstacleBridgeRuntimeConfig.stringValue(from: section?["worker"] ?? section?["proxy_provider_worker"] ?? runtimeConfig["proxy_provider_worker"]) ?? "off").lowercased(),
+            nativeExecutable: ObstacleBridgeRuntimeConfig.stringValue(from: section?["worker_native_executable"] ?? section?["proxy_provider_worker_native_executable"] ?? runtimeConfig["proxy_provider_worker_native_executable"]),
+            pythonExecutable: ObstacleBridgeRuntimeConfig.stringValue(from: section?["worker_python_executable"] ?? section?["proxy_provider_worker_python_executable"] ?? runtimeConfig["proxy_provider_worker_python_executable"]) ?? "/usr/bin/python3"
         )
     }
 
@@ -1426,6 +1570,7 @@ final class ObstacleBridgeHostRunner {
             "transport_runtime": transportRuntimeSnapshot(),
             "compress_layer": compressLayerSnapshot(peerID: nil) ?? NSNull(),
             "proxy_provider": proxyProviderSnapshot(),
+            "logging_worker": ObstacleBridgeAdminAPI.loggingWorkerStatus(loggingWorkerSnapshot()),
             "telemetry": telemetryStatusSnapshot(),
             "secure_link_material_generation": 0,
             "secure_link_last_reload_unix_ts": NSNull(),
@@ -2080,6 +2225,8 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func readLogLines(limit: Int) -> [String] {
+        loggingWorkerLock.lock(); let worker = loggingWorker; let configured = loggingWorkerConfigured; loggingWorkerLock.unlock()
+        if configured { return worker?.fetch(limit: limit)["lines"] as? [String] ?? [] }
         guard let path = configStore.debugLogFilePath(), !path.isEmpty,
               let text = try? String(contentsOfFile: path, encoding: .utf8) else {
             return []
@@ -4113,6 +4260,10 @@ extension ObstacleBridgeHostRunner: ObstacleBridgeAdminAPIStateProvider {
 
     func adminLogLines(limit: Int) -> [String] {
         readLogLines(limit: limit)
+    }
+
+    func adminLoggingWorkerStatus() -> [String: Any] {
+        loggingWorkerSnapshot()
     }
 
     func adminRequestRestart() -> [String: Any] {

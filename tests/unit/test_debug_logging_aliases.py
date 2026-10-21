@@ -130,10 +130,10 @@ def test_admin_logs_udp_only_reports_logger_unavailable_without_runner_call():
     ):
         asyncio.run(ui._handle_logs(mock.Mock(), "/api/logs?limit=10"))
     ui._call_runner.assert_not_called()
-    assert ui._send_json.await_args.args[2] == {
-        "ok": True, "lines": [], "count": 0, "source": "remote_udp",
-        "logger_available": False, "logger_error": "logger unavailable",
-    }
+    payload = ui._send_json.await_args.args[2]
+    assert payload["ok"] and not payload["available"]
+    assert payload["lines"] == [] and payload["count"] == 0 and payload["source"] == "remote_udp"
+    assert payload["error"] == "logger unavailable" and payload["logging_worker"]["state"] == "off"
 
 
 def test_admin_telemetry_status_is_redacted_and_reports_worker_liveness(tmp_path):

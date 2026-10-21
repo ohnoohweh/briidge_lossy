@@ -1,5 +1,6 @@
 import Foundation
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 
 /// Linux-owned, bounded observability producer. It deliberately performs no
 /// network I/O on runtime callbacks: telemetry is first persisted through the
@@ -7,6 +8,7 @@ import ObstacleBridgeCore
 /// the foreground runtime's callback path.
 public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     private let lock = NSLock()
+    private let logWorker: ObstacleBridgeLogWorkerSupervisor?
     private let fileURL: URL?
     private let emitter: ObstacleBridgeTelemetryEmitter?
     private let spool: ObstacleBridgeTelemetrySpool?
@@ -16,7 +18,8 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     private var recentLines: [String] = []
     private var lastLifecycleSignature: String?
 
-    public init(configuration: [String: Any], sessionID: String = UUID().uuidString.lowercased()) {
+    public init(configuration: [String: Any], sessionID: String = UUID().uuidString.lowercased(), logWorker: ObstacleBridgeLogWorkerSupervisor? = nil) {
+        self.logWorker = logWorker
         let logging = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("debug_logging", from: configuration)
         let logPath = (logging["log_file"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         fileURL = logPath.isEmpty ? nil : URL(fileURLWithPath: logPath)
@@ -47,6 +50,7 @@ public final class ObstacleBridgeLinuxObservability: @unchecked Sendable {
     }
 
     public func record(_ event: String, priority: ObstacleBridgeTelemetryPriority = .normal, fields: [String: ObstacleBridgeTelemetryFieldValue] = [:]) {
+        logWorker?.emit(name: "linux.runtime", level: "INFO", levelNumber: 20, message: event)
         writeLog("\(event) \(fields.map { "\($0.key)=\(self.logValue($0.value))" }.sorted().joined(separator: " "))")
         guard let emitter, let spool, emitter.emit(event: event, fields: fields, priority: priority) else { return }
         for item in emitter.drain() { _ = spool.append(item) }

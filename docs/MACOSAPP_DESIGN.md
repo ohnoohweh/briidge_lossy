@@ -354,7 +354,7 @@ The intended one-case invocation is:
 
 ```bash
 sudo -n ./scripts/run_macos_swift_elevated_tests.sh \
-  --app-bundle /Users/ohnoohweh/briidge_lossy/ios/build/macos/ObstacleBridge.app \
+  --app-bundle <repository>/ios/build/macos/ObstacleBridge.app \
   tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
 ```
 

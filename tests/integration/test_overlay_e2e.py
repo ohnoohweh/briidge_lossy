@@ -7401,6 +7401,170 @@ def _require_macos_swift_host_runner() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize('implementation', ['python', 'native'])
+def test_linux_swift_supervises_logging_worker(tmp_path: Path, implementation: str) -> None:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    binary_path = _linux_swift_runner_binary()
+    peer = LinuxSwiftSecureLinkPeer('tcp', b'linux-swift-logging-psk', keep_open=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    config_path = tmp_path / 'logging.json'
+    config_path.write_text(json.dumps({
+        'runner': {'overlay_transport': 'tcp'},
+        'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
+        'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': 'linux-swift-logging-psk'},
+        'debug_logging': {'log_worker': implementation, 'log_worker_python_executable': sys.executable},
+    }), encoding='utf-8')
+    proc = start_proc('linux_swift_logging', [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '45'], tmp_path, admin_port=admin_port)
+    try:
+        deadline = time.monotonic() + 20
+        worker = None
+        while time.monotonic() < deadline:
+            try:
+                _, status = fetch_json(f'http://127.0.0.1:{admin_port}/api/status', timeout=1)
+                worker = status.get('logging_worker', {})
+                if worker.get('state') == 'running':
+                    break
+            except (OSError, ValueError):
+                pass
+            time.sleep(0.1)
+        assert worker and worker.get('state') == 'running', proc.log_path.read_text(errors='replace')
+        assert worker['implementation'] == implementation and worker['pid'] > 1 and worker['pid'] != proc.popen.pid
+        _, logs = fetch_json(f'http://127.0.0.1:{admin_port}/api/logs?limit=20')
+        # The private collector receives the canonical lifecycle event; its
+        # structured fields remain in the telemetry/file record paths.
+        assert logs['available'] and any('runtime.lifecycle' in line for line in logs['lines'])
+        os.kill(worker['pid'], signal.SIGKILL)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            _, status = fetch_json(f'http://127.0.0.1:{admin_port}/api/status')
+            current = status['logging_worker']
+            if current['state'] == 'running' and current['generation'] > worker['generation']:
+                break
+            time.sleep(0.1)
+        assert current['state'] == 'running' and current['generation'] > worker['generation'] and current['restarts'] >= 1
+    finally:
+        if proc.popen.poll() is None:
+            os.killpg(proc.popen.pid, signal.SIGTERM)
+        proc.popen.wait(timeout=8)
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('proxy_implementation', ['python', 'native'])
+@pytest.mark.parametrize('log_implementation', ['python', 'native'])
+def test_linux_swift_proxy_logs_follow_collector(tmp_path: Path, proxy_implementation: str, log_implementation: str) -> None:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    binary_path = _linux_swift_runner_binary()
+    peer = LinuxSwiftSecureLinkPeer('tcp', b'linux-swift-logging-psk', keep_open=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    config_path = tmp_path / 'proxy-logging.json'
+    config_path.write_text(json.dumps({
+        'runner': {'overlay_transport': 'tcp'},
+        'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
+        'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': 'linux-swift-logging-psk'},
+        'debug_logging': {'log_worker': log_implementation, 'log_worker_python_executable': sys.executable},
+        'proxy_provider': {
+            'enabled': True, 'bind': '127.0.0.1', 'http_port': 0, 'socks5_port': 0,
+            'protocols': ['http-connect'], 'worker': proxy_implementation, 'worker_python_executable': sys.executable,
+            'auth': {'mode': 'basic', 'username': 'user', 'token': 'private-proxy-token'},
+            'egress': {'mode': 'direct'}, 'policy': {'allow_private_destinations': True, 'blocked_host_patterns': []},
+        },
+    }), encoding='utf-8')
+    proc = start_proc('linux_swift_proxy_logging', [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '45'], tmp_path, admin_port=admin_port)
+    try:
+        def wait_for(path, predicate):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    _, result = fetch_json(f'http://127.0.0.1:{admin_port}{path}', timeout=1)
+                    if predicate(result):
+                        return result
+                except (OSError, ValueError):
+                    pass
+                time.sleep(0.1)
+            raise AssertionError(f'timed out waiting for {path}: {proc.log_path.read_text(errors="replace")}')
+
+        status = wait_for('/api/status', lambda item: item.get('logging_worker', {}).get('state') == 'running' and item.get('resource_health', {}).get('proxy_provider', {}).get('worker', {}).get('state') == 'running')
+        logger = status['logging_worker']
+        proxy = status['resource_health']['proxy_provider']['worker']
+        assert logger['implementation'] == log_implementation and proxy['implementation'] == proxy_implementation
+        logs = wait_for('/api/logs?limit=100', lambda item: any('[PROXY] listener started' in line for line in item.get('lines', [])))
+        assert 'private-proxy-token' not in json.dumps(logs)
+        assert logger['pid'] > 1 and logger['pid'] != proc.popen.pid
+        os.kill(logger['pid'], signal.SIGKILL)
+        status = wait_for('/api/status', lambda item: item.get('logging_worker', {}).get('state') == 'running' and item['logging_worker']['generation'] > logger['generation'])
+        assert status['resource_health']['proxy_provider']['worker']['pid'] == proxy['pid']
+        assert proxy['pid'] > 1 and proxy['pid'] != proc.popen.pid
+        os.kill(proxy['pid'], signal.SIGKILL)
+        wait_for('/api/status', lambda item: item.get('resource_health', {}).get('proxy_provider', {}).get('worker', {}).get('state') == 'running' and item['resource_health']['proxy_provider']['worker']['generation'] > proxy['generation'])
+        logs = wait_for('/api/logs?limit=100', lambda item: any('[PROXY] listener started' in line for line in item.get('lines', [])))
+        assert 'private-proxy-token' not in json.dumps(logs)
+    finally:
+        if proc.popen.poll() is None:
+            os.killpg(proc.popen.pid, signal.SIGTERM)
+        proc.popen.wait(timeout=8)
+        peer.close()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('proxy_implementation', ['python', 'native'])
+@pytest.mark.parametrize('log_implementation', ['python', 'native'])
+def test_linux_swift_proxy_component_log_level(tmp_path: Path, proxy_implementation: str, log_implementation: str) -> None:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    binary_path = _linux_swift_runner_binary()
+    peer = LinuxSwiftSecureLinkPeer('tcp', b'linux-swift-logging-psk', keep_open=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    config_path = tmp_path / 'proxy-level.json'
+    config_path.write_text(json.dumps({
+        'runner': {'overlay_transport': 'tcp'},
+        'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
+        'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': 'linux-swift-logging-psk'},
+        'debug_logging': {'log_worker': log_implementation, 'log_worker_python_executable': sys.executable},
+        'proxy_provider': {'enabled': True, 'bind': '127.0.0.1', 'http_port': 0, 'socks5_port': 0,
+            'protocols': ['http-connect'], 'worker': proxy_implementation, 'worker_python_executable': sys.executable,
+            'log_proxy_provider': 'WARNING', 'auth': {'mode': 'basic', 'username': 'user', 'token': 'private-proxy-token'},
+            'egress': {'mode': 'direct'}, 'policy': {'allow_private_destinations': True, 'blocked_host_patterns': []}},
+    }), encoding='utf-8')
+    proc = start_proc('linux_swift_proxy_level', [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '45'], tmp_path, admin_port=admin_port)
+    try:
+        def wait_for(path, predicate):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    _, result = fetch_json(f'http://127.0.0.1:{admin_port}{path}', timeout=1)
+                    if predicate(result):
+                        return result
+                except (OSError, ValueError):
+                    pass
+                time.sleep(0.1)
+            raise AssertionError(f'timed out waiting for {path}: {proc.log_path.read_text(errors="replace")}')
+
+        status = wait_for('/api/status', lambda item: item.get('logging_worker', {}).get('state') == 'running' and item.get('resource_health', {}).get('proxy_provider', {}).get('worker', {}).get('state') == 'running')
+        port = status['resource_health']['proxy_provider']['listeners']['http']['bound_port']
+        with socket.create_connection(('127.0.0.1', port), timeout=2) as client:
+            client.sendall(b'invalid-request\r\n\r\n')
+            client.shutdown(socket.SHUT_WR)
+            client.recv(4096)
+        logs = wait_for('/api/logs?limit=100', lambda item: any('[PROXY] client failed' in line for line in item.get('lines', [])))
+        assert not any('[PROXY] listener started' in line for line in logs['lines'])
+        assert 'private-proxy-token' not in json.dumps(logs)
+    finally:
+        if proc.popen.poll() is None:
+            os.killpg(proc.popen.pid, signal.SIGTERM)
+        proc.popen.wait(timeout=8)
+        peer.close()
+
+
+@pytest.mark.integration
 @pytest.mark.slow
 @pytest.mark.parametrize("case_name", BASIC_CASES)
 def test_overlay_e2e_basic(case_name: str, tmp_path: Path) -> None:

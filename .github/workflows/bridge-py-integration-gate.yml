@@ -71,7 +71,7 @@ jobs:
 
           changed_files="$(git diff --name-only "$base" "$head")"
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^src/|^tests/|^scripts/|^swift/Sources/ObstacleBridge(LogCollector|ProxyWorker|DesktopShared|Linux)/|^Package\.swift$|^ObstacleBridge\.py$|^pyproject\.toml$|\.py$)'; then
             echo "changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -89,7 +89,7 @@ jobs:
             echo "macos_tun_changed=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if printf '%s\n' "$changed_files" | grep -Eq '(^ios/tests/test_macos_swift_host_runner\.py$|^ios/tests/swift_test_support\.py$|^ios/native/ObstacleBridge(App|PrivilegedHelper)/(ObstacleBridgeHostRunner|ObstacleBridgeTunPrivilegedHelperMain).*\.swift$|^ios/native/ObstacleBridgeShared/ObstacleBridge(TunHelper|TunHelperXPCTransport|MacOSTun|ChannelMuxTun|PacketTunnelConfiguration).*\.swift$|^ios/scripts/build_macos_app\.sh$)'; then
+          if printf '%s\n' "$changed_files" | grep -Eq '(^ios/tests/test_macos_swift_host_runner\.py$|^ios/tests/swift_test_support\.py$|^ios/native/ObstacleBridge(App|PrivilegedHelper)/(ObstacleBridgeHostRunner|ObstacleBridgeTunPrivilegedHelperMain).*\.swift$|^ios/native/ObstacleBridgeShared/ObstacleBridge(TunHelper|TunHelperXPCTransport|MacOSTun|ChannelMuxTun|PacketTunnelConfiguration).*\.swift$|^swift/Sources/ObstacleBridgeDesktopShared/|^swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.*\.swift$|^ios/scripts/build_macos_app\.sh$)'; then
             echo "macos_host_runner_changed=true" >> "$GITHUB_OUTPUT"
           else
             echo "macos_host_runner_changed=false" >> "$GITHUB_OUTPUT"
@@ -97,7 +97,9 @@ jobs:
 
   bridge-py-integration-linux:
     name: Integration Gate (Linux shared)
-    timeout-minutes: 15
+    # Cold Swift builds can consume most of the original 15-minute budget;
+    # leave room for the worker-supervision and mixed-process probes as well.
+    timeout-minutes: 25
     needs: detect-bridge-change
     if: needs.detect-bridge-change.outputs.changed == 'true'
     runs-on: ubuntu-latest
@@ -123,7 +125,29 @@ jobs:
         run: ./scripts/build_linux_app.sh
 
       - name: Run Linux Swift live-runtime closure tests
-        run: swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+        run: |
+          OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
+          swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
+
+      - name: Test native log collector interoperability
+        run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
+
+      - name: Test isolated Python peer stack
+        run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
+
+      - name: Test private proxy worker
+        run: |
+          pytest -q tests/unit/test_proxy_worker.py
+          pytest -q tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test native proxy supervision
+        run: pytest -q tests/unit/test_native_proxy_supervisor.py
+
+      - name: Test native logging supervision
+        run: pytest -q tests/unit/test_native_log_supervisor.py
+
+      - name: Test private Admin worker
+        run: pytest -q tests/unit/test_admin_worker.py
 
       - name: Run Linux Swift integration subset
         # These tests own multiple peers and network processes. Four workers
@@ -393,6 +417,32 @@ jobs:
         # The remaining probes each invoke swiftc.  Three workers use the
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
+
+      - name: Test native log collector interoperability
+        run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
+
+      - name: Test isolated Python peer stack
+        run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
+
+      - name: Test private proxy worker
+        run: |
+          pytest -q tests/unit/test_proxy_worker.py
+          pytest -q tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+
+      - name: Test native proxy supervision
+        run: pytest -q tests/unit/test_native_proxy_supervisor.py
+
+      - name: Test native logging supervision
+        run: pytest -q tests/unit/test_native_log_supervisor.py
+
+      - name: Test macOS host proxy worker selection
+        env:
+          PYTHONPATH: .:src:ios/src
+          OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
+        run: pytest -q ios/tests/test_macos_swift_host_runner.py -k 'macos_host_supervises_proxy_worker or macos_host_supervises_logging_worker or macos_host_proxy_logs_follow_collector or macos_host_proxy_component_log_level or macos_build_uses_core_websocket_payload_source'
+
+      - name: Test private Admin worker
+        run: pytest -q tests/unit/test_admin_worker.py
 
   bridge-py-integration-macos-host-runner:
     name: Integration Gate (macOS host-runner qualification)

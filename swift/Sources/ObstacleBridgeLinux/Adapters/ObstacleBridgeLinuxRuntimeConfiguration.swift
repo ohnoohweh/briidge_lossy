@@ -206,14 +206,19 @@ public struct ObstacleBridgeLinuxProxyProviderConfiguration: Equatable, Sendable
     public let socks5Enabled: Bool
     public let credentials: (username: String, password: String)?
     public let allowPrivateDestinations: Bool
+    public let worker: String
+    public let workerExecutable: String?
+    /// Serialized bootstrap remains private to the host/worker channel.
+    public let workerBootstrap: Data?
 
-    public init(enabled: Bool = false, bindHost: String = "127.0.0.1", httpPort: Int = 13_881, socks5Port: Int = 13_882, httpEnabled: Bool = true, socks5Enabled: Bool = true, credentials: (username: String, password: String)? = nil, allowPrivateDestinations: Bool = false) {
+    public init(enabled: Bool = false, bindHost: String = "127.0.0.1", httpPort: Int = 13_881, socks5Port: Int = 13_882, httpEnabled: Bool = true, socks5Enabled: Bool = true, credentials: (username: String, password: String)? = nil, allowPrivateDestinations: Bool = false, worker: String = "off", workerExecutable: String? = nil, workerBootstrap: Data? = nil) {
         self.enabled = enabled; self.bindHost = bindHost; self.httpPort = httpPort; self.socks5Port = socks5Port
         self.httpEnabled = httpEnabled; self.socks5Enabled = socks5Enabled; self.credentials = credentials; self.allowPrivateDestinations = allowPrivateDestinations
+        self.worker = worker; self.workerExecutable = workerExecutable; self.workerBootstrap = workerBootstrap
     }
 
     public static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.enabled == rhs.enabled && lhs.bindHost == rhs.bindHost && lhs.httpPort == rhs.httpPort && lhs.socks5Port == rhs.socks5Port && lhs.httpEnabled == rhs.httpEnabled && lhs.socks5Enabled == rhs.socks5Enabled && lhs.credentials?.username == rhs.credentials?.username && lhs.credentials?.password == rhs.credentials?.password && lhs.allowPrivateDestinations == rhs.allowPrivateDestinations
+        lhs.enabled == rhs.enabled && lhs.bindHost == rhs.bindHost && lhs.httpPort == rhs.httpPort && lhs.socks5Port == rhs.socks5Port && lhs.httpEnabled == rhs.httpEnabled && lhs.socks5Enabled == rhs.socks5Enabled && lhs.credentials?.username == rhs.credentials?.username && lhs.credentials?.password == rhs.credentials?.password && lhs.allowPrivateDestinations == rhs.allowPrivateDestinations && lhs.worker == rhs.worker && lhs.workerExecutable == rhs.workerExecutable && lhs.workerBootstrap == rhs.workerBootstrap
     }
 }
 
@@ -400,8 +405,11 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.unavailableTransport("Linux Swift TUN requires an explicit helper socket and session token; no unauthenticated Python fallback is used")
         }
         let packetTunnelPlan = ObstacleBridgeRuntimeConfigPort.packetTunnelPlan(from: root)
-        let proxy = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("proxy_provider", from: root)
-        let protocols = (proxy["proxy_provider_protocols"] as? [String] ?? ["http-connect", "socks5-connect"]).map { $0.lowercased() }
+        var proxy = ObstacleBridgeRuntimeConfigPort.groupedSectionPayload("proxy_provider", from: root)
+        for key in ["proxy_provider_worker", "proxy_provider_worker_python_executable", "proxy_provider_worker_native_executable"] where proxy[key] == nil {
+            proxy[key] = root[key]
+        }
+        let protocols = (proxy["proxy_provider_protocols"] as? [String] ?? proxy["protocols"] as? [String] ?? ["http-connect", "socks5-connect"]).map { $0.lowercased() }
         let proxyEnabled = boolean(proxy["proxy_provider_enabled"] ?? proxy["enabled"]) ?? false
         let proxyHTTPPort = integer(proxy["proxy_provider_http_port"] ?? proxy["http_port"]) ?? 13_881
         let proxySOCKSPort = integer(proxy["proxy_provider_socks5_port"] ?? proxy["socks5_port"]) ?? 13_882
@@ -411,13 +419,30 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
         let auth = proxy["proxy_provider_auth"] as? [String: Any] ?? proxy["auth"] as? [String: Any] ?? [:]
         let authMode = (string(auth["mode"]) ?? "none").lowercased()
         let authUser = string(auth["username"]) ?? ""
-        let authPassword = string(auth["token"] ?? auth["password"]) ?? ""
-        let proxyCredentials = authMode == "none" ? nil : (username: authUser, password: authPassword)
+        let authToken = string(auth["token"]) ?? ""
+        let authPassword = authToken.isEmpty ? string(auth["password"]) ?? "" : authToken
+        let proxyCredentials = ["", "none", "off", "disabled"].contains(authMode) ? nil : (username: authUser, password: authPassword)
         if proxyEnabled, proxyCredentials != nil, (authUser.isEmpty || authPassword.isEmpty) {
             throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("proxy_provider authentication requires username and token/password")
         }
         let policy = proxy["proxy_provider_policy"] as? [String: Any] ?? proxy["policy"] as? [String: Any] ?? [:]
-        let proxyProvider = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: proxyEnabled, bindHost: string(proxy["proxy_provider_bind"] ?? proxy["bind_host"]) ?? "127.0.0.1", httpPort: proxyHTTPPort, socks5Port: proxySOCKSPort, httpEnabled: protocols.contains("http-connect") || protocols.contains("http"), socks5Enabled: protocols.contains("socks5-connect") || protocols.contains("socks5"), credentials: proxyCredentials, allowPrivateDestinations: boolean(policy["allow_private_destinations"]) ?? false)
+        let worker = (string(proxy["proxy_provider_worker"] ?? proxy["worker"]) ?? "off").lowercased()
+        guard ["off", "native", "python"].contains(worker) else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("invalid proxy_provider worker")
+        }
+        let executableKey = worker == "python" ? "python" : "native"
+        let workerExecutable = string(proxy["proxy_provider_worker_\(executableKey)_executable"] ?? proxy["worker_\(executableKey)_executable"])
+        let bindHost = string(proxy["proxy_provider_bind"] ?? proxy["bind"] ?? proxy["bind_host"]) ?? "127.0.0.1"
+        let egress = proxy["proxy_provider_egress"] as? [String: Any] ?? proxy["egress"] as? [String: Any] ?? [:]
+        var workerBootstrap: Data?
+        if proxyEnabled && worker != "off" {
+            let bootstrap: [String: Any] = ["bind": bindHost, "http_port": proxyHTTPPort, "socks5_port": proxySOCKSPort, "protocols": protocols, "auth": auth, "policy": policy, "egress": egress]
+            guard JSONSerialization.isValidJSONObject(bootstrap), let data = try? JSONSerialization.data(withJSONObject: bootstrap, options: [.sortedKeys]) else {
+                throw ObstacleBridgeLinuxRuntimeConfigurationError.invalidValue("invalid proxy worker configuration")
+            }
+            workerBootstrap = data
+        }
+        let proxyProvider = ObstacleBridgeLinuxProxyProviderConfiguration(enabled: proxyEnabled, bindHost: bindHost, httpPort: proxyHTTPPort, socks5Port: proxySOCKSPort, httpEnabled: protocols.contains("http-connect") || protocols.contains("http"), socks5Enabled: protocols.contains("socks5-connect") || protocols.contains("socks5"), credentials: proxyCredentials, allowPrivateDestinations: boolean(policy["allow_private_destinations"]) ?? false, worker: worker, workerExecutable: workerExecutable, workerBootstrap: workerBootstrap)
         let listenerMode = boolean(runner["listener_mode"]) == true
         guard let transportText = string(runner["overlay_transport"] ?? flat["overlay_transport"]),
               let transport = ObstacleBridgeLinuxTransport(rawValue: transportText.lowercased()) else {
@@ -542,6 +567,16 @@ public struct ObstacleBridgeLinuxRuntimeConfiguration: Equatable, Sendable {
             launchSwiftTunHelper: launchSwiftTunHelper, tunHelperExecutable: tunHelperExecutable,
             tunInterfaceName: tunInterfaceName, packetTunnelEnabled: tunRouting.enabledOnStartup, packetTunnelPlan: packetTunnelPlan, proxyProvider: proxyProvider
         )
+    }
+
+    /// Worker configuration arrives over an inherited private descriptor. Keep
+    /// its admission identical to file-backed foreground configuration without
+    /// materializing credentials on disk.
+    public static func parseJSONObject(_ root: [String: Any]) throws -> ObstacleBridgeLinuxRuntimeConfiguration {
+        guard JSONSerialization.isValidJSONObject(root) else {
+            throw ObstacleBridgeLinuxRuntimeConfigurationError.malformedJSON
+        }
+        return try parse(data: JSONSerialization.data(withJSONObject: root, options: [.sortedKeys]))
     }
 
     private static func string(_ value: Any?) -> String? { value as? String }

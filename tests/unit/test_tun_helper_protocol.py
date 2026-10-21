@@ -3,6 +3,7 @@ import unittest
 
 from obstacle_bridge.bridge_tun_helper_protocol import (
     TUN_HELPER_PROTOCOL_VERSION,
+    TUN_HELPER_MAX_FRAME_BYTES,
     TunHelperControlMessage,
     TunHelperFrameKind,
     decode_control_payload,
@@ -77,6 +78,16 @@ class TunHelperProtocolTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "unknown TUN helper frame kind"):
             try_decode_frame(encoded)
+
+    def test_frame_size_bound_matches_native_and_rejects_oversized_header(self) -> None:
+        payload = b"x" * TUN_HELPER_MAX_FRAME_BYTES
+        encoded = encode_frame(TunHelperFrameKind.PACKET_TO_HELPER, payload)
+        self.assertEqual(try_decode_frame(encoded), (TunHelperFrameKind.PACKET_TO_HELPER, payload, b""))
+        with self.assertRaisesRegex(ValueError, "exceeds maximum"):
+            encode_frame(TunHelperFrameKind.PACKET_TO_HELPER, payload + b"x")
+        header = bytes([TunHelperFrameKind.PACKET_TO_HELPER]) + (TUN_HELPER_MAX_FRAME_BYTES + 1).to_bytes(4, "big")
+        with self.assertRaisesRegex(ValueError, "exceeds maximum"):
+            try_decode_frame(header)
 
 
 if __name__ == "__main__":

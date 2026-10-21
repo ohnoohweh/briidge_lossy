@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
 import base64
+import copy
 import contextlib as _process_contextlib
 import ctypes
 import json
@@ -202,8 +203,14 @@ class Runner:
         self._sessions: List[ISession] = []
         self._muxes: List["ChannelMux"] = []
         self._session_labels: List[str] = []
+        self._peer_stack_worker = None
+        self._peer_stack_task: Optional[asyncio.Task] = None
+        self._peer_stack_snapshot: Optional[dict] = None
+        self._peer_stack_restarts = 0
+        self._peer_stack_failed_starts = 0
         self._proxy_provider_servers: Dict[str, ObstacleBridgeProxyServer] = {}
         self._proxy_provider_last_error: str = ""
+        self._proxy_provider_worker = None
         self._tun_helper_settings = TunExecutionSettings.from_mapping(vars(args))
         self._tun_helper_client: Optional[TunHelperClient] = None
         self._tun_helper_backend: Optional[LinuxTunHelperInMemoryBackend] = None
@@ -275,6 +282,103 @@ class Runner:
             "last_failed_monotonic": None,
             "last_failed_error": "",
         }
+
+    def _peer_stack_config(self) -> dict:
+        """Project only peer-owned settings into the private bootstrap."""
+        if (str(getattr(self.args, "overlay_transport", "")).strip().lower() != "tcp"
+                or not _has_configured_overlay_peer(self.args, transport="tcp")
+                or bool(getattr(self.args, "enabled_on_startup", True))
+                or self._tun_helper_settings.mode != "inline"):
+            raise ValueError("peer worker requires one TCP client and TUN disabled")
+        from .bridge_peer_worker import _validate_peer_services
+        _validate_peer_services(self.args)
+        sections = getattr(self.args, "_config_sections", {}) or {}
+        config = {}
+        for section in ("runner", "tcp_session", "secure_link", "compress_layer", "channel_mux"):
+            values = {}
+            for key in sections.get(section, ()):
+                if key != "peer_stack_worker" and hasattr(self.args, key):
+                    value = getattr(self.args, key)
+                    json.dumps(value, allow_nan=False)
+                    values[key] = value
+            config[section] = values
+        config["TUN_routing"] = {"enabled_on_startup": False}
+        return config
+
+    def _current_peer_stack_snapshot(self) -> Optional[dict]:
+        worker = self._peer_stack_worker
+        if worker is None or worker.process is None or worker.process.returncode is not None:
+            return None
+        snapshot = self._peer_stack_snapshot
+        return snapshot if snapshot and snapshot.get("generation") == worker.generation else None
+
+    async def _supervise_peer_stack(self, config: dict) -> None:
+        worker = self._peer_stack_worker
+        if worker is None:
+            return
+        delay = 0.25
+        while True:
+            try:
+                bundle = await worker.snapshot_bundle()
+                if worker.process is not None and worker.process.returncode is None:
+                    self._peer_stack_snapshot = {"generation": worker.generation, "bundle": bundle}
+                    delay = 0.25
+                await asyncio.sleep(0.25)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                self._peer_stack_snapshot = None
+                await worker.stop()
+                while True:
+                    await asyncio.sleep(delay)
+                    try:
+                        await worker.start(config)
+                        self._peer_stack_restarts += 1
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:
+                        self._peer_stack_failed_starts += 1
+                        delay = min(2.0, delay * 2)
+
+    async def _stop_peer_stack(self) -> None:
+        task, self._peer_stack_task = self._peer_stack_task, None
+        if task is not None:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        worker, self._peer_stack_worker = self._peer_stack_worker, None
+        self._peer_stack_snapshot = None
+        if worker is not None:
+            await worker.stop()
+
+    async def _peer_stack_control(self, operation: str, target_peer_id: Optional[str], scope: Optional[str] = None) -> dict:
+        worker = self._peer_stack_worker
+        if worker is not None:
+            try:
+                return await worker.control(operation, target_peer_id=target_peer_id, scope=scope)
+            except (ConnectionError, OSError, ValueError, RuntimeError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+                pass
+        # The operation may have reached a child before its reply was lost.
+        # Do not retry it automatically or report that it definitely failed.
+        return {"ok": False, "target_peer_id": target_peer_id, "requested": 0,
+                "reason": "peer_worker_unavailable_or_outcome_unknown",
+                "error": "peer_worker_unavailable_or_outcome_unknown"}
+
+    async def request_overlay_reconnect_async(self, target_peer_id: Optional[str] = None) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            return await self._peer_stack_control("reconnect", target_peer_id)
+        return self.request_overlay_reconnect(target_peer_id=target_peer_id)
+
+    async def request_secure_link_rekey_async(self, target_peer_id: Optional[str] = None) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            return await self._peer_stack_control("rekey", target_peer_id)
+        return self.request_secure_link_rekey(target_peer_id=target_peer_id)
+
+    async def request_secure_link_reload_async(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            return await self._peer_stack_control("reload", target_peer_id, scope=scope)
+        return self.request_secure_link_reload(scope=scope, target_peer_id=target_peer_id)
 
     def _telemetry_collector_warning(self, message: str) -> None:
         text = "WARNING: telemetry collector " + str(message)
@@ -753,6 +857,9 @@ class Runner:
     async def _start_proxy_provider(self) -> None:
         cfg = self._proxy_provider_config_snapshot()
         log = logging.getLogger("proxy_provider")
+        worker_mode = str(getattr(self.args, "proxy_provider_worker", "off") or "off")
+        if worker_mode not in {"off", "python", "native"}:
+            raise ValueError("unsupported proxy worker implementation")
         log.info(
             "[PROXY] provider config enabled=%s bind=%s http_port=%s socks5_port=%s protocols=%r auth_mode=%s",
             cfg["enabled"],
@@ -771,6 +878,23 @@ class Runner:
         if not http_enabled and not socks_enabled:
             self._proxy_provider_last_error = "no proxy protocols enabled"
             log.warning("[PROXY] provider enabled but no supported protocols are configured")
+            return
+        if worker_mode in {"python", "native"}:
+            from .bridge_proxy_worker import ProxyWorker, validate_worker_policy
+
+            try:
+                validate_worker_policy(cfg)
+            except ValueError:
+                self._proxy_provider_last_error = "proxy worker destination policy unsupported"
+                raise
+            worker = ProxyWorker(worker_mode, getattr(self.args, "proxy_provider_worker_native_executable", None), supervised=True)
+            try:
+                await self._await_with_async_diag("proxy_provider.worker.start", worker.start(cfg))
+            except Exception:
+                self._proxy_provider_last_error = "proxy worker failed to start"
+                raise
+            self._proxy_provider_worker = worker
+            self._proxy_provider_last_error = ""
             return
         credentials = self._proxy_provider_credentials(cfg.get("auth") or {})
         if (cfg.get("auth") or {}).get("mode") not in (None, "", "none") and credentials is None:
@@ -803,6 +927,9 @@ class Runner:
 
     async def _stop_proxy_provider(self) -> None:
         log = logging.getLogger("proxy_provider")
+        if self._proxy_provider_worker is not None:
+            worker, self._proxy_provider_worker = self._proxy_provider_worker, None
+            await self._await_with_async_diag("proxy_provider.worker.stop", worker.stop())
         for name, server in list(self._proxy_provider_servers.items()):
             try:
                 await self._await_with_async_diag(f"proxy_provider.{name}.stop", server.stop())
@@ -813,14 +940,19 @@ class Runner:
 
     def _proxy_provider_snapshot(self) -> dict:
         cfg = self._proxy_provider_config_snapshot()
+        worker = self._proxy_provider_worker
         return {
             "enabled": bool(cfg["enabled"]),
             "configured": cfg,
-            "listeners": {
+            "listeners": worker.listeners if worker is not None else {
                 name: server.snapshot()
                 for name, server in sorted(self._proxy_provider_servers.items())
             },
-            "last_error": self._proxy_provider_last_error,
+            "last_error": worker.last_error if worker is not None else self._proxy_provider_last_error,
+            **({"worker": {"implementation": worker.implementation,
+                            "state": "running" if worker.process is not None and worker.process.returncode is None and not worker.last_error else "unavailable",
+                            "generation": worker.generation, "restarts": worker.restarts,
+                            "failed_starts": worker.failed_starts}} if worker is not None else {}),
         }
 
     async def _start_tun_helper(self) -> None:
@@ -1381,6 +1513,12 @@ class Runner:
 
     async def start(self) -> None:
         ios_admin_ui = str(_admin_ui_platform()).strip().lower() == "ios"
+        peer_mode = str(getattr(self.args, "peer_stack_worker", "off") or "off")
+        if peer_mode not in {"off", "python", "native"}:
+            raise ValueError("unsupported peer worker implementation")
+        if peer_mode in {"python", "native"} and (ios_admin_ui or sys.platform not in {"darwin", "linux"}):
+            raise ValueError("peer workers require desktop macOS or Linux")
+        peer_config = self._peer_stack_config() if peer_mode in {"python", "native"} else None
         self._loop = asyncio.get_running_loop()
         self._install_async_task_factory(self._loop)
         self.log.debug("[SERVER] Runner start on session id=%x", id(self))
@@ -1400,8 +1538,33 @@ class Runner:
         # block on network state. This is especially important for iOS packet
         # tunnel providers where WebAdmin is the recovery/config surface.
         if getattr(self.args, "admin_web", False) and self.admin_web is None:
-            self.admin_web = AdminWebUI(self.args, self)
+            admin_worker = str(getattr(self.args, "admin_web_worker", "off") or "off")
+            if admin_worker == "python":
+                if ios_admin_ui:
+                    raise ValueError("Admin worker is unsupported in iOS runtimes")
+                from .bridge_admin_worker import AdminWorker
+                self.admin_web = AdminWorker(self, self.args, supervised=True)
+            elif admin_worker == "off":
+                self.admin_web = AdminWebUI(self.args, self)
+            else:
+                raise ValueError("unsupported Admin worker implementation")
             await self._await_with_async_diag("AdminWebUI.start", self.admin_web.start())
+
+        if peer_config is not None:
+            from .bridge_peer_worker import PeerStackWorker
+            worker = PeerStackWorker(implementation=peer_mode,
+                                     native_executable=getattr(self.args, "peer_stack_worker_native_executable", None))
+            self._peer_stack_worker = worker
+            try:
+                await worker.start(peer_config)
+                self._peer_stack_snapshot = {"generation": worker.generation, "bundle": await worker.snapshot_bundle()}
+            except BaseException:
+                with contextlib.suppress(Exception):
+                    await self.stop(reason="peer-worker-start-failed")
+                raise
+            self._peer_stack_task = asyncio.create_task(self._supervise_peer_stack(peer_config), name="peer-stack-supervisor")
+            self._runtime_health_task = asyncio.create_task(self._runtime_health_heartbeat())
+            return
 
         loop = asyncio.get_running_loop()
         transport_sessions = Runner.build_sessions_from_overlay(self.args)
@@ -1583,6 +1746,8 @@ class Runner:
 
         self.log.debug("[RUNNER] stop: entering proxy_provider.stop")
         await _run_stop_step("proxy_provider.stop", self._stop_proxy_provider(), timeout_s=3.0)
+
+        await _run_stop_step("peer_stack.stop", self._stop_peer_stack(), timeout_s=15.0)
 
         self.log.debug("[RUNNER] stop: entering telemetry_collector.stop")
         await _run_stop_step("telemetry_collector.stop", self._stop_telemetry_collector(), timeout_s=3.0)
@@ -1790,6 +1955,9 @@ class Runner:
 
     def request_overlay_reconnect(self, target_peer_id: Optional[str] = None) -> dict:
         target = str(target_peer_id or "").strip()
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            return {"ok": False, "target_peer_id": target or None, "requested": 0,
+                    "sessions": 0, "transports": [], "reason": "peer_worker_control_not_supported"}
         requested = 0
         sessions = 0
         transports: list[str] = []
@@ -2080,15 +2248,48 @@ class Runner:
             "compression_saving_ratio": savings_ratio,
         }
         payload["proxy_provider"] = self._proxy_provider_snapshot()
+        admin_worker = self.admin_web
+        implementation = getattr(admin_worker, "implementation", "") or str(getattr(self.args, "admin_web_worker", "off") or "off")
+        if implementation != "off":
+            process = getattr(admin_worker, "process", None)
+            alive = process is not None and process.returncode is None and not getattr(admin_worker, "last_error", "")
+            payload["admin_web_worker"] = {
+                "implementation": implementation,
+                "state": "running" if alive else "unavailable",
+                "generation": getattr(admin_worker, "generation", 0),
+                "restarts": getattr(admin_worker, "restarts", 0),
+                "failed_starts": getattr(admin_worker, "failed_starts", 0),
+            }
         payload["telemetry"] = {
             "client": self.get_telemetry_client_snapshot(),
             "collector": self.get_telemetry_collector_snapshot(),
         }
         payload["tun_helper"] = self._tun_helper_snapshot()
         payload.update(self._runtime_health_status_fields())
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            snapshot = self._current_peer_stack_snapshot()
+            if snapshot is not None:
+                child_status = snapshot["bundle"]["status"]
+                parent_fields = {"proxy_provider", "admin_web_worker", "telemetry", "tun_helper"}
+                parent_fields.update(self._runtime_health_status_fields())
+                payload.update(copy.deepcopy({key: value for key, value in child_status.items() if key not in parent_fields}))
+            worker = self._peer_stack_worker
+            process = worker.process if worker is not None else None
+            payload["peer_stack_worker"] = {
+                "implementation": str(getattr(worker, "implementation", "python")),
+                "state": "running" if snapshot is not None else "unavailable",
+                "pid": process.pid if process is not None and process.returncode is None else None,
+                "generation": worker.generation if worker is not None else 0,
+                "restarts": self._peer_stack_restarts,
+                "failed_starts": self._peer_stack_failed_starts,
+            }
         return payload
 
     def get_connections_snapshot(self) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            snapshot = self._current_peer_stack_snapshot()
+            if snapshot is not None:
+                return copy.deepcopy(snapshot["bundle"]["connections"])
         if not self._muxes:
             return {
                 "udp": [],
@@ -2690,6 +2891,9 @@ class Runner:
                 self._peer_traffic_rate_state.pop(peer_id, None)
 
     def get_peer_connections_snapshot(self) -> dict:
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            snapshot = self._current_peer_stack_snapshot()
+            return copy.deepcopy(snapshot["bundle"]["peers"]) if snapshot is not None else {"peers": [], "count": 0}
         peers: list = []
         def _active_connection_count(rows: list) -> int:
             return sum(
@@ -3040,6 +3244,9 @@ class Runner:
 
     def request_secure_link_rekey(self, target_peer_id: Optional[str] = None) -> dict:
         target = str(target_peer_id or "").strip()
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            return {"ok": False, "target_peer_id": target or None, "requested": 0,
+                    "skipped": 0, "results": [], "error": "peer_worker_control_not_supported"}
         requested = 0
         skipped = 0
         results: list[dict] = []
@@ -3102,6 +3309,10 @@ class Runner:
     def request_secure_link_reload(self, scope: str, target_peer_id: Optional[str] = None) -> dict:
         normalized_scope = str(scope or "").strip().lower()
         target = str(target_peer_id or "").strip()
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            return {"ok": False, "scope": normalized_scope, "target_peer_id": target or None,
+                    "requested": 0, "reloaded": 0, "dropped": 0, "failed": 0,
+                    "results": [], "reason": "peer_worker_control_not_supported"}
         requested = 0
         reloaded = 0
         dropped = 0
@@ -3269,6 +3480,11 @@ class Runner:
                     normalized_updates[str(nested_key)] = nested_value
                 continue
             normalized_updates[str(key)] = value
+        if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
+            peer_sections = ("runner", "tcp_session", "secure_link", "compress_layer", "channel_mux", "TUN_routing", "tun_execution")
+            peer_keys = {key for section in peer_sections for key in (getattr(self.args, "_config_sections", {}) or {}).get(section, ())}
+            if peer_keys.intersection(normalized_updates):
+                return (False, "peer worker configuration changes require stopping and restarting the runtime")
         if normalized_updates.get("admin_web_auth_disable") is True:
             normalized_updates["admin_web_username"] = ""
             normalized_updates["admin_web_password"] = ""
@@ -3416,6 +3632,14 @@ class Runner:
                      "comma-separated list from myudp,tcp,quic,ws. "
                      "Multiple transports are supported simultaneously for listening instances."
             )
+        if not _has('--peer-stack-worker'):
+            p.add_argument(
+                '--peer-stack-worker', choices=['off', 'python', 'native'], default='off',
+                help='Run one outbound TCP peer stack in a supervised Python or native process (requires TUN disabled).',
+            )
+        if not _has('--peer-stack-worker-native-executable'):
+            p.add_argument('--peer-stack-worker-native-executable', default=None,
+                           help='macOS native peer worker executable; defaults to ObstacleBridgeHostRunner on PATH.')
         if not _has('--client-restart-if-disconnected'):
             p.add_argument(
                 '--client-restart-if-disconnected',
@@ -4096,6 +4320,9 @@ def parse_runtime_args(
     args = cli.parse_args(argv, default_runtime_registrars())
     _attach_runtime_cli_metadata(args, cli)
     if apply_logging:
+        from .bridge_logging_worker import validate_managed_logging_args
+
+        validate_managed_logging_args(args)
         DebugLoggingConfigurator.from_args(args).apply()
     return args
 
@@ -4648,12 +4875,7 @@ def _maybe_reexec_with_windows_tun_privileges(
     raise SystemExit(0)
 
 
-def main(argv: Optional[List[str]] = None) -> None:
-    args = parse_runtime_args(argv, apply_logging=True)
-    log = logging.getLogger("runner")
-    _maybe_reexec_with_linux_tun_privileges(args, argv=argv, log=log)
-    _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
-    _maybe_reexec_with_windows_tun_privileges(args, argv=argv, log=log)
+def _run_configured_main(args, argv, log) -> None:
     r = Runner(args)
     installed_signal_handlers = _install_process_signal_handlers(r, log)
     log.info("[RUNNER] process start pid=%s argv=%r", os.getpid(), list(argv) if argv is not None else sys.argv[1:])
@@ -4702,6 +4924,18 @@ def main(argv: Optional[List[str]] = None) -> None:
             r._restart_exit_code,
             r._restart_reason,
         )
+
+
+def main(argv: Optional[List[str]] = None) -> None:
+    args = parse_runtime_args(argv, apply_logging=True)
+    log = logging.getLogger("runner")
+    _maybe_reexec_with_linux_tun_privileges(args, argv=argv, log=log)
+    _maybe_reexec_with_macos_tun_privileges(args, argv=argv, log=log)
+    _maybe_reexec_with_windows_tun_privileges(args, argv=argv, log=log)
+    from .bridge_logging_worker import activate_managed_logging
+
+    with activate_managed_logging(args):
+        _run_configured_main(args, argv, log)
 
 if __name__ == '__main__':
     main()
