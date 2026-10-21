@@ -708,7 +708,8 @@ REQ-PRX-001:
   # supervisors project the redacted lifecycle shape (identity/state/
   # generation/restart/failure/capabilities, listeners, and last_error), and
   # configured status omits all authentication secret values. Worker loss and
-  # failed replacement use the stable redacted unavailable/startup_failed codes.
+  # failed replacement, including native host projection, use the stable
+  # redacted unavailable/startup_failed codes.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5

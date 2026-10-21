@@ -298,9 +298,9 @@ control socket used for every replacement.
 The lifecycle projection uses redacted stable failure codes: `unavailable` for
 control or child loss, `startup_failed` when a replacement cannot become ready,
 and `invalid_configuration` when its private startup dictionary is rejected.
-Successful readiness clears the code. Both desktop supervisors retain the
-failed-start count while a retry is pending and expose no listener snapshot for
-an unavailable generation.
+Successful readiness clears the code. Both desktop supervisors and their host
+projections retain the failed-start count while a retry is pending and expose
+no listener snapshot for an unavailable generation.
 
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |

@@ -746,8 +746,14 @@ final class ObstacleBridgeHostRunner {
                 try worker.start(config: ["bind": config.bindHost, "http_port": config.httpPort,
                                           "socks5_port": config.socks5Port, "protocols": config.protocols,
                                           "auth": config.auth, "egress": config.egress, "policy": config.policy])
+            } catch let failure as ObstacleBridgeProxyWorkerSupervisor.Failure {
+                switch failure {
+                case .invalidConfiguration: proxyProviderLastError = "invalid_configuration"
+                case .invalidFrame, .unavailable, .timeout: proxyProviderLastError = "startup_failed"
+                }
+                throw failure
             } catch {
-                proxyProviderLastError = "proxy worker startup failed"
+                proxyProviderLastError = "startup_failed"
                 throw error
             }
             proxyWorker = worker
