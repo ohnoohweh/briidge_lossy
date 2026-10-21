@@ -10,6 +10,12 @@ public enum ObstacleBridgeProxyLifecycleErrorCode {
     public static let invalidConfiguration = "invalid_configuration"
 }
 
+/// Keeps configured intent distinct from a listener/worker's live state in
+/// every Apple proxy status projection.
+public enum ObstacleBridgeProxyStatusProjection {
+    public static func configuredEnabled(_ enabled: Bool) -> Bool { enabled }
+}
+
 final class ObstacleBridgeTCPProxyConnection {
     private let chanID: Int
     private let spec: ObstacleBridgeNativeServiceSpec

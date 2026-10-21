@@ -628,8 +628,9 @@ def test_proxy_server_source_exists() -> None:
     assert '"configured": config.configuredPayload()' in provider
     assert '"last_error": proxyProviderLastError' in provider
     assert "public enum ObstacleBridgeProxyLifecycleErrorCode" in native_connections
+    assert "public enum ObstacleBridgeProxyStatusProjection" in native_connections
     assert "ObstacleBridgeProxyLifecycleErrorCode.startupFailed" in host_runner
-    assert '"enabled": config.enabled' in host_runner
+    assert "ObstacleBridgeProxyStatusProjection.configuredEnabled(config.enabled)" in host_runner
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider

@@ -1041,7 +1041,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/integration/test_proxy_provider_e2e.py` | `ARC-CMP-001` | `REQ-PRX-001`, `PROC-TST-001` | In-process Python and both private-child proxy implementations handle concurrent HTTP, HTTPS-over-CONNECT and SOCKS5 clients against real local HTTP and TLS targets. | `pytest -q tests/integration/test_proxy_provider_e2e.py` |
 | `tests/unit/test_requirements_unit_gaps.py` | `ARC-CMP-002`, `ARC-CMP-003`, `ARC-CMP-004`, `ARC-CMP-005` | `REQ-ADM-002`, `REQ-ADM-003`, `REQ-ADM-004`, `REQ-ADM-005`, `REQ-LIFE-001`, `REQ-LIFE-003`, `REQ-LIFE-004`, `REQ-LST-002`, `REQ-LST-003`, `REQ-LST-004`, `REQ-LST-005`, `REQ-MYU-001`, `REQ-MYU-002`, `REQ-MYU-003`, `REQ-MYU-004`, `REQ-MYU-005`, `REQ-MYU-006`, `REQ-OVL-001`, `REQ-OVL-002`, `REQ-OVL-006`, `PROC-TST-002` | Requirement-gap unit coverage must pin admin-auth gate behavior, accepted-peer reporting identity across listener transports, UDP IPv4/IPv6 peer labeling, and `myudp` reliability/session invariants that support the broader integration claims | `pytest -q tests/unit/test_requirements_unit_gaps.py` |
 
-The Apple proxy source guard verifies that macOS host startup uses the shared redacted lifecycle-code vocabulary and keeps configured proxy intent separate from runtime worker state, so a platform-specific host edit cannot reintroduce descriptive errors or status-schema drift.
+The Apple proxy source guard verifies that macOS host startup uses the shared redacted lifecycle-code vocabulary and shared configured-status projection, so a platform-specific host edit cannot reintroduce descriptive errors or status-schema drift.
 
 ### Unit test catalog
 
