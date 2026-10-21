@@ -1043,7 +1043,7 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 
 The Apple proxy source guard verifies that macOS host startup uses the shared redacted lifecycle-code vocabulary and shared configured-status projection, so a platform-specific host edit cannot reintroduce descriptive errors or status-schema drift.
 Managed logging tests also cover the redacted off-state status used by Python Admin when no collector is selected.
-The CI workflow labels the platform-local proxy lifecycle and collector matrices as PXY-3B and PXY-3C on both macOS and Linux.
+The CI workflow labels the platform-local lifecycle matrix as PXY-3B and its exact Linux proxy-collector plus macOS proxy-collector/host matrix as PXY-3C.
 
 ### Unit test catalog
 

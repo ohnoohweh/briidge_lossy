@@ -455,7 +455,7 @@ ARC-CMP-004:
   # The shared Apple status projection keeps enabled as configured intent,
   # independently of the runtime projection.
   # Python Admin also projects the selected collector's bounded drop state;
-  # PXY-3 CI matrices record lifecycle/collector evidence separately per host.
+  # PXY-3 CI matrices record lifecycle and exact proxy-collector evidence per host.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

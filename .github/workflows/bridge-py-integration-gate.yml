@@ -129,7 +129,7 @@ jobs:
           OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
           swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
 
-      - name: Test native log collector interoperability
+      - name: Qualify PXY-3C proxy collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test isolated Python peer stack
@@ -143,7 +143,7 @@ jobs:
       - name: Qualify PXY-3B native-supervisor matrix (Linux)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
-      - name: Qualify PXY-3C collector matrix (Linux)
+      - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py
 
       - name: Test private Admin worker
@@ -418,7 +418,7 @@ jobs:
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
 
-      - name: Test native log collector interoperability
+      - name: Qualify PXY-3C proxy collector matrix (macOS)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test isolated Python peer stack
@@ -432,10 +432,10 @@ jobs:
       - name: Qualify PXY-3B native-supervisor matrix (macOS)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
-      - name: Qualify PXY-3C collector matrix (macOS)
+      - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py
 
-      - name: Test macOS host proxy worker selection
+      - name: Qualify PXY-3C macOS host proxy collector matrix
         env:
           PYTHONPATH: .:src:ios/src
           OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"

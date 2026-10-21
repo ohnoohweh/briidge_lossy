@@ -113,7 +113,7 @@ keeping credentials out of endpoint diagnostics and persisted status.
 - Native desktop host projections preserve those same proxy-worker lifecycle codes, sourced from the shared Apple proxy vocabulary, rather than substituting descriptive startup-error text.
 - Proxy status `enabled` reflects configuration through the shared Apple status projection; listener, worker state, and `last_error` are the independent runtime projection on Python and native desktop hosts.
 - Python and native Admin status project the selected logging collector's redacted lifecycle and bounded `dropped_records` count.
-- PXY-3 lifecycle and collector qualification is platform-local: named macOS and Linux gates run their respective host matrices and must each record success.
+- PXY-3 lifecycle and collector qualification is platform-local: named Linux proxy-collector and macOS proxy-collector/host gates run their respective matrices and must each record success.
 - Portability boundary: desktop subprocess supervision is shared between the macOS and Linux hosts; it does not authorize spawning worker processes from iOS extensions.
 
 Implementation note: shared Swift Core owns HTTP/SOCKS request parsing,
