@@ -688,6 +688,7 @@ struct ObstacleBridgeLinuxLiveRuntimeTests {
         runtime.start()
         defer { runtime.stop() }
         #expect(waitUntil { (runtime.remoteServicePorts()[7] ?? 0) > 0 })
+        try peer.advanceCatalog()
         #expect(waitUntil {
             let ports = runtime.remoteServicePorts()
             return ports[7] == nil && (ports[8] ?? 0) > 0
