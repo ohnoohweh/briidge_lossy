@@ -819,7 +819,7 @@ final class ObstacleBridgeHostRunner {
         if let worker = proxyWorker {
             let snapshot = worker.snapshot()
             let state = snapshot["worker"] as? [String: Any] ?? [:]
-            return ["enabled": state["state"] as? String == "running", "configured": config.configuredPayload(),
+            return ["enabled": config.enabled, "configured": config.configuredPayload(),
                     "listeners": snapshot["listeners"] ?? [:], "last_error": snapshot["last_error"] ?? "",
                     "worker": state]
         }
@@ -830,7 +830,7 @@ final class ObstacleBridgeHostRunner {
             }
         }
         return [
-            "enabled": !proxyServers.isEmpty,
+            "enabled": config.enabled,
             "configured": config.configuredPayload(),
             "listeners": listeners,
             "last_error": proxyProviderLastError,

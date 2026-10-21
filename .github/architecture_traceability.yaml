@@ -452,6 +452,7 @@ ARC-CMP-004:
   # failure/capabilities plus listeners and shared stable redacted last_error
   # codes, including native host projection; configured status omits
   # authentication secrets and failed listener start returns a stable code.
+  # Enabled reflects configured intent independently of the runtime projection.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve
