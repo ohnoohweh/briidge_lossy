@@ -441,9 +441,10 @@ ARC-CMP-004:
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.
-  # The established proxy contract qualifies Python/native selections on each
-  # host locally; it does not require a macOS-to-Linux process pairing. The
-  # evidence does not qualify the remaining common IPC plan. Contract-v1 requires explicit auth and rejects malformed
+  # The completed PXY-2 proxy contract qualifies Python/native selections on
+  # each host locally; it does not require a macOS-to-Linux process pairing.
+  # The evidence does not qualify the remaining common IPC plan. Contract-v1
+  # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
   # redacted lifecycle projection at worker identity/state/generation/restart/

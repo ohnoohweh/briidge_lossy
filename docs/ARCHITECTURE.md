@@ -268,10 +268,9 @@ selected implementation, bounded listener snapshot, and versioned capability
 declaration. Both desktop supervisors project capabilities at
 `worker.capabilities` with lifecycle identity/state/generation/restart/failure
 fields, listeners, and redacted `last_error`; configured status never exposes
-token or password values. The native selectable surface currently retains
-direct egress only, and the capability declaration is authoritative for that
-difference. Contract qualification runs each supervisor/worker selection on
-its own macOS or Linux host.
+token or password values. The capability declaration is authoritative for the
+common selectable surface. Contract qualification runs each supervisor/worker
+selection on its own macOS or Linux host.
 
 The destination policy is enforced before every HTTP CONNECT, absolute-form
 HTTP, and SOCKS5 CONNECT dial. `blocked_host_patterns` uses case-insensitive
@@ -292,13 +291,13 @@ same listener snapshot and capability declaration report `direct` and
 
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `PXY-2D` — listener behavior qualification | Qualify the now-common listener surface, including HTTP CONNECT and SOCKS5, all authentication modes, IPv4/IPv6 loopback binds, denied and allowed destinations, direct and system egress, bounded duplex transfer, half-close, and idle-client isolation. DoD: each selected implementation passes the same focused traffic suite on macOS and Linux, with test output naming OS and worker choice. | The Linux shared and macOS Swift-backed gates now run the named platform-local worker and native-supervisor matrices, and the large-transfer/half-close plus idle-client cases cover both workers. The named macOS matrix and proxy-worker E2E traffic pass locally; independent Linux evidence for this changed matrix remains required. |
 | `PXY-3` — lifecycle, observability and logging | Make worker startup, readiness, replacement, shutdown and log delivery fully supervisor-owned and generation-fenced. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; stale snapshots are rejected; Admin reports equivalent redacted listener, worker and failure state; Python and native proxy records reach the selected local collector without blocking traffic. | Both supervisors restart selected children and proxy logging has a record-only relay, but the shared lifecycle/error schema and all stale-generation cases are not yet qualified consistently on both hosts. |
 | `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
 
-Completed IPv6-listener, destination-policy, and system-egress work packages
-are represented by the durable contract decisions above rather than retained
-as active packages. `PXY-2D` is the next implementation slice.
+Completed IPv6-listener, destination-policy, system-egress, and platform-local
+listener qualification work packages are represented by the durable contract
+decisions above rather than retained as active packages. `PXY-3` is the next
+implementation slice.
 
 ## Connection lifecycle propagation and rotation
 
