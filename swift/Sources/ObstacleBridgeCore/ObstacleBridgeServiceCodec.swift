@@ -42,7 +42,15 @@ public indirect enum ObstacleBridgeJSONValue: Equatable, Sendable {
         case .array(let value): return "[" + value.map { $0.canonicalString() }.joined(separator: ",") + "]"
         case .string(let value): return Self.quote(value)
         case .integer(let value): return String(value)
-        case .double(let value): return value.rounded(.towardZero) == value ? String(Int64(value)) : String(value)
+        case .double(let value):
+            guard value.isFinite else { return "null" }
+            let integral = value.rounded(.towardZero) == value
+            if integral,
+               value >= Double(Int64.min),
+               value <= Double(Int64.max) {
+                return String(Int64(value))
+            }
+            return String(value)
         case .bool(let value): return value ? "true" : "false"
         case .null: return "null"
         }

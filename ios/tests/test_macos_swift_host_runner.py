@@ -82,6 +82,14 @@ def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
     assert "private proxy worker to exit before its ready frame" in supervisor
 
 
+def test_macos_log_worker_control_descriptors_survive_exec() -> None:
+    supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeLogWorkerSupervisor.swift").read_text(encoding="utf-8")
+
+    assert "fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0" in supervisor
+    assert "fcntl(descriptors[1], F_SETFD, FD_CLOEXEC)" not in supervisor
+    assert "standard input or standard error during exec" in supervisor
+
+
 @pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
 def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener() -> None:
     async def exercise() -> None:
@@ -136,6 +144,8 @@ def test_macos_webadmin_uses_core_canonical_json_serializer() -> None:
 
     assert "ObstacleBridgeCanonicalJSON.data(fromJSONObject: value)" in webadmin
     assert "public enum ObstacleBridgeCanonicalJSON" in service_codec
+    assert "guard value.isFinite else { return \"null\" }" in service_codec
+    assert "value <= Double(Int64.max)" in service_codec
 
 
 def test_macos_build_includes_mtls_telemetry_transport() -> None:

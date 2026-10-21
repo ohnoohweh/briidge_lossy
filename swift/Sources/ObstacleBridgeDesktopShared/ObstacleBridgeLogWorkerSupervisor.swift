@@ -87,8 +87,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     private func socketPair(_ kind: Int32) throws -> (Int32, Int32) {
         var descriptors: [Int32] = [-1, -1]
         guard socketpair(AF_UNIX, kind, 0, &descriptors) == 0 else { throw Failure.unavailable }
-        guard fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0,
-              fcntl(descriptors[1], F_SETFD, FD_CLOEXEC) == 0 else {
+        // The parent descriptor must not leak into the collector.  The child
+        // descriptor is deliberately inherited because Process supplies it as
+        // standard input or standard error during exec.
+        guard fcntl(descriptors[0], F_SETFD, FD_CLOEXEC) == 0 else {
             close(descriptors[0]); close(descriptors[1]); throw Failure.unavailable
         }
         return (descriptors[0], descriptors[1])
