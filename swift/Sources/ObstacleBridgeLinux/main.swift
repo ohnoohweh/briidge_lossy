@@ -1,6 +1,7 @@
 import Foundation
 import ObstacleBridgeLinuxAdapters
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
