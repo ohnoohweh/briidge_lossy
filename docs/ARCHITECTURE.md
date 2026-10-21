@@ -254,16 +254,30 @@ macOS-to-Linux process pairing. A package requires independently recorded
 passing macOS and Linux evidence before it is removed. The work packages run in
 the listed order.
 
+### Proxy worker contract decisions
+
+The selected proxy worker receives its version-1 startup dictionary only on an
+inherited Unix control socket. The dictionary has explicit authentication,
+loopback bind, listener-port, protocol, egress, and unrestricted-destination
+policy fields. Invalid values are rejected before a child is spawned with the
+redacted `invalid_configuration` outcome; listener allocation failures return
+`startup_failed` on that private channel. The readiness frame reports the
+selected implementation, bounded listener snapshot, and versioned capability
+declaration. Both desktop supervisors project capabilities at
+`worker.capabilities` with lifecycle identity/state/generation/restart/failure
+fields, listeners, and redacted `last_error`; configured status never exposes
+token or password values. The native selectable surface is deliberately IPv4
+loopback/direct egress, and the capability declaration is authoritative for
+that difference. Contract qualification runs each supervisor/worker selection
+on its own macOS or Linux host.
+
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `PXY-1` — worker contract and configuration | Freeze the proxy worker's versioned startup, snapshot, error and shutdown contract, including explicit capability reporting for bind family, protocols, authentication, egress and destination policy. DoD: Python and native workers accept the same supported configuration shape or fail closed with the same stable capability/error result; credentials remain off command lines, environment and status; Python and native supervisors on each host select either local worker and expose the same redacted lifecycle fields. | Contract-v1 now rejects malformed protocol, port, authentication, egress and bind values before spawn with `invalid_configuration`; it requires an explicit authentication object and accepts only advertised loopback families. Egress may carry the existing IPv4/IPv6 address-family declaration; capabilities declare the intentional native IPv4/direct subset. Python status now projects only authentication mode and username, matching the native redaction boundary; tests pin the common supervisor lifecycle projection (`worker` identity/state/generation/restart/failure/capabilities plus listeners and redacted `last_error`). Occupied listeners return a redacted stable child error. The remaining gap is independently recorded passing macOS and Linux corpus runs. |
-| `PXY-2` — listener and egress capability parity | Close the native/Python behavior gap for HTTP CONNECT and SOCKS5 listeners, authentication, bind-family selection, destination policy, egress modes, backpressure and half-close behavior. DoD: every proxy configuration advertised by `PXY-1` behaves equivalently for Python and native workers, or is removed from the shared selectable surface; IPv4 and IPv6 loopback traffic, allowed and denied destinations, authentication failures, large duplex transfers and idle-client isolation pass locally on macOS and Linux. | Native selection is intentionally limited to IPv4 loopback and direct egress; the Python worker has a broader listener/egress implementation. Destination-policy enforcement is not implemented by the Python worker, so it currently admits only an explicitly unrestricted policy. |
+| `PXY-2` — listener and egress capability parity | Close the native/Python behavior gap for HTTP CONNECT and SOCKS5 listeners, authentication, bind-family selection, destination policy, egress modes, backpressure and half-close behavior. DoD: every proxy configuration advertised by the established contract behaves equivalently for Python and native workers, or is removed from the shared selectable surface; IPv4 and IPv6 loopback traffic, allowed and denied destinations, authentication failures, large duplex transfers and idle-client isolation pass locally on macOS and Linux. | Native selection is intentionally limited to IPv4 loopback and direct egress; the Python worker has a broader listener/egress implementation. Destination-policy enforcement is not implemented by the Python worker, so it currently admits only an explicitly unrestricted policy. |
 | `PXY-3` — lifecycle, observability and logging | Make worker startup, readiness, replacement, shutdown and log delivery fully supervisor-owned and generation-fenced. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; stale snapshots are rejected; Admin reports equivalent redacted listener, worker and failure state; Python and native proxy records reach the selected local collector without blocking traffic. | Both supervisors restart selected children and proxy logging has a record-only relay, but the shared lifecycle/error schema and all stale-generation cases are not yet qualified consistently on both hosts. |
 | `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
 
-`PXY-1` is the next implementation slice. When its DoD is met, remove its row
-and update the status matrix and proxy design evidence with the resulting
-durable contract; do not retain it as completed-plan history.
+`PXY-2` is the next implementation slice.
 
 ## Connection lifecycle propagation and rotation
 

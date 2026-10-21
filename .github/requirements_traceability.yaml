@@ -696,9 +696,9 @@ REQ-WSP-013:
     - tests/unit/test_ws_payload_mode.py::test_peer_address_override_rejects_dns_names
 
 REQ-PRX-001:
-  # Desktop Python/native worker selection is qualified independently on macOS
-  # and Linux; these entries never imply a cross-operating-system process pair.
-  # Contract-v1 requires explicit authentication and rejects malformed bind,
+  # Desktop Python/native worker selection has recorded passing macOS and Linux
+  # qualification; these entries never imply a cross-operating-system pair.
+  # The established contract-v1 requires explicit authentication and rejects malformed bind,
   # protocol, port, authentication, and egress shapes before spawn; the
   # optional IPv4/IPv6 egress-family declaration remains accepted. Both
   # supervisors project the redacted lifecycle shape (identity/state/
