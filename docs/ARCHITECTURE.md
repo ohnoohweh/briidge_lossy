@@ -258,7 +258,7 @@ the listed order.
 
 The selected proxy worker receives its version-1 startup dictionary only on an
 inherited Unix control socket. The dictionary has explicit authentication,
-loopback bind, listener-port, protocol, egress, and unrestricted-destination
+loopback bind, listener-port, protocol, egress, and destination-policy
 policy fields. Both selected implementations bind only to the explicit IPv4 or
 IPv6 loopback address supplied by that dictionary. Invalid values are rejected
 before a child is spawned with the
@@ -273,17 +273,26 @@ direct egress only, and the capability declaration is authoritative for that
 difference. Contract qualification runs each supervisor/worker selection on
 its own macOS or Linux host.
 
+The destination policy is enforced before every HTTP CONNECT, absolute-form
+HTTP, and SOCKS5 CONNECT dial. `blocked_host_patterns` uses case-insensitive
+`*` and `?` matching against the requested hostname before DNS lookup. With
+`allow_private_destinations` disabled, a literal or every resolved direct-dial
+address must be globally routable; the Python worker dials only the approved
+numeric results. A denied HTTP destination receives `403`; a denied SOCKS5
+destination receives reply code `0x02`. This makes the default policy fail
+closed while preserving an explicit local-test or deployment opt-in for private
+destinations.
+
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `PXY-2B` — destination-policy enforcement | Define one fail-closed interpretation of `allow_private_destinations` and `blocked_host_patterns`, then enforce it before every HTTP CONNECT, absolute-form HTTP, and SOCKS5 destination dial in both workers. DoD: allowed loopback test destinations pass; private-address and blocked-name destinations are denied without any outbound dial; policy snapshots/capabilities state enforcement; local Python/native traffic tests pass independently on macOS and Linux. | Neither worker enforces restrictions: the current contract only permits an explicitly unrestricted policy. DNS resolution, literal addresses, hostname-pattern matching, and denied-protocol replies need one shared design and tests. |
 | `PXY-2C` — system-egress parity | Give the native worker the contract's system egress behavior, including environment proxy discovery and `NO_PROXY`, or remove system egress from the selectable desktop contract. DoD: the capability declaration, configuration validation, listener snapshots, and authenticated HTTP CONNECT/SOCKS5 traffic agree for direct and system egress on each platform; a local upstream-proxy fixture proves selected and bypassed routes. | Python advertises and implements `system`; native advertises and accepts only `direct`. No platform-local native system-egress fixture exists. |
-| `PXY-2D` — listener behavior qualification | Qualify the now-common listener surface, including HTTP CONNECT and SOCKS5, all authentication modes, IPv4/IPv6 loopback binds, denied and allowed destinations, bounded duplex transfer, half-close, and idle-client isolation. DoD: each selected implementation passes the same focused traffic suite on macOS and Linux, with test output naming OS and worker choice. | IPv6 loopback listener binding and traffic now pass for both workers. Existing authentication, large-transfer, half-close, and idle-client tests are incomplete as a platform-local common matrix; destination-policy and system-egress cases depend on PXY-2B/C. |
+| `PXY-2D` — listener behavior qualification | Qualify the now-common listener surface, including HTTP CONNECT and SOCKS5, all authentication modes, IPv4/IPv6 loopback binds, denied and allowed destinations, bounded duplex transfer, half-close, and idle-client isolation. DoD: each selected implementation passes the same focused traffic suite on macOS and Linux, with test output naming OS and worker choice. | IPv6 loopback traffic and destination-policy allow/deny behavior now pass for both workers. Existing authentication, large-transfer, half-close, and idle-client tests are incomplete as a platform-local common matrix; system-egress cases depend on PXY-2C. |
 | `PXY-3` — lifecycle, observability and logging | Make worker startup, readiness, replacement, shutdown and log delivery fully supervisor-owned and generation-fenced. DoD: occupied ports, failed readiness, control loss, worker crash, restart backoff, parent loss and shutdown leave no listener or child behind; stale snapshots are rejected; Admin reports equivalent redacted listener, worker and failure state; Python and native proxy records reach the selected local collector without blocking traffic. | Both supervisors restart selected children and proxy logging has a record-only relay, but the shared lifecycle/error schema and all stale-generation cases are not yet qualified consistently on both hosts. |
 | `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
 
-The completed IPv6-listener work package is represented by the durable
-contract decision above rather than retained as an active package. `PXY-2B` is
-the next implementation slice.
+Completed IPv6-listener and destination-policy work packages are represented
+by the durable contract decisions above rather than retained as active
+packages. `PXY-2C` is the next implementation slice.
 
 ## Connection lifecycle propagation and rotation
 

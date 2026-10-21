@@ -938,7 +938,7 @@ Operational notes:
 
 ObstacleBridge can expose a first-party local proxy provider for browser or application traffic. The provider is separate from the overlay peer connection: it listens on local loopback ports, accepts explicit proxy clients, and then opens direct outbound connections from the ObstacleBridge runtime.
 
-To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--proxy-provider-worker native` and `--proxy-provider-policy '{"allow_private_destinations":true,"blocked_host_patterns":[]}'`. This explicitly allows private destinations and provides no destination blocklist; use it only where that policy is appropriate. Build the native executable with `swift build --product ObstacleBridgeProxyWorker` and supply its path with `--proxy-provider-worker-native-executable`. Both children accept explicit `127.0.0.1` or `::1` loopback binds; the native child currently requires `--proxy-provider-egress '{"mode":"direct"}'`, while system-egress and destination-policy enforcement remain open parity work. Contract-v1 requires an explicit authentication object and rejects malformed loopback binds, ports, protocols, authentication, and egress before a child is started; the existing IPv4/IPv6 egress address-family setting remains accepted. Both supervisors report the same redacted worker lifecycle fields, including `worker.capabilities`, listeners, and `last_error`; configured status exposes auth mode and username but never token/password values. Invalid configuration and listener-start failure reach the local supervisor as stable redacted error codes. The supervisor replaces a lost child; active proxy connections do not survive replacement. The same-host Python/native contract matrix is qualified independently on macOS and Linux; it does not require a macOS-to-Linux worker pairing.
+To opt into a desktop proxy child, add `--proxy-provider-worker python` or `--proxy-provider-worker native`. The default destination policy rejects private destinations; use `--proxy-provider-policy '{"allow_private_destinations":true,"blocked_host_patterns":[]}'` only when local/private access is intended. `blocked_host_patterns` is a case-insensitive `*`/`?` blocklist applied before resolution. Build the native executable with `swift build --product ObstacleBridgeProxyWorker` and supply its path with `--proxy-provider-worker-native-executable`. Both children accept explicit `127.0.0.1` or `::1` loopback binds; the native child currently requires `--proxy-provider-egress '{"mode":"direct"}'`, while system-egress remains open parity work. Contract-v1 requires an explicit authentication object and rejects malformed loopback binds, ports, protocols, authentication, egress, and destination policy before a child is started; the existing IPv4/IPv6 egress address-family setting remains accepted. Both supervisors report the same redacted worker lifecycle fields, including `worker.capabilities`, listeners, and `last_error`; configured status exposes auth mode and username but never token/password values. Invalid configuration and listener-start failure reach the local supervisor as stable redacted error codes. The supervisor replaces a lost child; active proxy connections do not survive replacement. The same-host Python/native contract matrix is qualified independently on macOS and Linux; it does not require a macOS-to-Linux worker pairing.
 
 On desktop Linux and macOS, the Python runner supports the experimental `--peer-stack-worker python --no-tun-enabled-on-startup` for a single outbound TCP peer. `--peer-stack-worker native --peer-stack-worker-native-executable /path/to/ObstacleBridgeHostRunner` on macOS or `/path/to/ObstacleBridgeLinux` on Linux selects a native child (or resolves the platform executable on `PATH`). The child owns the peer stack and TCP/UDP services, and the supervisor replaces it after failure. Native mode has generation-fenced snapshots but currently rejects reconnect, rekey and reload controls; it does not start Admin, proxy, telemetry or TUN. Both modes reject TUN services and peer configuration updates. Listener peers and other overlay transports remain unqualified. Existing connections are lost when the child is replaced.
 
@@ -1592,8 +1592,8 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 
 | Product | Test files | Test defs |
 | --- | ---: | ---: |
-| Python CLI/runtime, including macOS Python | `74` | `1107` |
-| macOS Swift app | `1` | `78` |
+| Python CLI/runtime, including macOS Python | `74` | `1114` |
+| macOS Swift app | `1` | `82` |
 | iOS app/extension | `32` | `210` |
 
 #### Requirement traceability
@@ -1601,7 +1601,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `82/92 = 89.1%` | `90/92 = 97.8%` | `90/92 = 97.8%` |
-| macOS Swift app | `3/92 = 3.3%` | `9/92 = 9.8%` | `12/92 = 13.0%` |
+| macOS Swift app | `5/92 = 5.4%` | `9/92 = 9.8%` | `14/92 = 15.2%` |
 | iOS app/extension | `10/92 = 10.9%` | `25/92 = 27.2%` | `27/92 = 29.3%` |
 
 #### Architecture traceability
@@ -1609,7 +1609,7 @@ Current snapshot from `python3 scripts/report_product_traceability.py`:
 | Product | Integration covered | Unit covered | Any covered |
 | --- | ---: | ---: | ---: |
 | Python CLI/runtime, including macOS Python | `7/8 = 87.5%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
-| macOS Swift app | `1/8 = 12.5%` | `3/8 = 37.5%` | `3/8 = 37.5%` |
+| macOS Swift app | `1/8 = 12.5%` | `4/8 = 50.0%` | `4/8 = 50.0%` |
 | iOS app/extension | `4/8 = 50.0%` | `8/8 = 100.0%` | `8/8 = 100.0%` |
 
 The supporting manifests remain shared:
@@ -1636,9 +1636,9 @@ Desktop-only process ownership is reviewed across macOS and Linux; iOS extension
 | --- | --- | ---: | ---: | ---: |
 | Direct unit parity | Python and Swift produce the same bytes or state transitions for the same inputs | `0` | `120` | `120` |
 | Mixed-runtime integration | Python and Swift runtimes interoperate over live overlay paths | `12` | `0` | `12` |
-| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `74` | `0` | `74` |
+| Swift-backed integration | Swift host-runner behavior is exercised against Python-backed expectations and peers | `82` | `0` | `82` |
 | Swift contract probes | Swift-only contract tests guard expected behavior without directly comparing Python output | `0` | `34` | `34` |
-| Total parity-oriented evidence | Sum of the lanes above | `86` | `154` | `240` |
+| Total parity-oriented evidence | Sum of the lanes above | `94` | `154` | `248` |
 
 Important caveat:
 

@@ -54,7 +54,7 @@ ARC-CMP-001:
     - tests/unit/test_native_proxy_supervisor.py::test_owner_loss_closes_proxy_listener
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_supervisor_retries_occupied_port
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_supervisor_replaces_stalled_child
-    - tests/unit/test_native_proxy_supervisor.py::test_restricted_policy_fails_closed
+    - tests/unit/test_native_proxy_supervisor.py::test_restricted_policy_starts_with_enforcement
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxLiveRuntimeTests.swift::nativeRuntimeOwnsEitherProxyWorkerAndReportsLoss
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::proxyWorkerConfigurationPreservesPolicyAndSelection
@@ -66,7 +66,9 @@ ARC-CMP-001:
     - tests/unit/test_proxy_worker.py::test_supervised_proxy_stop_cancels_pending_restart
     - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
     - tests/unit/test_proxy_worker.py::test_runner_rejects_unknown_proxy_worker_selection
-    - tests/unit/test_proxy_worker.py::test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_rejects_invalid_destination_policy
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_destination_policy_allows_and_blocks_host_patterns
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_destination_policy_denies_private_http_and_socks
     - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_loopback_listener_traffic
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback

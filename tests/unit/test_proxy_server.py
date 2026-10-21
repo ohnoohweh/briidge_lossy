@@ -86,7 +86,7 @@ def test_python_proxy_server_rewrites_http_absolute_form() -> None:
 async def _test_python_proxy_server_rewrites_http_absolute_form() -> None:
     target_server, target_port, captured = await _start_capture_server()
     proxy = ObstacleBridgeProxyServer(
-        ObstacleBridgeProxyServerConfig(bind_host="127.0.0.1", port=0, allow_socks5=False)
+        ObstacleBridgeProxyServerConfig(bind_host="127.0.0.1", port=0, allow_socks5=False, egress={"mode": "direct"})
     )
     await proxy.start()
     proxy_port = proxy._server.sockets[0].getsockname()[1]
@@ -222,6 +222,7 @@ async def _test_python_proxy_server_accepts_socks5_connect_with_user_password() 
             credentials=ProxyCredentials("obproxy", "secret"),
             allow_http=False,
             allow_socks5=True,
+            egress={"mode": "direct"},
         )
     )
     await proxy.start()

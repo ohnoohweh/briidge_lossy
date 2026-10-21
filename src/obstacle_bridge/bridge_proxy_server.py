@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import fnmatch
+import ipaddress
 import json
 import logging
+import socket
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
@@ -17,6 +20,10 @@ from .bridge_proxy_common import open_http_connect_tunnel, resolve_proxy_endpoin
 class ProxyCredentials:
     username: str
     password: str
+
+
+class ProxyDestinationRejected(RuntimeError):
+    """A configured destination policy denied the requested target."""
 
 
 @dataclass(frozen=True)
@@ -184,6 +191,7 @@ class ObstacleBridgeProxyServerConfig:
     allow_socks5: bool = True
     max_header_bytes: int = 64 * 1024
     egress: Optional[dict[str, Any]] = None
+    policy: Optional[dict[str, Any]] = None
 
 
 def _json_cli_value(value: Any) -> Any:
@@ -330,6 +338,7 @@ class ObstacleBridgeProxyServer:
             "socks5_enabled": self.config.allow_socks5,
             "auth_required": self.config.credentials is not None,
             "egress_mode": self._egress_mode(),
+            "destination_policy_enforced": self._destination_policy_enforced(),
         }
 
     @staticmethod
@@ -344,6 +353,39 @@ class ObstacleBridgeProxyServer:
     def _egress_config(self) -> dict[str, Any]:
         raw = self.config.egress
         return dict(raw) if isinstance(raw, Mapping) else {}
+
+    def _policy_config(self) -> dict[str, Any]:
+        raw = self.config.policy
+        return dict(raw) if isinstance(raw, Mapping) else {"allow_private_destinations": True, "blocked_host_patterns": []}
+
+    def _destination_policy_enforced(self) -> bool:
+        return self.config.policy is not None
+
+    async def _authorize_destination(self, host: str, port: int) -> list[str]:
+        """Return approved numeric direct-dial targets, or reject before dialing."""
+        policy = self._policy_config()
+        normalized_host = host.strip().strip("[]").rstrip(".").casefold()
+        blocked = [str(pattern).strip().casefold() for pattern in policy.get("blocked_host_patterns", [])]
+        if not normalized_host or any(fnmatch.fnmatchcase(normalized_host, pattern) for pattern in blocked):
+            raise ProxyDestinationRejected("destination blocked by policy")
+        if bool(policy.get("allow_private_destinations", True)):
+            return []
+        try:
+            literal = ipaddress.ip_address(normalized_host)
+        except ValueError:
+            literal = None
+        if literal is not None:
+            if not literal.is_global:
+                raise ProxyDestinationRejected("private destination blocked by policy")
+            return [str(literal)]
+        try:
+            rows = await asyncio.get_running_loop().getaddrinfo(normalized_host, port, type=socket.SOCK_STREAM)
+        except socket.gaierror:
+            return []
+        addresses = list(dict.fromkeys(str(row[4][0]) for row in rows))
+        if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+            raise ProxyDestinationRejected("private destination blocked by policy")
+        return addresses
 
     def _egress_mode(self) -> str:
         return str(self._egress_config().get("mode") or "system").strip().lower()
@@ -484,7 +526,11 @@ class _ProxySession:
             if destination is None:
                 await self._send_http_error("400 Bad Request", "invalid CONNECT authority")
                 return
-            await self._connect_outbound(*destination, secure=True)
+            try:
+                await self._connect_outbound(*destination, secure=True)
+            except ProxyDestinationRejected:
+                await self._send_http_error("403 Forbidden", "destination blocked by policy")
+                return
             self.inbound_writer.write(b"HTTP/1.1 200 Connection Established\r\nProxy-Agent: ObstacleBridge\r\n\r\n")
             await self.inbound_writer.drain()
             await self._start_tunnel(self.buffer[request.header_length :])
@@ -494,7 +540,11 @@ class _ProxySession:
             await self._send_http_error("400 Bad Request", "absolute-form HTTP target required")
             return
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
-        await self._connect_outbound(parsed.hostname, port, secure=parsed.scheme.lower() == "https")
+        try:
+            await self._connect_outbound(parsed.hostname, port, secure=parsed.scheme.lower() == "https")
+        except ProxyDestinationRejected:
+            await self._send_http_error("403 Forbidden", "destination blocked by policy")
+            return
         forwarded = (
             ObstacleBridgeProxyProtocolCodec.rewrite_http_request_for_origin_server(request)
             + self.buffer[request.header_length :]
@@ -567,7 +617,11 @@ class _ProxySession:
         if parsed.command != 0x01:
             await self._send_socks5_reply(0x07)
             raise RuntimeError("unsupported socks5 command")
-        await self._connect_outbound(parsed.host, parsed.port, secure=parsed.port == 443)
+        try:
+            await self._connect_outbound(parsed.host, parsed.port, secure=parsed.port == 443)
+        except ProxyDestinationRejected:
+            await self._send_socks5_reply(0x02)
+            return
         await self._send_socks5_reply(0x00)
         await self._start_tunnel(self.buffer[parsed.consumed :])
 
@@ -575,8 +629,19 @@ class _ProxySession:
         if port <= 0 or port > 65535:
             await self._send_http_error("400 Bad Request", "invalid destination port")
             raise RuntimeError("invalid destination port")
+        direct_addresses = await self.server._authorize_destination(host, port)
         upstream_proxy = self.server._resolve_egress_proxy(host, port, secure=secure)
         if upstream_proxy is None:
+            if direct_addresses:
+                last_error: OSError | None = None
+                for address in direct_addresses:
+                    try:
+                        self.outbound_reader, self.outbound_writer = await self.server._open_connection(host=address, port=port)
+                        return
+                    except OSError as exc:
+                        last_error = exc
+                assert last_error is not None
+                raise last_error
             self.outbound_reader, self.outbound_writer = await self.server._open_connection(host=host, port=port)
             return
         sock = await asyncio.to_thread(

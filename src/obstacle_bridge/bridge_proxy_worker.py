@@ -46,16 +46,18 @@ def worker_capabilities(implementation: str) -> dict[str, Any]:
         "protocols": ["http-connect", "socks5-connect"],
         "auth_modes": ["none", "basic", "token", "password"],
         "egress_modes": egress_modes,
-        "destination_policy": {"enforced": False, "requires_unrestricted": True},
+        "destination_policy": {"enforced": True, "requires_unrestricted": False},
     }
 
 
 def validate_worker_policy(config: dict[str, Any]) -> None:
-    """Do not silently ignore restrictions that this provider cannot enforce."""
+    """Accept only the policy shape both selected workers enforce."""
     policy = config.get("policy")
     if (not isinstance(policy, dict) or set(policy) != {"allow_private_destinations", "blocked_host_patterns"}
-            or policy.get("allow_private_destinations") is not True or policy.get("blocked_host_patterns") != []):
-        raise ValueError("proxy worker requires an explicitly unrestricted destination policy; policy enforcement is not implemented")
+            or not isinstance(policy.get("allow_private_destinations"), bool)
+            or not isinstance(policy.get("blocked_host_patterns"), list)
+            or any(not isinstance(pattern, str) or not pattern.strip() for pattern in policy["blocked_host_patterns"])):
+        raise ValueError("proxy worker destination policy is invalid")
 
 
 def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
@@ -181,6 +183,7 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
             server = ObstacleBridgeProxyServer(ObstacleBridgeProxyServerConfig(
                 bind_host=str(cfg["bind"]), port=port, credentials=credentials,
                 allow_http=http, allow_socks5=socks, egress=cfg.get("egress"),
+                policy=cfg.get("policy"),
             ))
             await server.start()
             servers[name] = server

@@ -333,22 +333,76 @@ def test_runner_rejects_unknown_proxy_worker_selection():
     asyncio.run(exercise())
 
 
-def test_proxy_worker_fails_closed_on_unimplemented_destination_restrictions(backend):
+def test_proxy_worker_rejects_invalid_destination_policy(backend):
     async def exercise():
-        for policy in ({}, {"allow_private_destinations": False, "blocked_host_patterns": []},
-                       {"allow_private_destinations": True, "blocked_host_patterns": ["*.example"]},
+        for policy in ({}, {"allow_private_destinations": "false", "blocked_host_patterns": []},
+                       {"allow_private_destinations": True, "blocked_host_patterns": ["  "]},
                        {"allow_private_destinations": True, "blocked_host_patterns": [], "future_rule": True}):
             worker = ProxyWorker(*backend)
             with pytest.raises(ProxyWorkerStartupError, match="invalid_configuration"):
                 await worker.start(_config(policy=policy))
             assert worker.process is None
-        args = build_runtime_args_from_config({"proxy_provider": {"proxy_provider_enabled": True,
-            "proxy_provider_worker": "python", "proxy_provider_protocols": ["http-connect"]}})
-        runner = Runner(args)
-        with pytest.raises(ValueError, match="policy"):
-            await runner._start_proxy_provider()
-        assert runner._proxy_provider_snapshot()["last_error"] == "proxy worker destination policy unsupported"
-        assert runner._proxy_provider_servers == {}
+    asyncio.run(exercise())
+
+
+def test_proxy_worker_destination_policy_allows_and_blocks_host_patterns(backend):
+    async def exercise():
+        target = await asyncio.start_server(_echo, "127.0.0.1", 0)
+        worker = ProxyWorker(*backend)
+        try:
+            await worker.start(_config(protocols=["http-connect"], policy={
+                "allow_private_destinations": True, "blocked_host_patterns": ["blocked.*"],
+            }))
+            assert worker.capabilities["destination_policy"] == {"enforced": True, "requires_unrestricted": False}
+            assert worker.listeners["http"]["destination_policy_enforced"] is True
+            await _http_tunnel(worker.listeners["http"]["bound_port"], target.sockets[0].getsockname()[1], True)
+        finally:
+            await worker.stop()
+            target.close()
+            await target.wait_closed()
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("policy", [
+    {"allow_private_destinations": False, "blocked_host_patterns": []},
+    {"allow_private_destinations": True, "blocked_host_patterns": ["127.*"]},
+])
+def test_proxy_worker_destination_policy_denies_private_http_and_socks(backend, policy):
+    async def exercise():
+        accepted = 0
+
+        async def target_handler(reader, writer):
+            nonlocal accepted
+            accepted += 1
+            await _echo(reader, writer)
+
+        target = await asyncio.start_server(target_handler, "127.0.0.1", 0)
+        worker = ProxyWorker(*backend)
+        try:
+            await worker.start(_config(policy=policy))
+            port = target.sockets[0].getsockname()[1]
+            token = base64.b64encode(b"user:private-token").decode()
+            reader, writer = await asyncio.open_connection("127.0.0.1", worker.listeners["http"]["bound_port"])
+            writer.write(f"CONNECT 127.0.0.1:{port} HTTP/1.1\r\nProxy-Authorization: Basic {token}\r\n\r\n".encode())
+            await writer.drain()
+            assert (await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 3)).startswith(b"HTTP/1.1 403")
+            writer.close()
+            await writer.wait_closed()
+            reader, writer = await asyncio.open_connection("127.0.0.1", worker.listeners["socks5"]["bound_port"])
+            writer.write(b"\x05\x01\x02\x01\x04user\x0dprivate-token")
+            await writer.drain()
+            assert await reader.readexactly(4) == b"\x05\x02\x01\x00"
+            writer.write(b"\x05\x01\x00\x01\x7f\x00\x00\x01" + port.to_bytes(2, "big"))
+            await writer.drain()
+            assert (await reader.readexactly(10))[:2] == b"\x05\x02"
+            writer.close()
+            await writer.wait_closed()
+            await asyncio.sleep(0.05)
+            assert accepted == 0
+        finally:
+            await worker.stop()
+            target.close()
+            await target.wait_closed()
     asyncio.run(exercise())
 
 
