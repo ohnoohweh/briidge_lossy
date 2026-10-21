@@ -9,6 +9,7 @@ import argparse
 import asyncio
 import contextlib
 import copy
+import ipaddress
 import json
 import logging
 import os
@@ -77,8 +78,12 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 65535:
             raise ValueError("proxy worker listener port is invalid")
     bind = config.get("bind")
-    if not isinstance(bind, str) or not bind:
-        raise ValueError("proxy worker bind host is invalid")
+    try:
+        bind_address = ipaddress.ip_address(bind)
+    except (TypeError, ValueError):
+        raise ValueError("proxy worker bind host is invalid") from None
+    if not bind_address.is_loopback or bind_address.version not in ({4, 6} if implementation == "python" else {4}):
+        raise ValueError("proxy worker bind family is unsupported")
     egress = config.get("egress")
     if not isinstance(egress, dict) or set(egress) != {"mode"} or not isinstance(egress.get("mode"), str):
         raise ValueError("proxy worker egress configuration is invalid")

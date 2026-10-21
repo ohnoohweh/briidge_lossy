@@ -356,9 +356,12 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
           !protocols.isEmpty, Set(protocols).isSubset(of: ["http", "http-connect", "socks5", "socks5-connect"]),
           let httpPort = config["http_port"] as? Int, (0...65_535).contains(httpPort),
           let socksPort = config["socks5_port"] as? Int, (0...65_535).contains(socksPort) else { throw WorkerError.invalid }
-    let auth = config["auth"] as? [String: Any] ?? [:]
+    guard let auth = config["auth"] as? [String: Any] else { throw WorkerError.invalid }
     let authMode = (auth["mode"] as? String ?? "none").lowercased()
     guard Set(auth.keys).isSubset(of: ["mode", "username", "token", "password"]),
+          auth["username"] == nil || auth["username"] is String,
+          auth["token"] == nil || auth["token"] is String,
+          auth["password"] == nil || auth["password"] is String,
           ["none", "basic", "token", "password"].contains(authMode) else { throw WorkerError.invalid }
     var username: String?, password: String?
     if authMode == "none" {

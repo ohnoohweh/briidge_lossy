@@ -698,10 +698,10 @@ REQ-WSP-013:
 REQ-PRX-001:
   # Desktop Python/native worker selection is qualified independently on macOS
   # and Linux; these entries never imply a cross-operating-system process pair.
-  # Contract-v1 rejects malformed protocol, port, authentication, and egress
-  # shapes before spawn. Both supervisors project the redacted lifecycle shape
-  # (identity/state/generation/restart/failure/capabilities, listeners, and
-  # last_error) rather than propagating configuration in parent errors.
+  # Contract-v1 requires explicit authentication and rejects malformed bind,
+  # protocol, port, authentication, and egress shapes before spawn. Both
+  # supervisors project the redacted lifecycle shape (identity/state/
+  # generation/restart/failure/capabilities, listeners, and last_error).
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
