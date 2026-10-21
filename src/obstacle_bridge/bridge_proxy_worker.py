@@ -37,7 +37,7 @@ class ProxyWorkerStartupError(ValueError):
 def worker_capabilities(implementation: str) -> dict[str, Any]:
     """Redacted, versioned declaration of the selected worker surface."""
     if implementation == "native":
-        bind_families, egress_modes = ["ipv4", "ipv6"], ["direct"]
+        bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
     else:
         bind_families, egress_modes = ["ipv4", "ipv6"], ["direct", "system"]
     return {
@@ -95,7 +95,7 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
                                          or sorted(egress["address_families"]) != ["ipv4", "ipv6"]):
         raise ValueError("proxy worker egress address families are invalid")
     mode = egress["mode"].lower()
-    if mode not in ({"direct", "system"} if implementation == "python" else {"direct"}):
+    if mode not in {"direct", "system"}:
         raise ValueError("proxy worker egress mode is unsupported")
     auth = config.get("auth")
     if not isinstance(auth, dict) or not set(auth).issubset({"mode", "username", "token", "password"}):

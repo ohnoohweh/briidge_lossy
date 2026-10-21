@@ -142,24 +142,33 @@ private func isNonPublic(_ item: UnsafeMutablePointer<addrinfo>) -> Bool {
     return true
 }
 
-private func connectDirect(_ host: String, _ port: Int, policy: DestinationPolicy) throws -> Int32 {
+private func validateDestination(_ host: String, _ port: Int, policy: DestinationPolicy) throws {
     guard (1...65_535).contains(port) else { throw WorkerError.invalid }
     let normalizedHost = policyHost(host)
     guard !normalizedHost.isEmpty,
           !policy.blockedHostPatterns.contains(where: { patternMatches($0, normalizedHost) }) else { throw WorkerError.destinationDenied }
+    guard !policy.allowPrivateDestinations else { return }
     var hints = addrinfo()
     hints.ai_family = AF_UNSPEC
     hints.ai_socktype = streamType
     var result: UnsafeMutablePointer<addrinfo>?
     guard getaddrinfo(host, String(port), &hints, &result) == 0, let first = result else { throw WorkerError.io }
     defer { freeaddrinfo(first) }
-    if !policy.allowPrivateDestinations {
-        var candidate: UnsafeMutablePointer<addrinfo>? = first
-        while let item = candidate {
-            if isNonPublic(item) { throw WorkerError.destinationDenied }
-            candidate = item.pointee.ai_next
-        }
+    var candidate: UnsafeMutablePointer<addrinfo>? = first
+    while let item = candidate {
+        if isNonPublic(item) { throw WorkerError.destinationDenied }
+        candidate = item.pointee.ai_next
     }
+}
+
+private func connectDirect(_ host: String, _ port: Int, policy: DestinationPolicy) throws -> Int32 {
+    try validateDestination(host, port, policy: policy)
+    var hints = addrinfo()
+    hints.ai_family = AF_UNSPEC
+    hints.ai_socktype = streamType
+    var result: UnsafeMutablePointer<addrinfo>?
+    guard getaddrinfo(host, String(port), &hints, &result) == 0, let first = result else { throw WorkerError.io }
+    defer { freeaddrinfo(first) }
     var cursor: UnsafeMutablePointer<addrinfo>? = first
     while let item = cursor {
         let fd = socket(item.pointee.ai_family, item.pointee.ai_socktype, item.pointee.ai_protocol)
@@ -173,6 +182,82 @@ private func connectDirect(_ host: String, _ port: Int, policy: DestinationPolic
     throw WorkerError.io
 }
 
+private func environmentValue(_ names: [String]) -> String? {
+    for name in names {
+        if let raw = getenv(name), let value = String(validatingCString: raw)?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty {
+            return value
+        }
+    }
+    return nil
+}
+
+private func parseProxyEndpoint(_ raw: String) -> (host: String, port: Int)? {
+    let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !value.isEmpty else { return nil }
+    let uri = value.contains("://") ? value : "http://\(value)"
+    guard let components = URLComponents(string: uri), let host = components.host, !host.isEmpty else { return nil }
+    let scheme = components.scheme?.lowercased() ?? "http"
+    guard ["http", "https", "ws", "wss"].contains(scheme) else { return nil }
+    let port = components.port ?? 8080
+    return (host, port > 0 && port <= 65_535 ? port : 0)
+}
+
+private func testSystemProxyEndpoint(_ secure: Bool) -> (host: String, port: Int)? {
+    guard let spec = environmentValue(["OBSTACLEBRIDGE_TEST_SYSTEM_PROXY"]) else { return nil }
+    let wanted = secure ? ["https", "http"] : ["http", "https"]
+    var fallback: (host: String, port: Int)?
+    for item in spec.split(separator: ";") {
+        let pair = item.split(separator: "=", maxSplits: 1).map(String.init)
+        let key = pair.count == 2 ? pair[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased() : ""
+        let value = pair.count == 2 ? pair[1] : String(item)
+        guard let endpoint = parseProxyEndpoint(value), endpoint.port > 0 else { continue }
+        if wanted.contains(key) { return endpoint }
+        if fallback == nil { fallback = endpoint }
+    }
+    return fallback
+}
+
+private func noProxyMatches(_ host: String) -> Bool {
+    guard let raw = environmentValue(["NO_PROXY", "no_proxy"]) else { return false }
+    let target = policyHost(host)
+    return raw.split(separator: ",").contains { item in
+        let token = policyHost(String(item))
+        if token == "*" { return true }
+        if token.hasPrefix(".") { return target.hasSuffix(token) }
+        return target == token || target.hasSuffix("." + token)
+    }
+}
+
+private func systemProxyEndpoint(_ host: String, secure: Bool) -> (host: String, port: Int)? {
+    if let override = testSystemProxyEndpoint(secure) { return override }
+    guard !noProxyMatches(host) else { return nil }
+    return environmentValue(secure ? ["HTTPS_PROXY", "https_proxy"] : ["HTTP_PROXY", "http_proxy"])
+        .flatMap(parseProxyEndpoint)
+}
+
+private func connectSystem(_ host: String, _ port: Int, secure: Bool, policy: DestinationPolicy) throws -> Int32 {
+    try validateDestination(host, port, policy: policy)
+    guard let proxy = systemProxyEndpoint(host, secure: secure) else { return try connectDirect(host, port, policy: policy) }
+    let proxyPolicy = DestinationPolicy(allowPrivateDestinations: true, blockedHostPatterns: [])
+    let fd = try connectDirect(proxy.host, proxy.port, policy: proxyPolicy)
+    do {
+        let authority = host.contains(":") ? "[\(host)]:\(port)" : "\(host):\(port)"
+        try writeAll(fd, Data("CONNECT \(authority) HTTP/1.1\r\nHost: \(authority)\r\nConnection: keep-alive\r\n\r\n".utf8))
+        var response = Data()
+        while response.count < 65_536 {
+            response.append(try readExact(fd, 1))
+            if response.suffix(4) == Data("\r\n\r\n".utf8) { break }
+        }
+        guard response.suffix(4) == Data("\r\n\r\n".utf8),
+              let status = String(data: response, encoding: .isoLatin1)?.split(separator: "\r\n").first,
+              status.contains(" 200 ") else { throw WorkerError.io }
+        return fd
+    } catch {
+        close(fd)
+        throw error
+    }
+}
+
 private struct ProxySettings: Sendable {
     let configuredPort: Int
     let bindHost: String
@@ -180,6 +265,7 @@ private struct ProxySettings: Sendable {
     let username: String?
     let password: String?
     let policy: DestinationPolicy
+    let egressMode: String
 }
 
 private final class ProxyListener: @unchecked Sendable {
@@ -238,7 +324,7 @@ private final class ProxyListener: @unchecked Sendable {
                 "failed_connections": failed, "rx_bytes": rx, "tx_bytes": tx, "last_error": lastError,
                 "bind_host": settings.bindHost, "port": settings.configuredPort, "bound_port": boundPort,
                 "http_enabled": !settings.socks, "socks5_enabled": settings.socks,
-                "auth_required": settings.username != nil, "egress_mode": "direct",
+                "auth_required": settings.username != nil, "egress_mode": settings.egressMode,
                 "destination_policy_enforced": true]
     }
 
@@ -277,6 +363,12 @@ private final class ProxyListener: @unchecked Sendable {
         if settings.socks { try serveSOCKS(client) } else { try serveHTTP(client) }
     }
 
+    private func connectOutbound(_ host: String, _ port: Int, secure: Bool) throws -> Int32 {
+        settings.egressMode == "system"
+            ? try connectSystem(host, port, secure: secure, policy: settings.policy)
+            : try connectDirect(host, port, policy: settings.policy)
+    }
+
     private func serveHTTP(_ client: Int32) throws {
         var header = Data()
         while header.count < 65_536 {
@@ -308,7 +400,7 @@ private final class ProxyListener: @unchecked Sendable {
             host = value; port = url.port ?? (scheme.lowercased() == "https" ? 443 : 80)
         }
         let remote: Int32
-        do { remote = try connectDirect(host, port, policy: settings.policy) }
+        do { remote = try connectOutbound(host, port, secure: parts[0].uppercased() == "CONNECT" || port == 443) }
         catch WorkerError.destinationDenied {
             try writeAll(client, Data("HTTP/1.1 403 Forbidden\r\nContent-Length: 30\r\nConnection: close\r\n\r\ndestination blocked by policy\n".utf8))
             throw WorkerError.destinationDenied
@@ -360,7 +452,7 @@ private final class ProxyListener: @unchecked Sendable {
         }
         let port = [UInt8](try readExact(client, 2))
         let remote: Int32
-        do { remote = try connectDirect(host, Int(port[0]) << 8 | Int(port[1]), policy: settings.policy) }
+        do { remote = try connectOutbound(host, Int(port[0]) << 8 | Int(port[1]), secure: Int(port[0]) << 8 | Int(port[1]) == 443) }
         catch WorkerError.destinationDenied {
             try writeAll(client, Data([5, 2, 0, 1, 0, 0, 0, 0, 0, 0]))
             throw WorkerError.destinationDenied
@@ -436,7 +528,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
           let allowPrivateDestinations = policy["allow_private_destinations"] as? Bool,
           let blocked = policy["blocked_host_patterns"] as? [String], blocked.allSatisfy({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
           let egress = config["egress"] as? [String: Any], let mode = egress["mode"] as? String,
-          mode.lowercased() == "direct", Set(egress.keys).isSubset(of: ["mode", "address_families"]),
+          ["direct", "system"].contains(mode.lowercased()), Set(egress.keys).isSubset(of: ["mode", "address_families"]),
           (egress["address_families"] == nil || Set(egress["address_families"] as? [String] ?? []) == ["ipv4", "ipv6"]),
           let protocols = config["protocols"] as? [String],
           !protocols.isEmpty, Set(protocols).isSubset(of: ["http", "http-connect", "socks5", "socks5-connect"]),
@@ -464,10 +556,10 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     let destinationPolicy = DestinationPolicy(allowPrivateDestinations: allowPrivateDestinations, blockedHostPatterns: blocked.map(policyHost))
     defer { listeners.values.forEach { $0.stop() } }
     if !Set(protocols).isDisjoint(with: ["http", "http-connect"]) {
-        listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, bindHost: bindHost, socks: false, username: username, password: password, policy: destinationPolicy), logger: logger)
+        listeners["http"] = try ProxyListener(settings: .init(configuredPort: httpPort, bindHost: bindHost, socks: false, username: username, password: password, policy: destinationPolicy, egressMode: mode.lowercased()), logger: logger)
     }
     if !Set(protocols).isDisjoint(with: ["socks5", "socks5-connect"]) {
-        listeners["socks5"] = try ProxyListener(settings: .init(configuredPort: socksPort, bindHost: bindHost, socks: true, username: username, password: password, policy: destinationPolicy), logger: logger)
+        listeners["socks5"] = try ProxyListener(settings: .init(configuredPort: socksPort, bindHost: bindHost, socks: true, username: username, password: password, policy: destinationPolicy, egressMode: mode.lowercased()), logger: logger)
     }
     guard !listeners.isEmpty else { throw WorkerError.invalid }
     logger?.emit(20, "[PROXY] listener started")
@@ -476,7 +568,7 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     let capabilities: [String: Any] = ["contract_version": 1, "bind_families": ["ipv4", "ipv6"],
                                         "protocols": ["http-connect", "socks5-connect"],
                                         "auth_modes": ["none", "basic", "token", "password"],
-                                        "egress_modes": ["direct"],
+                                        "egress_modes": ["direct", "system"],
                                         "destination_policy": ["enforced": true, "requires_unrestricted": false]]
     try writeFrame(fd, ["v": 1, "kind": "proxy.ready", "implementation": "native", "capabilities": capabilities, "listeners": snapshot()])
     while true {

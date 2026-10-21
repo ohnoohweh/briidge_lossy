@@ -8,6 +8,7 @@ import socket
 import struct
 import subprocess
 import sys
+from unittest import mock
 
 import pytest
 
@@ -29,6 +30,32 @@ def _config(**overrides):
            "egress": {"mode": "direct"}, "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}}
     cfg.update(overrides)
     return cfg
+
+
+async def _start_connect_proxy():
+    captured = []
+
+    async def pipe(reader, writer):
+        try:
+            while data := await reader.read(16 * 1024):
+                writer.write(data)
+                await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def handle(reader, writer):
+        header = await reader.readuntil(b"\r\n\r\n")
+        captured.append(header)
+        authority = header.decode("latin1").split("\r\n", 1)[0].split()[1]
+        host, port = authority.rsplit(":", 1)
+        outbound_reader, outbound_writer = await asyncio.open_connection(host.strip("[]"), int(port))
+        writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+        await writer.drain()
+        await asyncio.gather(pipe(reader, outbound_writer), pipe(outbound_reader, writer))
+
+    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    return server, server.sockets[0].getsockname()[1], captured
 
 
 async def _echo(reader, writer):
@@ -147,6 +174,7 @@ def test_proxy_worker_readiness_advertises_redacted_capabilities(implementation,
     {"protocols": ["socks5"], "auth": {"mode": "token", "username": "user", "token": "private-token"}},
     {"protocols": ["http-connect", "socks5-connect"], "auth": {"mode": "password", "username": "user", "password": "private-token"}},
     {"egress": {"mode": "direct", "address_families": ["ipv4", "ipv6"]}},
+    {"egress": {"mode": "system"}},
 ])
 def test_proxy_worker_contract_accepts_advertised_configuration_shapes(backend, changes):
     async def exercise():
@@ -406,15 +434,47 @@ def test_proxy_worker_destination_policy_denies_private_http_and_socks(backend, 
     asyncio.run(exercise())
 
 
-def test_native_proxy_worker_rejects_unimplemented_egress_and_bind(native_proxy_worker_executable):
+def test_native_proxy_worker_rejects_invalid_egress_and_bind(native_proxy_worker_executable):
     async def exercise():
-        for changes in ({"egress": {"mode": "system"}}, {"bind": "0.0.0.0"},
+        for changes in ({"bind": "0.0.0.0"},
                         {"egress": {"mode": "direct", "address_families": ["ipv4"]}},
                         {"egress": {"mode": "direct", "proxy_host": "host"}}):
             worker = ProxyWorker("native", native_proxy_worker_executable)
             with pytest.raises(ProxyWorkerStartupError, match="invalid_configuration"):
                 await worker.start(_config(**changes))
             assert worker.process is None
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("no_proxy", ["", "127.0.0.1"])
+def test_proxy_worker_system_egress_selects_and_bypasses_env_proxy(backend, no_proxy):
+    async def exercise():
+        target = await asyncio.start_server(_echo, "127.0.0.1", 0)
+        upstream, upstream_port, captured = await _start_connect_proxy()
+        worker = ProxyWorker(*backend)
+        environment = {
+            "HTTP_PROXY": f"http://127.0.0.1:{upstream_port}",
+            "http_proxy": f"http://127.0.0.1:{upstream_port}",
+            "HTTPS_PROXY": f"http://127.0.0.1:{upstream_port}",
+            "https_proxy": f"http://127.0.0.1:{upstream_port}", "ALL_PROXY": "", "all_proxy": "",
+            "NO_PROXY": no_proxy, "no_proxy": no_proxy,
+        }
+        if not no_proxy:
+            environment["OBSTACLEBRIDGE_TEST_SYSTEM_PROXY"] = f"http=127.0.0.1:{upstream_port}"
+        try:
+            with mock.patch.dict(os.environ, environment, clear=False):
+                await worker.start(_config(protocols=["http-connect"], egress={"mode": "system"}))
+                assert worker.listeners["http"]["egress_mode"] == "system"
+                await _http_tunnel(worker.listeners["http"]["bound_port"], target.sockets[0].getsockname()[1], True)
+            assert len(captured) == (0 if no_proxy else 1)
+            if captured:
+                assert captured[0].startswith(f"CONNECT 127.0.0.1:{target.sockets[0].getsockname()[1]} ".encode())
+        finally:
+            await worker.stop()
+            upstream.close()
+            await upstream.wait_closed()
+            target.close()
+            await target.wait_closed()
     asyncio.run(exercise())
 
 

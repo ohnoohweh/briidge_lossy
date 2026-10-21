@@ -69,7 +69,8 @@ ARC-CMP-001:
     - tests/unit/test_proxy_worker.py::test_proxy_worker_rejects_invalid_destination_policy
     - tests/unit/test_proxy_worker.py::test_proxy_worker_destination_policy_allows_and_blocks_host_patterns
     - tests/unit/test_proxy_worker.py::test_proxy_worker_destination_policy_denies_private_http_and_socks
-    - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_invalid_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_system_egress_selects_and_bypasses_env_proxy
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_loopback_listener_traffic
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
     - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies

@@ -701,8 +701,9 @@ REQ-PRX-001:
   # The established contract-v1 requires explicit authentication and rejects malformed bind,
   # protocol, port, authentication, egress, and destination-policy shapes
   # before spawn; both children accept explicit IPv4/IPv6 loopback listener
-  # binds, enforce hostname/private-destination denials before a dial, and
-  # retain the optional IPv4/IPv6 egress-family declaration. Both
+  # binds, enforce hostname/private-destination denials before a dial, select
+  # direct/system egress with POSIX environment bypasses, and retain the
+  # optional IPv4/IPv6 egress-family declaration. Both
   # supervisors project the redacted lifecycle shape (identity/state/
   # generation/restart/failure/capabilities, listeners, and last_error), and
   # configured status omits all authentication secret values.
@@ -733,7 +734,8 @@ REQ-PRX-001:
     - tests/unit/test_proxy_worker.py::test_proxy_worker_rejects_invalid_destination_policy
     - tests/unit/test_proxy_worker.py::test_proxy_worker_destination_policy_allows_and_blocks_host_patterns
     - tests/unit/test_proxy_worker.py::test_proxy_worker_destination_policy_denies_private_http_and_socks
-    - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_unimplemented_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_native_proxy_worker_rejects_invalid_egress_and_bind
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_system_egress_selects_and_bypasses_env_proxy
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_loopback_listener_traffic
     - tests/unit/test_proxy_worker.py::test_proxy_worker_ipv6_socks_and_password_fallback
     - tests/unit/test_proxy_worker.py::test_native_proxy_concurrent_half_close_with_large_replies
