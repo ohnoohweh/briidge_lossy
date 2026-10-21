@@ -626,6 +626,10 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,
             "resource_health": resourceHealthProvider(),
+            // Keep the common desktop Admin status contract: `/api/logs` is
+            // backed by this supervisor, and operators also need its
+            // lifecycle state from the status snapshot.
+            "logging_worker": logWorker?.status() ?? ["state": "off"],
             "operator_capabilities": operatorCapabilities(),
             "connection_layers": [
                 ["name": "transport", "state": status.state, "connected": status.state == "connected"],
