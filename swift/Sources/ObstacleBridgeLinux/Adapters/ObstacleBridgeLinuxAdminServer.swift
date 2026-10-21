@@ -2,6 +2,7 @@ import Dispatch
 import Foundation
 import Crypto
 import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
