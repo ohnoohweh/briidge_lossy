@@ -699,7 +699,8 @@ REQ-PRX-001:
   # Desktop Python/native worker selection is qualified independently on macOS
   # and Linux; these entries never imply a cross-operating-system process pair.
   # The worker contract pins redacted error codes for invalid credentials and
-  # occupied listeners rather than propagating configuration in parent errors.
+  # occupied listeners, and both supervisors project capabilities at
+  # worker.capabilities rather than propagating configuration in parent errors.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5

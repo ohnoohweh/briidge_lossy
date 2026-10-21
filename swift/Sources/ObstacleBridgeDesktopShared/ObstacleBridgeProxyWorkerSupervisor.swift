@@ -324,9 +324,9 @@ public final class ObstacleBridgeSupervisedProxyWorker: @unchecked Sendable {
         let running = current && inner["state"] as? String == "running"
         return ["worker": ["implementation": implementation, "state": isStopped ? "stopped" : (running ? "running" : "unavailable"),
                            "pid": running ? (inner["pid"] as? Int ?? 0) : 0, "generation": localGeneration,
-                           "restarts": localRestarts, "failed_starts": localFailures],
+                           "restarts": localRestarts, "failed_starts": localFailures,
+                           "capabilities": running ? (snapshot["capabilities"] ?? [:]) : [:]],
                 "listeners": running ? (snapshot["listeners"] ?? [:]) : [:],
-                "capabilities": running ? (snapshot["capabilities"] ?? [:]) : [:],
                 "last_error": running || isStopped ? "" : "proxy worker unavailable"]
     }
 
