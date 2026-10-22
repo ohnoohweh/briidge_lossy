@@ -5,7 +5,6 @@ import base64
 import json
 import os
 import socket
-import struct
 import subprocess
 import sys
 from unittest import mock
@@ -14,6 +13,7 @@ import pytest
 
 from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
 from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, ProxyWorkerStartupError, _read_frame, resolve_native_proxy_worker_executable, worker_capabilities
+from obstacle_bridge.worker_ipc import WorkerIPCFrameKind, encode_control, encode_frame
 
 pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="proxy worker requires desktop Unix sockets")
 
@@ -381,7 +381,7 @@ def test_supervised_proxy_stop_cancels_pending_restart(monkeypatch, backend):
 def test_proxy_control_rejects_oversize_header_without_waiting_for_body():
     async def exercise():
         reader = asyncio.StreamReader()
-        reader.feed_data(struct.pack("!I", MAX_FRAME + 1))
+        reader.feed_data(encode_frame(WorkerIPCFrameKind.RESPONSE, 1, b"x" * (MAX_FRAME + 1))[:20])
         with pytest.raises(ValueError, match="frame size"):
             await asyncio.wait_for(_read_frame(reader), timeout=0.1)
     asyncio.run(exercise())
@@ -393,9 +393,9 @@ def test_proxy_worker_discards_retired_generation_snapshot():
         worker.generation = 2
         worker.listeners = {"http": {"bound_port": 2}}
         reader = asyncio.StreamReader()
-        payload = json.dumps({"v": 1, "kind": "proxy.snapshot", "generation": 1,
-                              "listeners": {"http": {"bound_port": 1}}}, separators=(",", ":")).encode()
-        reader.feed_data(struct.pack("!I", len(payload)) + payload)
+        payload = encode_control(WorkerIPCFrameKind.EVENT, 1, {"v": 1, "kind": "proxy.snapshot", "generation": 1,
+                                                                "listeners": {"http": {"bound_port": 1}}})
+        reader.feed_data(payload)
         reader.feed_eof()
         await worker._receive(reader, 1)
         assert worker.listeners == {"http": {"bound_port": 2}}

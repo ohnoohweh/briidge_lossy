@@ -20,9 +20,10 @@ def native_proxy_worker_executable(tmp_path_factory: pytest.TempPathFactory) -> 
     swiftc = shutil.which("swiftc")
     if not swiftc or sys.platform not in {"darwin", "linux"}:
         pytest.skip("native proxy worker requires swiftc on macOS or Linux")
+    shared_source = ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"
     source = ROOT / "swift/Sources/ObstacleBridgeProxyWorker/main.swift"
     binary = tmp_path_factory.mktemp("native-proxy") / "proxy-worker"
-    subprocess.run([swiftc, str(source), "-o", str(binary)], check=True, capture_output=True, text=True)
+    subprocess.run([swiftc, str(shared_source), str(source), "-o", str(binary)], check=True, capture_output=True, text=True)
     return str(binary)
 
 

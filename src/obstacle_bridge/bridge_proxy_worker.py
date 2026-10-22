@@ -15,11 +15,11 @@ import logging
 import os
 import shutil
 import socket
-import struct
 import sys
 from typing import Any
 
 from .bridge_proxy_server import ObstacleBridgeProxyServer, ObstacleBridgeProxyServerConfig, ProxyCredentials
+from .worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, frame_size, try_decode_frame
 
 MAX_FRAME = 64 * 1024
 _PROTOCOLS = {"http", "http-connect", "socks5", "socks5-connect"}
@@ -131,20 +131,37 @@ def validate_worker_config(config: dict[str, Any], implementation: str) -> None:
 
 
 async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any]:
-    size = struct.unpack("!I", await reader.readexactly(4))[0]
-    if size == 0 or size > MAX_FRAME:
+    try:
+        header = await reader.readexactly(20)
+    except asyncio.IncompleteReadError as exc:
+        raise ValueError("invalid proxy worker frame") from exc
+    size = frame_size(header)
+    if size is None or size > MAX_FRAME:
         raise ValueError("invalid proxy worker frame size")
-    message = json.loads((await reader.readexactly(size)).decode("utf-8"))
-    if not isinstance(message, dict) or message.get("v") != 1:
+    try:
+        frame, remainder = try_decode_frame(header + await reader.readexactly(size))
+    except asyncio.IncompleteReadError as exc:
+        raise ValueError("invalid proxy worker frame") from exc
+    if frame is None or remainder:
+        raise ValueError("invalid proxy worker frame")
+    message = decode_control(frame)
+    if message.get("v") != 1:
         raise ValueError("invalid proxy worker frame")
     return message
 
 
 async def _write_frame(writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
-    encoded = json.dumps(message, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
-    if not encoded or len(encoded) > MAX_FRAME:
+    raw_kind = str(message.get("kind") or "")
+    kind = (WorkerIPCFrameKind.REQUEST if raw_kind == "proxy.start" or raw_kind == "proxy.stop"
+            else WorkerIPCFrameKind.ERROR if raw_kind == "proxy.error"
+            else WorkerIPCFrameKind.EVENT if raw_kind == "proxy.snapshot"
+            else WorkerIPCFrameKind.RESPONSE)
+    generation = message.get("generation")
+    generation = generation if type(generation) is int and generation > 0 else 1
+    encoded = encode_control(kind, generation, message)
+    if len(encoded) - 20 > MAX_FRAME:
         raise ValueError("invalid proxy worker frame size")
-    writer.write(struct.pack("!I", len(encoded)) + encoded)
+    writer.write(encoded)
     await asyncio.wait_for(writer.drain(), timeout=1.0)
 
 

@@ -68,6 +68,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
+    proxy_worker = (ROOT / "swift" / "Sources" / "ObstacleBridgeProxyWorker" / "main.swift").read_text(encoding="utf-8")
+    proxy_supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
     assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 2
@@ -82,6 +84,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert runner.count("NSLog(") == 1
     assert "ObstacleBridgeWorkerIPC.frameSize(header)" in worker
     assert "ObstacleBridgeWorkerIPC.encodeControl" in worker
+    assert "ObstacleBridgeWorkerIPC.decodeControl" in proxy_worker
+    assert "ObstacleBridgeWorkerIPC.encodeControl" in proxy_supervisor
     assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
 
 

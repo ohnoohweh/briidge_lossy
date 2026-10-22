@@ -447,9 +447,8 @@ ARC-CMP-004:
   # A shared Python/Swift codec now qualifies bounded control/data framing,
   # positive-generation fencing, and capability-intersection wire parity. The
   # Python-supervised peer-control boundary has migrated for both child
-  # implementations; the other component boundaries remain unqualified. Contract-v1
-  # Native proxy build products link the shared codec before their coordinated
-  # supervisor/worker framing migration.
+  # implementations, as has the Python/native proxy supervisor-worker boundary;
+  # Admin, logging, and helper component boundaries remain unqualified. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
