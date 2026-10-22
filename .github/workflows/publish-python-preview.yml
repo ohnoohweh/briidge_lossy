@@ -1,0 +1,44 @@
+name: Publish Python source preview
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-python-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Package and publish Python source ZIP
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create installable source ZIP
+        run: |
+          set -euo pipefail
+          mkdir -p dist/python
+          git archive --format=zip --prefix=ObstacleBridge-python-preview/ HEAD > dist/python/ObstacleBridge-python-preview.zip
+          unzip -t dist/python/ObstacleBridge-python-preview.zip
+          sha256sum dist/python/ObstacleBridge-python-preview.zip > dist/python/ObstacleBridge-python-preview.zip.sha256
+
+      - name: Publish the Python source ZIP
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! gh release view macos-preview >/dev/null 2>&1; then
+            gh release create macos-preview --target "$TARGET" --title 'Latest main preview (all platforms)' --prerelease --notes 'Latest main preview artifacts. Verify each attached SHA-256 before use.' || true
+          fi
+          gh release view macos-preview >/dev/null
+          gh release edit macos-preview --target "$TARGET"
+          gh release upload macos-preview dist/python/ObstacleBridge-python-preview.zip dist/python/ObstacleBridge-python-preview.zip.sha256 --clobber

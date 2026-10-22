@@ -1,0 +1,46 @@
+name: Publish Ubuntu 24.04 native preview
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-ubuntu2404-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish Ubuntu 24.04 native archive
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Verify Swift toolchain
+        run: swift --version
+
+      - name: Build the native Linux product
+        run: |
+          set -euo pipefail
+          scripts/build_linux_app.sh --output-dir build/ubuntu2404
+          tar -C build/ubuntu2404 -czf ObstacleBridge-linux-ubuntu-24.04.5-lts.tar.gz ObstacleBridgeLinux ObstacleBridgeProxyWorker ObstacleBridgeLogCollector ObstacleBridgeLinux.build-info.json admin_web
+          sha256sum ObstacleBridge-linux-ubuntu-24.04.5-lts.tar.gz > ObstacleBridge-linux-ubuntu-24.04.5-lts.tar.gz.sha256
+
+      - name: Publish the Ubuntu archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! gh release view macos-preview >/dev/null 2>&1; then
+            gh release create macos-preview --target "$TARGET" --title 'Latest main preview (all platforms)' --prerelease --notes 'Latest main preview artifacts. Verify each attached SHA-256 before use.' || true
+          fi
+          gh release view macos-preview >/dev/null
+          gh release edit macos-preview --target "$TARGET"
+          gh release upload macos-preview ObstacleBridge-linux-ubuntu-24.04.5-lts.tar.gz ObstacleBridge-linux-ubuntu-24.04.5-lts.tar.gz.sha256 --clobber

@@ -43,14 +43,14 @@ jobs:
           if gh release view macos-preview >/dev/null 2>&1; then
             gh release edit macos-preview \
               --target "$TARGET" \
-              --title "macOS preview (latest main)" \
-              --notes "Built from ${TARGET}. This is an ad-hoc-signed preview build, not a notarized production release. Verify the attached SHA-256 before use."
+              --title "Latest main preview (all platforms)" \
+              --notes "Built from ${TARGET}. Assets are independent preview builds; verify each attached SHA-256 before use. The macOS app is ad-hoc signed, not notarized, and the iOS IPA targets the simulator only."
           else
             gh release create macos-preview \
               --target "$TARGET" \
-              --title "macOS preview (latest main)" \
+              --title "Latest main preview (all platforms)" \
               --prerelease \
-              --notes "Built from ${TARGET}. This is an ad-hoc-signed preview build, not a notarized production release. Verify the attached SHA-256 before use."
+              --notes "Built from ${TARGET}. Assets are independent preview builds; verify each attached SHA-256 before use. The macOS app is ad-hoc signed, not notarized, and the iOS IPA targets the simulator only."
           fi
           gh release upload macos-preview \
             ios/build/macos/release/ObstacleBridge-macos-preview.zip \
