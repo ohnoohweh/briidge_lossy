@@ -234,7 +234,9 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeTunPrivilegedHelperMain.swift"
 
 echo "[build_macos_app] compiling macOS proxy worker"
-"${SWIFTC_CMD}" -o "${PROXY_WORKER_BINARY_PATH}" "${REPO_ROOT}/swift/Sources/ObstacleBridgeProxyWorker/main.swift"
+"${SWIFTC_CMD}" -o "${PROXY_WORKER_BINARY_PATH}" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeProxyWorker/main.swift"
 
 echo "[build_macos_app] compiling macOS log collector"
 "${SWIFTC_CMD}" -o "${LOG_WORKER_BINARY_PATH}" "${REPO_ROOT}/swift/Sources/ObstacleBridgeLogCollector/main.swift"

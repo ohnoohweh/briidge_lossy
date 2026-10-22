@@ -14,6 +14,7 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "ObstacleBridgeProxyWorker",
+        dependencies: ["ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeProxyWorker"
     ),
     .executableTarget(

@@ -1160,7 +1160,8 @@ bounded versioned frame carries a fenced generation plus either a canonical
 control object or opaque binary data, and its hello exchange deterministically
 negotiates capabilities. Python-supervised peer children use this contract for
 their control frames on macOS, whether Python or native; Admin, logging, proxy,
-and helper protocols are still being migrated.
+and helper protocols are still being migrated. The native proxy build already
+includes the same shared codec, ready for its coordinated frame migration.
 When a Python supervisor selects a private collector on macOS, its native peer
 worker receives only a separate inherited record-only descriptor; it emits
 bounded lifecycle records and cannot query the collector.
