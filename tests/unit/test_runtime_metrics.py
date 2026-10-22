@@ -131,3 +131,19 @@ def test_runner_runtime_metrics_status_is_bounded_and_redacted():
     assert set(payload) == {"cpu_cores_max", "work_slice_ms_max", "event_loop_lag_ms", "categories", "most_timed_category", "longest_uninterrupted_category"}
     assert payload["most_timed_category"] == "channelmux_callback"
     assert all("payload" not in row and "address" not in row for row in payload["categories"])
+
+
+def test_linux_local_runtime_metrics_smoke_lifecycle():
+    """Socket/TUN-free local smoke coverage for the monitor/status lifecycle."""
+    async def exercise():
+        runner = _runner_for_metrics_tests()
+        runner._start_runtime_metrics_monitor()
+        await asyncio.sleep(0)
+        runner._record_runtime_loop_lag(deadline_ns=10, actual_ns=20)
+        payload = runner._runtime_metrics_status_fields()
+        assert payload["event_loop_lag_ms"]["last"] == 0.00001
+        assert isinstance(payload["categories"], list)
+        await runner._stop_runtime_metrics_monitor()
+        assert runner._runtime_metrics_task is None
+
+    asyncio.run(exercise())

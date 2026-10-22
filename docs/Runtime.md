@@ -611,8 +611,6 @@ TUN, a network peer, or Swift.
 Remaining local Linux work packages are deliberately independent so each can
 be developed and validated without a mixed Python/Swift CI run:
 
-- **L-RM.4 — Linux smoke scenario:** validate the sampler, lag probe, status
-  projection, and shutdown in a short local socket-only bridge subprocess.
 - **L-RM.5 — WebAdmin runtime analysis:** add compact graphical dual-arc CPU
   load and uninterrupted-computation meters immediately beside Restart, plus
   a Runtime Analysis tab with exact values, leaders, and bounded category
@@ -620,8 +618,9 @@ be developed and validated without a mixed Python/Swift CI run:
 
 `Runner` now projects cached redacted CPU/load peaks, loop lag, approved
 callback timing summaries, two-second maxima, and category leaders through
-`/api/status`. The residual gap is a local subprocess smoke scenario and the
-WebAdmin meters/Runtime Analysis tab.
+`/api/status`; its local no-TUN/no-peer lifecycle smoke test covers monitor
+startup, status, and cancellation. The residual gap is the WebAdmin meters and
+Runtime Analysis tab.
 
 ### Dashboard and alert on relationships
 
