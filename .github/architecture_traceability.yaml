@@ -459,8 +459,9 @@ ARC-CMP-004:
   # PXY-3 CI matrices have recorded lifecycle and exact proxy-collector
   # success per host without a cross-operating-system process pair.
   # PXY-4 discovery keeps configured and deployment-selected workers fail-closed.
-  # PXY-4B has a named Linux same-host gate; its composed per-pair traffic and
-  # package-discovery evidence remains an explicit architecture gap.
+  # PXY-4B's named Linux bundled-host gate exercises HTTP/SOCKS traffic,
+  # collector observability, replacement and shutdown for both worker choices;
+  # independent Linux success and explicit package-discovery evidence remain gaps.
   # PXY-4C keeps macOS host traffic, logging, replacement, and shutdown proof
   # separate from Linux rather than inventing a cross-platform process pairing.
   # Elevated route/DNS verification is host-local and deterministic; packet

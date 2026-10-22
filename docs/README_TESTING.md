@@ -1037,9 +1037,11 @@ The component view they support is described in [ARCHITECTURE.md](ARCHITECTURE.m
 | `tests/unit/test_proxy_server.py` | `ARC-CMP-001` | `REQ-PRX-001`, `PROC-TST-002` | The Python proxy server must mirror the Swift provider's HTTP rewrite/auth and SOCKS5 CONNECT handshake behavior while exposing listener/counter/auth snapshots for non-extension runtime use, and its optional system egress mode must resolve an upstream proxy through the shared WinHTTP/PAC-compatible helper before tunneling outbound traffic | `pytest -q tests/unit/test_proxy_server.py` |
 | `tests/unit/test_proxy_worker.py` | `ARC-CMP-001` | `REQ-PRX-001` | Python and native proxy children own separate HTTP/SOCKS listeners and authenticated connections, bind and carry HTTP CONNECT traffic on IPv4 and IPv6 loopback, enforce matching destination-policy allow/deny decisions before an outbound dial, select/bypass the same system-egress upstream proxy, relay IPv6 and larger streams, publish the contract-v1 supervisor lifecycle projection, reject unsupported settings, and shut down on owner loss. Readiness and periodic snapshots must echo the supervisor-issued generation; a retired generation cannot overwrite active listener or failure state. Recovery exposes the stable redacted `unavailable` or `startup_failed` code until successful readiness clears it. Native discovery accepts an explicit executable, then a validated deployment override, then development `PATH`; invalid candidates fail closed. Native coverage includes concurrent idle connections, duplex backpressure, large responses and half-closes. | `pytest -q tests/unit/test_proxy_worker.py` |
 The named Linux PXY-4B workflow gate combines the Python-supervisor authenticated
-traffic/recovery cases, worker protocol E2E, and Linux Swift-host collector/replacement
-cases. It is progress toward, rather than evidence replacing, the remaining composed
-per-pair Linux host-traffic and packaged-discovery qualification.
+traffic/recovery cases and worker protocol E2E with a bundled Linux Swift-host test for
+each selected worker. The host test carries authenticated HTTP CONNECT and SOCKS5 echo
+traffic, observes selected collector status/logs, replaces a killed worker, confirms
+listener closure on shutdown, and uses sibling discovery in the native case. A successful
+Linux run and the explicit packaged-discovery qualification record remain required.
 The named macOS PXY-4C gate runs the same Python-supervisor cases plus the bundled
 macOS host process for each selected worker; its host test carries authenticated
 HTTP CONNECT and SOCKS5 traffic, observes the selected collector, replaces a killed

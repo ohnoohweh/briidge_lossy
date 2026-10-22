@@ -149,7 +149,7 @@ jobs:
         run: |
           pytest -vv tests/unit/test_proxy_worker.py -k 'runner_proxy_child_owns_http_socks_and_snapshots or runner_reports_lost_proxy_worker_without_in_process_fallback'
           pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
-          pytest -vv tests/integration/test_overlay_e2e.py -k linux_swift_proxy_logs_follow_collector
+          pytest -vv tests/integration/test_overlay_e2e.py -k 'linux_swift_proxy_logs_follow_collector or linux_swift_host_supervises_proxy_worker_full_matrix'
 
       - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py
