@@ -465,6 +465,8 @@ ARC-CMP-004:
   # python-worker and packaged-native-worker cases; no cross-host pairing is implied.
   # The macOS bundled-host scenario reserves its status, listener, and echo ports
   # as one distinct loopback set before launch.
+  # The macOS logging producer source/runtime guard inventories the runner,
+  # child, host, and native child paths and rejects direct private-mode sinks.
   # The desktop isolation summary therefore retains no active proxy-worker gap.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.

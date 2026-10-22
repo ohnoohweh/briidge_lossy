@@ -80,6 +80,38 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert runner.count("NSLog(") == 1
 
 
+def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:
+    """Keep every IPC-2M-1 producer on its inherited collector capability."""
+    runner = (ROOT / "src" / "obstacle_bridge" / "bridge_runner.py").read_text(encoding="utf-8")
+    admin = (ROOT / "src" / "obstacle_bridge" / "bridge_admin_worker.py").read_text(encoding="utf-8")
+    proxy = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_worker.py").read_text(encoding="utf-8")
+    peer = (ROOT / "src" / "obstacle_bridge" / "bridge_peer_worker.py").read_text(encoding="utf-8")
+    host = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    native_peer = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
+    native_proxy = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
+
+    # Python runner owns collector selection; its child producers receive only
+    # the inherited record relay and cannot create a direct logging sink.
+    assert "with activate_managed_logging(args):" in runner
+    for producer in (admin, proxy, peer):
+        assert "install_child_log_handler" in producer
+        assert "logging.StreamHandler" not in producer
+        assert "logging.FileHandler" not in producer
+    assert "stderr=asyncio.subprocess.DEVNULL if self._log_relay is not None else None" in peer
+    assert "if log_fd is not None:" in peer and "else:\n            logging.basicConfig" in peer
+
+    # Native host, proxy, and peer producers likewise use only the selected
+    # collector or inherited record descriptor. The one NSLog is the explicit
+    # no-collector fallback and must not be available in private-worker mode.
+    assert "worker.emit(name: \"macos.host\"" in host
+    assert "if let worker = activeLoggingWorker()" in host
+    assert "else {\n            NSLog(\"[ObstacleBridgeHostRunner][%@]\", event)" in host
+    assert host.count("NSLog(") == 1
+    assert "loggingWorker.makeProducerRelay()" in native_proxy
+    assert "--log-fd" in native_proxy
+    assert "ObstacleBridgeLogProducer(inheritedFD: $0" in native_peer
+
+
 def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
     supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
@@ -3699,6 +3731,7 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
         "debug_logging": {"log_worker": implementation, "log_worker_python_executable": sys.executable},
     }), encoding="utf-8")
     process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout = stderr = ""
     try:
         status_url = f"http://127.0.0.1:{status_port}/api/status"
         status = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
@@ -3713,10 +3746,12 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
     finally:
         process.terminate()
         try:
-            process.communicate(timeout=8)
+            stdout, stderr = process.communicate(timeout=8)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=5)
+    assert "runtime.started" not in stdout
+    assert "runtime.started" not in stderr
 
 
 @pytest.mark.parametrize("implementation", [

@@ -948,6 +948,12 @@ Admin status includes the selected logging collector lifecycle and bounded dropp
 PXY-3 lifecycle and collector qualification is complete in separately named Linux proxy-collector and macOS proxy-collector/host gates; each host runs only its local worker selections.
 PXY-4 proxy-worker qualification is complete in independently successful Linux and macOS gates. Each selects the Python-supervisor traffic/recovery and proxy-to-collector cases plus a bundled-host test for `python-worker` and `packaged-native-worker`; the host tests prove authenticated HTTP CONNECT/SOCKS5 traffic, collector status/log snapshots, replacement, and shutdown. The macOS host matrix reserves its status, listener, and echo ports as one distinct loopback set before launch. The packaged-native cases use sibling discovery; no cross-operating-system worker pairing is required. The desktop process-isolation summary therefore lists no remaining proxy-worker gap.
 
+The completed macOS logging producer boundary inventories the Python runner,
+its Admin/proxy/peer children, the macOS host, and native proxy/peer children.
+In private-collector mode each producer has record-only delivery; source and
+host-runtime guards exclude direct stream/file sinks and confirm startup records
+reach the selected collector rather than host stdout or stderr.
+
 On desktop Linux and macOS, the Python runner supports the experimental `--peer-stack-worker python --no-tun-enabled-on-startup` for a single outbound TCP peer. `--peer-stack-worker native --peer-stack-worker-native-executable /path/to/ObstacleBridgeHostRunner` on macOS or `/path/to/ObstacleBridgeLinux` on Linux selects a native child (or resolves the platform executable on `PATH`). The child owns the peer stack and TCP/UDP services, and the supervisor replaces it after failure. Native mode has generation-fenced snapshots but currently rejects reconnect, rekey and reload controls; it does not start Admin, proxy, telemetry or TUN. Both modes reject TUN services and peer configuration updates. Listener peers and other overlay transports remain unqualified. Existing connections are lost when the child is replaced.
 
 The default local ports are:
