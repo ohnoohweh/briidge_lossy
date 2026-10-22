@@ -39,7 +39,8 @@ def native_collector(tmp_path_factory):
     if not swiftc:
         pytest.skip("Swift compiler required")
     binary = tmp_path_factory.mktemp("proxy-log-collector") / "collector"
-    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(binary)], check=True)
+    subprocess.run([swiftc, str(ROOT / "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"),
+                    str(ROOT / "swift/Sources/ObstacleBridgeLogCollector/main.swift"), "-o", str(binary)], check=True)
     return str(binary)
 
 

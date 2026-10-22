@@ -1642,7 +1642,7 @@ REQ-ADM-001:
   # frames, generation fencing, and capability-intersection parity in Python
   # and Swift. Python and macOS-native peer children use the shared frames end
   # to end under the Python supervisor. Python/native proxy and private logging
-  # exchanges use those frames too; private (not public UDP) logging and the Python Admin worker use generation-
+  # exchanges use those frames too; private (not public UDP) logging and native-supervisor collector builds use the codec, while the Python Admin worker uses generation-
   # fenced frames too, while helper and native Admin migration remain open.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
