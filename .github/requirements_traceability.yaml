@@ -719,10 +719,10 @@ REQ-PRX-001:
   # independently per host; no cross-operating-system process pair is implied.
   # Python native-worker discovery prefers explicit configuration, then the
   # validated deployment override, before development PATH lookup.
-  # The named PXY-4 Linux/macOS gates select Python-supervisor and collector
-  # cases plus bundled-host HTTP/SOCKS traffic, collector observability,
+  # The independently successful PXY-4 Linux/macOS gates select Python-supervisor
+  # and collector cases plus bundled-host HTTP/SOCKS traffic, collector observability,
   # replacement and shutdown for explicitly named python-worker and
-  # packaged-native-worker selections. Independent successful host runs remain open.
+  # packaged-native-worker selections.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_overlay_e2e.py::test_linux_swift_host_supervises_proxy_worker_full_matrix

@@ -241,17 +241,7 @@ completed plan item.
 | `IPC-3` — Admin Web worker | Move HTTP/UI/auth/session ownership to an exchangeable process connected to supervisor and workers through IPC. DoD: existing APIs, live subscriptions, config confirmation/secrets, logs, restart and reconnect operations retain their security and semantics; worker failures and concurrent clients remain bounded and observable; Python/native Admin works with either supervisor on both hosts. |
 | `IPC-4` — per-peer stack workers | Isolate each peer's full transport-through-ChannelMux stack and provide explicit listener/accepted-peer ownership. DoD: all supported desktop transports, security modes, compression and TCP/UDP/TUN services interoperate with existing peers; peer-specific operations, snapshots, epochs, backpressure and reconnect survive independent worker failures without cross-peer state or plaintext leakage, for each Python/native pairing on both hosts. |
 | `IPC-5` — shared TUN worker | Move shared-interface routing, ownership and peer/channel arbitration into a separate exchangeable worker while retaining the privileged helper boundary. DoD: real bidirectional TUN traffic, simultaneous peers, route/DNS lifecycle, authenticated readiness, restart fencing, helper loss and cleanup are verified with Python/native worker and helper combinations on authorized macOS and Linux hosts. |
-| `IPC-6` — proxy worker | Active focus; its completion is decomposed into the ordered `PXY-*` packages below. This umbrella package is removed when the final `PXY-*` package is removed. |
 | `IPC-7` — integrated qualification and migration | Wire configuration, packaging, installation, process health and operator diagnostics into both desktop products. DoD: all supported Python/native worker combinations pass automated cross-process and mixed-overlay traffic, kill/restart, shutdown and resource-leak tests; privileged and signed-host evidence is recorded, existing deployments have a documented migration/rollback path, and no production path silently falls back to in-process ownership. |
-
-### Proxy separation work packages
-
-These packages deliberately use a platform-local acceptance model. A macOS
-case runs only macOS processes; a Linux case runs only Linux processes. “Mixed”
-means a Python and a native process on the same operating system, never a
-macOS-to-Linux process pairing. A package requires independently recorded
-passing macOS and Linux evidence before it is removed. The work packages run in
-the listed order.
 
 ### Proxy worker contract decisions
 
@@ -309,11 +299,12 @@ resolve the bundled worker beside their host executable. Every selected path
 must be an executable regular file; invalid discovery fails before private
 control IPC starts and never falls back to in-process proxy ownership.
 
-| Package | Scope and definition of done | Gap to close |
-| --- | --- | --- |
-| `PXY-4A` — packaged native-worker discovery | Make discovery deterministic for each desktop supervisor. DoD: an explicit executable remains authoritative; Python supervision accepts one validated deployment override before `PATH`; native macOS/Linux hosts resolve the worker bundled beside their host executable; invalid candidates fail closed without an in-process fallback. Platform-local probes identify the selected supervisor and worker. | Python’s validated deployment override and invalid-candidate rejection are covered, native hosts select their bundled sibling, and the platform-host matrices emit `python-worker` or `packaged-native-worker`. Independent successful macOS and Linux packaged-discovery runs remain required before closure. |
-| `PXY-4B` — Linux same-host selection matrix | Qualify every Python/native supervisor-worker combination on Linux. DoD: each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, proxy replacement after forced child loss, and clean shutdown using the selected packaged/discovered worker. Output identifies Linux and the selected pair. | The named Linux gate selects Python-supervisor traffic/recovery and collector cases plus a Linux bundled-host test for `python-worker`/`packaged-native-worker` that proves both protocols, collector status/log snapshots, replacement, and shutdown. Independent successful Linux CI evidence remains required before closure. |
-| `PXY-4C` — macOS same-host selection matrix | Qualify every Python/native supervisor-worker combination on macOS. DoD: each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, proxy replacement after forced child loss, and clean shutdown using the selected packaged/discovered worker. Output identifies macOS and the selected pair. | The named macOS gate selects Python-supervisor traffic/recovery and collector cases plus a bundled native-host test that proves both proxy protocols, selected collector status/logs, replacement, and shutdown for `python-worker`/`packaged-native-worker`. Independent successful macOS CI evidence remains required; Linux has its own PXY-4B gate. |
+Proxy-worker qualification is platform-local. The named Linux and macOS gates
+each report `python-worker` and `packaged-native-worker`, and exercise the
+selected worker's authenticated HTTP CONNECT/SOCKS5 traffic, redacted
+status/log projection, forced replacement, and host shutdown. A native host
+selects its sibling worker; no macOS process is used to qualify a Linux worker,
+or the reverse.
 
 PXY-3 lifecycle and observability qualification is complete: the independently
 recorded macOS and Linux matrices exercise the generation-fenced lifecycle
@@ -322,9 +313,9 @@ bounded drop state, and host status projection. This is a same-host contract;
 it does not require a macOS process to execute a Linux worker or the reverse.
 
 Completed IPv6-listener, destination-policy, system-egress, platform-local
-listener, and PXY-3 lifecycle/observability qualification work packages are
-represented by the durable contract decisions above rather than retained as
-active packages.
+listener, proxy-worker selection, and PXY-3 lifecycle/observability
+qualification work packages are represented by the durable contract decisions
+above rather than retained as active packages.
 
 ## Connection lifecycle propagation and rotation
 
