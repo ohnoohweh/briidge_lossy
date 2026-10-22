@@ -5,6 +5,13 @@ import tomllib
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_shared_worker_ipc_source_rejects_duplicate_control_members() -> None:
+    common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
+    assert "ControlJSONScanner" in common_ipc
+    assert "hasDuplicateObjectKey" in common_ipc
+    assert "JSONSerialization.jsonObject" in common_ipc
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"

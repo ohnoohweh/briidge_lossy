@@ -54,6 +54,11 @@ var targets: [Target] = [
         dependencies: ["ObstacleBridgeApplePackageProbe"],
         path: "swift/Tests/ObstacleBridgeApplePackageProbeTests"
     ),
+    .testTarget(
+        name: "ObstacleBridgeDesktopSharedTests",
+        dependencies: ["ObstacleBridgeDesktopShared"],
+        path: "swift/Tests/ObstacleBridgeDesktopSharedTests"
+    ),
 ]
 
 var packageDependencies: [Package.Dependency] = [

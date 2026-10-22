@@ -90,6 +90,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "ObstacleBridgeWorkerIPC.decodeControl" in proxy_worker
     assert "ObstacleBridgeWorkerIPC.encodeControl" in proxy_supervisor
     assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
+    assert "ControlJSONScanner" in common_ipc
+    assert "hasDuplicateObjectKey" in common_ipc
 
 
 def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:
