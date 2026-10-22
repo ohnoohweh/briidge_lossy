@@ -2,6 +2,7 @@ import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
 @testable import ObstacleBridgeCore
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
@@ -18,7 +19,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(throws: (any Error).self) { _ = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: "/tmp/helper.sock", sessionToken: "token", timeoutMilliseconds: 0) }
     }
 
-    @Test func unixHelperUsesAuthenticatedProtocolV1ControlAndPacketFrames() throws {
+    @Test func unixHelperUsesAuthenticatedCommonIPCControlAndPacketFrames() throws {
         let peer = try UnixHelperPeer(connectionCount: 6); defer { peer.stop() }
         let adapter = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: peer.path, sessionToken: peer.token)
         for command in [ObstacleBridgeTunHelperCommand.openTun, .applyNetwork, .removeNetwork, .snapshot, .stop] {
@@ -73,7 +74,7 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(peer.operations.isEmpty)
     }
 
-    @Test func swiftHelperServerAcceptsProtocolV1AuthenticatedControl() throws {
+    @Test func swiftHelperServerAcceptsCommonIPCAuthenticatedControl() throws {
         let backend = SwiftHelperBackend()
         let path = "/tmp/obstaclebridge-swift-helper-\(UUID().uuidString).sock"
         let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend)
@@ -564,27 +565,32 @@ private final class UnixHelperPeer: @unchecked Sendable {
             let fd = accept(listener, nil, nil); guard fd >= 0 else { return }
             do {
                 defer { _ = close(fd); completed.leave() }
-                guard let hello = try? readControl(fd), hello.op == "HELLO" else { return }
-                guard hello.payload["token"] as? String == token else { try? writeControl("ERROR", ["detail": "invalid session token"], fd); continue }
-                try? writeControl("HELLO_OK", ["authenticated": true], fd)
-                guard let (kind, body) = try? readFrame(fd) else { return }
-                if kind == 4 { lock.lock(); capturedOperations.append("WRITE_PACKET"); capturedPackets.append(body); lock.unlock(); continue }
-                guard kind == 1, let request = try? decodeControl(body) else { return }
+                let hello = try readFrame(fd)
+                let negotiated = try ObstacleBridgeWorkerIPC.negotiatedCapabilities(hello, supported: ["tun.control", "tun.packet", "tun.event"])
+                guard hello.kind == .hello, negotiated.role == "tun-helper-client", Set(negotiated.capabilities) == Set(["tun.control", "tun.packet", "tun.event"]) else { return }
+                try writeAll(try ObstacleBridgeWorkerIPC.hello(generation: hello.generation, role: "tun-helper", capabilities: ["tun.control", "tun.packet", "tun.event"]), fd)
+                try writeControl("READY", ["capabilities": ["tun.control", "tun.event", "tun.packet"]], kind: .ready, generation: hello.generation, fd)
+                guard let tokenHello = try? readControl(fd), tokenHello.op == "HELLO" else { return }
+                guard tokenHello.payload["token"] as? String == token else { try? writeControl("ERROR", ["detail": "invalid session token"], generation: hello.generation, fd); continue }
+                try? writeControl("HELLO_OK", ["authenticated": true], generation: hello.generation, fd)
+                let frame = try readFrame(fd)
+                guard frame.generation == hello.generation else { return }
+                if frame.kind == .data { lock.lock(); capturedOperations.append("WRITE_PACKET"); capturedPackets.append(frame.payload); lock.unlock(); continue }
+                guard frame.kind == .request, let request = try? decodeControl(frame) else { return }
                 lock.lock(); capturedOperations.append(request.op); capturedPayloads.append(request.payload); lock.unlock()
                 if disconnectFirstCommandReply && index == 0 { continue }
-                try? writeControl("\(request.op)_OK", ["handled": true], fd)
+                try? writeControl("\(request.op)_OK", ["handled": true], generation: hello.generation, fd)
             }
         }
     }
 
-    private func decodeControl(_ data: Data) throws -> (op: String, payload: [String: Any]) {
-        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any], object["version"] as? Int == 1, let op = object["op"] as? String, let payload = object["payload"] as? [String: Any] else { throw PeerError.socket }
+    private func decodeControl(_ frame: ObstacleBridgeWorkerIPC.Frame) throws -> (op: String, payload: [String: Any]) {
+        guard let object = try? ObstacleBridgeWorkerIPC.decodeControl(frame), let op = object["op"] as? String, let payload = object["payload"] as? [String: Any] else { throw PeerError.socket }
         return (op, payload)
     }
-    private func readControl(_ fd: Int32) throws -> (op: String, payload: [String: Any]) { let (kind, body) = try readFrame(fd); guard kind == 1 else { throw PeerError.socket }; return try decodeControl(body) }
-    private func writeControl(_ op: String, _ payload: [String: Any], _ fd: Int32) throws { let body = try JSONSerialization.data(withJSONObject: ["version": 1, "op": op, "payload": payload], options: [.sortedKeys]); try writeFrame(2, body, fd) }
-    private func readFrame(_ fd: Int32) throws -> (UInt8, Data) { let header: Data = try readExactly(5, fd); let length = header.dropFirst().reduce(UInt32(0)) { ($0 << 8) | UInt32($1) }; return (header[header.startIndex], try readExactly(Int(length), fd)) }
-    private func writeFrame(_ kind: UInt8, _ body: Data, _ fd: Int32) throws { var length = UInt32(body.count).bigEndian; var wire = Data([kind]); wire.append(Data(bytes: &length, count: 4)); wire.append(body); try writeAll(wire, fd) }
+    private func readControl(_ fd: Int32) throws -> (op: String, payload: [String: Any]) { let frame = try readFrame(fd); guard frame.kind == .request else { throw PeerError.socket }; return try decodeControl(frame) }
+    private func writeControl(_ op: String, _ payload: [String: Any], kind: ObstacleBridgeWorkerIPC.Kind = .response, generation: UInt64, _ fd: Int32) throws { try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: ["op": op, "payload": payload]), fd) }
+    private func readFrame(_ fd: Int32) throws -> ObstacleBridgeWorkerIPC.Frame { let header = try readExactly(ObstacleBridgeWorkerIPC.headerBytes, fd); guard let size = try ObstacleBridgeWorkerIPC.frameSize(header), let decoded = try ObstacleBridgeWorkerIPC.decode(header + (try readExactly(size, fd))).0 else { throw PeerError.socket }; return decoded }
     private func readExactly(_ count: Int, _ fd: Int32) throws -> Data { var data = Data(); var buffer = [UInt8](repeating: 0, count: max(1, count)); while data.count < count { let amount = read(fd, &buffer, count - data.count); guard amount > 0 else { throw PeerError.socket }; data.append(buffer, count: Int(amount)) }; return data }
     private func writeAll(_ data: Data, _ fd: Int32) throws { var offset = 0; while offset < data.count { let amount = data.withUnsafeBytes { write(fd, $0.baseAddress!.advanced(by: offset), data.count - offset) }; guard amount > 0 else { throw PeerError.socket }; offset += Int(amount) } }
     private enum PeerError: Error { case socket }

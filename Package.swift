@@ -94,7 +94,7 @@ targets += [
     ),
     .testTarget(
         name: "ObstacleBridgeLinuxAdapterTests",
-        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore"],
+        dependencies: ["ObstacleBridgeLinuxAdapters", "ObstacleBridgeCore", "ObstacleBridgeDesktopShared"],
         path: "swift/Tests/ObstacleBridgeLinuxAdapterTests"
     ),
 ]
