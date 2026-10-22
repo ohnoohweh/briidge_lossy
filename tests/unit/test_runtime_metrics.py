@@ -1,5 +1,7 @@
 import unittest
+import asyncio
 
+from obstacle_bridge.bridge import Runner
 from obstacle_bridge.runtime_metrics import (
     DurationHistogram,
     NANOSECONDS_PER_MILLISECOND,
@@ -15,6 +17,19 @@ class FakeClock:
 
     def monotonic_ns(self):
         return self.now_ns
+
+
+def _runner_for_metrics_tests():
+    runner = Runner.__new__(Runner)
+    runner._runtime_metrics_task = None
+    runner._runtime_metrics_last_sample_monotonic_ns = None
+    runner._runtime_metrics_last_sample_cpu_ns = None
+    runner._runtime_metrics_last_cpu_cores = None
+    runner._runtime_metrics_sample_count = 0
+    runner._runtime_metrics_last_loop_lag_ns = None
+    runner._runtime_metrics_max_loop_lag_ns = 0
+    runner._runtime_metrics_lag_probe_count = 0
+    return runner
 
 
 def test_histogram_reports_bounded_percentiles_and_no_samples():
@@ -70,3 +85,30 @@ def test_accumulator_rejects_unbounded_category_definitions():
         RuntimeMetricAccumulator(("x" * 65,))
     with unittest.TestCase().assertRaises(ValueError):
         RuntimeMetricAccumulator(tuple(str(index) for index in range(33)))
+
+
+def test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta():
+    runner = _runner_for_metrics_tests()
+    assert runner._sample_runtime_cpu(monotonic_ns=10, process_cpu_ns=5) is None
+    assert runner._sample_runtime_cpu(monotonic_ns=110, process_cpu_ns=55) == 0.5
+    assert runner._runtime_metrics_last_cpu_cores == 0.5
+    assert runner._runtime_metrics_sample_count == 1
+    assert runner._record_runtime_loop_lag(deadline_ns=200, actual_ns=243) == 43
+    assert runner._runtime_metrics_last_loop_lag_ns == 43
+    assert runner._runtime_metrics_max_loop_lag_ns == 43
+
+
+def test_runner_monitor_is_one_owned_task_and_cancels_cleanly():
+    async def exercise():
+        runner = _runner_for_metrics_tests()
+        runner._start_runtime_metrics_monitor()
+        task = runner._runtime_metrics_task
+        assert task is not None
+        runner._start_runtime_metrics_monitor()
+        assert runner._runtime_metrics_task is task
+        await asyncio.sleep(0)
+        await runner._stop_runtime_metrics_monitor()
+        assert runner._runtime_metrics_task is None
+        assert task.cancelled()
+
+    asyncio.run(exercise())

@@ -598,19 +598,19 @@ bounded aggregates to the monitoring system.
 
 ### In-process monitoring implementation state
 
-The Python runtime now has dependency-free, bounded timing primitives in
+The Python runtime has dependency-free, bounded timing primitives in
 `runtime_metrics.py`: an injectable monotonic clock, fixed duration buckets,
-rolling fixed-slot histograms, and a fixed-category accumulator. The
-primitives retain aggregates only; they neither start background work nor
-collect process accounting. Their unit tests use deterministic clocks and do
-not need a live bridge, root privileges, TUN, a network peer, or Swift.
+rolling fixed-slot histograms, and a fixed-category accumulator. `Runner` now
+owns exactly one cancellable monitor task that samples process CPU against
+monotonic elapsed time once per second and records event-loop probe lateness at
+a 250 ms cadence. The primitives retain aggregates only; the monitor has no
+public status projection or traffic-boundary instrumentation yet. Focused unit
+tests use deterministic inputs and do not need a live bridge, root privileges,
+TUN, a network peer, or Swift.
 
 Remaining local Linux work packages are deliberately independent so each can
 be developed and validated without a mixed Python/Swift CI run:
 
-- **L-RM.2 — Runner sampling and loop lag:** add one cadence-controlled
-  `time.process_time_ns()`/`time.monotonic_ns()` sampler and an owned,
-  cancellable asyncio lag probe to `Runner`.
 - **L-RM.3 — Runtime aggregation and status projection:** instrument approved
   coarse Python boundaries, derive lifetime and trailing-two-second maxima and
   category leaders, then serve a cached, redacted `runtime_metrics` projection
@@ -622,9 +622,10 @@ be developed and validated without a mixed Python/Swift CI run:
   a Runtime Analysis tab with exact values, leaders, and bounded category
   rows. The top bar remains graphical; text belongs in the tab.
 
-The current residual gap is therefore integration: the new primitives are not
-yet sampled by `Runner`, populated at runtime boundaries, exposed through
-WebAdmin, or shown in the administrator UI.
+The current residual gap is therefore aggregation and presentation: `Runner`
+has baseline process/loop observations, but approved runtime boundaries are
+not yet timed, no cached redacted `runtime_metrics` status payload exists, and
+WebAdmin has neither the meters nor the Runtime Analysis tab.
 
 ### Dashboard and alert on relationships
 

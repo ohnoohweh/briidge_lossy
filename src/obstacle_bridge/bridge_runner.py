@@ -192,6 +192,9 @@ class Runner:
     Thin orchestrator: wires ISession + ChannelMux + StatsBoard and manages lifecycle.
     """
 
+    RUNTIME_METRICS_SAMPLE_INTERVAL_NS = 1_000_000_000
+    RUNTIME_METRICS_LAG_INTERVAL_NS = 250_000_000
+
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.log = logging.getLogger("runner")
@@ -255,6 +258,17 @@ class Runner:
         self._runtime_health_sequence = 0
         self._runtime_health_task: Optional[asyncio.Task] = None
         self._runtime_health_last_error = ""
+        # One runner-owned monitor task samples process CPU and observes event
+        # loop lateness. It deliberately has no status projection yet: later
+        # runtime-aggregation work owns the public schema and categories.
+        self._runtime_metrics_task: Optional[asyncio.Task] = None
+        self._runtime_metrics_last_sample_monotonic_ns: Optional[int] = None
+        self._runtime_metrics_last_sample_cpu_ns: Optional[int] = None
+        self._runtime_metrics_last_cpu_cores: Optional[float] = None
+        self._runtime_metrics_sample_count = 0
+        self._runtime_metrics_last_loop_lag_ns: Optional[int] = None
+        self._runtime_metrics_max_loop_lag_ns = 0
+        self._runtime_metrics_lag_probe_count = 0
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._async_diag_lock = threading.Lock()
@@ -672,6 +686,64 @@ class Runner:
         while True:
             await asyncio.sleep(15.0)
             self._record_runtime_health("heartbeat")
+
+    def _sample_runtime_cpu(self, *, monotonic_ns: Optional[int] = None, process_cpu_ns: Optional[int] = None) -> Optional[float]:
+        """Record one process-CPU delta; the first sample establishes a baseline."""
+        wall_now = time.monotonic_ns() if monotonic_ns is None else int(monotonic_ns)
+        cpu_now = time.process_time_ns() if process_cpu_ns is None else int(process_cpu_ns)
+        previous_wall = self._runtime_metrics_last_sample_monotonic_ns
+        previous_cpu = self._runtime_metrics_last_sample_cpu_ns
+        self._runtime_metrics_last_sample_monotonic_ns = wall_now
+        self._runtime_metrics_last_sample_cpu_ns = cpu_now
+        if previous_wall is None or previous_cpu is None:
+            return None
+        wall_delta = wall_now - previous_wall
+        cpu_delta = cpu_now - previous_cpu
+        if wall_delta <= 0 or cpu_delta < 0:
+            return None
+        cores = float(cpu_delta) / float(wall_delta)
+        self._runtime_metrics_last_cpu_cores = cores
+        self._runtime_metrics_sample_count += 1
+        return cores
+
+    def _record_runtime_loop_lag(self, *, deadline_ns: int, actual_ns: Optional[int] = None) -> int:
+        """Record lateness of the runner-owned periodic probe in nanoseconds."""
+        now = time.monotonic_ns() if actual_ns is None else int(actual_ns)
+        lag_ns = max(0, now - int(deadline_ns))
+        self._runtime_metrics_last_loop_lag_ns = lag_ns
+        self._runtime_metrics_max_loop_lag_ns = max(self._runtime_metrics_max_loop_lag_ns, lag_ns)
+        self._runtime_metrics_lag_probe_count += 1
+        return lag_ns
+
+    async def _runtime_metrics_monitor(self) -> None:
+        """Use one cheap task for cadence CPU samples and event-loop lag probes."""
+        sample_deadline = time.monotonic_ns()
+        lag_deadline = sample_deadline + self.RUNTIME_METRICS_LAG_INTERVAL_NS
+        while True:
+            now = time.monotonic_ns()
+            if now >= sample_deadline:
+                self._sample_runtime_cpu(monotonic_ns=now)
+                sample_deadline = now + self.RUNTIME_METRICS_SAMPLE_INTERVAL_NS
+            if now >= lag_deadline:
+                self._record_runtime_loop_lag(deadline_ns=lag_deadline, actual_ns=now)
+                lag_deadline = now + self.RUNTIME_METRICS_LAG_INTERVAL_NS
+            next_deadline = min(sample_deadline, lag_deadline)
+            await asyncio.sleep(max(0.0, (next_deadline - time.monotonic_ns()) / 1_000_000_000.0))
+
+    def _start_runtime_metrics_monitor(self) -> None:
+        if self._runtime_metrics_task is None:
+            self._runtime_metrics_task = asyncio.create_task(
+                self._runtime_metrics_monitor(), name="runtime-metrics-monitor"
+            )
+
+    async def _stop_runtime_metrics_monitor(self) -> None:
+        task = self._runtime_metrics_task
+        self._runtime_metrics_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
     def _runtime_health_status_fields(self) -> dict[str, Any]:
         store = self._runtime_health_store
@@ -1534,6 +1606,7 @@ class Runner:
         )
         self._ensure_runtime_events()
         self._begin_runtime_health_lifetime()
+        self._start_runtime_metrics_monitor()
         await self._start_telemetry_client()
         await self._start_telemetry_collector()
         await self._start_tun_helper()
@@ -1741,6 +1814,7 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._runtime_health_task
             self._runtime_health_task = None
+        await self._stop_runtime_metrics_monitor()
         self.log.debug("[RUNNER] stop: entering telemetry_client.stop")
         await _run_stop_step("telemetry_client.stop", self._stop_telemetry_client(), timeout_s=3.0)
         if self.admin_web is not None:
