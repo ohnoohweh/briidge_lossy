@@ -866,6 +866,15 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
         parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {}}))
+        request = receive_control()
+        assert request["kind"] == "admin.call"
+        assert request["id"] == "bootstrap-status"
+        assert request["method"] == "get_status_snapshot"
+        assert request["args"] == [] and request["kwargs"] == {}
+        assert isinstance(request["deadline"], float)
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.RESPONSE, 7, {
+            "v": 1, "kind": "admin.reply", "id": request["id"], "ok": True, "result": {},
+        }))
         assert receive_control() == {"v": 1, "kind": "admin.ready", "implementation": "native", "port": 0, "generation": 7}
         parent_lifetime.close()
         assert process.wait(timeout=3) == 0
