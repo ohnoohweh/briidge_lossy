@@ -449,7 +449,8 @@ ARC-CMP-004:
   # Python-supervised peer-control boundary has migrated for Python plus macOS
   # and Linux-native children; Linux CI launches, snapshots, and stops the packaged peer. Python/native proxy and private logging
   # supervisor-worker boundaries; peer, proxy, and private logging children negotiate capabilities before
-  # bootstrap or readiness; the Python Admin child does too, while collector probes and native-proxy supervisor
+  # bootstrap or readiness, and private logging bounds its child-side hello wait;
+  # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while
   # helper and native Admin component boundaries remain unqualified. Contract-v1

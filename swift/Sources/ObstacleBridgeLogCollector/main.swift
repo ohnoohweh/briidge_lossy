@@ -19,6 +19,7 @@ private let maxDatagram = 60 * 1024
 private let maxReplyDatagram = 8 * 1024
 private let ringLimit = 1_200
 private let ringByteLimit = 1_048_576
+private let privateStartupTimeoutMS: Int32 = 5_000
 
 private func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data("\(message)\n".utf8))
@@ -95,6 +96,12 @@ if privateMode {
     socketFD = data
     lifetimeFD = lifetime
     privateGeneration = generation
+    var startupDescriptors = [pollfd(fd: data, events: Int16(POLLIN), revents: 0), pollfd(fd: lifetime, events: Int16(POLLIN), revents: 0)]
+    let startupPoll = poll(&startupDescriptors, nfds_t(startupDescriptors.count), privateStartupTimeoutMS)
+    guard startupPoll > 0, startupDescriptors[1].revents == 0,
+          startupDescriptors[0].revents & Int16(POLLIN) != 0 else {
+        fail("logging worker startup timed out")
+    }
     var helloBuffer = [UInt8](repeating: 0, count: maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
     let helloCount = recv(data, &helloBuffer, helloBuffer.count, 0)
     guard helloCount > 0, helloCount <= maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,

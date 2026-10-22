@@ -23,6 +23,7 @@ from .bridge_logging_ipc import LOG_WIRE_VERSION, NonBlockingUdpLogHandler, UdpL
 from .worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, encode_frame, try_decode_frame
 
 PRIVATE_MAX_DATAGRAM = 8 * 1024
+PRIVATE_STARTUP_TIMEOUT_S = 5.0
 _LOGGING_CAPABILITIES = ["logging.query", "logging.records"]
 
 
@@ -49,8 +50,10 @@ def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) 
     with socket.socket(fileno=data_fd) as data, socket.socket(fileno=lifetime_fd) as lifetime:
         if data.family != socket.AF_UNIX or data.type != socket.SOCK_DGRAM or lifetime.family != socket.AF_UNIX or lifetime.type != socket.SOCK_STREAM:
             raise ValueError("invalid private logging sockets")
-        readable, _, _ = select.select([data, lifetime], [], [])
+        readable, _, _ = select.select([data, lifetime], [], [], PRIVATE_STARTUP_TIMEOUT_S)
         if lifetime in readable:
+            return 0
+        if data not in readable:
             return 0
         try:
             frame, remainder = try_decode_frame(data.recv(PRIVATE_MAX_DATAGRAM + 21)) or (None, b"")
@@ -137,13 +140,13 @@ class ManagedLoggingWorker:
             child_data.close()
             child_lifetime.close()
             self._data.send(_logging_hello(generation, "supervisor"))
-            readable, _, _ = select.select([self._data], [], [], 5.0)
+            readable, _, _ = select.select([self._data], [], [], PRIVATE_STARTUP_TIMEOUT_S)
             if not readable:
                 raise RuntimeError("logging worker startup timed out")
             frame, remainder = try_decode_frame(self._data.recv(PRIVATE_MAX_DATAGRAM + 20)) or (None, b"")
             if remainder or not _is_logging_hello(frame, generation, "logging"):
                 raise RuntimeError("invalid logging worker capability response")
-            readable, _, _ = select.select([self._data], [], [], 5.0)
+            readable, _, _ = select.select([self._data], [], [], PRIVATE_STARTUP_TIMEOUT_S)
             if not readable:
                 raise RuntimeError("logging worker startup timed out")
             frame, remainder = try_decode_frame(self._data.recv(PRIVATE_MAX_DATAGRAM + 20)) or (None, b"")
