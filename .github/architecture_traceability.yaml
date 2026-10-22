@@ -456,7 +456,8 @@ ARC-CMP-004:
   # independently of the runtime projection.
   # Python Admin also projects the selected collector's bounded drop state, and
   # the native relay serializes child records with collector lifecycle state;
-  # PXY-3 CI matrices record lifecycle and exact proxy-collector evidence per host.
+  # PXY-3 CI matrices have recorded lifecycle and exact proxy-collector
+  # success per host without a cross-operating-system process pair.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve
