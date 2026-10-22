@@ -194,8 +194,10 @@ def test_peer_worker_aborts_inflight_start_when_owner_disappears(monkeypatch):
         monkeypatch.setattr(peer_module, "_peer_args", lambda _config: object())
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         parent.setblocking(False)
-        _reader, writer = await asyncio.open_connection(sock=parent)
+        reader, writer = await asyncio.open_connection(sock=parent)
         task = asyncio.create_task(_serve(child.detach()))
+        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["peer.control"], "generation": 1})
+        assert await _read_frame(reader) == {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": ["peer.control"], "generation": 1}
         await _write_frame(writer, {"v": 1, "kind": "peer.start", "peer_id": "test", "generation": 1, "config": {}})
         await asyncio.wait_for(started.wait(), 2)
         writer.close()

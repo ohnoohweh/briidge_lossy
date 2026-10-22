@@ -45,7 +45,8 @@ async def _write_frame(writer: asyncio.StreamWriter, value: dict[str, Any]) -> N
     from .worker_ipc import WorkerIPCFrameKind, encode_control
 
     raw_kind = str(value.get("kind") or "")
-    frame_kind = (WorkerIPCFrameKind.REQUEST if raw_kind == "peer.start"
+    frame_kind = (WorkerIPCFrameKind.HELLO if raw_kind == "worker.hello"
+                  else WorkerIPCFrameKind.REQUEST if raw_kind == "peer.start"
                   else WorkerIPCFrameKind.ERROR if raw_kind.endswith(".error") or raw_kind == "peer.error"
                   else WorkerIPCFrameKind.RESPONSE)
     generation = value.get("generation")
@@ -106,6 +107,11 @@ async def _serve(control_fd: int, log_fd: int | None = None) -> None:
     runner = None
     log_socket = None
     try:
+        hello = await asyncio.wait_for(_read_frame(reader), 5.0)
+        if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["peer.control"], "generation": hello.get("generation")} or type(hello.get("generation")) is not int or hello["generation"] < 1:
+            raise ValueError("invalid peer worker hello")
+        generation = hello["generation"]
+        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": ["peer.control"], "generation": generation})
         start = await asyncio.wait_for(_read_frame(reader), 5.0)
         peer_id, generation, config = start.get("peer_id"), start.get("generation"), start.get("config")
         if (start.get("kind") != "peer.start" or not isinstance(peer_id, str) or not 1 <= len(peer_id) <= 128
@@ -251,6 +257,10 @@ class PeerStackWorker:
             self._reader, self._writer = await asyncio.open_connection(sock=parent)
             self.process = process
             generation = self.generation + 1
+            await _write_frame(self._writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["peer.control"], "generation": generation})
+            hello = await asyncio.wait_for(_read_frame(self._reader), 5.0)
+            if hello != {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": ["peer.control"], "generation": generation}:
+                raise RuntimeError("peer worker capability negotiation failed")
             names = ("runner", "tcp_session", "peer_address_protocol", "secure_link", "compress_layer", "channel_mux")
             await _write_frame(self._writer, {"v": 1, "kind": "peer.start", "peer_id": self.peer_id,
                                              "generation": generation, "config": config,

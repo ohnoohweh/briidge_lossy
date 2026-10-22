@@ -19,10 +19,15 @@ enum ObstacleBridgeNativePeerWorker {
         var runner: ObstacleBridgeHostRunner?
         defer { runner?.stopPeerWorker() }
         do {
+            let hello = try readFrame(control)
+            guard kind(hello) == "worker.hello", hello["role"] as? String == "supervisor",
+                  hello["capabilities"] as? [String] == ["peer.control"], let helloGeneration = strictPositiveInt(hello["generation"])
+            else { throw WorkerError.invalidBootstrap }
+            try writeFrame(control, ["v": 1, "kind": "worker.hello", "role": "peer", "capabilities": ["peer.control"], "generation": helloGeneration])
             let start = try readFrame(control)
             guard kind(start) == "peer.start",
                   let peerID = start["peer_id"] as? String, !peerID.isEmpty, peerID.count <= 128,
-                  let generation = strictPositiveInt(start["generation"]),
+                  let generation = strictPositiveInt(start["generation"]), generation == helloGeneration,
                   let configuration = start["config"] as? [String: Any]
             else { throw WorkerError.invalidBootstrap }
             let rootLogLevel = ObstacleBridgeRuntimeConfig.privateWorkerLogLevel(from: start["log_root_level"])
@@ -99,7 +104,7 @@ enum ObstacleBridgeNativePeerWorker {
 
     private static func writeFrame(_ handle: FileHandle, _ frame: [String: Any]) throws {
         let rawKind = frame["kind"] as? String ?? ""
-        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "peer.error" ? .error : .response
+        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "worker.hello" ? .hello : rawKind == "peer.error" ? .error : .response
         let generation = UInt64(strictPositiveInt(frame["generation"]) ?? 1)
         handle.write(try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: frame))
     }
