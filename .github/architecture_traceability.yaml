@@ -449,7 +449,7 @@ ARC-CMP-004:
   # Python-supervised peer-control boundary has migrated for both child
   # implementations, as have the Python/native proxy and private logging
   # supervisor-worker boundaries; peer and proxy children negotiate capabilities before
-  # bootstrap, while collector probes and native-proxy supervisor
+  # bootstrap; the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while
   # helper and native Admin component boundaries remain unqualified. Contract-v1

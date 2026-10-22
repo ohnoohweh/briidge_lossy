@@ -32,7 +32,8 @@ ASYNC_METHODS = frozenset({"request_tun_enabled", "probe_tun_connectivity_verifi
 
 
 def _encode(message: dict[str, Any], generation: int = 1) -> bytes:
-    kind = (WorkerIPCFrameKind.READY if message.get("kind") == "admin.ready"
+    kind = (WorkerIPCFrameKind.HELLO if message.get("kind") == "worker.hello"
+            else WorkerIPCFrameKind.READY if message.get("kind") == "admin.ready"
             else WorkerIPCFrameKind.REQUEST if message.get("kind") in {"admin.start", "admin.call"}
             else WorkerIPCFrameKind.RESPONSE)
     frame = encode_control(kind, generation, message)
@@ -148,6 +149,10 @@ async def _serve_child(control_fd: int, lifetime_fd: int, log_fd: int | None, ge
             or control_fd == lifetime_fd):
         raise ValueError("invalid Admin worker sockets")
     control.settimeout(5.0)
+    hello = _read_socket_frame(control, generation)
+    if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": generation}:
+        raise ValueError("invalid Admin worker hello")
+    control.sendall(_encode({"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation}, generation))
     bootstrap = _read_socket_frame(control, generation)
     if bootstrap.get("kind") != "admin.start" or not isinstance(bootstrap.get("args"), dict):
         raise ValueError("invalid Admin worker startup")
@@ -251,6 +256,11 @@ class AdminWorker:
             # changing the runner's persisted configuration.
             if self.generation and int(child_args.get("admin_web_port") or 0) == 0:
                 child_args["admin_web_port"] = self.port
+            self.writer.write(_encode({"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": next_generation}, next_generation))
+            await asyncio.wait_for(self.writer.drain(), 1.0)
+            hello = await asyncio.wait_for(_read_frame(reader, next_generation), 5.0)
+            if hello != {"v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": next_generation}:
+                raise ValueError("invalid Admin worker hello")
             self.writer.write(_encode({"v": 1, "kind": "admin.start", "args": child_args,
                                        "log_root_level": logging.getLogger().level,
                                        "log_levels": {"admin_web": logging.getLogger("admin_web").level}}, next_generation))
