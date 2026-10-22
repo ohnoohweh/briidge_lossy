@@ -89,6 +89,29 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(stopped.wait(timeout: .now() + 1) == .success)
     }
 
+    @Test func nativeAdminChildBoundsBootstrapStatusReplyWait() throws {
+        let control = try makeSocketPair()
+        let lifetime = try makeSocketPair()
+        let childControl = dup(control.1)
+        let childLifetime = dup(lifetime.1)
+        guard childControl >= 0, childLifetime >= 0 else { throw POSIXError(.EMFILE) }
+        close(control.1); close(lifetime.1)
+        defer { close(control.0); close(lifetime.0) }
+        let stopped = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            defer { stopped.signal() }
+            try? ObstacleBridgeNativeAdminWorker.run(controlFD: childControl, lifetimeFD: childLifetime, generation: 9)
+        }
+
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: 9, value: [
+            "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 9,
+        ]), to: control.0)
+        #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 9, value: ["v": 1, "kind": "admin.start", "args": [String: Any]()]), to: control.0)
+        #expect(try readControl(from: control.0)["kind"] as? String == "admin.call")
+        #expect(stopped.wait(timeout: .now() + 2) == .success)
+    }
+
     /// This is intentionally opt-in: opening a kernel TUN device requires
     /// CAP_NET_ADMIN and must not make ordinary CI depend on host privileges.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))

@@ -1,5 +1,10 @@
 import CoreFoundation
 import Foundation
+#if os(macOS) || os(iOS)
+import Darwin
+#else
+import Glibc
+#endif
 
 /// The native Admin child bootstrap boundary. The parent supplies connected
 /// Unix descriptors; this entrypoint neither reads ambient configuration nor
@@ -13,14 +18,14 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0 else { throw Failure.invalidBootstrap }
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
         let lifetime = FileHandle(fileDescriptor: lifetimeFD, closeOnDealloc: true)
-        let hello = try readControl(control, generation: generation, expectedKind: .hello)
+        let hello = try readControl(control, generation: generation, expectedKind: .hello, deadline: ProcessInfo.processInfo.systemUptime + 5)
         guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
               hello["capabilities"] as? [String] == ["admin.control"], strictPositiveInt(hello["generation"]) == generation
         else { throw Failure.invalidBootstrap }
         try write(control, kind: .hello, generation: generation, value: [
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": generation,
         ])
-        let bootstrap = try readControl(control, generation: generation, expectedKind: .request)
+        let bootstrap = try readControl(control, generation: generation, expectedKind: .request, deadline: ProcessInfo.processInfo.systemUptime + 5)
         guard bootstrap["kind"] as? String == "admin.start", bootstrap["args"] is [String: Any] else { throw Failure.invalidBootstrap }
         let logLevel = strictNonnegativeInt(bootstrap["log_root_level"]) ?? 30
         let logProducer = try logFD.map { try ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: logLevel) }
@@ -32,7 +37,7 @@ public enum ObstacleBridgeNativeAdminWorker {
             "v": 1, "kind": "admin.call", "id": bootstrapStatusRequestID,
             "method": "get_status_snapshot", "args": [], "kwargs": [:], "deadline": deadline,
         ])
-        let reply = try readControl(control, generation: generation, expectedKind: .response)
+        let reply = try readControl(control, generation: generation, expectedKind: .response, deadline: deadline)
         guard reply["kind"] as? String == "admin.reply", reply["id"] as? String == bootstrapStatusRequestID,
               reply["ok"] as? Bool == true, reply["result"] is [String: Any]
         else { throw Failure.invalidBootstrap }
@@ -57,10 +62,10 @@ public enum ObstacleBridgeNativeAdminWorker {
         return number.intValue
     }
 
-    private static func readControl(_ handle: FileHandle, generation: Int, expectedKind: ObstacleBridgeWorkerIPC.Kind) throws -> [String: Any] {
-        let header = try readExactly(handle, count: ObstacleBridgeWorkerIPC.headerBytes)
+    private static func readControl(_ handle: FileHandle, generation: Int, expectedKind: ObstacleBridgeWorkerIPC.Kind, deadline: TimeInterval) throws -> [String: Any] {
+        let header = try readExactly(handle, count: ObstacleBridgeWorkerIPC.headerBytes, deadline: deadline)
         guard let size = try ObstacleBridgeWorkerIPC.frameSize(header), size <= maximumControlPayload else { throw Failure.invalidBootstrap }
-        let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(header + readExactly(handle, count: size))
+        let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(header + readExactly(handle, count: size, deadline: deadline))
         guard let frame, remainder.isEmpty, frame.kind == expectedKind, frame.generation == UInt64(generation) else { throw Failure.invalidBootstrap }
         let value = try ObstacleBridgeWorkerIPC.decodeControl(frame)
         guard strictPositiveInt(value["v"]) == 1 else { throw Failure.invalidBootstrap }
@@ -73,13 +78,27 @@ public enum ObstacleBridgeNativeAdminWorker {
         handle.write(frame)
     }
 
-    private static func readExactly(_ handle: FileHandle, count: Int) throws -> Data {
+    private static func readExactly(_ handle: FileHandle, count: Int, deadline: TimeInterval) throws -> Data {
         var output = Data()
         while output.count < count {
+            try waitReadable(handle.fileDescriptor, deadline: deadline)
             let chunk = try handle.read(upToCount: count - output.count) ?? Data()
             guard !chunk.isEmpty else { throw Failure.invalidBootstrap }
             output.append(chunk)
         }
         return output
+    }
+
+    private static func waitReadable(_ descriptor: Int32, deadline: TimeInterval) throws {
+        while true {
+            let remaining = deadline - ProcessInfo.processInfo.systemUptime
+            guard remaining > 0 else { throw Failure.invalidBootstrap }
+            var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+            let milliseconds = Int32(min(Double(Int32.max), max(1, ceil(remaining * 1_000))))
+            let result = poll(&pollDescriptor, 1, milliseconds)
+            if result < 0 && errno == EINTR { continue }
+            guard result > 0, pollDescriptor.revents & Int16(POLLIN) != 0 else { throw Failure.invalidBootstrap }
+            return
+        }
     }
 }
