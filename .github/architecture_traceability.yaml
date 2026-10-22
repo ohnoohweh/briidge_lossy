@@ -463,6 +463,10 @@ ARC-CMP-004:
   # Python-supervisor and collector cases plus bundled-host HTTP/SOCKS traffic,
   # collector observability, replacement and shutdown for explicitly named
   # python-worker and packaged-native-worker cases; no cross-host pairing is implied.
+  # The macOS bundled-host scenario reserves its status, listener, and echo ports
+  # as one distinct loopback set before launch.
+  # The macOS logging producer source/runtime guard inventories the runner,
+  # child, host, and native child paths and rejects direct private-mode sinks.
   # The desktop isolation summary therefore retains no active proxy-worker gap.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
@@ -504,7 +508,7 @@ ARC-CMP-004:
   # errexit relaxation needed to translate rc=75/77 into DSM-managed relaunch
   # instead of a final service stop.
   integration_tests:
-    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
@@ -788,6 +792,11 @@ ARC-CMP-005:
   # The Linux native foreground owner exposes a collector lifecycle snapshot
   # in status and its canonical lifecycle event through the bounded log query.
   # Python and native owners share the same public worker-envelope fields.
+  # Remaining logging-worker completion is qualified in separate macOS and
+  # Linux execution lanes; the final comparison consumes host-local evidence
+  # and never requires either host to execute the other's worker binary.
+  # macOS private-worker producer evidence includes the shared threshold
+  # vocabulary and payload-free host operational events.
   # The private Admin-worker boundary returns that same envelope.
   unit_tests:
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
@@ -854,6 +863,8 @@ ARC-CMP-005:
     - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_drops_when_collector_stalls
     - tests/unit/test_native_log_supervisor.py::test_swift_logging_child_exits_on_owner_loss
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
+    - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector

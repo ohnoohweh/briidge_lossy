@@ -946,7 +946,13 @@ Desktop proxy-worker and native-host status use the shared redacted lifecycle er
 Proxy `enabled` reports configured intent through the shared Apple status projection; listener and worker fields report the independently changing runtime state.
 Admin status includes the selected logging collector lifecycle and bounded dropped-record count; a native child record waits behind a concurrent collector lifecycle transition rather than being silently discarded.
 PXY-3 lifecycle and collector qualification is complete in separately named Linux proxy-collector and macOS proxy-collector/host gates; each host runs only its local worker selections.
-PXY-4 proxy-worker qualification is complete in independently successful Linux and macOS gates. Each selects the Python-supervisor traffic/recovery and proxy-to-collector cases plus a bundled-host test for `python-worker` and `packaged-native-worker`; the host tests prove authenticated HTTP CONNECT/SOCKS5 traffic, collector status/log snapshots, replacement, and shutdown. The packaged-native cases use sibling discovery; no cross-operating-system worker pairing is required. The desktop process-isolation summary therefore lists no remaining proxy-worker gap.
+PXY-4 proxy-worker qualification is complete in independently successful Linux and macOS gates. Each selects the Python-supervisor traffic/recovery and proxy-to-collector cases plus a bundled-host test for `python-worker` and `packaged-native-worker`; the host tests prove authenticated HTTP CONNECT/SOCKS5 traffic, collector status/log snapshots, replacement, and shutdown. The macOS host matrix reserves its status, listener, and echo ports as one distinct loopback set before launch. The packaged-native cases use sibling discovery; no cross-operating-system worker pairing is required. The desktop process-isolation summary therefore lists no remaining proxy-worker gap.
+
+The completed macOS logging producer boundary inventories the Python runner,
+its Admin/proxy/peer children, the macOS host, and native proxy/peer children.
+In private-collector mode each producer has record-only delivery; source and
+host-runtime guards exclude direct stream/file sinks and confirm startup records
+reach the selected collector rather than host stdout or stderr.
 
 On desktop Linux and macOS, the Python runner supports the experimental `--peer-stack-worker python --no-tun-enabled-on-startup` for a single outbound TCP peer. `--peer-stack-worker native --peer-stack-worker-native-executable /path/to/ObstacleBridgeHostRunner` on macOS or `/path/to/ObstacleBridgeLinux` on Linux selects a native child (or resolves the platform executable on `PATH`). The child owns the peer stack and TCP/UDP services, and the supervisor replaces it after failure. Native mode has generation-fenced snapshots but currently rejects reconnect, rekey and reload controls; it does not start Admin, proxy, telemetry or TUN. Both modes reject TUN services and peer configuration updates. Listener peers and other overlay transports remain unqualified. Existing connections are lost when the child is replaced.
 
@@ -1144,6 +1150,16 @@ the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
+The remaining desktop logging-worker separation is sequenced as reproducible
+macOS-only and Linux-only packages in
+[the architecture work-package plan](docs/ARCHITECTURE.md#remaining-work-packages);
+Python/native combinations are exercised on the same host, not across host
+operating systems.
+When a Python supervisor selects a private collector on macOS, its native peer
+worker receives only a separate inherited record-only descriptor; it emits
+bounded lifecycle records and cannot query the collector.
+The macOS host likewise sends payload-free operational event names to that
+collector while it is selected.
 Python separates telemetry configuration into `telemetry_client` and `telemetry_server`;
 the client section holds producer settings and the server section holds collector settings.
 The telemetry installation ID is always derived from

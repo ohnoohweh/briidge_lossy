@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import signal
 import shutil
@@ -32,6 +33,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
 from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
 from obstacle_bridge.bridge_peer_worker import PeerStackWorker
+from obstacle_bridge.bridge_logging_worker import activate_managed_logging
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
 from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
@@ -60,7 +62,7 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
-def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_only() -> None:
+def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     entrypoint = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
@@ -68,10 +70,46 @@ def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_on
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
     assert '"--peer-worker-control-fd"' in entrypoint
+    assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
+    assert "ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: rootLogLevel)" in worker
     assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
     assert "native peer worker cannot own shared desktop services" in runner
+    assert "private func recordOperationalLog(" in runner
+    assert runner.count("NSLog(") == 1
+
+
+def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:
+    """Keep every IPC-2M-1 producer on its inherited collector capability."""
+    runner = (ROOT / "src" / "obstacle_bridge" / "bridge_runner.py").read_text(encoding="utf-8")
+    admin = (ROOT / "src" / "obstacle_bridge" / "bridge_admin_worker.py").read_text(encoding="utf-8")
+    proxy = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_worker.py").read_text(encoding="utf-8")
+    peer = (ROOT / "src" / "obstacle_bridge" / "bridge_peer_worker.py").read_text(encoding="utf-8")
+    host = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    native_peer = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
+    native_proxy = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
+
+    # Python runner owns collector selection; its child producers receive only
+    # the inherited record relay and cannot create a direct logging sink.
+    assert "with activate_managed_logging(args):" in runner
+    for producer in (admin, proxy, peer):
+        assert "install_child_log_handler" in producer
+        assert "logging.StreamHandler" not in producer
+        assert "logging.FileHandler" not in producer
+    assert "stderr=asyncio.subprocess.DEVNULL if self._log_relay is not None else None" in peer
+    assert "if log_fd is not None:" in peer and "else:\n            logging.basicConfig" in peer
+
+    # Native host, proxy, and peer producers likewise use only the selected
+    # collector or inherited record descriptor. The one NSLog is the explicit
+    # no-collector fallback and must not be available in private-worker mode.
+    assert "worker.emit(name: \"macos.host\"" in host
+    assert "if let worker = activeLoggingWorker()" in host
+    assert "else {\n            NSLog(\"[ObstacleBridgeHostRunner][%@]\", event)" in host
+    assert host.count("NSLog(") == 1
+    assert "loggingWorker.makeProducerRelay()" in native_proxy
+    assert "--log-fd" in native_proxy
+    assert "ObstacleBridgeLogProducer(inheritedFD: $0" in native_peer
 
 
 def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:
@@ -91,8 +129,9 @@ def test_macos_log_worker_control_descriptors_survive_exec() -> None:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
-def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener() -> None:
+def test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener(monkeypatch: pytest.MonkeyPatch) -> None:
     async def exercise() -> None:
+        monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
         artifact = build_macos_swift_artifact()
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
@@ -111,12 +150,20 @@ def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_py
         )
         try:
             await listener.start()
-            await worker.start({
-                "runner": {"overlay_transport": "tcp"},
-                "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
-                "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
-                "TUN_routing": {"enabled_on_startup": False},
-            })
+            with activate_managed_logging(argparse.Namespace(log_worker="python", log_file=None)) as collector:
+                await worker.start({
+                    "runner": {"overlay_transport": "tcp"},
+                    "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
+                    "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
+                    "TUN_routing": {"enabled_on_startup": False},
+                })
+                for _ in range(100):
+                    records = collector.fetch(100)
+                    if any("peer_worker.started" in line for line in records["lines"]):
+                        break
+                    await asyncio.sleep(0.05)
+                else:
+                    pytest.fail("native peer worker did not use the record-only logging capability")
             process = worker.process
             assert process is not None and process.pid != os.getpid()
             command = subprocess.check_output(["ps", "-p", str(process.pid), "-o", "command="], text=True)
@@ -1351,6 +1398,21 @@ def _unused_tcp_port() -> int:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+def _unused_tcp_ports(count: int) -> list[int]:
+    """Reserve a distinct loopback TCP port set until every member is chosen."""
+    sockets: list[socket.socket] = []
+    try:
+        for _ in range(count):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", 0))
+            sockets.append(sock)
+        return [int(sock.getsockname()[1]) for sock in sockets]
+    finally:
+        for sock in sockets:
+            sock.close()
 
 
 def _unused_udp_port() -> int:
@@ -3669,6 +3731,7 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
         "debug_logging": {"log_worker": implementation, "log_worker_python_executable": sys.executable},
     }), encoding="utf-8")
     process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    stdout = stderr = ""
     try:
         status_url = f"http://127.0.0.1:{status_port}/api/status"
         status = _wait_http_condition(status_url, lambda item: item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
@@ -3683,10 +3746,12 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
     finally:
         process.terminate()
         try:
-            process.communicate(timeout=8)
+            stdout, stderr = process.communicate(timeout=8)
         except subprocess.TimeoutExpired:
             process.kill()
-            process.communicate(timeout=5)
+            stdout, stderr = process.communicate(timeout=5)
+    assert "runtime.started" not in stdout
+    assert "runtime.started" not in stderr
 
 
 @pytest.mark.parametrize("implementation", [
@@ -3697,10 +3762,7 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
-    status_port = _unused_tcp_port()
-    proxy_http_port = _unused_tcp_port()
-    proxy_socks5_port = _unused_tcp_port()
-    echo_port = _unused_tcp_port()
+    status_port, proxy_http_port, proxy_socks5_port, echo_port = _unused_tcp_ports(4)
     echo = _TCPEchoServer("127.0.0.1", echo_port)
     echo.start()
     config_path = tmp_path / "runtime.json"

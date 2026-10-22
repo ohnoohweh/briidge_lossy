@@ -723,6 +723,10 @@ REQ-PRX-001:
   # and collector cases plus bundled-host HTTP/SOCKS traffic, collector observability,
   # replacement and shutdown for explicitly named python-worker and
   # packaged-native-worker selections.
+  # The macOS host scenario reserves its status, listener, and echo ports as one
+  # distinct loopback set before it launches the bundled host.
+  # The macOS producer source/runtime guard inventories the runner, child,
+  # host, and native child paths; private-mode records use only the collector.
   # The desktop isolation status records proxy ownership as delivered; remaining
   # isolation work is tracked at the other component boundaries.
   integration_tests:
@@ -782,7 +786,7 @@ REQ-LIFE-001:
   # and forwards every newer disconnected transport epoch so ChannelMux can
   # complete bounded candidate rotation and request a supervised restart.
   integration_tests:
-    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_reconnect
@@ -1615,6 +1619,12 @@ REQ-MYU-007:
 REQ-ADM-001:
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
+  # The remaining desktop logging-worker work is sequenced in macOS-only and
+  # Linux-only packages. Their final comparison consumes the same bounded,
+  # redacted contract and host-local evidence; it never requires a foreign
+  # platform worker binary to execute.
+  # macOS producer evidence also pins shared log-level admission and keeps
+  # operational host records payload-free while private logging is selected.
   # Shared telemetry coverage keeps bounded worker-owned Runner producer/upload work off
   # forwarding paths and keeps producer defaults aligned
   # with macOS and iOS. Python cleanly separates client and
@@ -1671,6 +1681,8 @@ REQ-ADM-001:
     - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_drops_when_collector_stalls
     - tests/unit/test_native_log_supervisor.py::test_swift_logging_child_exits_on_owner_loss
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
+    - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector

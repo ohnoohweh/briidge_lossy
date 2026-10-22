@@ -15,8 +15,8 @@ enum ObstacleBridgeNativePeerWorker {
         var errorDescription: String? { "invalid native peer worker request" }
     }
 
-    static func run(controlFD: Int32) throws {
-        guard controlFD >= 0 else { throw WorkerError.invalidDescriptor }
+    static func run(controlFD: Int32, logFD: Int32? = nil) throws {
+        guard controlFD >= 0, logFD != controlFD else { throw WorkerError.invalidDescriptor }
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
         var runner: ObstacleBridgeHostRunner?
         defer { runner?.stopPeerWorker() }
@@ -27,7 +27,9 @@ enum ObstacleBridgeNativePeerWorker {
                   let generation = strictPositiveInt(start["generation"]),
                   let configuration = start["config"] as? [String: Any]
             else { throw WorkerError.invalidBootstrap }
-            let native = try ObstacleBridgeHostRunner(peerWorkerConfiguration: configuration)
+            let rootLogLevel = ObstacleBridgeRuntimeConfig.privateWorkerLogLevel(from: start["log_root_level"])
+            let producer = try logFD.map { try ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: rootLogLevel) }
+            let native = try ObstacleBridgeHostRunner(peerWorkerConfiguration: configuration, peerWorkerLogProducer: producer)
             try native.startPeerWorker()
             runner = native
             try writeFrame(control, ["v": ObstacleBridgeRuntimeConfig.isolatedWorkerProtocolVersion, "kind": "peer.ready", "peer_id": peerID,
