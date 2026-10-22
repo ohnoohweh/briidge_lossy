@@ -788,6 +788,9 @@ ARC-CMP-005:
   # The Linux native foreground owner exposes a collector lifecycle snapshot
   # in status and its canonical lifecycle event through the bounded log query.
   # Python and native owners share the same public worker-envelope fields.
+  # Remaining logging-worker completion is qualified in separate macOS and
+  # Linux execution lanes; the final comparison consumes host-local evidence
+  # and never requires either host to execute the other's worker binary.
   # The private Admin-worker boundary returns that same envelope.
   unit_tests:
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement

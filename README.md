@@ -1144,6 +1144,11 @@ the reference uploader uses only acknowledged delivery and the collector rejects
 replayed/admission-exhausted batches; public-Internet telemetry
 remains gated by the remaining authentication-operations and abuse-hardening sequence in
 [docs/LOGGING_DESIGN.md](docs/LOGGING_DESIGN.md).
+The remaining desktop logging-worker separation is sequenced as reproducible
+macOS-only and Linux-only packages in
+[the architecture work-package plan](docs/ARCHITECTURE.md#remaining-work-packages);
+Python/native combinations are exercised on the same host, not across host
+operating systems.
 Python separates telemetry configuration into `telemetry_client` and `telemetry_server`;
 the client section holds producer settings and the server section holds collector settings.
 The telemetry installation ID is always derived from

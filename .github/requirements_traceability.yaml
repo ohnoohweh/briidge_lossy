@@ -1615,6 +1615,10 @@ REQ-MYU-007:
 REQ-ADM-001:
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
+  # The remaining desktop logging-worker work is sequenced in macOS-only and
+  # Linux-only packages. Their final comparison consumes the same bounded,
+  # redacted contract and host-local evidence; it never requires a foreign
+  # platform worker binary to execute.
   # Shared telemetry coverage keeps bounded worker-owned Runner producer/upload work off
   # forwarding paths and keeps producer defaults aligned
   # with macOS and iOS. Python cleanly separates client and
