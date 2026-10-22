@@ -32,7 +32,6 @@ complete. No work package below is complete yet.
 | Logging | Python and native collectors are selectable by Python, macOS-native and Linux-native supervisors. Private inherited sockets carry bounded records, correlated log queries and owner-lifetime detection; collectors restart with a new generation. | This is a logging-specific protocol, not the common worker contract. Only selected producers are connected, aggregate drop accounting is incomplete, and cross-host/mixed-worker qualification is incomplete. |
 | Peer stack | A Python supervisor can isolate one outbound TCP stack in a Python child on macOS/Linux or a native child on macOS/Linux. The child owns the transport-through-ChannelMux stack and has generation-fenced snapshots, replacement and owner-loss shutdown. | It is not per accepted/listener peer; it lacks the other transport modes, TUN/catalog ownership and a binary data-plane IPC contract. Native peer control is intentionally limited, and the common worker protocol is absent. |
 | Shared TUN | Python and Swift privileged TUN helpers own device and host-policy operations across protocol-v1 IPC; macOS also has its existing XPC/helper path. | There is no separate shared-TUN routing worker. Peer/channel arbitration, packet routing and exchangeable Python/native ownership still run outside this boundary. |
-| Proxy server | Python and native proxy workers are selectable by the Python, macOS-native and Linux-native hosts. The selected child owns listeners and connections; credentials use private control IPC, worker frames are generation-fenced, and restart is supervised. Both workers support IPv4/IPv6 loopback, destination policy, and direct/system egress. | PXY-2 listener qualification is complete. The remaining work is lifecycle-failure qualification plus equivalent Admin/logging observability and the final packaged four-combination matrix. |
 
 ### Design decisions already in force
 
@@ -118,9 +117,12 @@ loopback listener binds, enforce the same destination policy, and support
 direct and system egress. Each native session has independent scheduling and a
 bounded duplex poll buffer; half-closes propagate after pending data is
 delivered. The worker fails startup for unsupported settings. Native host
-supervision bounds startup and health reads. PXY-2's focused macOS and Linux
-selection/traffic qualification is complete; the broader lifecycle,
-observability, and packaged mixed-process qualification remains open.
+supervision bounds startup and health reads. Independently successful Linux
+and macOS qualification covers Python/native selected workers, authenticated
+HTTP CONNECT and SOCKS5 traffic, redacted status/log projection, replacement,
+shutdown, and bundled native-worker discovery. This is a platform-local
+boundary: it does not require a macOS process to execute a Linux worker or the
+reverse.
 
 The Python runner can select `--admin-web-worker python` to move the existing
 HTTP listener, authentication and UI sessions into a child. A private inherited
