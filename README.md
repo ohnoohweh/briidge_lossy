@@ -1158,9 +1158,9 @@ operating systems.
 The common desktop-worker IPC foundation uses only inherited local sockets: its
 bounded versioned frame carries a fenced generation plus either a canonical
 control object or opaque binary data, and its hello exchange deterministically
-negotiates capabilities. The Python-supervised macOS native peer uses this
-contract for its control frames; Admin, logging, proxy, Python-peer, and helper
-protocols are still being migrated.
+negotiates capabilities. Python-supervised peer children use this contract for
+their control frames on macOS, whether Python or native; Admin, logging, proxy,
+and helper protocols are still being migrated.
 When a Python supervisor selects a private collector on macOS, its native peer
 worker receives only a separate inherited record-only descriptor; it emits
 bounded lifecycle records and cannot query the collector.
