@@ -133,6 +133,8 @@ jobs:
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test isolated Python peer stack
+        env:
+          OBSTACLEBRIDGE_TEST_LINUX_PEER_WORKER: ${{ github.workspace }}/build/linux/ObstacleBridgeLinux
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
       - name: Qualify PXY-3B lifecycle matrix (Linux)

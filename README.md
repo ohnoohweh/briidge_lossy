@@ -1161,8 +1161,8 @@ control object or opaque binary data, and its hello exchange deterministically
 negotiates capabilities. Python-supervised peer children and Python/native
 hello-negotiated proxy supervisor-worker pairs, hello-negotiated macOS/Linux native and Python peer workers, private Python/native logging collectors (not their public
 UDP endpoint; native supervisor qualification compiles that shared codec), and the hello-negotiated Python Admin
-worker use this contract for their control frames on macOS, whether Python or
-native; helper protocols and a native Admin worker are still being migrated.
+worker use this contract for their control frames on macOS and Linux, whether Python or
+native; Linux CI launches, snapshots, and stops the packaged native peer. Helper protocols and a native Admin worker are still being migrated.
 When a Python supervisor selects a private collector on macOS, its native peer
 worker receives only a separate inherited record-only descriptor; it emits
 bounded lifecycle records and cannot query the collector.

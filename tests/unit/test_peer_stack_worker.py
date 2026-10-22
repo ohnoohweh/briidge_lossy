@@ -92,6 +92,25 @@ def test_native_peer_worker_is_rejected_off_macos(monkeypatch):
     asyncio.run(exercise())
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux-native peer qualification requires Linux")
+def test_linux_native_peer_worker_negotiates_common_ipc_and_stops():
+    executable = os.environ.get("OBSTACLEBRIDGE_TEST_LINUX_PEER_WORKER", "")
+    if not executable or not os.path.isfile(executable):
+        pytest.skip("Linux-native peer executable is not available")
+
+    async def exercise():
+        worker = PeerStackWorker("linux-native-peer-test", implementation="native", native_executable=executable)
+        try:
+            await worker.start(_config())
+            assert worker.generation == 1
+            snapshot = await worker.snapshot()
+            assert isinstance(snapshot, dict)
+        finally:
+            await worker.stop()
+
+    asyncio.run(exercise())
+
+
 def test_peer_worker_inherits_stderr_without_managed_collector(monkeypatch, capfd):
     async def exercise():
         worker = PeerStackWorker("stderr-test")
