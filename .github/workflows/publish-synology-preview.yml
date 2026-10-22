@@ -56,4 +56,10 @@ jobs:
           fi
           gh release view "$RELEASE_TAG" >/dev/null
           gh release edit "$RELEASE_TAG" --target "$TARGET"
+          # SPK filenames contain the DSM build number, so --clobber alone
+          # cannot replace an earlier preview package with a different name.
+          # Keep the prerelease to one installable, current DSM package.
+          while IFS= read -r previous_spk; do
+            [ -z "$previous_spk" ] || gh release delete-asset "$RELEASE_TAG" "$previous_spk" --yes
+          done < <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name | select(test("^obstaclebridge-.+-noarch\\.spk$"))')
           gh release upload "$RELEASE_TAG" dist/synology/*.spk dist/synology/ObstacleBridge-synology-preview.spk.sha256 --clobber
