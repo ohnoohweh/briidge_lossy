@@ -456,7 +456,7 @@ ARC-CMP-004:
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while
-  # Linux helper runtime/owner-loss, native Admin ownership, and host-local lifecycle qualification remain in IPC-1H, IPC-1A, and IPC-1Q. Contract-v1
+  # Linux helper runtime/owner-loss, native Admin child control, Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1H, IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
