@@ -9,6 +9,7 @@ from typing import Any, Optional
 
 TUN_HELPER_PROTOCOL_VERSION = 1
 TUN_HELPER_MAX_FRAME_BYTES = 1_048_576
+TUN_HELPER_MAX_OPERATION_CHARS = 64
 _FRAME_HEADER = struct.Struct(">BI")
 
 
@@ -23,6 +24,12 @@ def _reject_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _reject_nonfinite(_value: str) -> None:
     raise ValueError("invalid TUN helper JSON number")
+
+
+def _normalise_operation(value: Any) -> str:
+    if not isinstance(value, str) or not (operation := value.strip()) or len(operation) > TUN_HELPER_MAX_OPERATION_CHARS:
+        raise ValueError("TUN helper control payload is missing op")
+    return operation
 
 
 class TunHelperFrameKind(enum.IntEnum):
@@ -68,10 +75,11 @@ def try_decode_frame(data: bytes) -> Optional[tuple[TunHelperFrameKind, bytes, b
 def encode_control_frame(kind: TunHelperFrameKind, message: TunHelperControlMessage) -> bytes:
     if kind not in {TunHelperFrameKind.CONTROL_REQUEST, TunHelperFrameKind.CONTROL_RESPONSE}:
         raise ValueError(f"control frames require request/response kinds, got {kind!r}")
+    operation = _normalise_operation(message.op)
     encoded = json.dumps(
         {
             "version": int(message.version),
-            "op": str(message.op),
+            "op": operation,
             "payload": dict(message.payload),
         },
         separators=(",", ":"),
@@ -98,9 +106,7 @@ def decode_control_payload(payload: bytes) -> TunHelperControlMessage:
         raise ValueError(
             f"unsupported TUN helper protocol version: {version} != {TUN_HELPER_PROTOCOL_VERSION}"
         )
-    op = doc.get("op")
-    if not isinstance(op, str) or not (op := op.strip()) or len(op) > 64:
-        raise ValueError("TUN helper control payload is missing op")
+    op = _normalise_operation(doc.get("op"))
     raw_payload = doc.get("payload")
     if raw_payload is None:
         payload_map: dict[str, Any] = {}

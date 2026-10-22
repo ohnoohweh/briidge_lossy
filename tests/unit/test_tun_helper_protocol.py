@@ -33,6 +33,22 @@ class TunHelperProtocolTests(unittest.TestCase):
         self.assertEqual(message.payload["ifname"], "obtun0")
         self.assertEqual(message.payload["mtu"], 1600)
 
+    def test_control_frame_normalizes_and_bounds_operation(self) -> None:
+        encoded = encode_control_frame(
+            TunHelperFrameKind.CONTROL_REQUEST,
+            TunHelperControlMessage(op="  SNAPSHOT  "),
+        )
+        decoded = try_decode_frame(encoded)
+        self.assertIsNotNone(decoded)
+        assert decoded is not None
+        self.assertEqual(decode_control_payload(decoded[1]).op, "SNAPSHOT")
+        for operation in ("", "   ", "x" * 65, 1):
+            with self.assertRaises(ValueError):
+                encode_control_frame(
+                    TunHelperFrameKind.CONTROL_REQUEST,
+                    TunHelperControlMessage(op=operation),  # type: ignore[arg-type]
+                )
+
     def test_decode_control_payload_rejects_unknown_version(self) -> None:
         encoded = encode_frame(
             TunHelperFrameKind.CONTROL_RESPONSE,

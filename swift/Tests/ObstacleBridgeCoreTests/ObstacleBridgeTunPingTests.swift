@@ -35,6 +35,18 @@ struct ObstacleBridgeTunPingTests {
             }
         }
     }
+    @Test func protocolV1ControlNormalizesAndBoundsOperations() throws {
+        let encoded = try ObstacleBridgeTunHelperProtocolV1.control(operation: "  HELLO  ", payload: [:])
+        #expect(try ObstacleBridgeTunHelperProtocolV1.decodeControl(encoded).operation == "HELLO")
+        for body in [
+            Data("{\"version\":1,\"op\":\"   \",\"payload\":{}}".utf8),
+            Data("{\"version\":1,\"op\":\"".utf8) + Data(repeating: 120, count: 65) + Data("\",\"payload\":{}}".utf8),
+        ] {
+            #expect(throws: ObstacleBridgeTunHelperProtocolV1.Error.malformedControl) {
+                try ObstacleBridgeTunHelperProtocolV1.decodeControl(body)
+            }
+        }
+    }
     @Test func buildsBoundedIPv4ProbePacket() throws {
         let payload = ObstacleBridgeTunPing.probePayload(
             probeKind: ObstacleBridgeTunPing.probeKindPeer,
