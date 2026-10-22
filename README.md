@@ -1155,6 +1155,11 @@ macOS-only and Linux-only packages in
 [the architecture work-package plan](docs/ARCHITECTURE.md#remaining-work-packages);
 Python/native combinations are exercised on the same host, not across host
 operating systems.
+The common desktop-worker IPC foundation uses only inherited local sockets: its
+bounded versioned frame carries a fenced generation plus either a canonical
+control object or opaque binary data, and its hello exchange deterministically
+negotiates capabilities. Existing Admin, logging, proxy, peer, and helper
+protocols are still being migrated to this common contract.
 When a Python supervisor selects a private collector on macOS, its native peer
 worker receives only a separate inherited record-only descriptor; it emits
 bounded lifecycle records and cannot query the collector.

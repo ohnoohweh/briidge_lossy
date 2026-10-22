@@ -444,7 +444,10 @@ ARC-CMP-004:
   # Desktop process evidence covers delivered component-specific worker slices.
   # The completed PXY-2 proxy contract qualifies Python/native selections on
   # each host locally; it does not require a macOS-to-Linux process pairing.
-  # The evidence does not qualify the remaining common IPC plan. Contract-v1
+  # A shared Python/Swift codec now qualifies bounded control/data framing,
+  # positive-generation fencing, and capability-intersection wire parity. No
+  # component boundary has migrated, so the remaining common IPC plan remains
+  # unqualified. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
