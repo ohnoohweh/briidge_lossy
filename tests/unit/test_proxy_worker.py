@@ -13,7 +13,7 @@ from unittest import mock
 import pytest
 
 from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
-from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, ProxyWorkerStartupError, _read_frame, worker_capabilities
+from obstacle_bridge.bridge_proxy_worker import MAX_FRAME, ProxyWorker, ProxyWorkerStartupError, _read_frame, resolve_native_proxy_worker_executable, worker_capabilities
 
 pytestmark = pytest.mark.skipif(sys.platform not in {"darwin", "linux"}, reason="proxy worker requires desktop Unix sockets")
 
@@ -33,6 +33,39 @@ def _config(**overrides):
            "egress": {"mode": "direct"}, "policy": {"allow_private_destinations": True, "blocked_host_patterns": []}}
     cfg.update(overrides)
     return cfg
+
+
+def test_native_proxy_worker_uses_validated_deployment_override(monkeypatch, native_proxy_worker_executable):
+    async def exercise():
+        monkeypatch.setenv("OBSTACLEBRIDGE_NATIVE_PROXY_WORKER", native_proxy_worker_executable)
+        monkeypatch.setenv("PATH", "")
+        worker = ProxyWorker("native", supervised=True)
+        try:
+            await worker.start(_config())
+            assert worker.process is not None
+            assert worker.listeners["http"]["bound_port"] > 0
+            assert worker.listeners["socks5"]["bound_port"] > 0
+        finally:
+            await worker.stop()
+
+    asyncio.run(exercise())
+
+
+def test_native_proxy_worker_rejects_invalid_deployment_override(monkeypatch, tmp_path):
+    candidate = tmp_path / "ObstacleBridgeProxyWorker"
+    candidate.write_text("not executable", encoding="utf-8")
+    monkeypatch.setenv("OBSTACLEBRIDGE_NATIVE_PROXY_WORKER", str(candidate))
+    monkeypatch.setenv("PATH", "")
+
+    with pytest.raises(ValueError, match="native proxy worker executable is unavailable"):
+        resolve_native_proxy_worker_executable()
+
+
+def test_native_proxy_worker_explicit_executable_precedes_deployment_override(monkeypatch, native_proxy_worker_executable, tmp_path):
+    invalid_override = tmp_path / "missing-worker"
+    monkeypatch.setenv("OBSTACLEBRIDGE_NATIVE_PROXY_WORKER", str(invalid_override))
+
+    assert resolve_native_proxy_worker_executable(native_proxy_worker_executable) == native_proxy_worker_executable
 
 
 async def _start_connect_proxy():

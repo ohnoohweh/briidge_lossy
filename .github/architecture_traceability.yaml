@@ -458,6 +458,7 @@ ARC-CMP-004:
   # the native relay serializes child records with collector lifecycle state;
   # PXY-3 CI matrices have recorded lifecycle and exact proxy-collector
   # success per host without a cross-operating-system process pair.
+  # PXY-4 discovery keeps configured and deployment-selected workers fail-closed.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

@@ -302,9 +302,18 @@ Successful readiness clears the code. Both desktop supervisors and their host
 projections retain the failed-start count while a retry is pending and expose
 no listener snapshot for an unavailable generation.
 
+Desktop native-worker discovery is deterministic. Python supervision prefers
+the configured executable, then the validated `OBSTACLEBRIDGE_NATIVE_PROXY_WORKER`
+deployment override, and finally the development `PATH` lookup. Native hosts
+resolve the bundled worker beside their host executable. Every selected path
+must be an executable regular file; invalid discovery fails before private
+control IPC starts and never falls back to in-process proxy ownership.
+
 | Package | Scope and definition of done | Gap to close |
 | --- | --- | --- |
-| `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
+| `PXY-4A` — packaged native-worker discovery | Make discovery deterministic for each desktop supervisor. DoD: an explicit executable remains authoritative; Python supervision accepts one validated deployment override before `PATH`; native macOS/Linux hosts resolve the worker bundled beside their host executable; invalid candidates fail closed without an in-process fallback. Platform-local probes identify the selected supervisor and worker. | Python’s validated deployment override and invalid-candidate rejection are covered, and native hosts select their bundled sibling. Record independent macOS/Linux packaged-discovery evidence and make the platform/pair selection explicit in the qualification output. |
+| `PXY-4B` — Linux same-host selection matrix | Qualify every Python/native supervisor-worker combination on Linux. DoD: each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, proxy replacement after forced child loss, and clean shutdown using the selected packaged/discovered worker. Output identifies Linux and the selected pair. | Focused Linux live-runtime, worker and logging checks exist, but no one Linux matrix proves all four pairs with both proxy protocols, status/log snapshots, replacement, shutdown, and packaged discovery. |
+| `PXY-4C` — macOS same-host selection matrix | Qualify every Python/native supervisor-worker combination on macOS. DoD: each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, proxy replacement after forced child loss, and clean shutdown using the selected packaged/discovered worker. Output identifies macOS and the selected pair. | Focused macOS host and worker checks exist, but no one macOS matrix proves all four pairs with both proxy protocols, status/log snapshots, replacement, shutdown, and packaged discovery. |
 
 PXY-3 lifecycle and observability qualification is complete: the independently
 recorded macOS and Linux matrices exercise the generation-fenced lifecycle
