@@ -613,7 +613,8 @@ tests use deterministic inputs and do not need a live bridge, root privileges,
 TUN, a network peer, or Swift.
 
 `Runner` now projects cached redacted CPU/load peaks, loop lag, approved
-callback timing summaries, two-second maxima, and category leaders through
+callback timing summaries, two-second maxima, and the source category for each
+overall/trailing-two-second uninterrupted peak through
 `/api/status`; its local no-TUN/no-peer lifecycle smoke test covers monitor
 startup, status, and cancellation. WebAdmin now renders compact graphical
 meters beside Restart and supplies exact aggregate detail through Runtime

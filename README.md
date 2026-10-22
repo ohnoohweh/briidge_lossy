@@ -1730,7 +1730,7 @@ dependency-free: it keeps fixed-bucket, fixed-window aggregate timing for
 approved categories, while one Runner-owned task samples process CPU and
 event-loop lateness. Cached redacted status now exposes bounded aggregates;
 the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
-remains tracked in that guide.
+shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals.
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
 - Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.

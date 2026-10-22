@@ -128,8 +128,9 @@ def test_runner_runtime_metrics_status_is_bounded_and_redacted():
     runner.record_sync_activity("channelmux.dispatch", phase="started")
     runner.record_sync_activity("channelmux.dispatch", phase="finished")
     payload = runner._runtime_metrics_status_fields()
-    assert set(payload) == {"cpu_cores_max", "work_slice_ms_max", "event_loop_lag_ms", "categories", "most_timed_category", "longest_uninterrupted_category"}
-    assert payload["most_timed_category"] == "channelmux_callback"
+    assert set(payload) == {"cpu_cores_max", "work_slice_ms_max", "event_loop_lag_ms", "categories", "longest_uninterrupted_category", "longest_uninterrupted_last_2_seconds_category"}
+    assert payload["longest_uninterrupted_category"] == "channelmux_callback"
+    assert payload["longest_uninterrupted_last_2_seconds_category"] == "channelmux_callback"
     assert all("payload" not in row and "address" not in row for row in payload["categories"])
 
 

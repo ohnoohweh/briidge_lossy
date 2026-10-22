@@ -2086,16 +2086,21 @@ function renderRuntimeMetrics(status) {
   const renderMeter = (id, values, ceiling) => {
     const el = document.getElementById(id); if (!el) return;
     const overall = Number(values?.overall); const recent = Number(values?.last_2_seconds);
-    if (!Number.isFinite(overall) && !Number.isFinite(recent)) { el.textContent = '◌'; return; }
+    if (!Number.isFinite(overall) && !Number.isFinite(recent)) { el.style.setProperty('--overall', '0%'); el.style.setProperty('--recent', '0%'); return; }
     const outer = Math.min(100, (overall / ceiling) * 100); const inner = Math.min(100, (recent / ceiling) * 100);
-    el.textContent = '◉'; el.style.setProperty('--outer', `${outer}%`); el.style.setProperty('--inner', `${inner}%`);
+    el.style.setProperty('--overall', `${outer}%`); el.style.setProperty('--recent', `${inner}%`);
   };
   renderMeter('cpuMeter', metrics.cpu_cores_max, 1); renderMeter('sliceMeter', metrics.work_slice_ms_max, 100);
   const summary = document.getElementById('runtimeAnalysisSummary'); const rows = document.getElementById('runtimeAnalysisRows');
   if (!summary || !rows) return;
-  const categories = Array.isArray(metrics.categories) ? metrics.categories : [];
-  summary.textContent = `Most timed: ${metrics.most_timed_category || 'n/a'} · Longest uninterrupted: ${metrics.longest_uninterrupted_category || 'n/a'}`;
-  rows.innerHTML = categories.map(row => `<div class="kv-row"><span>${escapeHtml(row.category)}</span><strong>${Number(row.total_ms || 0).toFixed(1)} ms total · ${row.max_ms == null ? '—' : Number(row.max_ms).toFixed(1) + ' ms max'}</strong></div>`).join('');
+  const cpu = metrics.cpu_cores_max || {}; const slice = metrics.work_slice_ms_max || {};
+  summary.textContent = 'Peak values since start and over the trailing two seconds.';
+  rows.innerHTML = [
+    ['Longest uninterrupted — since start', slice.overall == null ? '—' : `${Number(slice.overall).toFixed(1)} ms · ${metrics.longest_uninterrupted_category || 'unknown source'}`],
+    ['Longest uninterrupted — last 2 s', slice.last_2_seconds == null ? '—' : `${Number(slice.last_2_seconds).toFixed(1)} ms · ${metrics.longest_uninterrupted_last_2_seconds_category || 'unknown source'}`],
+    ['Max CPU load — since start', cpu.overall == null ? '—' : `${(Number(cpu.overall) * 100).toFixed(1)}% of one core`],
+    ['Max CPU load — last 2 s', cpu.last_2_seconds == null ? '—' : `${(Number(cpu.last_2_seconds) * 100).toFixed(1)}% of one core`]
+  ].map(([label, value]) => `<div class="kv-row"><span>${label}</span><strong>${value}</strong></div>`).join('');
 }
 
 function setActiveTab(tabName) {

@@ -236,8 +236,10 @@ h1 {
   gap: 16px;
 }
 
-.runtime-meters { display:flex; gap:8px; align-items:center; }
-.runtime-meters span { width:22px; height:22px; display:inline-grid; place-items:center; border-radius:50%; color:#7dd3fc; background:conic-gradient(#38bdf8 var(--outer,0%),#26344a 0); box-shadow:inset 0 0 0 5px #111827; font-size:12px; }
+.runtime-meters { display:flex; gap:10px; align-items:center; }
+.runtime-meter { display:grid; grid-template-columns:auto 64px; gap:5px; align-items:center; font-size:10px; color:var(--muted); }
+.runtime-meter i { display:block; width:64px; height:8px; border-radius:4px; background:linear-gradient(90deg,#2563eb var(--overall,0%),#26344a var(--overall,0%)); position:relative; overflow:hidden; }
+.runtime-meter i::after { content:""; position:absolute; inset:0 auto 0 0; width:var(--recent,0%); background:#67e8f9; border-radius:4px; }
 
 .quick-actions {
   display: flex;

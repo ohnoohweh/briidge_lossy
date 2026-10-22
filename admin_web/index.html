@@ -74,7 +74,7 @@
       </div>
       <div class="topbar-right">
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
-        <div id="runtimeMeters" class="runtime-meters" aria-label="Runtime pressure meters"><span id="cpuMeter" title="CPU load: outer ring lifetime peak, inner ring last 2 seconds">◌</span><span id="sliceMeter" title="Uninterrupted computation: outer ring lifetime peak, inner ring last 2 seconds">◌</span></div>
+        <div id="runtimeMeters" class="runtime-meters" aria-label="Runtime pressure meters"><div class="runtime-meter" title="CPU load: dark bar is lifetime peak; bright bar is last 2 seconds"><span>CPU</span><i id="cpuMeter"></i></div><div class="runtime-meter" title="Uninterrupted computation: dark bar is lifetime peak; bright bar is last 2 seconds"><span>Slice</span><i id="sliceMeter"></i></div></div>
         <button id="restartBtn" class="btn btn-danger" type="button">Restart</button>
       </div>
     </header>

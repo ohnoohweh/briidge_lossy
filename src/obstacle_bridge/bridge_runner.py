@@ -770,16 +770,16 @@ class Runner:
                          "mean_ms": (item.lifetime.total_ms / item.lifetime.count) if item.lifetime.count else None,
                          "p95_ms": item.lifetime.p95_ms, "p99_ms": item.lifetime.p99_ms,
                          "max_ms": item.lifetime.max_ms, "last_2_seconds_max_ms": item.recent.max_ms})
-        total_leader = max(rows, key=lambda row: (row["total_ms"], row["category"]), default=None)
         slice_leader = max(rows, key=lambda row: (row["max_ms"] or 0.0, row["category"]), default=None)
+        recent_slice_leader = max(rows, key=lambda row: (row["last_2_seconds_max_ms"] or 0.0, row["category"]), default=None)
         return {"cpu_cores_max": {"overall": self._runtime_metrics_cpu_peak_overall,
                 "last_2_seconds": max((value for _, value in self._runtime_metrics_cpu_peaks), default=None)},
                 "work_slice_ms_max": {"overall": max((row["max_ms"] or 0.0 for row in rows), default=None),
                 "last_2_seconds": max((row["last_2_seconds_max_ms"] or 0.0 for row in rows), default=None)},
                 "event_loop_lag_ms": {"last": None if self._runtime_metrics_last_loop_lag_ns is None else self._runtime_metrics_last_loop_lag_ns / 1_000_000.0,
                 "max": self._runtime_metrics_max_loop_lag_ns / 1_000_000.0}, "categories": rows,
-                "most_timed_category": total_leader["category"] if total_leader and total_leader["count"] else None,
-                "longest_uninterrupted_category": slice_leader["category"] if slice_leader and slice_leader["count"] else None}
+                "longest_uninterrupted_category": slice_leader["category"] if slice_leader and slice_leader["count"] else None,
+                "longest_uninterrupted_last_2_seconds_category": recent_slice_leader["category"] if recent_slice_leader and recent_slice_leader["last_2_seconds_max_ms"] is not None else None}
 
     def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
         now_mono = time.monotonic()
