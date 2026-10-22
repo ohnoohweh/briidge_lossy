@@ -707,7 +707,16 @@ REQ-PRX-001:
   # optional IPv4/IPv6 egress-family declaration. Both
   # supervisors project the redacted lifecycle shape (identity/state/
   # generation/restart/failure/capabilities, listeners, and last_error), and
-  # configured status omits all authentication secret values.
+  # configured status omits all authentication secret values. Worker loss and
+  # failed replacement, including native host projection sourced from the
+  # shared Apple vocabulary, use the stable redacted unavailable/startup_failed codes.
+  # Enabled is configured intent through the shared Apple projection; listener,
+  # worker, and error fields are runtime state.
+  # Python and native Admin both project selected collector lifecycle/drop state;
+  # native child records serialize behind a collector lifecycle transition rather
+  # than being silently discarded.
+  # PXY-3 lifecycle and exact proxy-collector evidence has recorded success
+  # independently per host; no cross-operating-system process pair is implied.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
@@ -725,6 +734,7 @@ REQ-PRX-001:
     - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxRuntimeConfigurationTests.swift::proxyWorkerConfigurationPreservesPolicyAndSelection
     - tests/unit/test_proxy_worker.py::test_runner_proxy_child_owns_http_socks_and_snapshots
     - tests/unit/test_proxy_worker.py::test_proxy_worker_readiness_advertises_redacted_capabilities
+    - tests/unit/test_proxy_worker.py::test_proxy_worker_discards_retired_generation_snapshot
     - tests/unit/test_proxy_worker.py::test_proxy_worker_owner_loss_closes_listeners
     - tests/unit/test_proxy_worker.py::test_proxy_worker_failed_start_cleans_up_and_never_uses_incomplete_auth
     - tests/unit/test_proxy_worker.py::test_runner_reports_lost_proxy_worker_without_in_process_fallback

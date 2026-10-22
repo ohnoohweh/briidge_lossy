@@ -270,7 +270,7 @@ def test_runner_reports_lost_proxy_worker_without_in_process_fallback(backend, l
                 await asyncio.sleep(0.05)
             snapshot = runner._proxy_provider_snapshot()
             assert snapshot["worker"]["state"] == "unavailable"
-            assert snapshot["last_error"] == "proxy worker unavailable"
+            assert snapshot["last_error"] == "unavailable"
             assert snapshot["listeners"] == {}
             assert runner._proxy_provider_servers == {}
             for _ in range(160):
@@ -308,6 +308,7 @@ def test_supervised_proxy_retries_busy_port_and_cleans_up(backend):
                     break
                 await asyncio.sleep(0.05)
             assert worker.failed_starts >= 1 and worker.generation == 1
+            assert worker.last_error == "startup_failed"
             reserved.close()
             for _ in range(160):
                 if worker.generation >= 2 and worker.process.returncode is None:
@@ -350,6 +351,22 @@ def test_proxy_control_rejects_oversize_header_without_waiting_for_body():
         reader.feed_data(struct.pack("!I", MAX_FRAME + 1))
         with pytest.raises(ValueError, match="frame size"):
             await asyncio.wait_for(_read_frame(reader), timeout=0.1)
+    asyncio.run(exercise())
+
+
+def test_proxy_worker_discards_retired_generation_snapshot():
+    async def exercise():
+        worker = ProxyWorker()
+        worker.generation = 2
+        worker.listeners = {"http": {"bound_port": 2}}
+        reader = asyncio.StreamReader()
+        payload = json.dumps({"v": 1, "kind": "proxy.snapshot", "generation": 1,
+                              "listeners": {"http": {"bound_port": 1}}}, separators=(",", ":")).encode()
+        reader.feed_data(struct.pack("!I", len(payload)) + payload)
+        reader.feed_eof()
+        await worker._receive(reader, 1)
+        assert worker.listeners == {"http": {"bound_port": 2}}
+        assert worker.last_error == ""
     asyncio.run(exercise())
 
 

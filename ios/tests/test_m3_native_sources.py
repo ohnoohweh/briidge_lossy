@@ -605,6 +605,7 @@ def test_proxy_server_source_exists() -> None:
     policy = (CORE_SWIFT_DIR / "ObstacleBridgeProxyProtocolPolicy.swift").read_text(encoding="utf-8")
     provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
     host_runner = (MACOS_SWIFT_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    native_connections = (SHARED_NATIVE_DIR / "ObstacleBridgeNativeProxyConnections.swift").read_text(encoding="utf-8")
     python_runtime = (ROOT / "src" / "obstacle_bridge" / "bridge_proxy_server.py").read_text(encoding="utf-8")
 
     assert "enum ObstacleBridgeProxyProtocolCodec" in policy
@@ -626,6 +627,10 @@ def test_proxy_server_source_exists() -> None:
     assert '"proxy_provider"' in provider
     assert '"configured": config.configuredPayload()' in provider
     assert '"last_error": proxyProviderLastError' in provider
+    assert "public enum ObstacleBridgeProxyLifecycleErrorCode" in native_connections
+    assert "public enum ObstacleBridgeProxyStatusProjection" in native_connections
+    assert "ObstacleBridgeProxyLifecycleErrorCode.startupFailed" in host_runner
+    assert "ObstacleBridgeProxyStatusProjection.configuredEnabled(config.enabled)" in host_runner
     assert 'flatPayload["proxy_provider_auth"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_egress"]) as? [String: Any]' in provider
     assert 'flatPayload["proxy_provider_policy"]) as? [String: Any]' in provider

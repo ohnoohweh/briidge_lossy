@@ -234,7 +234,10 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
     }
 
     fileprivate func forwardRecord(_ data: Data) {
-        guard stateLock.try() else { return }
+        // This runs on the relay's dedicated queue rather than on a proxy
+        // request path.  Wait for a concurrent lifecycle transition instead
+        // of silently losing a child record while it holds stateLock.
+        stateLock.lock()
         defer { stateLock.unlock() }
         guard !stopped, dataFD >= 0, process?.isRunning == true else { droppedRecords += 1; return }
         #if os(Linux)

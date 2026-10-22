@@ -746,8 +746,14 @@ final class ObstacleBridgeHostRunner {
                 try worker.start(config: ["bind": config.bindHost, "http_port": config.httpPort,
                                           "socks5_port": config.socks5Port, "protocols": config.protocols,
                                           "auth": config.auth, "egress": config.egress, "policy": config.policy])
+            } catch let failure as ObstacleBridgeProxyWorkerSupervisor.Failure {
+                switch failure {
+                case .invalidConfiguration: proxyProviderLastError = ObstacleBridgeProxyLifecycleErrorCode.invalidConfiguration
+                case .invalidFrame, .unavailable, .timeout: proxyProviderLastError = ObstacleBridgeProxyLifecycleErrorCode.startupFailed
+                }
+                throw failure
             } catch {
-                proxyProviderLastError = "proxy worker startup failed"
+                proxyProviderLastError = ObstacleBridgeProxyLifecycleErrorCode.startupFailed
                 throw error
             }
             proxyWorker = worker
@@ -813,7 +819,7 @@ final class ObstacleBridgeHostRunner {
         if let worker = proxyWorker {
             let snapshot = worker.snapshot()
             let state = snapshot["worker"] as? [String: Any] ?? [:]
-            return ["enabled": state["state"] as? String == "running", "configured": config.configuredPayload(),
+            return ["enabled": ObstacleBridgeProxyStatusProjection.configuredEnabled(config.enabled), "configured": config.configuredPayload(),
                     "listeners": snapshot["listeners"] ?? [:], "last_error": snapshot["last_error"] ?? "",
                     "worker": state]
         }
@@ -824,7 +830,7 @@ final class ObstacleBridgeHostRunner {
             }
         }
         return [
-            "enabled": !proxyServers.isEmpty,
+            "enabled": ObstacleBridgeProxyStatusProjection.configuredEnabled(config.enabled),
             "configured": config.configuredPayload(),
             "listeners": listeners,
             "last_error": proxyProviderLastError,

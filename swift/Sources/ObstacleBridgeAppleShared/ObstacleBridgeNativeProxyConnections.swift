@@ -1,6 +1,21 @@
 import Foundation
 import Network
 
+/// Redacted lifecycle vocabulary shared by Apple proxy owners. Desktop hosts
+/// map supervisor failures onto these values; no configuration detail crosses
+/// into status or Admin snapshots.
+public enum ObstacleBridgeProxyLifecycleErrorCode {
+    public static let unavailable = "unavailable"
+    public static let startupFailed = "startup_failed"
+    public static let invalidConfiguration = "invalid_configuration"
+}
+
+/// Keeps configured intent distinct from a listener/worker's live state in
+/// every Apple proxy status projection.
+public enum ObstacleBridgeProxyStatusProjection {
+    public static func configuredEnabled(_ enabled: Bool) -> Bool { enabled }
+}
+
 final class ObstacleBridgeTCPProxyConnection {
     private let chanID: Int
     private let spec: ObstacleBridgeNativeServiceSpec

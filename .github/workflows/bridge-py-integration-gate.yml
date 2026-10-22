@@ -129,18 +129,18 @@ jobs:
           OBSTACLEBRIDGE_TEST_PYTHON="$(command -v python)" OBSTACLEBRIDGE_TEST_PROXY_WORKER="$GITHUB_WORKSPACE/build/linux/ObstacleBridgeProxyWorker" swift test --filter ObstacleBridgeLinuxLiveRuntimeTests
           swift test --filter ObstacleBridgeLinuxRuntimeConfigurationTests
 
-      - name: Test native log collector interoperability
+      - name: Qualify PXY-3C proxy collector matrix (Linux)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test isolated Python peer stack
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
-      - name: Qualify PXY-2 proxy worker matrix (Linux)
+      - name: Qualify PXY-3B lifecycle matrix (Linux)
         run: |
           pytest -vv tests/unit/test_proxy_worker.py
           pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
-      - name: Qualify PXY-2 native-supervisor matrix (Linux)
+      - name: Qualify PXY-3B native-supervisor matrix (Linux)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
       - name: Test native logging supervision
@@ -418,24 +418,24 @@ jobs:
         # macOS runner's CPUs without allowing an unbounded compiler fan-out.
         run: pytest -vv --timeout=120 -n 3 -m "not slow" tests/unit/test_channel_mux_swift_parity.py ios/tests --ignore=ios/tests/test_macos_swift_host_runner.py
 
-      - name: Test native log collector interoperability
+      - name: Qualify PXY-3C proxy collector matrix (macOS)
         run: pytest -q tests/unit/test_native_log_collector.py tests/unit/test_managed_logging_worker.py
 
       - name: Test isolated Python peer stack
         run: pytest -q tests/unit/test_peer_stack_worker.py tests/integration/test_peer_stack_worker_e2e.py
 
-      - name: Qualify PXY-2 proxy worker matrix (macOS)
+      - name: Qualify PXY-3B lifecycle matrix (macOS)
         run: |
           pytest -vv tests/unit/test_proxy_worker.py
           pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
 
-      - name: Qualify PXY-2 native-supervisor matrix (macOS)
+      - name: Qualify PXY-3B native-supervisor matrix (macOS)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
       - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py
 
-      - name: Test macOS host proxy worker selection
+      - name: Qualify PXY-3C macOS host proxy collector matrix
         env:
           PYTHONPATH: .:src:ios/src
           OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
