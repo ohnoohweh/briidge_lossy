@@ -439,6 +439,8 @@ ARC-CMP-003:
     - tests/integration/test_overlay_e2e.py::test_overlay_e2e_ws_static_http_root_repeated_requests_with_secure_link_myudp_peer_on_mixed_listener
 
 ARC-CMP-004:
+  # Python and native macOS/Linux TUN helpers use generation-fenced OBIP
+  # HELLO/READY, request/response/event/data frames; IPC-1H still needs qualification.
   # Native peer-worker evidence includes bounded private-descriptor admission;
   # Linux executable qualification remains a CI-host responsibility.
   # Desktop process evidence covers delivered component-specific worker slices.

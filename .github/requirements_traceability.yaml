@@ -1618,6 +1618,8 @@ REQ-MYU-007:
 # extend the existing `REQ-MYU-*` and admin-observability test families.
 
 REQ-ADM-001:
+  # Python and native macOS/Linux TUN helpers now use generation-fenced OBIP
+  # HELLO/READY, request/response/event/data frames; qualification remains IPC-1H work.
   # UDP logging targets remain direct host:port configuration values rather
   # than being coerced into the adjacent logger-level selector vocabulary.
   # The remaining desktop logging-worker work is sequenced in macOS-only and

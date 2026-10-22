@@ -72,7 +72,7 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     proxy_supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
-    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 4
+    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 5
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
@@ -549,7 +549,9 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert 'args.contains("--helper-build-info")' in helper_main
     assert "ObstacleBridgeGeneratedBuildStamp.providerBuildCommit" in helper_main
     assert "ObstacleBridgeMacOSProtocolV1TunHelperServer" in helper_main
-    assert "ObstacleBridgeTunHelperProtocolV1.decodeControl" in protocol_server
+    assert "ObstacleBridgeWorkerIPC.negotiatedCapabilities" in protocol_server
+    assert "ObstacleBridgeWorkerIPC.decodeControl" in protocol_server
+    assert "ObstacleBridgeWorkerIPC.frameSize" in protocol_server
     assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
     assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server
     assert "destination.update(from: path, count: path.count)" in protocol_server
@@ -558,8 +560,9 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "applyPythonNetwork" in protocol_server
     assert "backend.setPacketSink" in protocol_server
     assert "backend.setEventSink" in protocol_server
-    assert ".packetFromHelper" in protocol_server
+    assert "frame.kind == .data" in protocol_server
     assert ".event" in protocol_server
+    assert "clientGenerations" in protocol_server
     assert "authenticatedClients" in protocol_server
     assert "writerLock" in protocol_server
     assert "expireIfIdle" in protocol_server

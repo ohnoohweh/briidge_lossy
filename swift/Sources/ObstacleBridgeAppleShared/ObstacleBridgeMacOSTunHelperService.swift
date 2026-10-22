@@ -1,5 +1,8 @@
 import Foundation
 
+// The packaged macOS helper's Unix-socket control path uses the shared OBIP
+// worker framing; XPC remains a separate in-process service boundary.
+
 #if os(macOS)
 #if canImport(ServiceManagement)
 import ServiceManagement
