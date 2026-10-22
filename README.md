@@ -1162,7 +1162,7 @@ negotiates capabilities. Python-supervised peer children and Python/native
 hello-negotiated proxy supervisor-worker pairs, hello-negotiated macOS/Linux native and Python peer workers, private Python/native logging collectors (not their public
 UDP endpoint; native supervisor qualification compiles that shared codec), and the hello-negotiated Python Admin
 worker use this contract for their control frames on macOS and Linux, whether Python or
-native; peers exchange opaque data only after negotiating `peer.binary-data`, private logging bounds its child-side hello wait, the Python privileged helper bounds unauthenticated HELLO admission, and Linux CI launches, snapshots, stops, and verifies the packaged native peer's data exchange. Helper codec migration and a native Admin worker are still being migrated.
+native; peers exchange opaque data only after negotiating `peer.binary-data`, private logging and Python/macOS/Linux privileged helpers bound unauthenticated initial admission, and Linux CI launches, snapshots, stops, and verifies the packaged native peer's data exchange. Helper codec migration and a native Admin worker are still being migrated.
 When a Python supervisor selects a private collector on macOS, its native peer
 worker receives only a separate inherited record-only descriptor; it emits
 bounded lifecycle records and cannot query the collector.

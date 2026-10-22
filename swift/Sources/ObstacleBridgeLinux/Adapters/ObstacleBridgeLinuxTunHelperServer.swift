@@ -39,6 +39,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     public let socketPath: String
     private let sessionToken: String
     private let authenticatedClientIdleTimeout: TimeInterval
+    private let unauthenticatedClientIdleTimeout: TimeInterval
     private let backend: ObstacleBridgeLinuxTunHelperServerBackend
     private let onStop: (() -> Void)?
     private let queue = DispatchQueue(label: "org.obstaclebridge.linux.tun-helper-server", attributes: .concurrent)
@@ -50,13 +51,14 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
     private var lastAuthenticatedActivity = Date()
     private var watchdog: DispatchSourceTimer?
 
-    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5, onStop: (() -> Void)? = nil) throws {
+    public init(socketPath: String, sessionToken: String, backend: ObstacleBridgeLinuxTunHelperServerBackend, authenticatedClientIdleTimeout: TimeInterval = 5, unauthenticatedClientIdleTimeout: TimeInterval = 5, onStop: (() -> Void)? = nil) throws {
         guard !socketPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !sessionToken.isEmpty else {
             throw ObstacleBridgeLinuxTunHelperAdapterError.unavailable("Linux TUN helper server requires socket path and session token")
         }
         self.socketPath = socketPath
         self.sessionToken = sessionToken
         self.authenticatedClientIdleTimeout = max(authenticatedClientIdleTimeout, 0.5)
+        self.unauthenticatedClientIdleTimeout = max(unauthenticatedClientIdleTimeout, 0.1)
         self.backend = backend
         self.onStop = onStop
         backend.setPacketSink { [weak self] packet in self?.emitPacket(packet) }
@@ -126,7 +128,8 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
         defer { lock.lock(); authenticatedClients.remove(client); lock.unlock(); _ = close(client) }
         var authenticated = false
         while true {
-            guard let (kind, body) = try? readFrame(from: client) else { return }
+            let timeoutMS = authenticated ? nil : Int32(min(30_000, max(100, unauthenticatedClientIdleTimeout * 1_000)))
+            guard let (kind, body) = try? readFrame(from: client, timeoutMS: timeoutMS) else { return }
             switch kind {
             case .controlRequest:
                 guard let message = decodeControl(body) else { try? sendError("bad_control_payload", "invalid protocol-v1 control message", to: client); continue }
@@ -222,7 +225,13 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
             offset += Int(count)
         }
     }
-    private func readFrame(from fd: Int32) throws -> (FrameKind, Data) {
+    private func readFrame(from fd: Int32, timeoutMS: Int32? = nil) throws -> (FrameKind, Data) {
+        if let timeoutMS {
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&descriptor, 1, timeoutMS) > 0, descriptor.revents & Int16(POLLIN) != 0 else {
+                throw ObstacleBridgeLinuxTunHelperAdapterError.disconnected
+            }
+        }
         let wireHeader = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, from: fd)
         let parsed: (kind: FrameKind, bodyLength: Int)
         do { parsed = try ObstacleBridgeTunHelperProtocolV1.header(wireHeader) }

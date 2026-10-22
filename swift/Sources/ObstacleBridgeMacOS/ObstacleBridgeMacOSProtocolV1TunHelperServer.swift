@@ -53,7 +53,7 @@ final class ObstacleBridgeMacOSProtocolV1TunHelperServer {
 
     private func serve(_ fd: Int32) {
         defer { lock.lock(); authenticatedClients.remove(fd); lock.unlock(); _ = close(fd) }; var authenticated = false
-        while let frame = try? readFrame(fd) {
+        while let frame = try? readFrame(fd, timeoutMS: authenticated ? nil : Int32(min(30_000, max(100, idleTimeout * 1_000))) ) {
             if frame.0 == .packetToHelper, authenticated { try? backend.writePacket(frame.1); continue }
             guard frame.0 == .controlRequest, let control = try? ObstacleBridgeTunHelperProtocolV1.decodeControl(frame.1) else { return }
             if control.operation == "HELLO" {
@@ -98,7 +98,15 @@ final class ObstacleBridgeMacOSProtocolV1TunHelperServer {
         for client in clients { try? writeFrame(kind: .event, body: data, fd: client) }
     }
     private func send(_ op: String, _ payload: [String: Any], _ fd: Int32) throws { try writeAll(ObstacleBridgeTunHelperProtocolV1.frame(kind: .controlResponse, body: try ObstacleBridgeTunHelperProtocolV1.control(operation: op, payload: payload)), fd) }
-    private func readFrame(_ fd: Int32) throws -> (ObstacleBridgeTunHelperProtocolV1.FrameKind, Data) { let head = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, fd); let parsed = try ObstacleBridgeTunHelperProtocolV1.header(head); return (parsed.kind, try readExactly(parsed.bodyLength, fd)) }
+    private func readFrame(_ fd: Int32, timeoutMS: Int32? = nil) throws -> (ObstacleBridgeTunHelperProtocolV1.FrameKind, Data) {
+        if let timeoutMS {
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&descriptor, 1, timeoutMS) > 0, descriptor.revents & Int16(POLLIN) != 0 else { throw ObstacleBridgeTunHelperProtocolV1.Error.malformedFrame }
+        }
+        let head = try readExactly(ObstacleBridgeTunHelperProtocolV1.headerBytes, fd)
+        let parsed = try ObstacleBridgeTunHelperProtocolV1.header(head)
+        return (parsed.kind, try readExactly(parsed.bodyLength, fd))
+    }
     private func readExactly(_ count: Int, _ fd: Int32) throws -> Data { var result = Data(); var b = [UInt8](repeating: 0, count: max(1, min(count, 8192))); while result.count < count { let got = read(fd, &b, min(b.count, count-result.count)); guard got > 0 else { throw ObstacleBridgeTunHelperProtocolV1.Error.malformedFrame }; result.append(b, count: got) }; return result }
     private func writeFrame(kind: ObstacleBridgeTunHelperProtocolV1.FrameKind, body: Data, fd: Int32) throws { try writeAll(ObstacleBridgeTunHelperProtocolV1.frame(kind: kind, body: body), fd) }
     private func writeAll(_ data: Data, _ fd: Int32) throws {
