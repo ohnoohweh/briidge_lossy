@@ -98,8 +98,8 @@ def decode_control_payload(payload: bytes) -> TunHelperControlMessage:
         raise ValueError(
             f"unsupported TUN helper protocol version: {version} != {TUN_HELPER_PROTOCOL_VERSION}"
         )
-    op = str(doc.get("op") or "").strip()
-    if not op:
+    op = doc.get("op")
+    if not isinstance(op, str) or not (op := op.strip()) or len(op) > 64:
         raise ValueError("TUN helper control payload is missing op")
     raw_payload = doc.get("payload")
     if raw_payload is None:

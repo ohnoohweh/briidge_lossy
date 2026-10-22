@@ -52,6 +52,8 @@ class TunHelperProtocolTests(unittest.TestCase):
             b'{"version":1,"version":1,"op":"SNAPSHOT","payload":{}}',
             b'{"version":NaN,"op":"SNAPSHOT","payload":{}}',
             b'[]',
+            b'{"version":1,"op":1,"payload":{}}',
+            b'{"version":1,"op":"' + b"x" * 65 + b'","payload":{}}',
         ):
             with self.assertRaises(ValueError):
                 decode_control_payload(payload)
