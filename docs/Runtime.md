@@ -598,6 +598,10 @@ bounded aggregates to the monitoring system.
 
 ### In-process monitoring implementation state
 
+This section lists only unfinished work packages. When a package is complete,
+remove its package entry and fold its durable result into the present-state
+description rather than retaining completed work-package IDs.
+
 The Python runtime has dependency-free, bounded timing primitives in
 `runtime_metrics.py`: an injectable monotonic clock, fixed duration buckets,
 rolling fixed-slot histograms, and a fixed-category accumulator. `Runner` now
