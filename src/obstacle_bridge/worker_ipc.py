@@ -69,9 +69,10 @@ def encode_frame(kind: WorkerIPCFrameKind, generation: int, payload: bytes = b""
 
 def try_decode_frame(data: bytes) -> tuple[WorkerIPCFrame, bytes] | None:
     raw = bytes(data)
-    if len(raw) < _HEADER.size:
+    size = frame_size(raw)
+    if size is None:
         return None
-    magic, version, raw_kind, flags, generation, size = _HEADER.unpack(raw[:_HEADER.size])
+    magic, version, raw_kind, flags, generation, _ = _HEADER.unpack(raw[:_HEADER.size])
     if magic != _MAGIC or version != WORKER_IPC_VERSION or flags != 0:
         raise ValueError("invalid worker IPC frame header")
     try:
@@ -85,6 +86,24 @@ def try_decode_frame(data: bytes) -> tuple[WorkerIPCFrame, bytes] | None:
     if len(raw) < total:
         return None
     return WorkerIPCFrame(kind=kind, generation=generation, payload=raw[_HEADER.size:total]), raw[total:]
+
+
+def frame_size(data: bytes) -> int | None:
+    """Return a validated body size once the fixed header is available."""
+    raw = bytes(data)
+    if len(raw) < _HEADER.size:
+        return None
+    magic, version, raw_kind, flags, generation, size = _HEADER.unpack(raw[:_HEADER.size])
+    if magic != _MAGIC or version != WORKER_IPC_VERSION or flags != 0:
+        raise ValueError("invalid worker IPC frame header")
+    try:
+        WorkerIPCFrameKind(raw_kind)
+    except ValueError as exc:
+        raise ValueError("invalid worker IPC frame kind") from exc
+    _validate_generation(generation)
+    if size > WORKER_IPC_MAX_FRAME_BYTES:
+        raise ValueError("worker IPC frame exceeds maximum payload size")
+    return size
 
 
 def encode_control(kind: WorkerIPCFrameKind, generation: int, value: dict[str, Any]) -> bytes:

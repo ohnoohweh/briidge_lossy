@@ -445,9 +445,9 @@ ARC-CMP-004:
   # The completed PXY-2 proxy contract qualifies Python/native selections on
   # each host locally; it does not require a macOS-to-Linux process pairing.
   # A shared Python/Swift codec now qualifies bounded control/data framing,
-  # positive-generation fencing, and capability-intersection wire parity. No
-  # component boundary has migrated, so the remaining common IPC plan remains
-  # unqualified. Contract-v1
+  # positive-generation fencing, and capability-intersection wire parity. The
+  # macOS native-peer control boundary has migrated; the other component
+  # boundaries remain unqualified. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same

@@ -5,8 +5,6 @@ import Foundation
 /// configuration capability and owner-lifetime signal; no config path, secret
 /// environment variable, or loopback listener is used for startup control.
 enum ObstacleBridgeNativePeerWorker {
-    private static let maximumFrame = 1_048_576
-
     private enum WorkerError: LocalizedError {
         case invalidFrame
         case invalidBootstrap
@@ -78,14 +76,15 @@ enum ObstacleBridgeNativePeerWorker {
     }
 
     private static func readFrame(_ handle: FileHandle) throws -> [String: Any] {
-        let header = try readExactly(handle, count: 4)
-        let length = header.reduce(0) { ($0 << 8) | Int($1) }
-        guard length > 0, length <= maximumFrame else { throw WorkerError.invalidFrame }
-        let payload = try readExactly(handle, count: length)
-        guard let frame = try JSONSerialization.jsonObject(with: payload) as? [String: Any],
-              strictPositiveInt(frame["v"]) == ObstacleBridgeRuntimeConfig.isolatedWorkerProtocolVersion
+        let header = try readExactly(handle, count: ObstacleBridgeWorkerIPC.headerBytes)
+        guard let length = try ObstacleBridgeWorkerIPC.frameSize(header) else { throw WorkerError.invalidFrame }
+        let payload = header + (try readExactly(handle, count: length))
+        let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(payload)
+        guard let frame, remainder.isEmpty else { throw WorkerError.invalidFrame }
+        let value = try ObstacleBridgeWorkerIPC.decodeControl(frame)
+        guard strictPositiveInt(value["v"]) == ObstacleBridgeRuntimeConfig.isolatedWorkerProtocolVersion
         else { throw WorkerError.invalidFrame }
-        return frame
+        return value
     }
 
     private static func readExactly(_ handle: FileHandle, count: Int) throws -> Data {
@@ -99,10 +98,9 @@ enum ObstacleBridgeNativePeerWorker {
     }
 
     private static func writeFrame(_ handle: FileHandle, _ frame: [String: Any]) throws {
-        let payload = try JSONSerialization.data(withJSONObject: frame, options: [])
-        guard !payload.isEmpty, payload.count <= maximumFrame else { throw WorkerError.invalidFrame }
-        var length = UInt32(payload.count).bigEndian
-        handle.write(Data(bytes: &length, count: 4))
-        handle.write(payload)
+        let rawKind = frame["kind"] as? String ?? ""
+        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "peer.error" ? .error : .response
+        let generation = UInt64(strictPositiveInt(frame["generation"]) ?? 1)
+        handle.write(try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: frame))
     }
 }

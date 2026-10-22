@@ -11,6 +11,7 @@ IOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeiOS/"
 MACOS_SWIFT_PREFIX = "swift/Sources/ObstacleBridgeMacOS/"
 DESKTOP_PROXY_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift"
 DESKTOP_LOG_SUPERVISOR = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift"
+DESKTOP_WORKER_IPC = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift"
 LINUX_DESKTOP_HOST = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift"
 LINUX_LOG_ADAPTER = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift"
 MACOS_DESKTOP_HOST = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"
@@ -43,7 +44,7 @@ def _is_swift_under(path: str, prefix: str) -> bool:
 def classify_swift_shared_parity(changed: list[str]) -> dict[str, list[str]]:
     normalized = _normalize(changed)
     return {
-        "shared_swift": [path for path in normalized if _is_swift_under(path, SHARED_SWIFT_PREFIX)],
+        "shared_swift": [path for path in normalized if _is_swift_under(path, SHARED_SWIFT_PREFIX) or path == DESKTOP_WORKER_IPC],
         "ios_swift": [path for path in normalized if _is_swift_under(path, IOS_SWIFT_PREFIX)],
         "macos_swift": [path for path in normalized if _is_swift_under(path, MACOS_SWIFT_PREFIX)],
         "parity_tests": [path for path in normalized if path in PARITY_TEST_FILES],

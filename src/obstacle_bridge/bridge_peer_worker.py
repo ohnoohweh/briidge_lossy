@@ -9,48 +9,48 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
-import json
 import logging
 import os
 import shutil
 import socket
-import struct
 import sys
 import uuid
 from typing import Any
 
-MAX_FRAME = 1024 * 1024
+from .worker_ipc import WORKER_IPC_MAX_FRAME_BYTES
 
 
-def _json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate peer worker field")
-        result[key] = value
-    return result
-
-
-def _invalid_constant(_value: str) -> None:
-    raise ValueError("invalid peer worker number")
-
+MAX_FRAME = WORKER_IPC_MAX_FRAME_BYTES
 
 async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any]:
-    size = struct.unpack("!I", await reader.readexactly(4))[0]
-    if not 0 < size <= MAX_FRAME:
+    from .worker_ipc import decode_control, frame_size, try_decode_frame
+
+    try:
+        header = await reader.readexactly(20)
+    except asyncio.IncompleteReadError as exc:
+        raise ValueError("invalid peer worker frame") from exc
+    size = frame_size(header)
+    if size is None or size > WORKER_IPC_MAX_FRAME_BYTES:
         raise ValueError("invalid peer worker frame size")
-    value = json.loads((await reader.readexactly(size)).decode("utf-8"),
-                       object_pairs_hook=_json_object, parse_constant=_invalid_constant)
-    if not isinstance(value, dict) or type(value.get("v")) is not int or value["v"] != 1:
+    frame, remainder = try_decode_frame(header + await reader.readexactly(size))
+    if frame is None or remainder:
+        raise ValueError("invalid peer worker frame")
+    value = decode_control(frame)
+    if type(value.get("v")) is not int or value["v"] != 1:
         raise ValueError("invalid peer worker frame")
     return value
 
 
 async def _write_frame(writer: asyncio.StreamWriter, value: dict[str, Any]) -> None:
-    body = json.dumps(value, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
-    if not 0 < len(body) <= MAX_FRAME:
-        raise ValueError("invalid peer worker frame size")
-    writer.write(struct.pack("!I", len(body)) + body)
+    from .worker_ipc import WorkerIPCFrameKind, encode_control
+
+    raw_kind = str(value.get("kind") or "")
+    frame_kind = (WorkerIPCFrameKind.REQUEST if raw_kind == "peer.start"
+                  else WorkerIPCFrameKind.ERROR if raw_kind.endswith(".error") or raw_kind == "peer.error"
+                  else WorkerIPCFrameKind.RESPONSE)
+    generation = value.get("generation")
+    generation = generation if type(generation) is int and generation > 0 else 1
+    writer.write(encode_control(frame_kind, generation, value))
     await asyncio.wait_for(writer.drain(), 1.0)
 
 

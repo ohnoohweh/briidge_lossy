@@ -67,8 +67,10 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     entrypoint = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
+    common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
+    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 2
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
@@ -78,6 +80,9 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "native peer worker cannot own shared desktop services" in runner
     assert "private func recordOperationalLog(" in runner
     assert runner.count("NSLog(") == 1
+    assert "ObstacleBridgeWorkerIPC.frameSize(header)" in worker
+    assert "ObstacleBridgeWorkerIPC.encodeControl" in worker
+    assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
 
 
 def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:

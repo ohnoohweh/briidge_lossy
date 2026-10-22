@@ -1640,7 +1640,8 @@ REQ-ADM-001:
   # The isolated Admin-worker query path is covered by the same contract.
   # Common desktop-worker framing independently verifies bounded control/data
   # frames, generation fencing, and capability-intersection parity in Python
-  # and Swift before component workers migrate to it.
+  # and Swift. The macOS native-peer integration uses the shared frames end to
+  # end under its Python supervisor; other component migrations remain open.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
@@ -1651,6 +1652,7 @@ REQ-ADM-001:
     - tests/unit/test_worker_ipc_protocol.py::test_common_worker_ipc_rejects_malformed_oversized_and_stale_frames
     - tests/unit/test_worker_ipc_protocol.py::test_common_worker_ipc_negotiates_only_mutual_capabilities
     - tests/unit/test_worker_ipc_protocol.py::test_common_worker_ipc_swift_wire_parity
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates

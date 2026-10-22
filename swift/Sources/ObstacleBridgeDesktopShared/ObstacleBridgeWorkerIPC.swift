@@ -7,7 +7,7 @@ public enum ObstacleBridgeWorkerIPC {
     public static let version: UInt8 = 1
     public static let maximumFrameBytes = 1_048_576
     private static let magic = Data([0x4f, 0x42, 0x49, 0x50]) // OBIP
-    private static let headerBytes = 20
+    public static let headerBytes = 20
 
     public enum Kind: UInt8 {
         case hello = 1, ready, request, response, event, data, error, goodbye
@@ -39,16 +39,24 @@ public enum ObstacleBridgeWorkerIPC {
     }
 
     public static func decode(_ data: Data) throws -> (Frame?, Data) {
-        guard data.count >= headerBytes else { return (nil, data) }
-        guard data.prefix(4) == magic, data[4] == version, data[6] == 0, data[7] == 0 else { throw Failure.invalidFrame }
+        guard let size = try frameSize(data) else { return (nil, data) }
         guard let kind = Kind(rawValue: data[5]) else { throw Failure.invalidFrame }
+        let generation = data[8..<16].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
+        let total = headerBytes + size
+        guard data.count >= total else { return (nil, data) }
+        return (Frame(kind: kind, generation: generation, payload: Data(data[headerBytes..<total])), Data(data.dropFirst(total)))
+    }
+
+    public static func frameSize(_ data: Data) throws -> Int? {
+        guard data.count >= headerBytes else { return nil }
+        guard data.prefix(4) == magic, data[4] == version, data[6] == 0, data[7] == 0,
+              Kind(rawValue: data[5]) != nil
+        else { throw Failure.invalidFrame }
         let generation = data[8..<16].reduce(UInt64(0)) { ($0 << 8) | UInt64($1) }
         let size = data[16..<20].reduce(0) { ($0 << 8) | Int($1) }
         guard generation > 0 else { throw Failure.invalidFrame }
         guard size <= maximumFrameBytes else { throw Failure.frameTooLarge }
-        let total = headerBytes + size
-        guard data.count >= total else { return (nil, data) }
-        return (Frame(kind: kind, generation: generation, payload: Data(data[headerBytes..<total])), Data(data.dropFirst(total)))
+        return size
     }
 
     public static func encodeControl(kind: Kind, generation: UInt64, value: [String: Any]) throws -> Data {
