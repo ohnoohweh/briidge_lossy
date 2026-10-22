@@ -95,6 +95,23 @@ if privateMode {
     socketFD = data
     lifetimeFD = lifetime
     privateGeneration = generation
+    var helloBuffer = [UInt8](repeating: 0, count: maxDatagram + ObstacleBridgeWorkerIPC.headerBytes + 1)
+    let helloCount = recv(data, &helloBuffer, helloBuffer.count, 0)
+    guard helloCount > 0, helloCount <= maxDatagram + ObstacleBridgeWorkerIPC.headerBytes,
+          let decoded = try? ObstacleBridgeWorkerIPC.decode(Data(helloBuffer.prefix(helloCount))),
+          let hello = decoded.0, decoded.1.isEmpty, hello.kind == .hello, hello.generation == generation,
+          let helloPayload = try? ObstacleBridgeWorkerIPC.decodeControl(hello),
+          helloPayload["v"] as? Int == 1, helloPayload["kind"] as? String == "worker.hello",
+          helloPayload["role"] as? String == "supervisor",
+          helloPayload["capabilities"] as? [String] == ["logging.query", "logging.records"] else {
+        fail("invalid logging worker capability request")
+    }
+    let helloReply = try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: generation, value: [
+        "v": 1, "kind": "worker.hello", "role": "logging",
+        "capabilities": ["logging.query", "logging.records"],
+    ])
+    let helloSent = helloReply.withUnsafeBytes { send(data, $0.baseAddress, $0.count, 0) }
+    guard helloSent == helloReply.count else { fail("unable to negotiate logging worker") }
     let ready = try ObstacleBridgeWorkerIPC.encodeControl(kind: .ready, generation: generation, value: [
         "v": 1, "kind": "worker.ready", "role": "logging", "implementation": "native",
     ])

@@ -167,7 +167,16 @@ public final class ObstacleBridgeLogWorkerSupervisor: @unchecked Sendable {
         child.standardOutput = nullOutput
         try child.run()
         try childInput.close(); try childError.close(); try nullOutput.close()
-        guard waitReadable(parentData, milliseconds: 5_000),
+        guard sendDatagram(parentData, kind: .hello, generation: nextGeneration, payload: [
+                  "v": 1, "kind": "worker.hello", "role": "supervisor",
+                  "capabilities": ["logging.query", "logging.records"],
+              ]),
+              waitReadable(parentData, milliseconds: 5_000),
+              let hello = receive(parentData, generation: nextGeneration), hello.kind == .hello,
+              hello.payload["v"] as? Int == 1, hello.payload["kind"] as? String == "worker.hello",
+              hello.payload["role"] as? String == "logging",
+              hello.payload["capabilities"] as? [String] == ["logging.query", "logging.records"],
+              waitReadable(parentData, milliseconds: 5_000),
               let ready = receive(parentData, generation: nextGeneration), ready.kind == .ready, ready.payload["v"] as? Int == 1,
               ready.payload["kind"] as? String == "worker.ready", ready.payload["role"] as? String == "logging",
               ready.payload["implementation"] as? String == implementation, child.isRunning else { throw Failure.unavailable }

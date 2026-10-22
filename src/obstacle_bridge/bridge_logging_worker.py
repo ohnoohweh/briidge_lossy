@@ -23,6 +23,25 @@ from .bridge_logging_ipc import LOG_WIRE_VERSION, NonBlockingUdpLogHandler, UdpL
 from .worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, encode_frame, try_decode_frame
 
 PRIVATE_MAX_DATAGRAM = 8 * 1024
+_LOGGING_CAPABILITIES = ["logging.query", "logging.records"]
+
+
+def _logging_hello(generation: int, role: str) -> bytes:
+    return encode_control(WorkerIPCFrameKind.HELLO, generation, {
+        "v": LOG_WIRE_VERSION, "kind": "worker.hello", "role": role,
+        "capabilities": _LOGGING_CAPABILITIES,
+    })
+
+
+def _is_logging_hello(frame: Any, generation: int, role: str) -> bool:
+    try:
+        return (frame is not None and frame.kind == WorkerIPCFrameKind.HELLO and
+                frame.generation == generation and decode_control(frame) == {
+                    "v": LOG_WIRE_VERSION, "kind": "worker.hello", "role": role,
+                    "capabilities": _LOGGING_CAPABILITIES,
+                })
+    except ValueError:
+        return False
 
 
 def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) -> int:
@@ -30,6 +49,16 @@ def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) 
     with socket.socket(fileno=data_fd) as data, socket.socket(fileno=lifetime_fd) as lifetime:
         if data.family != socket.AF_UNIX or data.type != socket.SOCK_DGRAM or lifetime.family != socket.AF_UNIX or lifetime.type != socket.SOCK_STREAM:
             raise ValueError("invalid private logging sockets")
+        readable, _, _ = select.select([data, lifetime], [], [])
+        if lifetime in readable:
+            return 0
+        try:
+            frame, remainder = try_decode_frame(data.recv(PRIVATE_MAX_DATAGRAM + 21)) or (None, b"")
+        except ValueError:
+            return 0
+        if remainder or not _is_logging_hello(frame, generation, "supervisor"):
+            return 0
+        data.send(_logging_hello(generation, "logging"))
         receiver = UdpLogReceiver("", PRIVATE_MAX_DATAGRAM - 20, connected_socket=data)
         receiver.reply_transform = lambda reply: encode_frame(WorkerIPCFrameKind.RESPONSE, generation, reply)
         data.send(encode_control(WorkerIPCFrameKind.READY, generation, {"v": LOG_WIRE_VERSION, "kind": "worker.ready", "role": "logging", "implementation": "python"}))
@@ -107,6 +136,13 @@ class ManagedLoggingWorker:
             self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, pass_fds=(child_data.fileno(), child_lifetime.fileno()))
             child_data.close()
             child_lifetime.close()
+            self._data.send(_logging_hello(generation, "supervisor"))
+            readable, _, _ = select.select([self._data], [], [], 5.0)
+            if not readable:
+                raise RuntimeError("logging worker startup timed out")
+            frame, remainder = try_decode_frame(self._data.recv(PRIVATE_MAX_DATAGRAM + 20)) or (None, b"")
+            if remainder or not _is_logging_hello(frame, generation, "logging"):
+                raise RuntimeError("invalid logging worker capability response")
             readable, _, _ = select.select([self._data], [], [], 5.0)
             if not readable:
                 raise RuntimeError("logging worker startup timed out")
