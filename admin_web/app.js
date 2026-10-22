@@ -2081,6 +2081,23 @@ function isTabActive(tabName) {
   return Boolean(panel && panel.classList.contains('active'));
 }
 
+function renderRuntimeMetrics(status) {
+  const metrics = status?.runtime_metrics || {};
+  const renderMeter = (id, values, ceiling) => {
+    const el = document.getElementById(id); if (!el) return;
+    const overall = Number(values?.overall); const recent = Number(values?.last_2_seconds);
+    if (!Number.isFinite(overall) && !Number.isFinite(recent)) { el.textContent = '◌'; return; }
+    const outer = Math.min(100, (overall / ceiling) * 100); const inner = Math.min(100, (recent / ceiling) * 100);
+    el.textContent = '◉'; el.style.setProperty('--outer', `${outer}%`); el.style.setProperty('--inner', `${inner}%`);
+  };
+  renderMeter('cpuMeter', metrics.cpu_cores_max, 1); renderMeter('sliceMeter', metrics.work_slice_ms_max, 100);
+  const summary = document.getElementById('runtimeAnalysisSummary'); const rows = document.getElementById('runtimeAnalysisRows');
+  if (!summary || !rows) return;
+  const categories = Array.isArray(metrics.categories) ? metrics.categories : [];
+  summary.textContent = `Most timed: ${metrics.most_timed_category || 'n/a'} · Longest uninterrupted: ${metrics.longest_uninterrupted_category || 'n/a'}`;
+  rows.innerHTML = categories.map(row => `<div class="kv-row"><span>${escapeHtml(row.category)}</span><strong>${Number(row.total_ms || 0).toFixed(1)} ms total · ${row.max_ms == null ? '—' : Number(row.max_ms).toFixed(1) + ' ms max'}</strong></div>`).join('');
+}
+
 function setActiveTab(tabName) {
   const tabs = document.querySelectorAll('.nav-tab');
   const panels = document.querySelectorAll('.tab-panel');
@@ -3268,6 +3285,7 @@ function applyMetaDoc(j) {
 
 function applyStatusDoc(j) {
   uiState.statusDoc = j || {};
+  renderRuntimeMetrics(uiState.statusDoc);
   if (j?.admin_ui?.runtime_dependencies) {
     uiState.runtimeDependencies = j.admin_ui.runtime_dependencies;
     renderOnboardingDependencyWarnings();

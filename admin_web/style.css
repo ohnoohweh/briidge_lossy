@@ -236,6 +236,9 @@ h1 {
   gap: 16px;
 }
 
+.runtime-meters { display:flex; gap:8px; align-items:center; }
+.runtime-meters span { width:22px; height:22px; display:inline-grid; place-items:center; border-radius:50%; color:#7dd3fc; background:conic-gradient(#38bdf8 var(--outer,0%),#26344a 0); box-shadow:inset 0 0 0 5px #111827; font-size:12px; }
+
 .quick-actions {
   display: flex;
   flex-wrap: wrap;
