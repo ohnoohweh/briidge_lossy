@@ -723,6 +723,8 @@ REQ-PRX-001:
   # and collector cases plus bundled-host HTTP/SOCKS traffic, collector observability,
   # replacement and shutdown for explicitly named python-worker and
   # packaged-native-worker selections.
+  # The macOS host scenario reserves its status, listener, and echo ports as one
+  # distinct loopback set before it launches the bundled host.
   # The desktop isolation status records proxy ownership as delivered; remaining
   # isolation work is tracked at the other component boundaries.
   integration_tests:

@@ -1368,6 +1368,21 @@ def _unused_tcp_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _unused_tcp_ports(count: int) -> list[int]:
+    """Reserve a distinct loopback TCP port set until every member is chosen."""
+    sockets: list[socket.socket] = []
+    try:
+        for _ in range(count):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", 0))
+            sockets.append(sock)
+        return [int(sock.getsockname()[1]) for sock in sockets]
+    finally:
+        for sock in sockets:
+            sock.close()
+
+
 def _unused_udp_port() -> int:
     with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as sock:
         sock.bind(("::1", 0))
@@ -3712,10 +3727,7 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
-    status_port = _unused_tcp_port()
-    proxy_http_port = _unused_tcp_port()
-    proxy_socks5_port = _unused_tcp_port()
-    echo_port = _unused_tcp_port()
+    status_port, proxy_http_port, proxy_socks5_port, echo_port = _unused_tcp_ports(4)
     echo = _TCPEchoServer("127.0.0.1", echo_port)
     echo.start()
     config_path = tmp_path / "runtime.json"

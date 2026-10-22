@@ -463,6 +463,8 @@ ARC-CMP-004:
   # Python-supervisor and collector cases plus bundled-host HTTP/SOCKS traffic,
   # collector observability, replacement and shutdown for explicitly named
   # python-worker and packaged-native-worker cases; no cross-host pairing is implied.
+  # The macOS bundled-host scenario reserves its status, listener, and echo ports
+  # as one distinct loopback set before launch.
   # The desktop isolation summary therefore retains no active proxy-worker gap.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
