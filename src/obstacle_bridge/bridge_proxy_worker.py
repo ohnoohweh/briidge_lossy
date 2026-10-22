@@ -34,6 +34,22 @@ class ProxyWorkerStartupError(ValueError):
         self.code = code
 
 
+def resolve_native_proxy_worker_executable(explicit: str | None = None) -> str:
+    """Return the one native worker executable selected for a desktop owner.
+
+    An explicit configuration wins.  A packaged launcher can then supply its
+    adjacent worker through the deployment override without depending on a
+    mutable process ``PATH``.  The final ``PATH`` lookup preserves the
+    development invocation.  Every result is validated before the private
+    control socket is created, so a bad package cannot trigger an in-process
+    fallback.
+    """
+    executable = explicit or os.environ.get("OBSTACLEBRIDGE_NATIVE_PROXY_WORKER") or shutil.which("ObstacleBridgeProxyWorker")
+    if not executable or not os.path.isfile(executable) or not os.access(executable, os.X_OK):
+        raise ValueError("native proxy worker executable is unavailable")
+    return executable
+
+
 def worker_capabilities(implementation: str) -> dict[str, Any]:
     """Redacted, versioned declaration of the selected worker surface."""
     if implementation == "native":
@@ -271,9 +287,7 @@ class ProxyWorker:
         except ValueError as exc:
             raise ProxyWorkerStartupError("invalid_configuration") from exc
         if self.implementation == "native":
-            executable = self.native_executable or shutil.which("ObstacleBridgeProxyWorker")
-            if not executable:
-                raise ValueError("native proxy worker executable not found")
+            executable = resolve_native_proxy_worker_executable(self.native_executable)
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
             command = ([sys.executable, "-m", "obstacle_bridge.bridge_proxy_worker"] if self.implementation == "python" else [executable])

@@ -458,6 +458,11 @@ ARC-CMP-004:
   # the native relay serializes child records with collector lifecycle state;
   # PXY-3 CI matrices have recorded lifecycle and exact proxy-collector
   # success per host without a cross-operating-system process pair.
+  # PXY-4 discovery keeps configured and deployment-selected workers fail-closed.
+  # PXY-4's independently successful Linux and macOS host gates select
+  # Python-supervisor and collector cases plus bundled-host HTTP/SOCKS traffic,
+  # collector observability, replacement and shutdown for explicitly named
+  # python-worker and packaged-native-worker cases; no cross-host pairing is implied.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

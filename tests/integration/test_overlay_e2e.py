@@ -7512,6 +7512,125 @@ def test_linux_swift_proxy_logs_follow_collector(tmp_path: Path, proxy_implement
         peer.close()
 
 
+def _linux_proxy_response_head(conn: socket.socket) -> bytes:
+    response = b''
+    while b'\r\n\r\n' not in response:
+        chunk = conn.recv(4096)
+        if not chunk:
+            raise AssertionError(f'proxy closed before response head: {response!r}')
+        response += chunk
+    return response
+
+
+def _linux_proxy_http_connect_echo(proxy_port: int, target_port: int) -> None:
+    token = base64.b64encode(b'user:private-proxy-token').decode('ascii')
+    with socket.create_connection(('127.0.0.1', proxy_port), timeout=3) as conn:
+        conn.settimeout(3)
+        conn.sendall(
+            f'CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n'
+            f'Host: 127.0.0.1:{target_port}\r\n'
+            f'Proxy-Authorization: Basic {token}\r\n\r\n'.encode('ascii')
+        )
+        assert _linux_proxy_response_head(conn).startswith(b'HTTP/1.1 200')
+        payload = b'\x01linux-host-http-connect'
+        conn.sendall(payload)
+        assert conn.recv(len(payload)) == response_payload(payload)
+
+
+def _linux_proxy_socks5_echo(proxy_port: int, target_port: int) -> None:
+    with socket.create_connection(('127.0.0.1', proxy_port), timeout=3) as conn:
+        conn.settimeout(3)
+        conn.sendall(b'\x05\x01\x02')
+        assert conn.recv(2) == b'\x05\x02'
+        conn.sendall(b'\x01\x04user\x13private-proxy-token')
+        assert conn.recv(2) == b'\x01\x00'
+        conn.sendall(b'\x05\x01\x00\x01\x7f\x00\x00\x01' + target_port.to_bytes(2, 'big'))
+        assert conn.recv(10)[:2] == b'\x05\x00'
+        payload = b'\x01linux-host-socks5'
+        conn.sendall(payload)
+        assert conn.recv(len(payload)) == response_payload(payload)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('proxy_implementation', [
+    pytest.param('python', id='python-worker'),
+    pytest.param('native', id='packaged-native-worker'),
+])
+def test_linux_swift_host_supervises_proxy_worker_full_matrix(tmp_path: Path, proxy_implementation: str) -> None:
+    if not sys.platform.startswith('linux'):
+        pytest.skip('Linux Swift process E2E coverage requires Linux')
+    binary_path = _linux_swift_runner_binary()
+    peer = LinuxSwiftSecureLinkPeer('tcp', b'linux-swift-logging-psk', keep_open=True)
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        admin_port = int(reservation.getsockname()[1])
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reservation:
+        reservation.bind(('127.0.0.1', 0))
+        target_port = int(reservation.getsockname()[1])
+    target = BounceBackServer('linux-proxy-target', 'tcp', '127.0.0.1', target_port, tmp_path / 'linux-proxy-target.log')
+    target.start()
+    config_path = tmp_path / 'proxy-full-matrix.json'
+    config_path.write_text(json.dumps({
+        'runner': {'overlay_transport': 'tcp'},
+        'tcp_session': {'tcp_peer': '127.0.0.1', 'tcp_peer_port': peer.port},
+        'secure_link': {'secure_link_mode': 'psk', 'secure_link_psk': 'linux-swift-logging-psk'},
+        'debug_logging': {'log_worker': 'python', 'log_worker_python_executable': sys.executable},
+        'proxy_provider': {
+            'enabled': True, 'bind': '127.0.0.1', 'http_port': 0, 'socks5_port': 0,
+            'protocols': ['http-connect', 'socks5-connect'], 'worker': proxy_implementation,
+            'worker_python_executable': sys.executable,
+            'auth': {'mode': 'basic', 'username': 'user', 'token': 'private-proxy-token'},
+            'egress': {'mode': 'direct'}, 'policy': {'allow_private_destinations': True, 'blocked_host_patterns': []},
+        },
+    }), encoding='utf-8')
+    proc = start_proc('linux_swift_proxy_full_matrix', [str(binary_path), '--runtime-config', str(config_path), '--run', '--admin-port', str(admin_port), '--hold-sec', '45'], tmp_path, admin_port=admin_port)
+    try:
+        def wait_for(path, predicate):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                try:
+                    _, result = fetch_json(f'http://127.0.0.1:{admin_port}{path}', timeout=1)
+                    if predicate(result):
+                        return result
+                except (OSError, ValueError):
+                    pass
+                time.sleep(0.1)
+            raise AssertionError(f'timed out waiting for {path}: {proc.log_path.read_text(errors="replace")}')
+
+        status = wait_for('/api/status', lambda item: item.get('logging_worker', {}).get('state') == 'running' and item.get('resource_health', {}).get('proxy_provider', {}).get('worker', {}).get('state') == 'running')
+        proxy = status['resource_health']['proxy_provider']
+        worker = proxy['worker']
+        assert worker['implementation'] == proxy_implementation and worker['pid'] > 1 and worker['pid'] != proc.popen.pid
+        assert status['logging_worker']['implementation'] == 'python'
+        http_port = proxy['listeners']['http']['bound_port']
+        socks5_port = proxy['listeners']['socks5']['bound_port']
+        assert http_port > 0 and socks5_port > 0 and 'private-proxy-token' not in json.dumps(status)
+        _linux_proxy_http_connect_echo(http_port, target_port)
+        _linux_proxy_socks5_echo(socks5_port, target_port)
+        logs = wait_for('/api/logs?limit=100', lambda item: any('[PROXY] listener started' in line for line in item.get('lines', [])))
+        assert 'private-proxy-token' not in json.dumps(logs)
+        os.kill(worker['pid'], signal.SIGKILL)
+        status = wait_for('/api/status', lambda item: item.get('resource_health', {}).get('proxy_provider', {}).get('worker', {}).get('state') == 'running' and item['resource_health']['proxy_provider']['worker']['generation'] > worker['generation'])
+        replacement = status['resource_health']['proxy_provider']
+        assert replacement['worker']['restarts'] >= 1
+        assert replacement['listeners']['http']['bound_port'] == http_port
+        assert replacement['listeners']['socks5']['bound_port'] == socks5_port
+        _linux_proxy_http_connect_echo(http_port, target_port)
+        _linux_proxy_socks5_echo(socks5_port, target_port)
+        os.killpg(proc.popen.pid, signal.SIGTERM)
+        proc.popen.wait(timeout=8)
+        with pytest.raises(OSError):
+            socket.create_connection(('127.0.0.1', http_port), timeout=1)
+        with pytest.raises(OSError):
+            socket.create_connection(('127.0.0.1', socks5_port), timeout=1)
+    finally:
+        if proc.popen.poll() is None:
+            os.killpg(proc.popen.pid, signal.SIGTERM)
+        proc.popen.wait(timeout=8)
+        target.stop()
+        peer.close()
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize('proxy_implementation', ['python', 'native'])
 @pytest.mark.parametrize('log_implementation', ['python', 'native'])

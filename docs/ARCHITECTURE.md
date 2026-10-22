@@ -241,17 +241,7 @@ completed plan item.
 | `IPC-3` — Admin Web worker | Move HTTP/UI/auth/session ownership to an exchangeable process connected to supervisor and workers through IPC. DoD: existing APIs, live subscriptions, config confirmation/secrets, logs, restart and reconnect operations retain their security and semantics; worker failures and concurrent clients remain bounded and observable; Python/native Admin works with either supervisor on both hosts. |
 | `IPC-4` — per-peer stack workers | Isolate each peer's full transport-through-ChannelMux stack and provide explicit listener/accepted-peer ownership. DoD: all supported desktop transports, security modes, compression and TCP/UDP/TUN services interoperate with existing peers; peer-specific operations, snapshots, epochs, backpressure and reconnect survive independent worker failures without cross-peer state or plaintext leakage, for each Python/native pairing on both hosts. |
 | `IPC-5` — shared TUN worker | Move shared-interface routing, ownership and peer/channel arbitration into a separate exchangeable worker while retaining the privileged helper boundary. DoD: real bidirectional TUN traffic, simultaneous peers, route/DNS lifecycle, authenticated readiness, restart fencing, helper loss and cleanup are verified with Python/native worker and helper combinations on authorized macOS and Linux hosts. |
-| `IPC-6` — proxy worker | Active focus; its completion is decomposed into the ordered `PXY-*` packages below. This umbrella package is removed when the final `PXY-*` package is removed. |
 | `IPC-7` — integrated qualification and migration | Wire configuration, packaging, installation, process health and operator diagnostics into both desktop products. DoD: all supported Python/native worker combinations pass automated cross-process and mixed-overlay traffic, kill/restart, shutdown and resource-leak tests; privileged and signed-host evidence is recorded, existing deployments have a documented migration/rollback path, and no production path silently falls back to in-process ownership. |
-
-### Proxy separation work packages
-
-These packages deliberately use a platform-local acceptance model. A macOS
-case runs only macOS processes; a Linux case runs only Linux processes. “Mixed”
-means a Python and a native process on the same operating system, never a
-macOS-to-Linux process pairing. A package requires independently recorded
-passing macOS and Linux evidence before it is removed. The work packages run in
-the listed order.
 
 ### Proxy worker contract decisions
 
@@ -302,9 +292,19 @@ Successful readiness clears the code. Both desktop supervisors and their host
 projections retain the failed-start count while a retry is pending and expose
 no listener snapshot for an unavailable generation.
 
-| Package | Scope and definition of done | Gap to close |
-| --- | --- | --- |
-| `PXY-4` — platform-local qualification and packaging | Qualify the complete same-host worker-selection matrix and packaged discovery path. DoD: on macOS and Linux independently, the Python supervisor runs Python and native workers, and the native host runs Python and native workers; each combination proves authenticated HTTP CONNECT and SOCKS5 traffic, status/log snapshots, replacement after forced child loss and clean shutdown. Packaged native worker discovery is verified on that platform, and the test output identifies the operating system and selected supervisor/worker pair. | Focused selection and child-loss tests exist, but the complete four-combination matrix, protocol traffic, logging, recovery and packaged-discovery evidence is not yet recorded separately for macOS and Linux. |
+Desktop native-worker discovery is deterministic. Python supervision prefers
+the configured executable, then the validated `OBSTACLEBRIDGE_NATIVE_PROXY_WORKER`
+deployment override, and finally the development `PATH` lookup. Native hosts
+resolve the bundled worker beside their host executable. Every selected path
+must be an executable regular file; invalid discovery fails before private
+control IPC starts and never falls back to in-process proxy ownership.
+
+Proxy-worker qualification is platform-local. The named Linux and macOS gates
+each report `python-worker` and `packaged-native-worker`, and exercise the
+selected worker's authenticated HTTP CONNECT/SOCKS5 traffic, redacted
+status/log projection, forced replacement, and host shutdown. A native host
+selects its sibling worker; no macOS process is used to qualify a Linux worker,
+or the reverse.
 
 PXY-3 lifecycle and observability qualification is complete: the independently
 recorded macOS and Linux matrices exercise the generation-fenced lifecycle
@@ -313,9 +313,9 @@ bounded drop state, and host status projection. This is a same-host contract;
 it does not require a macOS process to execute a Linux worker or the reverse.
 
 Completed IPv6-listener, destination-policy, system-egress, platform-local
-listener, and PXY-3 lifecycle/observability qualification work packages are
-represented by the durable contract decisions above rather than retained as
-active packages.
+listener, proxy-worker selection, and PXY-3 lifecycle/observability
+qualification work packages are represented by the durable contract decisions
+above rather than retained as active packages.
 
 ## Connection lifecycle propagation and rotation
 

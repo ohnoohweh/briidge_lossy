@@ -3102,6 +3102,45 @@ class _TCPEchoServer:
                     return
 
 
+def _read_proxy_head(conn: socket.socket) -> bytes:
+    response = b""
+    while b"\r\n\r\n" not in response:
+        chunk = conn.recv(4096)
+        if not chunk:
+            raise AssertionError(f"proxy closed before response head: {response!r}")
+        response += chunk
+    return response
+
+
+def _macos_host_http_connect_echo(proxy_port: int, target_port: int) -> None:
+    token = base64.b64encode(b"user:private-proxy-token").decode("ascii")
+    with socket.create_connection(("127.0.0.1", proxy_port), timeout=3) as conn:
+        conn.settimeout(3)
+        conn.sendall(
+            f"CONNECT 127.0.0.1:{target_port} HTTP/1.1\r\n"
+            f"Host: 127.0.0.1:{target_port}\r\n"
+            f"Proxy-Authorization: Basic {token}\r\n\r\n".encode("ascii")
+        )
+        assert _read_proxy_head(conn).startswith(b"HTTP/1.1 200")
+        payload = b"macos-host-http-connect"
+        conn.sendall(payload)
+        assert conn.recv(len(payload)) == payload
+
+
+def _macos_host_socks5_echo(proxy_port: int, target_port: int) -> None:
+    with socket.create_connection(("127.0.0.1", proxy_port), timeout=3) as conn:
+        conn.settimeout(3)
+        conn.sendall(b"\x05\x01\x02")
+        assert conn.recv(2) == b"\x05\x02"
+        conn.sendall(b"\x01\x04user\x13private-proxy-token")
+        assert conn.recv(2) == b"\x01\x00"
+        conn.sendall(b"\x05\x01\x00\x01\x7f\x00\x00\x01" + target_port.to_bytes(2, "big"))
+        assert conn.recv(10)[:2] == b"\x05\x00"
+        payload = b"macos-host-socks5"
+        conn.sendall(payload)
+        assert conn.recv(len(payload)) == payload
+
+
 class _UDPEchoServer:
     def __init__(self, host: str, port: int) -> None:
         self.host = host
@@ -3650,19 +3689,27 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
             process.communicate(timeout=5)
 
 
-@pytest.mark.parametrize("implementation", ["python", "native"])
+@pytest.mark.parametrize("implementation", [
+    pytest.param("python", id="python-worker"),
+    pytest.param("native", id="packaged-native-worker"),
+])
 def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, implementation: str) -> None:
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
     artifact = build_macos_swift_artifact()
     status_port = _unused_tcp_port()
-    proxy_port = _unused_tcp_port()
+    proxy_http_port = _unused_tcp_port()
+    proxy_socks5_port = _unused_tcp_port()
+    echo_port = _unused_tcp_port()
+    echo = _TCPEchoServer("127.0.0.1", echo_port)
+    echo.start()
     config_path = tmp_path / "runtime.json"
     config_path.write_text(json.dumps({
         "admin_web": True, "admin_web_bind": "127.0.0.1", "admin_web_port": status_port,
+        "debug_logging": {"log_worker": "python", "log_worker_python_executable": sys.executable},
         "proxy_provider": {
-            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_port,
-            "socks5_port": 0, "protocols": ["http-connect"], "worker": implementation,
+            "enabled": True, "bind": "127.0.0.1", "http_port": proxy_http_port,
+            "socks5_port": proxy_socks5_port, "protocols": ["http-connect", "socks5-connect"], "worker": implementation,
             "worker_python_executable": sys.executable,
             "auth": {"mode": "basic", "username": "user", "token": "private-proxy-token"},
             "egress": {"mode": "direct"},
@@ -3672,19 +3719,31 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
     process = subprocess.Popen([str(artifact.binary_path), "--runtime-config", str(config_path), "--status-port", str(status_port), "--hold-sec", "45"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
         url = f"http://127.0.0.1:{status_port}/api/status"
-        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running", timeout_sec=20)
+        status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item.get("logging_worker", {}).get("state") == "running", timeout_sec=20)
         proxy = status["proxy_provider"]
         assert proxy["worker"]["implementation"] == implementation
         assert proxy["worker"]["pid"] > 1 and proxy["worker"]["pid"] != process.pid
-        assert proxy["listeners"]["http"]["bound_port"] == proxy_port
+        assert status["logging_worker"]["implementation"] == "python"
+        assert proxy["listeners"]["http"]["bound_port"] == proxy_http_port
+        assert proxy["listeners"]["socks5"]["bound_port"] == proxy_socks5_port
         assert "private-proxy-token" not in json.dumps(status)
+        _macos_host_http_connect_echo(proxy_http_port, echo_port)
+        _macos_host_socks5_echo(proxy_socks5_port, echo_port)
+        logs = _wait_http_condition(f"http://127.0.0.1:{status_port}/api/logs?limit=100", lambda item: any("[PROXY] listener started" in line for line in item.get("lines", [])), timeout_sec=10)
+        assert "private-proxy-token" not in json.dumps(logs)
         os.kill(proxy["worker"]["pid"], signal.SIGKILL)
         status = _wait_http_condition(url, lambda item: item.get("proxy_provider", {}).get("worker", {}).get("state") == "running" and item["proxy_provider"]["worker"]["generation"] > proxy["worker"]["generation"], timeout_sec=20)
         assert status["proxy_provider"]["worker"]["restarts"] >= 1
-        assert status["proxy_provider"]["listeners"]["http"]["bound_port"] == proxy_port
-        with socket.create_connection(("127.0.0.1", proxy_port), timeout=2) as conn:
-            conn.sendall(b"CONNECT 127.0.0.1:1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\n\r\n")
-            assert conn.recv(1024).startswith(b"HTTP/1.1 407")
+        assert status["proxy_provider"]["listeners"]["http"]["bound_port"] == proxy_http_port
+        assert status["proxy_provider"]["listeners"]["socks5"]["bound_port"] == proxy_socks5_port
+        _macos_host_http_connect_echo(proxy_http_port, echo_port)
+        _macos_host_socks5_echo(proxy_socks5_port, echo_port)
+        process.terminate()
+        process.communicate(timeout=8)
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", proxy_http_port), timeout=1)
+        with pytest.raises(OSError):
+            socket.create_connection(("127.0.0.1", proxy_socks5_port), timeout=1)
     finally:
         process.terminate()
         try:
@@ -3692,6 +3751,7 @@ def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.
         except subprocess.TimeoutExpired:
             process.kill()
             process.communicate(timeout=5)
+        echo.stop()
 
 
 @pytest.mark.parametrize("proxy_implementation", ["python", "native"])
