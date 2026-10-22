@@ -608,15 +608,36 @@ public status projection or traffic-boundary instrumentation yet. Focused unit
 tests use deterministic inputs and do not need a live bridge, root privileges,
 TUN, a network peer, or Swift.
 
-Remaining local Linux work packages are deliberately independent so each can
-be developed and validated without a mixed Python/Swift CI run:
-
 `Runner` now projects cached redacted CPU/load peaks, loop lag, approved
 callback timing summaries, two-second maxima, and category leaders through
 `/api/status`; its local no-TUN/no-peer lifecycle smoke test covers monitor
 startup, status, and cancellation. WebAdmin now renders compact graphical
 meters beside Restart and supplies exact aggregate detail through Runtime
 Analysis. There is no remaining L-RM work package gap.
+
+### Swift monitoring implementation plan
+
+The next monitoring work is split by ownership, not by the operating system
+used to compile it. The portable Swift Core metrics model is shared runtime
+logic and may be implemented and locally validated with `swift test` on either
+Linux or macOS. It must not be unnecessarily held behind a macOS app build,
+an iOS simulator, a Python peer, or mixed-runtime CI.
+
+- **S-RM.1 — Portable Swift Core metrics:** implement the same bounded
+  histogram, rolling-window, approved-category, and redacted snapshot contract
+  in `ObstacleBridgeCore`. Linux or macOS may own this effort; its definition
+  of done is a Core-only `swift test` suite with injected clocks and fixture
+  payloads covering lifetime/two-second maxima, leaders, empty/unavailable
+  state, and bounded storage.
+- **S-RM.2 — Apple product adapters:** macOS/iOS work begins only after the
+  Core contract exists. It owns Apple-specific process accounting, HostRunner
+  or packet-tunnel scheduling, lifecycle cancellation, and native status/UI
+  projection. It must consume the Core model rather than fork timing,
+  percentile, window, or redaction semantics.
+
+The current residual Swift gap is S-RM.1 followed by S-RM.2. Linux Swift work
+can complete S-RM.1 independently; macOS effort is deliberately scoped to
+Apple-product integration after that portable Core slice is available.
 
 ### Dashboard and alert on relationships
 
