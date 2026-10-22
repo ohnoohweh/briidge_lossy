@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import ObstacleBridgeLinuxAdapters
+import ObstacleBridgeDesktopShared
 #if os(Linux)
 import Glibc
 #endif
@@ -44,6 +45,37 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(try readExactly(outbound.count, from: pair.1) == outbound)
     }
 
+    @Test func nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss() throws {
+        let control = try makeSocketPair()
+        let lifetime = try makeSocketPair()
+        let childControl = dup(control.1)
+        let childLifetime = dup(lifetime.1)
+        guard childControl >= 0, childLifetime >= 0 else { throw POSIXError(.EMFILE) }
+        close(control.1); close(lifetime.1)
+        defer { close(control.0) }
+        var parentLifetimeFD = lifetime.0
+        defer {
+            if parentLifetimeFD >= 0 { close(parentLifetimeFD) }
+        }
+        let stopped = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            defer { stopped.signal() }
+            try? ObstacleBridgeNativeAdminWorker.run(controlFD: childControl, lifetimeFD: childLifetime, generation: 7)
+        }
+
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: 7, value: [
+            "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
+        ]), to: control.0)
+        #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": [String: Any]()]), to: control.0)
+        let ready = try readControl(from: control.0)
+        #expect(ready["kind"] as? String == "admin.ready")
+        #expect(ready["implementation"] as? String == "native")
+        close(parentLifetimeFD)
+        parentLifetimeFD = -1
+        #expect(stopped.wait(timeout: .now() + 1) == .success)
+    }
+
     /// This is intentionally opt-in: opening a kernel TUN device requires
     /// CAP_NET_ADMIN and must not make ordinary CI depend on host privileges.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))
@@ -65,14 +97,34 @@ struct ObstacleBridgeLinuxTunDeviceTests {
     }
 
     private func writeAll(_ data: Data, to descriptor: Int32) throws {
-        let result = data.withUnsafeBytes { write(descriptor, $0.baseAddress, data.count) }
-        guard result == data.count else { throw POSIXError(.EIO) }
+        var offset = 0
+        while offset < data.count {
+            let result = data.withUnsafeBytes { bytes in
+                write(descriptor, bytes.baseAddress!.advanced(by: offset), data.count - offset)
+            }
+            guard result > 0 else { throw POSIXError(.EIO) }
+            offset += result
+        }
     }
 
     private func readExactly(_ count: Int, from descriptor: Int32) throws -> Data {
         var output = [UInt8](repeating: 0, count: count)
-        let result = read(descriptor, &output, count)
-        guard result == count else { throw POSIXError(.EIO) }
+        var offset = 0
+        while offset < count {
+            let result = output.withUnsafeMutableBytes { bytes in
+                read(descriptor, bytes.baseAddress!.advanced(by: offset), count - offset)
+            }
+            guard result > 0 else { throw POSIXError(.EIO) }
+            offset += result
+        }
         return Data(output)
+    }
+
+    private func readControl(from descriptor: Int32) throws -> [String: Any] {
+        let header = try readExactly(ObstacleBridgeWorkerIPC.headerBytes, from: descriptor)
+        guard let size = try ObstacleBridgeWorkerIPC.frameSize(header),
+              let frame = try ObstacleBridgeWorkerIPC.decode(header + readExactly(size, from: descriptor)).0
+        else { throw POSIXError(.EIO) }
+        return try ObstacleBridgeWorkerIPC.decodeControl(frame)
     }
 }
