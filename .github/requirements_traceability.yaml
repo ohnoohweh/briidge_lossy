@@ -723,6 +723,8 @@ REQ-PRX-001:
   # and collector cases plus bundled-host HTTP/SOCKS traffic, collector observability,
   # replacement and shutdown for explicitly named python-worker and
   # packaged-native-worker selections.
+  # The desktop isolation status records proxy ownership as delivered; remaining
+  # isolation work is tracked at the other component boundaries.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_overlay_e2e.py::test_linux_swift_host_supervises_proxy_worker_full_matrix
