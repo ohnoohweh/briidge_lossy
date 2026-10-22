@@ -748,6 +748,42 @@ def test_macos_tun_helper_package_status_validates_bundled_helper_version(tmp_pa
     assert status["repair_hint"] == ""
 
 
+def test_macos_packaged_tun_helper_interoperates_with_python_common_ipc() -> None:
+    artifact = build_macos_swift_artifact()
+    helper_path = artifact.app_bundle / "Contents" / "MacOS" / "ObstacleBridgeTunHelper"
+    # Darwin's sockaddr_un path is limited to 104 bytes. pytest's per-test
+    # directory can exceed that, so keep this real Unix socket path short.
+    socket_path = Path("/tmp") / f"ob-ipc1h-{uuid.uuid4().hex}.sock"
+    process = subprocess.Popen(
+        [str(helper_path), "--tun-helper-server", str(socket_path), "test-token", "--idle-sec", "5"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert socket_path.exists()
+
+        from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
+
+        async def probe() -> dict:
+            client = TunHelperClient(socket_path=str(socket_path), session_token="test-token")
+            await client.connect()
+            try:
+                return await client.snapshot()
+            finally:
+                await client.close()
+
+        assert asyncio.run(probe())["backend"] == "darwin-native"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+        with contextlib.suppress(FileNotFoundError):
+            socket_path.unlink()
+
+
 def test_macos_tun_helper_package_status_reports_stale_helper_version(tmp_path: Path) -> None:
     app_bundle = tmp_path / "ObstacleBridge.app"
     helper_dir = app_bundle / "Contents" / "MacOS"
