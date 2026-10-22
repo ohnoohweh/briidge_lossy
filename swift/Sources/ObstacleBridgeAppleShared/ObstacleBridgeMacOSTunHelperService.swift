@@ -10,6 +10,8 @@ import ServiceManagement
 
 enum ObstacleBridgeMacOSTunHelperService {
     static let helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"
+    /// Packaged HostRunner child selector for the inherited-only native Admin bootstrap.
+    static let nativeAdminChildControlArgument = "--admin-worker-control-fd"
     static let helperExecutableName = "ObstacleBridgeTunHelper"
     static let expectedHelperVersion = "1"
     /// Bound the packaged helper's accept loop so authenticated owner loss

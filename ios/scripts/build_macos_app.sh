@@ -167,6 +167,7 @@ echo "[build_macos_app] compiling macOS Swift host runner"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeProxyWorkerSupervisor.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeLogWorkerSupervisor.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeNativeAdminWorker.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeCore/ObstacleBridgeOverlayChannelCore.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeAppleOverlayChannelAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeOverlayConnectionSupport.swift" \
@@ -231,6 +232,7 @@ echo "[build_macos_app] compiling macOS TUN privileged helper skeleton"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunAdapter.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeMacOSTunHelperClient.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeNativeAdminWorker.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeMacOSProtocolV1TunHelperServer.swift" \
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeTunPrivilegedHelperMain.swift"
 

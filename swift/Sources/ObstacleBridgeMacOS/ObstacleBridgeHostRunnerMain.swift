@@ -11,6 +11,11 @@ struct ObstacleBridgeHostRunnerMain {
                       arguments[0] == "--peer-worker-control-fd", let controlFD = Int32(arguments[1]),
                       arguments[2] == "--log-fd", let logFD = Int32(arguments[3]) {
                 try ObstacleBridgeNativePeerWorker.run(controlFD: controlFD, logFD: logFD)
+            } else if arguments.count == 6,
+                      arguments[0] == ObstacleBridgeMacOSTunHelperService.nativeAdminChildControlArgument, let controlFD = Int32(arguments[1]),
+                      arguments[2] == "--admin-worker-lifetime-fd", let lifetimeFD = Int32(arguments[3]),
+                      arguments[4] == "--generation", let generation = Int(arguments[5]) {
+                try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, generation: generation)
             } else {
                 try ObstacleBridgeHostRunner.runMain(arguments: arguments)
             }

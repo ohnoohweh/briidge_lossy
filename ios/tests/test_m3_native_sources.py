@@ -12,6 +12,14 @@ def test_shared_worker_ipc_source_rejects_duplicate_control_members() -> None:
     assert "ControlJSONScanner" in common_ipc
     assert "hasDuplicateObjectKey" in common_ipc
     assert "JSONSerialization.jsonObject" in common_ipc
+
+
+def test_shared_native_admin_child_source_uses_inherited_control_and_lifetime_descriptors() -> None:
+    child = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeNativeAdminWorker.swift").read_text(encoding="utf-8")
+    assert "run(controlFD: Int32, lifetimeFD: Int32, generation: Int)" in child
+    assert '"admin.control"' in child
+    assert '"admin.ready"' in child
+    assert "lifetime.availableData" in child
 SHARED_NATIVE_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared"
 CORE_SWIFT_DIR = ROOT / "swift" / "Sources" / "ObstacleBridgeCore"
 APP_NATIVE_DIR = ROOT / "ios" / "native" / "ObstacleBridgeApp"

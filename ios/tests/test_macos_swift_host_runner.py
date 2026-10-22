@@ -68,11 +68,13 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
     runner = (APP_NATIVE_DIR / "ObstacleBridgeHostRunner.swift").read_text(encoding="utf-8")
     common_ipc = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift").read_text(encoding="utf-8")
+    helper_service = (ROOT / "swift" / "Sources" / "ObstacleBridgeAppleShared" / "ObstacleBridgeMacOSTunHelperService.swift").read_text(encoding="utf-8")
     proxy_worker = (ROOT / "swift" / "Sources" / "ObstacleBridgeProxyWorker" / "main.swift").read_text(encoding="utf-8")
     proxy_supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
     assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 5
+    assert build_script.count("ObstacleBridgeNativeAdminWorker.swift") == 2
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
@@ -92,6 +94,9 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
     assert "ControlJSONScanner" in common_ipc
     assert "hasDuplicateObjectKey" in common_ipc
+    assert "nativeAdminChildControlArgument" in entrypoint
+    assert 'nativeAdminChildControlArgument = "--admin-worker-control-fd"' in helper_service
+    assert "ObstacleBridgeNativeAdminWorker.run" in entrypoint
 
 
 def test_macos_logging_producer_inventory_has_no_private_mode_direct_sink() -> None:
