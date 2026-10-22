@@ -538,6 +538,7 @@ ARC-CMP-004:
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
     - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
+    - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunProbeDiagnosticsPolicyTests.swift::buildsPortableProbeCountersAndResultProjection
     - tests/unit/test_peer_stack_worker.py::test_cancelled_peer_retirement_kills_and_reaps_child
     - tests/unit/test_peer_stack_worker.py::test_peer_control_deadline_kills_and_reaps_unresponsive_child

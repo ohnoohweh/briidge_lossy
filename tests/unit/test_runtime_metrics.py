@@ -1,5 +1,6 @@
 import unittest
 import asyncio
+import threading
 
 from obstacle_bridge.bridge import Runner
 from obstacle_bridge.runtime_metrics import (
@@ -29,6 +30,14 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics_last_loop_lag_ns = None
     runner._runtime_metrics_max_loop_lag_ns = 0
     runner._runtime_metrics_lag_probe_count = 0
+    runner._runtime_metrics = RuntimeMetricAccumulator(("channelmux_callback", "tun_callback", "admin_snapshot"))
+    runner._runtime_metrics_started = {}
+    runner._runtime_metrics_cpu_peaks = []
+    runner._runtime_metrics_cpu_peak_overall = None
+    runner._async_diag_lock = threading.Lock()
+    runner._sync_diag = {"last_started_name": "", "last_started_kind": "", "last_started_monotonic": None,
+                        "last_finished_name": "", "last_finished_kind": "", "last_finished_monotonic": None,
+                        "last_failed_name": "", "last_failed_kind": "", "last_failed_monotonic": None, "last_failed_error": ""}
     return runner
 
 
@@ -112,3 +121,13 @@ def test_runner_monitor_is_one_owned_task_and_cancels_cleanly():
         assert task.cancelled()
 
     asyncio.run(exercise())
+
+
+def test_runner_runtime_metrics_status_is_bounded_and_redacted():
+    runner = _runner_for_metrics_tests()
+    runner.record_sync_activity("channelmux.dispatch", phase="started")
+    runner.record_sync_activity("channelmux.dispatch", phase="finished")
+    payload = runner._runtime_metrics_status_fields()
+    assert set(payload) == {"cpu_cores_max", "work_slice_ms_max", "event_loop_lag_ms", "categories", "most_timed_category", "longest_uninterrupted_category"}
+    assert payload["most_timed_category"] == "channelmux_callback"
+    assert all("payload" not in row and "address" not in row for row in payload["categories"])

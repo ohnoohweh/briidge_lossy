@@ -25,6 +25,7 @@ from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, Teleme
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
+from .runtime_metrics import NANOSECONDS_PER_SECOND, RuntimeMetricAccumulator
 
 _bridge = export_bridge_globals(globals())
 
@@ -269,6 +270,10 @@ class Runner:
         self._runtime_metrics_last_loop_lag_ns: Optional[int] = None
         self._runtime_metrics_max_loop_lag_ns = 0
         self._runtime_metrics_lag_probe_count = 0
+        self._runtime_metrics = RuntimeMetricAccumulator(("channelmux_callback", "tun_callback", "admin_snapshot"))
+        self._runtime_metrics_started: Dict[str, int] = {}
+        self._runtime_metrics_cpu_peaks: list[tuple[int, float]] = []
+        self._runtime_metrics_cpu_peak_overall: Optional[float] = None
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._async_diag_lock = threading.Lock()
@@ -704,6 +709,9 @@ class Runner:
         cores = float(cpu_delta) / float(wall_delta)
         self._runtime_metrics_last_cpu_cores = cores
         self._runtime_metrics_sample_count += 1
+        self._runtime_metrics_cpu_peaks.append((wall_now, cores))
+        self._runtime_metrics_cpu_peaks = [item for item in self._runtime_metrics_cpu_peaks if wall_now - item[0] < 2 * NANOSECONDS_PER_SECOND]
+        self._runtime_metrics_cpu_peak_overall = max(float(self._runtime_metrics_cpu_peak_overall or 0.0), cores)
         return cores
 
     def _record_runtime_loop_lag(self, *, deadline_ns: int, actual_ns: Optional[int] = None) -> int:
@@ -754,6 +762,25 @@ class Runner:
             "runtime_health_last_error": self._runtime_health_last_error or None,
         }
 
+    def _runtime_metrics_status_fields(self) -> dict[str, Any]:
+        now = time.monotonic_ns()
+        rows = []
+        for item in self._runtime_metrics.snapshot(now_ns=now, window_ns=2 * NANOSECONDS_PER_SECOND):
+            rows.append({"category": item.category, "count": item.lifetime.count, "total_ms": item.lifetime.total_ms,
+                         "mean_ms": (item.lifetime.total_ms / item.lifetime.count) if item.lifetime.count else None,
+                         "p95_ms": item.lifetime.p95_ms, "p99_ms": item.lifetime.p99_ms,
+                         "max_ms": item.lifetime.max_ms, "last_2_seconds_max_ms": item.recent.max_ms})
+        total_leader = max(rows, key=lambda row: (row["total_ms"], row["category"]), default=None)
+        slice_leader = max(rows, key=lambda row: (row["max_ms"] or 0.0, row["category"]), default=None)
+        return {"cpu_cores_max": {"overall": self._runtime_metrics_cpu_peak_overall,
+                "last_2_seconds": max((value for _, value in self._runtime_metrics_cpu_peaks), default=None)},
+                "work_slice_ms_max": {"overall": max((row["max_ms"] or 0.0 for row in rows), default=None),
+                "last_2_seconds": max((row["last_2_seconds_max_ms"] or 0.0 for row in rows), default=None)},
+                "event_loop_lag_ms": {"last": None if self._runtime_metrics_last_loop_lag_ns is None else self._runtime_metrics_last_loop_lag_ns / 1_000_000.0,
+                "max": self._runtime_metrics_max_loop_lag_ns / 1_000_000.0}, "categories": rows,
+                "most_timed_category": total_leader["category"] if total_leader and total_leader["count"] else None,
+                "longest_uninterrupted_category": slice_leader["category"] if slice_leader and slice_leader["count"] else None}
+
     def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
         now_mono = time.monotonic()
         with self._async_diag_lock:
@@ -772,6 +799,14 @@ class Runner:
                 self._async_diag["last_failed_error"] = str(error or "")
 
     def record_sync_activity(self, name: str, *, kind: str = "callback", phase: str, error: str = "") -> None:
+        category = "tun_callback" if str(name).startswith("tun") else "channelmux_callback"
+        now_ns = time.monotonic_ns()
+        if phase == "started":
+            self._runtime_metrics_started[category] = now_ns
+        elif phase in {"finished", "failed"}:
+            started = self._runtime_metrics_started.pop(category, None)
+            if started is not None:
+                self._runtime_metrics.record(category, max(0, now_ns - started), completed_at_ns=now_ns)
         now_mono = time.monotonic()
         with self._async_diag_lock:
             if phase == "started":
@@ -2346,6 +2381,7 @@ class Runner:
             "collector": self.get_telemetry_collector_snapshot(),
         }
         payload["tun_helper"] = self._tun_helper_snapshot()
+        payload["runtime_metrics"] = self._runtime_metrics_status_fields()
         payload.update(self._runtime_health_status_fields())
         if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()
