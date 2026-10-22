@@ -459,6 +459,8 @@ ARC-CMP-004:
   # PXY-3 CI matrices have recorded lifecycle and exact proxy-collector
   # success per host without a cross-operating-system process pair.
   # PXY-4 discovery keeps configured and deployment-selected workers fail-closed.
+  # PXY-4B has a named Linux same-host gate; its composed per-pair traffic and
+  # package-discovery evidence remains an explicit architecture gap.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

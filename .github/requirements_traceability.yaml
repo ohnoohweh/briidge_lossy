@@ -719,6 +719,8 @@ REQ-PRX-001:
   # independently per host; no cross-operating-system process pair is implied.
   # Python native-worker discovery prefers explicit configuration, then the
   # validated deployment override, before development PATH lookup.
+  # The named PXY-4B Linux gate combines supervisor traffic/recovery and
+  # native-host collector/replacement evidence while composed per-pair proof remains open.
   integration_tests:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_proxy_worker
     - tests/integration/test_proxy_provider_e2e.py::test_proxy_provider_e2e_python_http_https_and_socks5
