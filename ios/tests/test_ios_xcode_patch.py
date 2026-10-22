@@ -272,7 +272,7 @@ def test_patch_pbxproj_text_injects_extension_target() -> None:
     assert "ObstacleBridgeQuicOverlayTransportOwner.swift in Sources" in patched
     assert "ObstacleBridgeProxyServer.swift in Sources" in patched
     assert "ObstacleBridgeOnboarding.swift in Sources" in patched
-    assert "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" in patched
+    assert "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift" not in patched
     assert "../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift" in patched
     assert "../../../../../swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeNativeCrypto.swift" in patched
     assert 'path = "../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgePacketFlowBridge.swift";' not in patched
@@ -289,7 +289,7 @@ def test_patch_pbxproj_text_accepts_quoted_generated_target_name() -> None:
     assert "packageProductDependencies = (" in patched
     assert "71C700000000000000000002 /* Crypto */" in patched
     assert "build/generated/ObstacleBridgeGeneratedBuildStamp.swift" in patched
-    assert "ObstacleBridgeHostRunner.swift in Sources" in patched
+    assert "ObstacleBridgeHostRunner.swift in Sources" not in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in Sources" in patched
     assert "ObstacleBridgeGeneratedBuildStamp.swift in IPServer Sources" in patched
     assert "CURRENT_PROJECT_VERSION = 1;" in patched

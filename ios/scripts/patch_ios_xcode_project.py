@@ -334,7 +334,6 @@ def add_app_native_crypto_source(text: str) -> str:
     required_entries = [
         "\t\t\t\t71C300000000000000000001 /* ObstacleBridgeNativeCrypto.swift in Sources */,\n",
         "\t\t\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */,\n",
-        "\t\t\t\t71C400000000000000000002 /* ObstacleBridgeHostRunner.swift in Sources */,\n",
     ]
 
     if all(entry in text for entry in required_entries):
@@ -389,6 +388,18 @@ def add_app_native_crypto_source(text: str) -> str:
         + phase_match.group("tail")
         + text[phase_match.end():]
     )
+
+
+def remove_app_macos_host_runner_source(text: str) -> str:
+    """Keep the macOS-only HostRunner out of the generated iOS target."""
+    for entry in (
+        "\t\t71C400000000000000000002 /* ObstacleBridgeHostRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */; };\n",
+        "\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeHostRunner.swift; path = \"../../../../../swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t\t\t71C400000000000000000002 /* ObstacleBridgeHostRunner.swift in Sources */,\n",
+        "\t\t\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */,\n",
+    ):
+        text = text.replace(entry, "")
+    return text
 
 
 def add_app_shared_swift_sources(text: str) -> str:
@@ -931,8 +942,7 @@ def patch_app_target(text: str) -> str:
     text = insert_before(
         text,
         "/* End PBXBuildFile section */\n",
-        "\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */; };\n"
-        "\t\t71C400000000000000000002 /* ObstacleBridgeHostRunner.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */; };\n",
+        "\t\t71C400000000000000000001 /* ObstacleBridgeTunnelControl.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */; };\n",
     )
     text = insert_before(
         text,
@@ -942,8 +952,7 @@ def patch_app_target(text: str) -> str:
     text = insert_before(
         text,
         "/* End PBXFileReference section */\n",
-        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n"
-        "\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeHostRunner.swift; path = \"../../../../../swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift\"; sourceTree = SOURCE_ROOT; };\n",
+        "\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ObstacleBridgeTunnelControl.swift; path = \"../../../../../swift/Sources/ObstacleBridgeiOS/ObstacleBridgeTunnelControl.swift\"; sourceTree = SOURCE_ROOT; };\n",
     )
     text, count = re.subn(
         r"(\t\t\t\t609384A628B5B958005B2A5D /\* Process Python libraries \*/,\n"
@@ -970,6 +979,7 @@ def patch_app_target(text: str) -> str:
         "\t\t60796F1019190F4100A9926B /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n",
         "\t\t60796F1019190F4100A9926B /* Release */ = {\n\t\t\tisa = XCBuildConfiguration;\n\t\t\tbuildSettings = {\n\t\t\t\tASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;\n\t\t\t\tCODE_SIGN_ENTITLEMENTS = \"../../../../native/ObstacleBridgeApp/ObstacleBridge.entitlements\";\n\t\t\t\tCLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = NO;\n\t\t\t\tSWIFT_VERSION = 5.0;\n",
     )
+    text = remove_app_macos_host_runner_source(text)
     text = add_app_native_crypto_source(text)
     text = add_app_shared_swift_sources(text)
     text = add_app_generated_swift_source(text)
@@ -982,7 +992,6 @@ def patch_app_target(text: str) -> str:
         "\t\t\t\t71C300000000000000000010 /* ObstacleBridgeNativeCrypto.swift */,\n"
         f"\t\t\t\t{APP_GENERATED_SWIFT_SOURCE[1]} /* {APP_GENERATED_SWIFT_SOURCE[2]} */,\n"
         "\t\t\t\t71C400000000000000000010 /* ObstacleBridgeTunnelControl.swift */,\n"
-        "\t\t\t\t71C400000000000000000011 /* ObstacleBridgeHostRunner.swift */,\n"
         "\t\t\t);\n"
         "\t\t\tname = \"Shared Native\";\n"
         "\t\t\tsourceTree = \"<group>\";\n"
