@@ -17,8 +17,16 @@ else
   BRIEFCASE_CMD="briefcase"
 fi
 
+if [ -n "${PYTHON_CMD:-}" ]; then
+  :
+elif [ -x "$REPO_ROOT/.venv/bin/python" ]; then
+  PYTHON_CMD="$REPO_ROOT/.venv/bin/python"
+else
+  PYTHON_CMD="python3"
+fi
+
 cd "$IOS_DIR"
-"$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/scripts/write_build_info.py"
+"$PYTHON_CMD" "$REPO_ROOT/scripts/write_build_info.py"
 if [ -f "$PROJECT_PBXPROJ" ] && [ -d "$PYTHON_SUPPORT_XCFRAMEWORK" ]; then
   echo "[create_ios_xcode_project] existing iOS project detected, refreshing app bundle"
   "$BRIEFCASE_CMD" update iOS --no-input -a "$APP_NAME"
@@ -30,4 +38,4 @@ else
   echo "[create_ios_xcode_project] project support missing, creating iOS environment"
   "$BRIEFCASE_CMD" create iOS "$@"
 fi
-"$REPO_ROOT/.venv/bin/python" "$IOS_DIR/scripts/patch_ios_xcode_project.py"
+"$PYTHON_CMD" "$IOS_DIR/scripts/patch_ios_xcode_project.py"

@@ -1,0 +1,68 @@
+name: Publish iOS preview
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-ios-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish iOS Simulator IPA
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install iOS packaging dependencies
+        run: python -m pip install --upgrade pip briefcase
+
+      - name: Build unsigned iOS Simulator app
+        run: |
+          set -euo pipefail
+          ios/scripts/create_ios_xcode_project.sh --no-input
+          python scripts/write_build_info.py
+          xcodebuild \
+            -project ios/build/obstacle_bridge_ios/ios/xcode/ObstacleBridge.xcodeproj \
+            -scheme ObstacleBridge \
+            -configuration Release \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/build/release-preview/derived \
+            ARCHS=arm64 \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Prepare release assets
+        run: |
+          set -euo pipefail
+          app_path='ios/build/release-preview/derived/Build/Products/Release-iphonesimulator/ObstacleBridge.app'
+          test -d "$app_path"
+          mkdir Payload
+          cp -R "$app_path" Payload/
+          ditto -c -k --keepParent Payload ObstacleBridge-ios-simulator-preview.ipa
+          shasum -a 256 ObstacleBridge-ios-simulator-preview.ipa > ObstacleBridge-ios-simulator-preview.ipa.sha256
+
+      - name: Publish the IPA
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! gh release view macos-preview >/dev/null 2>&1; then
+            gh release create macos-preview --target "$TARGET" --title 'Latest main preview (all platforms)' --prerelease --notes 'Latest main preview artifacts. Verify each attached SHA-256 before use.' || true
+          fi
+          gh release view macos-preview >/dev/null
+          gh release edit macos-preview --target "$TARGET"
+          gh release upload macos-preview ObstacleBridge-ios-simulator-preview.ipa ObstacleBridge-ios-simulator-preview.ipa.sha256 --clobber

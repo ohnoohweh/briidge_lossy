@@ -1,0 +1,56 @@
+name: Publish Synology preview
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: publish-synology-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish Synology DSM SPK
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Build and verify the DSM package
+        run: |
+          set -euo pipefail
+          python scripts/build_synology_spk.py --build-number "${{ github.run_number }}"
+          python - <<'PY'
+          import pathlib
+          import tarfile
+
+          package = next(pathlib.Path('dist/synology').glob('*.spk'))
+          with tarfile.open(package) as archive:
+              assert 'INFO' in archive.getnames()
+              assert 'package.tgz' in archive.getnames()
+          print(package)
+          PY
+          sha256sum dist/synology/*.spk > dist/synology/ObstacleBridge-synology-preview.spk.sha256
+
+      - name: Publish the SPK
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if ! gh release view macos-preview >/dev/null 2>&1; then
+            gh release create macos-preview --target "$TARGET" --title 'Latest main preview (all platforms)' --prerelease --notes 'Latest main preview artifacts. Verify each attached SHA-256 before use.' || true
+          fi
+          gh release view macos-preview >/dev/null
+          gh release edit macos-preview --target "$TARGET"
+          gh release upload macos-preview dist/synology/*.spk dist/synology/ObstacleBridge-synology-preview.spk.sha256 --clobber
