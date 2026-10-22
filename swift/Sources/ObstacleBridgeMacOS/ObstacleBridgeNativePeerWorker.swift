@@ -27,7 +27,7 @@ enum ObstacleBridgeNativePeerWorker {
                   let generation = strictPositiveInt(start["generation"]),
                   let configuration = start["config"] as? [String: Any]
             else { throw WorkerError.invalidBootstrap }
-            let rootLogLevel = strictLogLevel(start["log_root_level"]) ?? 30
+            let rootLogLevel = ObstacleBridgeRuntimeConfig.privateWorkerLogLevel(from: start["log_root_level"])
             let producer = try logFD.map { try ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: rootLogLevel) }
             let native = try ObstacleBridgeHostRunner(peerWorkerConfiguration: configuration, peerWorkerLogProducer: producer)
             try native.startPeerWorker()
@@ -72,14 +72,6 @@ enum ObstacleBridgeNativePeerWorker {
     private static func strictPositiveInt(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber,
               CFGetTypeID(number) != CFBooleanGetTypeID(), number.intValue > 0,
-              number.doubleValue == Double(number.intValue)
-        else { return nil }
-        return number.intValue
-    }
-
-    private static func strictLogLevel(_ value: Any?) -> Int? {
-        guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID(), number.intValue >= 0,
               number.doubleValue == Double(number.intValue)
         else { return nil }
         return number.intValue

@@ -528,6 +528,7 @@ def test_runtime_config_source_exists() -> None:
     assert "struct ObstacleBridgeAdminUIBootstrapState" in admin_web
     assert "ObstacleBridgeAdminWebSupport.bootstrapState(" in runtime
     assert "static func flatten(" in runtime
+    assert "static func privateWorkerLogLevel(from value: Any?, fallback: Int = 30) -> Int" in runtime
     assert "static func ownServerSpecs(" in runtime
     assert "static func remoteServerSpecs(" in runtime
     assert "static func tunnelRoutingOverride(" in runtime

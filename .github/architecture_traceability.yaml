@@ -791,6 +791,8 @@ ARC-CMP-005:
   # Remaining logging-worker completion is qualified in separate macOS and
   # Linux execution lanes; the final comparison consumes host-local evidence
   # and never requires either host to execute the other's worker binary.
+  # macOS private-worker producer evidence includes the shared threshold
+  # vocabulary and payload-free host operational events.
   # The private Admin-worker boundary returns that same envelope.
   unit_tests:
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
@@ -858,6 +860,7 @@ ARC-CMP-005:
     - tests/unit/test_native_log_supervisor.py::test_swift_logging_child_exits_on_owner_loss
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
     - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
+    - ios/tests/test_m3_native_sources.py::test_runtime_config_source_exists
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector

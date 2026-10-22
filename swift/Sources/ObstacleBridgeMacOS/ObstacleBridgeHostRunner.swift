@@ -538,7 +538,7 @@ final class ObstacleBridgeHostRunner {
             try startSharedUDPOverlayTransportOwnerIfNeeded()
             bootstrapState["startup_status"] = "ready"
         } catch {
-            NSLog("[ObstacleBridgeHostRunner][startup_failed] %@", error.localizedDescription)
+            recordOperationalLog(event: "runtime.startup_failed", level: "ERROR", levelNumber: 40)
             bootstrapState["startup_status"] = "failed"
             bootstrapState["startup_error"] = error.localizedDescription
             startupFailed = true
@@ -677,6 +677,18 @@ final class ObstacleBridgeHostRunner {
     private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
         loggingWorkerLock.lock(); defer { loggingWorkerLock.unlock() }
         return loggingWorker
+    }
+
+    /// Operational host events use the selected private collector when one is
+    /// configured. The collector record intentionally contains a stable event
+    /// name only: NSError descriptions and callback dictionaries can contain
+    /// endpoint or configuration material and remain out of private logs.
+    private func recordOperationalLog(event: String, level: String = "INFO", levelNumber: Int = 20) {
+        if let worker = activeLoggingWorker() {
+            worker.emit(name: "macos.host", level: level, levelNumber: levelNumber, message: event)
+        } else {
+            NSLog("[ObstacleBridgeHostRunner][%@]", event)
+        }
     }
 
     private func stopLoggingWorker() {
@@ -3353,8 +3365,8 @@ final class ObstacleBridgeHostRunner {
             { [weak self] packet in
                 self?.deliverLocalTunPacketToActiveOverlay(packet)
             },
-            { event, fields in
-                NSLog("[ObstacleBridgeHostRunner][%@] %@", event, String(describing: fields))
+            { [weak self] event, _ in
+                self?.recordOperationalLog(event: event)
             }
         )
         macOSTunHelperTransportKind = helperClient.transportKind
@@ -3369,12 +3381,7 @@ final class ObstacleBridgeHostRunner {
             macOSTunChannelConnectedHookFired = false
             runMacOSTunLifecycleHook(for: tunService, event: "on_created")
         } catch {
-            NSLog(
-                "[ObstacleBridgeHostRunner][macos_utun_start_failed] ifname=%@ mtu=%d error=%@",
-                ifname,
-                mtu,
-                error.localizedDescription
-            )
+            recordOperationalLog(event: "macos_utun_start_failed", level: "ERROR", levelNumber: 40)
             helperClient.recordFailure(stage: "macos_utun_start", error: error.localizedDescription)
             macOSTunHelperRuntimeSnapshot = helperClient.runtimeSnapshot
             macOSTunHelperClient = nil
@@ -3382,7 +3389,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func handleSharedOverlayOwnerEvent(event: String, fields: [String: Any]) {
-        NSLog("[ObstacleBridgeHostRunner][%@] %@", event, String(describing: fields))
+        recordOperationalLog(event: event)
         guard event == "ws_overlay_connected"
             || event == "tcp_overlay_connected"
             || event == "quic_overlay_connected"
@@ -3459,17 +3466,12 @@ final class ObstacleBridgeHostRunner {
         guard let snapshot = Self.macOSRouteSnapshot(to: peerHost, inet6: false),
               !snapshot.interfaceName.hasPrefix("utun")
         else {
-            NSLog("[ObstacleBridgeHostRunner][macos_overlay_underlay_route_missing] peer=%@", peerHost)
+            recordOperationalLog(event: "macos_overlay_underlay_route_missing", level: "WARNING", levelNumber: 30)
             return
         }
         macOSOverlayUnderlayGatewayV4 = snapshot.gateway
         macOSOverlayUnderlayInterfaceV4 = snapshot.interfaceName
-        NSLog(
-            "[ObstacleBridgeHostRunner][macos_overlay_underlay_route] peer=%@ gateway=%@ interface=%@",
-            peerHost,
-            snapshot.gateway.isEmpty ? "<none>" : snapshot.gateway,
-            snapshot.interfaceName.isEmpty ? "<none>" : snapshot.interfaceName
-        )
+        recordOperationalLog(event: "macos_overlay_underlay_route")
     }
 
     private func macOSTunHookContextPeerHost() -> String {
@@ -3864,12 +3866,7 @@ final class ObstacleBridgeHostRunner {
                 recordTunICMPStage("to_local_tun_written")
             }
         } catch {
-            NSLog(
-                "[ObstacleBridgeHostRunner][macos_utun_write_failed] ifname=%@ packet_bytes=%d error=%@",
-                helperClient.actualIfname,
-                packet.count,
-                error.localizedDescription
-            )
+            recordOperationalLog(event: "macos_utun_write_failed", level: "ERROR", levelNumber: 40)
             helperClient.recordFailure(
                 stage: "macos_utun_write",
                 error: error.localizedDescription

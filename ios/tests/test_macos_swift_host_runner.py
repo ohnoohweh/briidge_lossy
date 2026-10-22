@@ -76,6 +76,8 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
     assert "native peer worker cannot own shared desktop services" in runner
+    assert "private func recordOperationalLog(" in runner
+    assert runner.count("NSLog(") == 1
 
 
 def test_macos_proxy_worker_control_descriptor_survives_exec() -> None:

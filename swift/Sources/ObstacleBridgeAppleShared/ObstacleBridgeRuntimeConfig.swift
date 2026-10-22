@@ -668,6 +668,14 @@ enum ObstacleBridgeRuntimeConfig {
         ObstacleBridgeRuntimeConfigPolicy.intValue(from: value)
     }
 
+    /// The portable private-worker record vocabulary uses Python logging's
+    /// non-negative numeric threshold. Hosts that do not own desktop workers
+    /// can still validate configuration without creating a process boundary.
+    static func privateWorkerLogLevel(from value: Any?, fallback: Int = 30) -> Int {
+        guard let level = intValue(from: value), level >= 0 else { return fallback }
+        return level
+    }
+
     static func doubleValue(from value: Any?) -> Double? {
         ObstacleBridgeRuntimeConfigPolicy.doubleValue(from: value)
     }

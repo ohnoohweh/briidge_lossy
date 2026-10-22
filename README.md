@@ -1152,6 +1152,8 @@ operating systems.
 When a Python supervisor selects a private collector on macOS, its native peer
 worker receives only a separate inherited record-only descriptor; it emits
 bounded lifecycle records and cannot query the collector.
+The macOS host likewise sends payload-free operational event names to that
+collector while it is selected.
 Python separates telemetry configuration into `telemetry_client` and `telemetry_server`;
 the client section holds producer settings and the server section holds collector settings.
 The telemetry installation ID is always derived from
