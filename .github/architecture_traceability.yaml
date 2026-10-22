@@ -448,7 +448,7 @@ ARC-CMP-004:
   # positive-generation fencing, and capability-intersection wire parity. The
   # Python-supervised peer-control boundary has migrated for both child
   # implementations, as have the Python/native proxy and private logging
-  # supervisor-worker boundaries; peer children negotiate capabilities before
+  # supervisor-worker boundaries; peer and proxy children negotiate capabilities before
   # bootstrap, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while

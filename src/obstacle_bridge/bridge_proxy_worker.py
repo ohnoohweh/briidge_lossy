@@ -152,7 +152,8 @@ async def _read_frame(reader: asyncio.StreamReader) -> dict[str, Any]:
 
 async def _write_frame(writer: asyncio.StreamWriter, message: dict[str, Any]) -> None:
     raw_kind = str(message.get("kind") or "")
-    kind = (WorkerIPCFrameKind.REQUEST if raw_kind == "proxy.start" or raw_kind == "proxy.stop"
+    kind = (WorkerIPCFrameKind.HELLO if raw_kind == "worker.hello"
+            else WorkerIPCFrameKind.REQUEST if raw_kind == "proxy.start" or raw_kind == "proxy.stop"
             else WorkerIPCFrameKind.ERROR if raw_kind == "proxy.error"
             else WorkerIPCFrameKind.EVENT if raw_kind == "proxy.snapshot"
             else WorkerIPCFrameKind.RESPONSE)
@@ -186,6 +187,11 @@ async def _serve(data_fd: int, log_fd: int | None = None) -> None:
     command = None
     log_socket = None
     try:
+        hello = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
+        generation = hello.get("generation")
+        if hello != {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["proxy.control"], "generation": generation} or type(generation) is not int or generation < 1:
+            raise ValueError("invalid proxy worker hello")
+        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "proxy", "capabilities": ["proxy.control"], "generation": generation})
         init = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
         generation = init.get("generation")
         if (init.get("kind") != "proxy.start" or not isinstance(init.get("config"), dict)
@@ -325,6 +331,10 @@ class ProxyWorker:
             parent.setblocking(False)
             reader, self.writer = await asyncio.open_connection(sock=parent)
             expected_generation = self.generation + 1
+            await _write_frame(self.writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["proxy.control"], "generation": expected_generation})
+            hello = await asyncio.wait_for(_read_frame(reader), timeout=5.0)
+            if hello != {"v": 1, "kind": "worker.hello", "role": "proxy", "capabilities": ["proxy.control"], "generation": expected_generation}:
+                raise ProxyWorkerStartupError("startup_failed")
             await _write_frame(self.writer, {"v": 1, "kind": "proxy.start", "generation": expected_generation, "config": config,
                                              "log_root_level": logging.getLogger().level,
                                              "log_levels": {"proxy_provider": logging.getLogger("proxy_provider").level}})

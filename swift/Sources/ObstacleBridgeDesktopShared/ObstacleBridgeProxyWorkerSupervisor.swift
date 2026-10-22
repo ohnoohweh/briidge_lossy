@@ -87,7 +87,7 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
 
     private func writeFrame(_ fd: Int32, value: [String: Any]) throws {
         let rawKind = value["kind"] as? String ?? ""
-        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "proxy.start" || rawKind == "proxy.stop" ? .request : .response
+        let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "worker.hello" ? .hello : rawKind == "proxy.start" || rawKind == "proxy.stop" ? .request : .response
         let generation = UInt64((value["generation"] as? Int) ?? 1)
         let frame = try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: value)
         guard frame.count - ObstacleBridgeWorkerIPC.headerBytes <= Self.maxFrame else { throw Failure.invalidFrame }
@@ -154,6 +154,10 @@ public final class ObstacleBridgeProxyWorkerSupervisor: @unchecked Sendable {
             relay?.releaseChildHandle()
             lock.lock(); child = process; control = parentFD; stopping = false; logRelay = relay; lock.unlock()
             try childInput.close()
+            try writeFrame(parentFD, value: ["v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["proxy.control"], "generation": expectedGeneration])
+            let hello = try Self.readFrame(parentFD, timeout: 5_000_000_000)
+            guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "proxy",
+                  hello["capabilities"] as? [String] == ["proxy.control"], hello["generation"] as? Int == expectedGeneration else { throw Failure.invalidFrame }
             try writeFrame(parentFD, value: ["v": 1, "kind": "proxy.start", "generation": expectedGeneration, "config": config,
                                              "log_root_level": 10, "log_levels": ["proxy_provider": loggingWorker?.proxyLogLevel ?? 0]])
             let response = try Self.readFrame(parentFD, timeout: 5_000_000_000)

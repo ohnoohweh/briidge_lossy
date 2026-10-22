@@ -50,7 +50,7 @@ private func readFrame(_ fd: Int32) throws -> [String: Any] {
 
 private func writeFrame(_ fd: Int32, _ message: [String: Any]) throws {
     let rawKind = message["kind"] as? String ?? ""
-    let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "proxy.error" ? .error : rawKind == "proxy.snapshot" ? .event : .response
+    let kind: ObstacleBridgeWorkerIPC.Kind = rawKind == "worker.hello" ? .hello : rawKind == "proxy.error" ? .error : rawKind == "proxy.snapshot" ? .event : .response
     let generation = UInt64((message["generation"] as? Int) ?? 1)
     let frame = try ObstacleBridgeWorkerIPC.encodeControl(kind: kind, generation: generation, value: message)
     guard frame.count - ObstacleBridgeWorkerIPC.headerBytes <= maximumControlFrame else { throw WorkerError.invalid }
@@ -522,11 +522,15 @@ private func run(_ fd: Int32, logFD: Int32?) throws {
     guard validateSocket(fd, type: streamType), logFD != fd else { throw WorkerError.invalid }
     let logger = try logFD.map { try ChildLogger(fd: $0) }
     setTimeout(fd, seconds: 5)
+    let hello = try readFrame(fd)
+    guard hello["kind"] as? String == "worker.hello", hello["role"] as? String == "supervisor",
+          hello["capabilities"] as? [String] == ["proxy.control"], let helloGeneration = hello["generation"] as? Int, helloGeneration > 0 else { throw WorkerError.invalid }
+    try writeFrame(fd, ["v": 1, "kind": "worker.hello", "role": "proxy", "capabilities": ["proxy.control"], "generation": helloGeneration])
     let initial = try readFrame(fd)
     let rootLevel = initial["log_root_level"] as? Int ?? 30
     let loggerLevel = (initial["log_levels"] as? [String: Int])?["proxy_provider"] ?? 0
     logger?.level = loggerLevel == 0 ? rootLevel : loggerLevel
-    guard initial["kind"] as? String == "proxy.start", let generation = initial["generation"] as? Int, generation > 0,
+    guard initial["kind"] as? String == "proxy.start", let generation = initial["generation"] as? Int, generation == helloGeneration,
           let config = initial["config"] as? [String: Any],
           let bindHost = config["bind"] as? String, ["127.0.0.1", "::1"].contains(bindHost),
           let policy = config["policy"] as? [String: Any], Set(policy.keys) == ["allow_private_destinations", "blocked_host_patterns"],
