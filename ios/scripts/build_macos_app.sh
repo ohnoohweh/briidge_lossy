@@ -239,7 +239,9 @@ echo "[build_macos_app] compiling macOS proxy worker"
   "${REPO_ROOT}/swift/Sources/ObstacleBridgeProxyWorker/main.swift"
 
 echo "[build_macos_app] compiling macOS log collector"
-"${SWIFTC_CMD}" -o "${LOG_WORKER_BINARY_PATH}" "${REPO_ROOT}/swift/Sources/ObstacleBridgeLogCollector/main.swift"
+"${SWIFTC_CMD}" -o "${LOG_WORKER_BINARY_PATH}" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWorkerIPC.swift" \
+  "${REPO_ROOT}/swift/Sources/ObstacleBridgeLogCollector/main.swift"
 
 echo "[build_macos_app] preparing macOS app bundle"
 rm -rf "${APP_BUNDLE}"

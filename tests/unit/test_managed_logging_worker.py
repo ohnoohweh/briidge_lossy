@@ -32,7 +32,7 @@ def native_collector(tmp_path_factory):
     if not swiftc or sys.platform not in {"darwin", "linux"}:
         pytest.skip("native collector requires swiftc on macOS or Linux")
     binary = tmp_path_factory.mktemp("private-log-collector") / "collector"
-    subprocess.run([swiftc, str(SOURCE), "-o", str(binary)], check=True, capture_output=True, text=True)
+    subprocess.run([swiftc, str(SOURCE.parents[1] / "ObstacleBridgeDesktopShared" / "ObstacleBridgeWorkerIPC.swift"), str(SOURCE), "-o", str(binary)], check=True, capture_output=True, text=True)
     return binary
 
 

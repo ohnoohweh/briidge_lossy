@@ -19,6 +19,7 @@ var targets: [Target] = [
     ),
     .executableTarget(
         name: "ObstacleBridgeLogCollector",
+        dependencies: ["ObstacleBridgeDesktopShared"],
         path: "swift/Sources/ObstacleBridgeLogCollector"
     ),
     .systemLibrary(

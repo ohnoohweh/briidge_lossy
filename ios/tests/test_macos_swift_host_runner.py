@@ -72,7 +72,7 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     proxy_supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
-    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 2
+    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 3
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker

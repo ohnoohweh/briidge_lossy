@@ -179,6 +179,7 @@ class UdpLogReceiver:
         self._socket.setblocking(False)
         self.max_datagram_bytes = max(512, min(int(max_datagram_bytes), 65507))
         self.malformed_datagrams = 0
+        self.reply_transform = None
 
     def handle_datagram(self, data: bytes, address=None) -> bool:
         try:
@@ -195,10 +196,13 @@ class UdpLogReceiver:
                     lines.pop(0)
                     reply_payload["lines"] = lines
                     reply = json.dumps(reply_payload, ensure_ascii=False, separators=(",", ":"), default=repr).encode("utf-8")
+                outbound = self.reply_transform(reply) if self.reply_transform is not None else reply
+                if not outbound or len(outbound) > self.max_datagram_bytes:
+                    raise ValueError("invalid logger reply frame")
                 if address is None:
-                    self._socket.send(reply)
+                    self._socket.send(outbound)
                 else:
-                    self._socket.sendto(reply, address)
+                    self._socket.sendto(outbound, address)
                 return True
             if not isinstance(payload, dict) or payload.get("v") != LOG_WIRE_VERSION:
                 raise ValueError("unsupported log wire payload")
@@ -242,13 +246,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--bind", default="127.0.0.1:15140", help="UDP listen address (default 127.0.0.1:15140)")
     parser.add_argument("--max-datagram-bytes", type=int, default=DEFAULT_MAX_DATAGRAM_BYTES)
     parser.add_argument("--private-fds", nargs=2, type=int, metavar=("DATA_FD", "LIFETIME_FD"), help=argparse.SUPPRESS)
+    parser.add_argument("--generation", type=int, default=1, help=argparse.SUPPRESS)
     DebugLoggingConfigurator.register_cli(parser)
     args = parser.parse_args(argv)
     DebugLoggingConfigurator.from_args(args).apply()
     if args.private_fds is not None:
         from .bridge_logging_worker import serve_private_receiver
 
-        return serve_private_receiver(*args.private_fds)
+        return serve_private_receiver(*args.private_fds, args.generation)
     receiver = UdpLogReceiver(args.bind, args.max_datagram_bytes)
     logging.getLogger("logging_ipc").info("UDP log receiver listening on %s", args.bind)
     receiver.serve_forever()

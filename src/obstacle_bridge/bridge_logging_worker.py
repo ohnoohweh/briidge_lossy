@@ -20,17 +20,19 @@ import uuid
 from typing import Any, Optional
 
 from .bridge_logging_ipc import LOG_WIRE_VERSION, NonBlockingUdpLogHandler, UdpLogReceiver, swap_admin_log_query_client
+from .worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, encode_frame, try_decode_frame
 
 PRIVATE_MAX_DATAGRAM = 8 * 1024
 
 
-def serve_private_receiver(data_fd: int, lifetime_fd: int) -> int:
+def serve_private_receiver(data_fd: int, lifetime_fd: int, generation: int = 1) -> int:
     """Serve records until the owner closes its inherited lifetime socket."""
     with socket.socket(fileno=data_fd) as data, socket.socket(fileno=lifetime_fd) as lifetime:
         if data.family != socket.AF_UNIX or data.type != socket.SOCK_DGRAM or lifetime.family != socket.AF_UNIX or lifetime.type != socket.SOCK_STREAM:
             raise ValueError("invalid private logging sockets")
-        receiver = UdpLogReceiver("", PRIVATE_MAX_DATAGRAM, connected_socket=data)
-        data.send(json.dumps({"v": LOG_WIRE_VERSION, "kind": "worker.ready", "role": "logging", "implementation": "python"}).encode("utf-8"))
+        receiver = UdpLogReceiver("", PRIVATE_MAX_DATAGRAM - 20, connected_socket=data)
+        receiver.reply_transform = lambda reply: encode_frame(WorkerIPCFrameKind.RESPONSE, generation, reply)
+        data.send(encode_control(WorkerIPCFrameKind.READY, generation, {"v": LOG_WIRE_VERSION, "kind": "worker.ready", "role": "logging", "implementation": "python"}))
         while True:
             readable, _, _ = select.select([data, lifetime], [], [])
             if lifetime in readable:
@@ -39,17 +41,31 @@ def serve_private_receiver(data_fd: int, lifetime_fd: int) -> int:
                 lifetime.recv(1)
                 return 0
             if data in readable:
-                packet = data.recv(PRIVATE_MAX_DATAGRAM + 1)
-                if len(packet) <= PRIVATE_MAX_DATAGRAM:
-                    receiver.handle_datagram(packet)
+                packet = data.recv(PRIVATE_MAX_DATAGRAM + 21)
+                try:
+                    decoded = try_decode_frame(packet)
+                    if decoded is None or decoded[1] or decoded[0].generation != generation or decoded[0].kind not in {WorkerIPCFrameKind.REQUEST, WorkerIPCFrameKind.DATA}:
+                        continue
+                    receiver.handle_datagram(decoded[0].payload)
+                except ValueError:
+                    continue
 
 
 class _PrivateLogHandler(NonBlockingUdpLogHandler):
-    def __init__(self, data: socket.socket):
+    def __init__(self, data: socket.socket, generation: int = 1, *, framed: bool = False):
         logging.Handler.__init__(self)
         self._socket = data
         self.max_datagram_bytes = PRIVATE_MAX_DATAGRAM
         self.dropped_records = 0
+        self.generation = generation
+        self.framed = framed
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            payload = self._payload(record)
+            self._socket.send(encode_frame(WorkerIPCFrameKind.DATA, self.generation, payload) if self.framed else payload)
+        except Exception:
+            self.dropped_records += 1
 
     def close(self) -> None:
         # The worker owns this shared socket; queries may still be in flight.
@@ -59,7 +75,7 @@ class _PrivateLogHandler(NonBlockingUdpLogHandler):
 class ManagedLoggingWorker:
     """Launch a selected Python/native log worker and own its private channels."""
 
-    def __init__(self, implementation: str, *, native_executable: Optional[str] = None, stdout: Any = None):
+    def __init__(self, implementation: str, *, native_executable: Optional[str] = None, stdout: Any = None, generation: int = 1):
         if implementation not in {"python", "native"}:
             raise ValueError("logging worker must be python or native")
         if os.name != "posix":
@@ -67,6 +83,7 @@ class ManagedLoggingWorker:
         if implementation == "native" and not native_executable:
             raise ValueError("native logging worker executable is required")
         self.implementation = implementation
+        self.generation = generation
         self._query_lock = threading.Lock()
         self._data, child_data = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
         try:
@@ -77,7 +94,7 @@ class ManagedLoggingWorker:
             raise
         self._data.setblocking(False)
         self.process: Optional[subprocess.Popen] = None
-        self.handler = _PrivateLogHandler(self._data)
+        self.handler = _PrivateLogHandler(self._data, generation, framed=True)
         try:
             # Darwin defaults AF_UNIX datagram send buffers to 2 KiB. Set
             # both directions explicitly so the shared 8 KiB wire limit is
@@ -86,14 +103,15 @@ class ManagedLoggingWorker:
                 endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 64 * 1024)
                 endpoint.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 64 * 1024)
             fds = [str(child_data.fileno()), str(child_lifetime.fileno())]
-            command = ([sys.executable, "-m", "obstacle_bridge.bridge_logging_ipc"] if implementation == "python" else [str(native_executable)]) + ["--private-fds", *fds]
+            command = ([sys.executable, "-m", "obstacle_bridge.bridge_logging_ipc"] if implementation == "python" else [str(native_executable)]) + ["--private-fds", *fds, "--generation", str(generation)]
             self.process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=stdout, pass_fds=(child_data.fileno(), child_lifetime.fileno()))
             child_data.close()
             child_lifetime.close()
             readable, _, _ = select.select([self._data], [], [], 5.0)
             if not readable:
                 raise RuntimeError("logging worker startup timed out")
-            ready = json.loads(self._data.recv(PRIVATE_MAX_DATAGRAM).decode("utf-8"))
+            frame, remainder = try_decode_frame(self._data.recv(PRIVATE_MAX_DATAGRAM + 20)) or (None, b"")
+            ready = decode_control(frame) if frame is not None and not remainder and frame.kind == WorkerIPCFrameKind.READY and frame.generation == generation else None
             if ready != {"v": LOG_WIRE_VERSION, "kind": "worker.ready", "role": "logging", "implementation": implementation}:
                 raise RuntimeError("invalid logging worker startup response")
         except BaseException:
@@ -111,12 +129,15 @@ class ManagedLoggingWorker:
             return unavailable
         try:
             try:
-                self._data.send(request)
+                self._data.send(encode_frame(WorkerIPCFrameKind.REQUEST, self.generation, request))
                 while True:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0 or not select.select([self._data], [], [], remaining)[0]:
                         return unavailable
-                    payload = json.loads(self._data.recv(PRIVATE_MAX_DATAGRAM).decode("utf-8"))
+                    frame, remainder = try_decode_frame(self._data.recv(PRIVATE_MAX_DATAGRAM + 20)) or (None, b"")
+                    if frame is None or remainder or frame.kind != WorkerIPCFrameKind.RESPONSE or frame.generation != self.generation:
+                        continue
+                    payload = json.loads(frame.payload.decode("utf-8"))
                     if not isinstance(payload, dict) or payload.get("request_id") != request_id:
                         continue
                     if payload.get("v") != LOG_WIRE_VERSION or payload.get("kind") != "logs.reply" or payload.get("ok") is not True or not isinstance(payload.get("lines"), list):
@@ -157,8 +178,10 @@ class _SupervisedLogHandler(NonBlockingUdpLogHandler):
         if child is None or self._supervisor._stop.is_set():
             self.dropped_records += 1
             return
-        self._socket = child._data
-        super().emit(record)
+        try:
+            child._data.send(encode_frame(WorkerIPCFrameKind.DATA, child.generation, self._payload(record)))
+        except Exception:
+            self.dropped_records += 1
 
     def close(self):
         logging.Handler.close(self)
@@ -173,7 +196,7 @@ class SupervisedLoggingWorker:
         self.stdout = stdout
         self._stop = threading.Event()
         self._active: Optional[ManagedLoggingWorker] = ManagedLoggingWorker(
-            implementation, native_executable=native_executable, stdout=stdout
+            implementation, native_executable=native_executable, stdout=stdout, generation=1
         )
         self._last_process = self._active.process
         self._generation = 1
@@ -229,7 +252,7 @@ class SupervisedLoggingWorker:
             self.handler.dropped_records += 1
             return
         try:
-            child._data.send(packet)
+            child._data.send(encode_frame(WorkerIPCFrameKind.DATA, child.generation, packet))
         except OSError:
             self.handler.dropped_records += 1
 
@@ -258,7 +281,7 @@ class SupervisedLoggingWorker:
                 break
             try:
                 replacement = ManagedLoggingWorker(
-                    self.implementation, native_executable=self.native_executable, stdout=self.stdout
+                    self.implementation, native_executable=self.native_executable, stdout=self.stdout, generation=self._generation + 1
                 )
             except Exception:
                 self._failed_starts += 1
