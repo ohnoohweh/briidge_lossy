@@ -1149,6 +1149,9 @@ macOS-only and Linux-only packages in
 [the architecture work-package plan](docs/ARCHITECTURE.md#remaining-work-packages);
 Python/native combinations are exercised on the same host, not across host
 operating systems.
+When a Python supervisor selects a private collector on macOS, its native peer
+worker receives only a separate inherited record-only descriptor; it emits
+bounded lifecycle records and cannot query the collector.
 Python separates telemetry configuration into `telemetry_client` and `telemetry_server`;
 the client section holds producer settings and the server section holds collector settings.
 The telemetry installation ID is always derived from

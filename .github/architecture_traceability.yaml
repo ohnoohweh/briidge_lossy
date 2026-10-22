@@ -504,7 +504,7 @@ ARC-CMP-004:
   # errexit relaxation needed to translate rc=75/77 into DSM-managed relaunch
   # instead of a final service stop.
   integration_tests:
-    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_peer_worker_exits_when_supervisor_is_killed
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
@@ -857,6 +857,7 @@ ARC-CMP-005:
     - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_drops_when_collector_stalls
     - tests/unit/test_native_log_supervisor.py::test_swift_logging_child_exits_on_owner_loss
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_supervises_logging_worker
+    - ios/tests/test_macos_swift_host_runner.py::test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener
     - tests/integration/test_overlay_e2e.py::test_linux_swift_supervises_logging_worker
     - tests/unit/test_native_proxy_supervisor.py::test_native_proxy_child_logs_follow_collector_and_proxy_restarts
     - ios/tests/test_macos_swift_host_runner.py::test_macos_host_proxy_logs_follow_collector

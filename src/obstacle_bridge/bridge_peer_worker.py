@@ -215,9 +215,13 @@ class PeerStackWorker:
         parent, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
         process = None
         try:
+            # Both Python and native peer children receive the same
+            # producer-only descriptor.  In particular, a native macOS child
+            # must not fall back to inherited stderr when a managed collector
+            # is selected by its Python supervisor.
+            from .bridge_logging_worker import open_child_log_relay
+            self._log_relay = open_child_log_relay()
             if self.implementation == "python":
-                from .bridge_logging_worker import open_child_log_relay
-                self._log_relay = open_child_log_relay()
                 command = [sys.executable, "-m", "obstacle_bridge.bridge_peer_worker", "--control-fd", str(child.fileno())]
             else:
                 default_executable = "ObstacleBridgeHostRunner" if sys.platform == "darwin" else "ObstacleBridgeLinux"

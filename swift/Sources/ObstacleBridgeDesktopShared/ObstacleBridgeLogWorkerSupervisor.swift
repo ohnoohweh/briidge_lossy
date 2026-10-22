@@ -349,4 +349,50 @@ public final class ObstacleBridgeLogProducerRelay: @unchecked Sendable {
     public func stop() { source.cancel(); releaseChildHandle() }
     deinit { stop() }
 }
+
+/// A native child-side endpoint for a producer-only inherited logging
+/// capability. It has no query or collector-lifecycle operations.
+public final class ObstacleBridgeLogProducer: @unchecked Sendable {
+    private static let maxDatagram = 8 * 1024
+    private let descriptor: Int32
+    private let minimumLevel: Int
+
+    public init(inheritedFD: Int32, minimumLevel: Int = 0) throws {
+        guard inheritedFD >= 0 else { throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable }
+        var socketType: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(inheritedFD, SOL_SOCKET, SO_TYPE, &socketType, &length) == 0,
+              socketType == logDatagramSocket else { throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable }
+        let flags = fcntl(inheritedFD, F_GETFL)
+        guard flags >= 0, fcntl(inheritedFD, F_SETFL, flags | O_NONBLOCK) == 0 else {
+            throw ObstacleBridgeLogWorkerSupervisor.Failure.unavailable
+        }
+        self.descriptor = inheritedFD
+        self.minimumLevel = minimumLevel
+    }
+
+    public func emit(name: String, level: String, levelNumber: Int, message: String) {
+        guard levelNumber >= minimumLevel else { return }
+        let record: [String: Any] = [
+            "v": 1,
+            "created": Date().timeIntervalSince1970,
+            "name": String(name.prefix(256)),
+            "level": String(level.prefix(32)),
+            "levelno": levelNumber,
+            "message": String(message.prefix(4096)),
+            "process": Int(ProcessInfo.processInfo.processIdentifier),
+            "thread": "native",
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: record),
+              !data.isEmpty, data.count <= Self.maxDatagram else { return }
+        #if os(Linux)
+        let flags = Int32(MSG_DONTWAIT | MSG_NOSIGNAL)
+        #else
+        let flags = Int32(MSG_DONTWAIT)
+        #endif
+        _ = data.withUnsafeBytes { send(descriptor, $0.baseAddress, $0.count, flags) }
+    }
+
+    deinit { close(descriptor) }
+}
 #endif

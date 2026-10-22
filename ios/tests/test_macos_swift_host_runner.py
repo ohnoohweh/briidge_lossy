@@ -6,6 +6,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import signal
 import shutil
@@ -32,6 +33,7 @@ from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from obstacle_bridge.bridge import AdminWebUI, CONFIG_SECRET_PREFIX, _decrypt_config_secret, _encrypt_config_secret
 from obstacle_bridge.bridge import Runner, build_runtime_args_from_config
 from obstacle_bridge.bridge_peer_worker import PeerStackWorker
+from obstacle_bridge.bridge_logging_worker import activate_managed_logging
 from obstacle_bridge.core import ObstacleBridgeClient
 from obstacle_bridge.onboarding import decode_invite_token, encode_invite_token
 from obstacle_bridge.bridge_tun_helper_macos import DarwinTunHelperBackend
@@ -60,7 +62,7 @@ def test_macos_build_uses_core_websocket_payload_source() -> None:
     assert "swift/Sources/ObstacleBridgeAppleShared/ObstacleBridgeWebSocketPayloadCodec.swift" not in build_script
 
 
-def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_only() -> None:
+def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities() -> None:
     build_script = (ROOT / "ios" / "scripts" / "build_macos_app.sh").read_text(encoding="utf-8")
     entrypoint = (APP_NATIVE_DIR / "ObstacleBridgeHostRunnerMain.swift").read_text(encoding="utf-8")
     worker = (APP_NATIVE_DIR / "ObstacleBridgeNativePeerWorker.swift").read_text(encoding="utf-8")
@@ -68,7 +70,9 @@ def test_macos_host_runner_builds_the_native_peer_worker_with_private_control_on
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
     assert '"--peer-worker-control-fd"' in entrypoint
+    assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
+    assert "ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: rootLogLevel)" in worker
     assert '"peer.ready"' in worker and '"peer.snapshot.reply"' in worker
     assert "startPeerWorker()" in runner and "stopPeerWorker()" in runner
     assert "native peer worker cannot own shared desktop services" in runner
@@ -91,8 +95,9 @@ def test_macos_log_worker_control_descriptors_survive_exec() -> None:
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="native peer worker is macOS-only")
-def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_python_listener() -> None:
+def test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_with_python_listener(monkeypatch: pytest.MonkeyPatch) -> None:
     async def exercise() -> None:
+        monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
         artifact = build_macos_swift_artifact()
         with socket.socket() as reservation:
             reservation.bind(("127.0.0.1", 0))
@@ -111,12 +116,20 @@ def test_macos_native_peer_worker_uses_private_control_and_interoperates_with_py
         )
         try:
             await listener.start()
-            await worker.start({
-                "runner": {"overlay_transport": "tcp"},
-                "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
-                "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
-                "TUN_routing": {"enabled_on_startup": False},
-            })
+            with activate_managed_logging(argparse.Namespace(log_worker="python", log_file=None)) as collector:
+                await worker.start({
+                    "runner": {"overlay_transport": "tcp"},
+                    "tcp_session": {"tcp_peer": "127.0.0.1", "tcp_peer_port": overlay_port},
+                    "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
+                    "TUN_routing": {"enabled_on_startup": False},
+                })
+                for _ in range(100):
+                    records = collector.fetch(100)
+                    if any("peer_worker.started" in line for line in records["lines"]):
+                        break
+                    await asyncio.sleep(0.05)
+                else:
+                    pytest.fail("native peer worker did not use the record-only logging capability")
             process = worker.process
             assert process is not None and process.pid != os.getpid()
             command = subprocess.check_output(["ps", "-p", str(process.pid), "-o", "command="], text=True)

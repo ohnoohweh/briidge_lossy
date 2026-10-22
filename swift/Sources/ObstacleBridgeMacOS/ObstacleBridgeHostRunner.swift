@@ -177,6 +177,7 @@ final class ObstacleBridgeHostRunner {
     private let loggingWorkerLock = NSLock()
     private var loggingWorker: ObstacleBridgeLogWorkerSupervisor?
     private var loggingWorkerConfigured = false
+    private var peerWorkerLogProducer: ObstacleBridgeLogProducer?
     private var proxyProviderLastError = ""
     private var macOSTunHelperClient: ObstacleBridgeTunHelperClienting?
     private var macOSTunHelperRuntimeSnapshot = ObstacleBridgeTunHelperRuntimeSnapshot()
@@ -274,7 +275,7 @@ final class ObstacleBridgeHostRunner {
     /// Initializes the narrowly scoped native peer child from its inherited
     /// control capability. The configuration is intentionally never written to
     /// a file by this path.
-    init(peerWorkerConfiguration decoded: [String: Any]) throws {
+    init(peerWorkerConfiguration decoded: [String: Any], peerWorkerLogProducer: ObstacleBridgeLogProducer? = nil) throws {
         try Self.validatePeerWorkerConfiguration(decoded)
         self.runtimeConfigPath = "<peer-worker-ipc>"
         self.runtimeConfigRaw = decoded
@@ -289,6 +290,7 @@ final class ObstacleBridgeHostRunner {
         self.bindHost = "127.0.0.1"
         self.statusPort = 0
         self.macOSTunHelperClientFactory = Self.makeDefaultMacOSTunHelperClient
+        self.peerWorkerLogProducer = peerWorkerLogProducer
         serviceStateQueue.setSpecific(key: Self.serviceStateQueueKey, value: 1)
     }
 
@@ -319,9 +321,11 @@ final class ObstacleBridgeHostRunner {
         try startOwnServers()
         startSharedTCPOverlayTransportOwnerIfNeeded()
         bootstrapState["startup_status"] = "ready"
+        peerWorkerLogProducer?.emit(name: "macos.peer_worker", level: "INFO", levelNumber: 20, message: "peer_worker.started")
     }
 
     func stopPeerWorker() {
+        peerWorkerLogProducer?.emit(name: "macos.peer_worker", level: "INFO", levelNumber: 20, message: "peer_worker.stopped")
         sharedTcpOverlayTransportOwner?.stop()
         sharedTcpOverlayTransportOwner = nil
         stopOwnServers()
@@ -663,7 +667,11 @@ final class ObstacleBridgeHostRunner {
             return runtimeHealthSequence
         }
         enqueueTelemetryHealth(state: event, counter: sequence)
-        activeLoggingWorker()?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
+        if let worker = activeLoggingWorker() {
+            worker.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
+        } else {
+            peerWorkerLogProducer?.emit(name: "macos.runtime", level: "INFO", levelNumber: 20, message: event)
+        }
     }
 
     private func activeLoggingWorker() -> ObstacleBridgeLogWorkerSupervisor? {
