@@ -12,6 +12,19 @@ TUN_HELPER_MAX_FRAME_BYTES = 1_048_576
 _FRAME_HEADER = struct.Struct(">BI")
 
 
+def _reject_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate TUN helper JSON field")
+        value[key] = item
+    return value
+
+
+def _reject_nonfinite(_value: str) -> None:
+    raise ValueError("invalid TUN helper JSON number")
+
+
 class TunHelperFrameKind(enum.IntEnum):
     CONTROL_REQUEST = 1
     CONTROL_RESPONSE = 2
@@ -69,10 +82,18 @@ def encode_control_frame(kind: TunHelperFrameKind, message: TunHelperControlMess
 
 def decode_control_payload(payload: bytes) -> TunHelperControlMessage:
     try:
-        doc = json.loads(bytes(payload).decode("utf-8"))
+        doc = json.loads(
+            bytes(payload).decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_object,
+            parse_constant=_reject_nonfinite,
+        )
     except Exception as exc:
         raise ValueError(f"invalid TUN helper control payload: {exc}") from exc
-    version = int(doc.get("version", 0) or 0)
+    if not isinstance(doc, dict):
+        raise ValueError("TUN helper control payload must be an object")
+    version = doc.get("version")
+    if type(version) is not int:
+        raise ValueError("TUN helper control payload has invalid version")
     if version != TUN_HELPER_PROTOCOL_VERSION:
         raise ValueError(
             f"unsupported TUN helper protocol version: {version} != {TUN_HELPER_PROTOCOL_VERSION}"

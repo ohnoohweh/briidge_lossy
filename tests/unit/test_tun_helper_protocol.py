@@ -47,6 +47,15 @@ class TunHelperProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported TUN helper protocol version"):
             decode_control_payload(payload)
 
+    def test_decode_control_payload_rejects_duplicate_and_nonfinite_fields(self) -> None:
+        for payload in (
+            b'{"version":1,"version":1,"op":"SNAPSHOT","payload":{}}',
+            b'{"version":NaN,"op":"SNAPSHOT","payload":{}}',
+            b'[]',
+        ):
+            with self.assertRaises(ValueError):
+                decode_control_payload(payload)
+
     def test_try_decode_frame_returns_none_for_incomplete_payload(self) -> None:
         encoded = encode_frame(TunHelperFrameKind.PACKET_TO_HELPER, b"\x01\x02\x03\x04")
 
