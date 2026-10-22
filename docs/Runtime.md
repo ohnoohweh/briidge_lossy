@@ -596,6 +596,36 @@ peer addresses, channel IDs, service IDs, exception text, or session IDs.
 Keep detailed per-peer information in the authenticated admin APIs and expose
 bounded aggregates to the monitoring system.
 
+### In-process monitoring implementation state
+
+The Python runtime now has dependency-free, bounded timing primitives in
+`runtime_metrics.py`: an injectable monotonic clock, fixed duration buckets,
+rolling fixed-slot histograms, and a fixed-category accumulator. The
+primitives retain aggregates only; they neither start background work nor
+collect process accounting. Their unit tests use deterministic clocks and do
+not need a live bridge, root privileges, TUN, a network peer, or Swift.
+
+Remaining local Linux work packages are deliberately independent so each can
+be developed and validated without a mixed Python/Swift CI run:
+
+- **L-RM.2 — Runner sampling and loop lag:** add one cadence-controlled
+  `time.process_time_ns()`/`time.monotonic_ns()` sampler and an owned,
+  cancellable asyncio lag probe to `Runner`.
+- **L-RM.3 — Runtime aggregation and status projection:** instrument approved
+  coarse Python boundaries, derive lifetime and trailing-two-second maxima and
+  category leaders, then serve a cached, redacted `runtime_metrics` projection
+  through the authenticated status path and bounded health evidence.
+- **L-RM.4 — Linux smoke scenario:** validate the sampler, lag probe, status
+  projection, and shutdown in a short local socket-only bridge subprocess.
+- **L-RM.5 — WebAdmin runtime analysis:** add compact graphical dual-arc CPU
+  load and uninterrupted-computation meters immediately beside Restart, plus
+  a Runtime Analysis tab with exact values, leaders, and bounded category
+  rows. The top bar remains graphical; text belongs in the tab.
+
+The current residual gap is therefore integration: the new primitives are not
+yet sampled by `Runner`, populated at runtime boundaries, exposed through
+WebAdmin, or shown in the administrator UI.
+
 ### Dashboard and alert on relationships
 
 Place these graphs on one time axis:

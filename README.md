@@ -1725,6 +1725,10 @@ Important caveat:
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.
 
 For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime performance investigation and monitoring guide](docs/Runtime.md).
+The Python runtime's first in-process monitoring primitive is bounded and
+dependency-free: it keeps only fixed-bucket, fixed-window aggregate timing for
+approved categories. Runner sampling, status projection, and the WebAdmin
+Runtime Analysis view remain the tracked follow-up work in that guide.
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
 - Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.
