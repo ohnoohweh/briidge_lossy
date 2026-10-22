@@ -26,6 +26,13 @@ enum ObstacleBridgeLinuxMain {
             do { try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, generation: generation) } catch { exit(2) }
             return
         }
+        if arguments.count == 8, arguments[0] == "--admin-worker-control-fd", let controlFD = Int32(arguments[1]),
+           arguments[2] == "--admin-worker-lifetime-fd", let lifetimeFD = Int32(arguments[3]),
+           arguments[4] == "--generation", let generation = Int(arguments[5]),
+           arguments[6] == "--log-fd", let logFD = Int32(arguments[7]) {
+            do { try ObstacleBridgeNativeAdminWorker.run(controlFD: controlFD, lifetimeFD: lifetimeFD, logFD: logFD, generation: generation) } catch { exit(2) }
+            return
+        }
         if let runOptions = ObstacleBridgeLinuxForegroundOptions.parse(arguments) {
             runForeground(options: runOptions)
             return

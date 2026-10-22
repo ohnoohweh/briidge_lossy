@@ -96,6 +96,7 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert "hasDuplicateObjectKey" in common_ipc
     assert "nativeAdminChildControlArgument" in entrypoint
     assert 'nativeAdminChildControlArgument = "--admin-worker-control-fd"' in helper_service
+    assert 'nativeAdminChildLogArgument = "--log-fd"' in helper_service
     assert "ObstacleBridgeNativeAdminWorker.run" in entrypoint
 
 
@@ -831,20 +832,24 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
     artifact = build_macos_swift_artifact()
     parent_control, child_control = socket.socketpair()
     parent_lifetime, child_lifetime = socket.socketpair()
+    parent_log, child_log = socket.socketpair(socket.AF_UNIX, socket.SOCK_DGRAM)
     process = subprocess.Popen(
         [
             str(artifact.binary_path),
             "--admin-worker-control-fd", str(child_control.fileno()),
             "--admin-worker-lifetime-fd", str(child_lifetime.fileno()),
             "--generation", "7",
+            "--log-fd", str(child_log.fileno()),
         ],
-        pass_fds=(child_control.fileno(), child_lifetime.fileno()),
+        pass_fds=(child_control.fileno(), child_lifetime.fileno(), child_log.fileno()),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
     child_control.close()
     child_lifetime.close()
+    child_log.close()
     parent_control.settimeout(3)
+    parent_log.settimeout(3)
     try:
         from obstacle_bridge.worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, frame_size, try_decode_frame
 
@@ -865,7 +870,7 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
         assert receive_control() == {
             "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
         }
-        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {}}))
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {}, "log_root_level": 0}))
         request = receive_control()
         assert request["kind"] == "admin.call"
         assert request["id"] == "bootstrap-status"
@@ -876,10 +881,16 @@ def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_o
             "v": 1, "kind": "admin.reply", "id": request["id"], "ok": True, "result": {},
         }))
         assert receive_control() == {"v": 1, "kind": "admin.ready", "implementation": "native", "port": 0, "generation": 7}
+        assert json.loads(parent_log.recv(8192)) == {
+            "v": 1, "name": "admin.native", "level": "INFO", "levelno": 20,
+            "message": "native_admin_ready", "process": process.pid, "thread": "native",
+            "created": pytest.approx(time.time(), abs=3),
+        }
         parent_lifetime.close()
         assert process.wait(timeout=3) == 0
     finally:
         parent_control.close()
+        parent_log.close()
         with contextlib.suppress(OSError):
             parent_lifetime.close()
         if process.poll() is None:

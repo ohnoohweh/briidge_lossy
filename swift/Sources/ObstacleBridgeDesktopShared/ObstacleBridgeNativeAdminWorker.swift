@@ -9,7 +9,7 @@ public enum ObstacleBridgeNativeAdminWorker {
     private static let maximumControlPayload = 65_536
     private static let bootstrapStatusRequestID = "bootstrap-status"
 
-    public static func run(controlFD: Int32, lifetimeFD: Int32, generation: Int) throws {
+    public static func run(controlFD: Int32, lifetimeFD: Int32, logFD: Int32? = nil, generation: Int) throws {
         guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0 else { throw Failure.invalidBootstrap }
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
         let lifetime = FileHandle(fileDescriptor: lifetimeFD, closeOnDealloc: true)
@@ -22,6 +22,8 @@ public enum ObstacleBridgeNativeAdminWorker {
         ])
         let bootstrap = try readControl(control, generation: generation, expectedKind: .request)
         guard bootstrap["kind"] as? String == "admin.start", bootstrap["args"] is [String: Any] else { throw Failure.invalidBootstrap }
+        let logLevel = strictNonnegativeInt(bootstrap["log_root_level"]) ?? 30
+        let logProducer = try logFD.map { try ObstacleBridgeLogProducer(inheritedFD: $0, minimumLevel: logLevel) }
         // This is the first parent-owned datum the child needs.  It pins the
         // common correlated request/reply boundary before IPC-1A2 adds the
         // HTTP/session methods that consume further runner state.
@@ -34,6 +36,7 @@ public enum ObstacleBridgeNativeAdminWorker {
         guard reply["kind"] as? String == "admin.reply", reply["id"] as? String == bootstrapStatusRequestID,
               reply["ok"] as? Bool == true, reply["result"] is [String: Any]
         else { throw Failure.invalidBootstrap }
+        logProducer?.emit(name: "admin.native", level: "INFO", levelNumber: 20, message: "native_admin_ready")
         try write(control, kind: .ready, generation: generation, value: [
             "v": 1, "kind": "admin.ready", "implementation": "native", "port": 0, "generation": generation,
         ])
@@ -45,6 +48,12 @@ public enum ObstacleBridgeNativeAdminWorker {
     private static func strictPositiveInt(_ value: Any?) -> Int? {
         guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
               number.intValue > 0, number.doubleValue == Double(number.intValue) else { return nil }
+        return number.intValue
+    }
+
+    private static func strictNonnegativeInt(_ value: Any?) -> Int? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.intValue >= 0, number.doubleValue == Double(number.intValue) else { return nil }
         return number.intValue
     }
 

@@ -48,11 +48,14 @@ struct ObstacleBridgeLinuxTunDeviceTests {
     @Test func nativeAdminChildUsesInheritedControlAndExitsOnOwnerLoss() throws {
         let control = try makeSocketPair()
         let lifetime = try makeSocketPair()
+        let log = try makeDatagramSocketPair()
         let childControl = dup(control.1)
         let childLifetime = dup(lifetime.1)
-        guard childControl >= 0, childLifetime >= 0 else { throw POSIXError(.EMFILE) }
-        close(control.1); close(lifetime.1)
+        let childLog = dup(log.1)
+        guard childControl >= 0, childLifetime >= 0, childLog >= 0 else { throw POSIXError(.EMFILE) }
+        close(control.1); close(lifetime.1); close(log.1)
         defer { close(control.0) }
+        defer { close(log.0) }
         var parentLifetimeFD = lifetime.0
         defer {
             if parentLifetimeFD >= 0 { close(parentLifetimeFD) }
@@ -60,14 +63,14 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let stopped = DispatchSemaphore(value: 0)
         DispatchQueue.global().async {
             defer { stopped.signal() }
-            try? ObstacleBridgeNativeAdminWorker.run(controlFD: childControl, lifetimeFD: childLifetime, generation: 7)
+            try? ObstacleBridgeNativeAdminWorker.run(controlFD: childControl, lifetimeFD: childLifetime, logFD: childLog, generation: 7)
         }
 
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .hello, generation: 7, value: [
             "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
         ]), to: control.0)
         #expect(try readControl(from: control.0)["kind"] as? String == "worker.hello")
-        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": [String: Any]()]), to: control.0)
+        try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .request, generation: 7, value: ["v": 1, "kind": "admin.start", "args": [String: Any](), "log_root_level": 0]), to: control.0)
         let request = try readControl(from: control.0)
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
@@ -78,6 +81,9 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         let ready = try readControl(from: control.0)
         #expect(ready["kind"] as? String == "admin.ready")
         #expect(ready["implementation"] as? String == "native")
+        let record = try JSONSerialization.jsonObject(with: readDatagram(from: log.0)) as? [String: Any]
+        #expect(record?["name"] as? String == "admin.native")
+        #expect(record?["message"] as? String == "native_admin_ready")
         close(parentLifetimeFD)
         parentLifetimeFD = -1
         #expect(stopped.wait(timeout: .now() + 1) == .success)
@@ -101,6 +107,19 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         var descriptors = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0, &descriptors) == 0 else { throw POSIXError(.ENFILE) }
         return (descriptors[0], descriptors[1])
+    }
+
+    private func makeDatagramSocketPair() throws -> (Int32, Int32) {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard socketpair(AF_UNIX, Int32(SOCK_DGRAM.rawValue), 0, &descriptors) == 0 else { throw POSIXError(.ENFILE) }
+        return (descriptors[0], descriptors[1])
+    }
+
+    private func readDatagram(from descriptor: Int32) throws -> Data {
+        var bytes = [UInt8](repeating: 0, count: 8192)
+        let count = read(descriptor, &bytes, bytes.count)
+        guard count > 0 else { throw POSIXError(.EIO) }
+        return Data(bytes.prefix(count))
     }
 
     private func writeAll(_ data: Data, to descriptor: Int32) throws {

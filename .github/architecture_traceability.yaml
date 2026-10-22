@@ -456,7 +456,7 @@ ARC-CMP-004:
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while
-  # A shared native Admin bootstrap accepts only inherited control/lifetime descriptors, exchanges Admin HELLO/READY, makes one bounded correlated bootstrap-status parent RPC, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Inherited logging and host qualification remain. Linux helper runtime/owner-loss, Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1H, IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
+  # A shared native Admin bootstrap accepts only inherited control/lifetime/record-only log descriptors, exchanges Admin HELLO/READY, makes one bounded correlated bootstrap-status parent RPC, and exits on owner loss; packaged macOS and Linux-only socketpair tests cover that boundary, with Linux CI evidence pending. Host qualification remains. Linux helper runtime/owner-loss, Admin HTTP/session parity, host-local selection, and broader lifecycle qualification remain in IPC-1H, IPC-1A1, IPC-1A2, IPC-1A3, and IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
