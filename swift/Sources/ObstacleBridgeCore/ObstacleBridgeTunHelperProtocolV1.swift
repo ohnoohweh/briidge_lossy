@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 
 /// OS-independent framing and JSON control contract for Python and compiled
 /// Swift TUN helpers. Local transport selection does not change this wire ABI.
@@ -36,7 +37,10 @@ public enum ObstacleBridgeTunHelperProtocolV1 {
 
     public static func decodeControl(_ data: Data) throws -> (operation: String, payload: [String: Any]) {
         guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              value["version"] as? Int == version,
+              let rawVersion = value["version"] as? NSNumber,
+              CFGetTypeID(rawVersion) != CFBooleanGetTypeID(),
+              rawVersion.intValue == version,
+              rawVersion.doubleValue == Double(version),
               let operation = value["op"] as? String, !operation.isEmpty,
               let payload = value["payload"] as? [String: Any] else { throw Error.malformedControl }
         return (operation, payload)
