@@ -112,6 +112,15 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(stopped.wait(timeout: .now() + 2) == .success)
     }
 
+    @Test func nativeAdminChildRejectsNonUnixStreamCapabilities() throws {
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard pipe(&descriptors) == 0 else { throw POSIXError(.EMFILE) }
+        defer { close(descriptors[0]); close(descriptors[1]) }
+        #expect(throws: (any Error).self) {
+            try ObstacleBridgeNativeAdminWorker.run(controlFD: descriptors[0], lifetimeFD: descriptors[1], generation: 1)
+        }
+    }
+
     /// This is intentionally opt-in: opening a kernel TUN device requires
     /// CAP_NET_ADMIN and must not make ordinary CI depend on host privileges.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["OBSTACLEBRIDGE_PRIVILEGED_TUN"] == "1"))

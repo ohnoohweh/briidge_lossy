@@ -14,8 +14,16 @@ public enum ObstacleBridgeNativeAdminWorker {
     private static let maximumControlPayload = 65_536
     private static let bootstrapStatusRequestID = "bootstrap-status"
 
+    #if os(Linux)
+    private static let unixStreamSocketType = Int32(SOCK_STREAM.rawValue)
+    #else
+    private static let unixStreamSocketType = SOCK_STREAM
+    #endif
+
     public static func run(controlFD: Int32, lifetimeFD: Int32, logFD: Int32? = nil, generation: Int) throws {
-        guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0 else { throw Failure.invalidBootstrap }
+        guard controlFD >= 0, lifetimeFD >= 0, controlFD != lifetimeFD, generation > 0,
+              isUnixStreamDescriptor(controlFD), isUnixStreamDescriptor(lifetimeFD)
+        else { throw Failure.invalidBootstrap }
         let control = FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)
         let lifetime = FileHandle(fileDescriptor: lifetimeFD, closeOnDealloc: true)
         let hello = try readControl(control, generation: generation, expectedKind: .hello, deadline: ProcessInfo.processInfo.systemUptime + 5)
@@ -100,5 +108,21 @@ public enum ObstacleBridgeNativeAdminWorker {
             guard result > 0, pollDescriptor.revents & Int16(POLLIN) != 0 else { throw Failure.invalidBootstrap }
             return
         }
+    }
+
+    private static func isUnixStreamDescriptor(_ descriptor: Int32) -> Bool {
+        var socketType: Int32 = 0
+        var socketTypeLength = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(descriptor, SOL_SOCKET, SO_TYPE, &socketType, &socketTypeLength) == 0,
+              socketType == unixStreamSocketType
+        else { return false }
+        var address = sockaddr_storage()
+        var addressLength = socklen_t(MemoryLayout<sockaddr_storage>.size)
+        let result = withUnsafeMutablePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                getsockname(descriptor, $0, &addressLength)
+            }
+        }
+        return result == 0 && address.ss_family == sa_family_t(AF_UNIX)
     }
 }
