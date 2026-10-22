@@ -7552,7 +7552,10 @@ def _linux_proxy_socks5_echo(proxy_port: int, target_port: int) -> None:
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize('proxy_implementation', ['python', 'native'])
+@pytest.mark.parametrize('proxy_implementation', [
+    pytest.param('python', id='python-worker'),
+    pytest.param('native', id='packaged-native-worker'),
+])
 def test_linux_swift_host_supervises_proxy_worker_full_matrix(tmp_path: Path, proxy_implementation: str) -> None:
     if not sys.platform.startswith('linux'):
         pytest.skip('Linux Swift process E2E coverage requires Linux')

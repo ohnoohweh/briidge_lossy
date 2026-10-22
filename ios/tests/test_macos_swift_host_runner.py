@@ -3689,7 +3689,10 @@ def test_macos_host_supervises_logging_worker(tmp_path: Path, monkeypatch: pytes
             process.communicate(timeout=5)
 
 
-@pytest.mark.parametrize("implementation", ["python", "native"])
+@pytest.mark.parametrize("implementation", [
+    pytest.param("python", id="python-worker"),
+    pytest.param("native", id="packaged-native-worker"),
+])
 def test_macos_host_supervises_proxy_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, implementation: str) -> None:
     monkeypatch.setenv("no_proxy", "127.0.0.1,localhost")
     monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
