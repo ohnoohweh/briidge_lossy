@@ -2,11 +2,14 @@ name: Publish Fedora 44 native preview
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/release-assets-execution-smoke]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  RELEASE_TAG: ${{ github.ref_name == 'main' && 'macos-preview' || 'release-assets-smoke' }}
 
 concurrency:
   group: publish-fedora44-preview
@@ -43,9 +46,9 @@ jobs:
           TARGET: ${{ github.sha }}
         run: |
           set -euo pipefail
-          if ! gh release view macos-preview >/dev/null 2>&1; then
-            gh release create macos-preview --target "$TARGET" --title 'Latest main preview (all platforms)' --prerelease --notes 'Latest main preview artifacts. Verify each attached SHA-256 before use.' || true
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --target "$TARGET" --title 'Release-assets smoke test' --prerelease --notes 'Temporary release-workflow smoke-test artifacts.' || true
           fi
-          gh release view macos-preview >/dev/null
-          gh release edit macos-preview --target "$TARGET"
-          gh release upload macos-preview ObstacleBridge-linux-fedora-44.tar.gz ObstacleBridge-linux-fedora-44.tar.gz.sha256 --clobber
+          gh release view "$RELEASE_TAG" >/dev/null
+          gh release edit "$RELEASE_TAG" --target "$TARGET"
+          gh release upload "$RELEASE_TAG" ObstacleBridge-linux-fedora-44.tar.gz ObstacleBridge-linux-fedora-44.tar.gz.sha256 --clobber
