@@ -50,6 +50,9 @@ final class ObstacleBridgeMacOSProtocolV1TunHelperServer {
         while true {
             lock.lock(); let active = listener == fd; lock.unlock()
             guard active else { return }
+            var descriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            guard poll(&descriptor, 1, ObstacleBridgeMacOSTunHelperService.ownerLossAcceptPollMilliseconds) >= 0 else { throw ObstacleBridgeWorkerIPC.Failure.invalidFrame }
+            guard descriptor.revents & Int16(POLLIN) != 0 else { continue }
             let client = accept(fd, nil, nil)
             if client >= 0 { queue.async { [weak self] in self?.serve(client) } }
         }

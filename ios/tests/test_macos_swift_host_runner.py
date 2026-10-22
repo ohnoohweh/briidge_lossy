@@ -554,6 +554,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert "ObstacleBridgeWorkerIPC.negotiatedCapabilities" in protocol_server
     assert "ObstacleBridgeWorkerIPC.decodeControl" in protocol_server
     assert "ObstacleBridgeWorkerIPC.frameSize" in protocol_server
+    assert "ownerLossAcceptPollMilliseconds" in protocol_server
     assert "obstacleBridgeUnixSocketPathBytes(socketPath, capacity:" in protocol_server
     assert "destination.initialize(repeating: 0, count: bytes.count)" in protocol_server
     assert "destination.update(from: path, count: path.count)" in protocol_server
@@ -778,6 +779,41 @@ def test_macos_packaged_tun_helper_interoperates_with_python_common_ipc() -> Non
                 await client.close()
 
         assert asyncio.run(probe())["backend"] == "darwin-native"
+    finally:
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+        with contextlib.suppress(FileNotFoundError):
+            socket_path.unlink()
+
+
+def test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss() -> None:
+    artifact = build_macos_swift_artifact()
+    helper_path = artifact.app_bundle / "Contents" / "MacOS" / "ObstacleBridgeTunHelper"
+    socket_path = Path("/tmp") / f"ob-ipc1h-owner-loss-{uuid.uuid4().hex}.sock"
+    process = subprocess.Popen(
+        [str(helper_path), "--tun-helper-server", str(socket_path), "test-token", "--idle-sec", "0.5"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 5
+        while not socket_path.exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert socket_path.exists()
+
+        from obstacle_bridge.bridge_tun_helper_client import TunHelperClient
+
+        async def connect_and_release() -> None:
+            client = TunHelperClient(socket_path=str(socket_path), session_token="test-token")
+            await client.connect()
+            await client.close()
+
+        asyncio.run(connect_and_release())
+        while process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.02)
+        assert process.poll() == 0
+        assert not socket_path.exists()
     finally:
         if process.poll() is None:
             process.terminate()

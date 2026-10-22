@@ -12,6 +12,9 @@ enum ObstacleBridgeMacOSTunHelperService {
     static let helperBundleIdentifier = "com.obstaclebridge.macos.ObstacleBridge.TunHelper"
     static let helperExecutableName = "ObstacleBridgeTunHelper"
     static let expectedHelperVersion = "1"
+    /// Bound the packaged helper's accept loop so authenticated owner loss
+    /// cannot leave its Unix-socket capability live behind the client.
+    static let ownerLossAcceptPollMilliseconds: Int32 = 100
     static let pythonHelperProtocolVersion = ObstacleBridgeTunHelperProtocolV1.version
     static let helperLaunchDaemonPlistName = "\(helperBundleIdentifier).plist"
     static let xpcMachServiceName = "\(helperBundleIdentifier).xpc"
