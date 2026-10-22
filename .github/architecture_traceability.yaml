@@ -461,6 +461,8 @@ ARC-CMP-004:
   # PXY-4 discovery keeps configured and deployment-selected workers fail-closed.
   # PXY-4B has a named Linux same-host gate; its composed per-pair traffic and
   # package-discovery evidence remains an explicit architecture gap.
+  # PXY-4C keeps macOS host traffic, logging, replacement, and shutdown proof
+  # separate from Linux rather than inventing a cross-platform process pairing.
   # Elevated route/DNS verification is host-local and deterministic; packet
   # carriage remains a separate integration responsibility.
   # Swift macOS packet carriage waits for its configured peer route to resolve

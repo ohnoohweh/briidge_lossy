@@ -1040,6 +1040,10 @@ The named Linux PXY-4B workflow gate combines the Python-supervisor authenticate
 traffic/recovery cases, worker protocol E2E, and Linux Swift-host collector/replacement
 cases. It is progress toward, rather than evidence replacing, the remaining composed
 per-pair Linux host-traffic and packaged-discovery qualification.
+The named macOS PXY-4C gate runs the same Python-supervisor cases plus the bundled
+macOS host process for each selected worker; its host test carries authenticated
+HTTP CONNECT and SOCKS5 traffic, observes the selected collector, replaces a killed
+worker, and confirms listener closure on host shutdown.
 | `tests/unit/test_native_proxy_supervisor.py` | `ARC-CMP-001` | `REQ-PRX-001` | Native supervision of Python and native proxy children covers the same contract-v1 lifecycle projection, including stable redacted failure codes, authenticated traffic, credential isolation, owner loss, crashed or stalled child replacement with stable ports, busy-port retry, shutdown during backoff, and fail-closed policy on desktop Unix. Linux live-runtime and macOS host-runner tests exercise product integration. | `pytest -q tests/unit/test_native_proxy_supervisor.py` |
 | `ios/tests/test_swift_shared_parity_guard.py` | `ARC-CMP-001` | `REQ-PRX-001` | The platform parity guard accepts the paired macOS/Linux proxy-supervision boundary only with its shared desktop owner and source tests; it still rejects unpaired macOS and iOS changes. | `PYTHONPATH=. pytest -q ios/tests/test_swift_shared_parity_guard.py` |
 | `tests/integration/test_proxy_provider_e2e.py` | `ARC-CMP-001` | `REQ-PRX-001`, `PROC-TST-001` | In-process Python and both private-child proxy implementations handle concurrent HTTP, HTTPS-over-CONNECT and SOCKS5 clients against real local HTTP and TLS targets. | `pytest -q tests/integration/test_proxy_provider_e2e.py` |

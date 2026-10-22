@@ -440,6 +440,15 @@ jobs:
       - name: Qualify PXY-3B native-supervisor matrix (macOS)
         run: pytest -vv tests/unit/test_native_proxy_supervisor.py
 
+      - name: Qualify PXY-4C macOS same-host proxy matrix
+        env:
+          PYTHONPATH: .:src:ios/src
+          OBSTACLEBRIDGE_REUSE_MACOS_BUILD: "1"
+        run: |
+          pytest -vv tests/unit/test_proxy_worker.py -k 'runner_proxy_child_owns_http_socks_and_snapshots or runner_reports_lost_proxy_worker_without_in_process_fallback'
+          pytest -vv tests/integration/test_proxy_provider_e2e.py -k proxy_worker
+          pytest -vv ios/tests/test_macos_swift_host_runner.py -k macos_host_supervises_proxy_worker
+
       - name: Test native logging supervision
         run: pytest -q tests/unit/test_native_log_supervisor.py
 

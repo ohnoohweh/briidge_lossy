@@ -116,6 +116,7 @@ keeping credentials out of endpoint diagnostics and persisted status.
 - PXY-3 lifecycle and collector qualification is platform-local: named Linux proxy-collector and macOS proxy-collector/host gates have independently recorded success for their respective matrices. It does not require a macOS-to-Linux process pairing.
 - Desktop Python proxy supervision resolves a configured native worker first, then a validated `OBSTACLEBRIDGE_NATIVE_PROXY_WORKER` deployment override, then the development `PATH`; native desktop hosts resolve their bundled sibling. An unavailable, non-regular, or non-executable candidate fails before private IPC starts and shall not select an in-process fallback.
 - PXY-4 Linux same-host qualification runs an explicitly named matrix that reports the Python/native worker selection through the existing test identifiers; the remaining per-pair composed host-traffic and packaged-discovery evidence remains required before that qualification is complete.
+- PXY-4 macOS same-host qualification runs an explicitly named matrix: its bundled host test exercises Python and native workers with authenticated HTTP CONNECT and SOCKS5 echo traffic, selected collector status/log snapshots, forced replacement, and clean shutdown. Linux evidence remains separately recorded through PXY-4B.
 - Portability boundary: desktop subprocess supervision is shared between the macOS and Linux hosts; it does not authorize spawning worker processes from iOS extensions.
 
 Implementation note: shared Swift Core owns HTTP/SOCKS request parsing,
