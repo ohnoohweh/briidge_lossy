@@ -26,7 +26,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Trust the container-mounted checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Build the native Linux product
+        shell: bash
         run: |
           set -euo pipefail
           scripts/build_linux_app.sh --output-dir build/fedora44
