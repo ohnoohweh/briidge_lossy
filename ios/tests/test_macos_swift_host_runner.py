@@ -500,6 +500,7 @@ def test_macos_tun_helper_package_skeleton_sources_exist() -> None:
     assert '"repair_action": helperVersionMismatch ? "stop_then_register" : ""' in service
     assert "readFrame(fd, timeoutMS: authenticated ? nil" in protocol_server
     assert "var descriptor = pollfd(fd: fd, events: Int16(POLLIN)" in protocol_server
+    assert '"HELLO is accepted only once"' in protocol_server
     assert "Stop/unregister the helper, rebuild or replace the app bundle, then register it again." in service
     assert '"approval_required": approvalRequired' in service
     assert '"approval_action": approvalRequired ? "open_system_settings_login_items" : ""' in service

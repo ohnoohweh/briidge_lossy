@@ -57,9 +57,11 @@ final class ObstacleBridgeMacOSProtocolV1TunHelperServer {
             if frame.0 == .packetToHelper, authenticated { try? backend.writePacket(frame.1); continue }
             guard frame.0 == .controlRequest, let control = try? ObstacleBridgeTunHelperProtocolV1.decodeControl(frame.1) else { return }
             if control.operation == "HELLO" {
-                authenticated = control.payload["token"] as? String == token
-                if authenticated { lock.lock(); authenticatedClients.insert(fd); lastAuthenticatedActivity = Date(); lock.unlock() }
-                try? send("HELLO_OK", ["authenticated": authenticated], fd)
+                guard !authenticated else { try? send("ERROR", ["detail": "HELLO is accepted only once"], fd); continue }
+                guard control.payload["token"] as? String == token else { try? send("ERROR", ["detail": "invalid session token"], fd); continue }
+                authenticated = true
+                lock.lock(); authenticatedClients.insert(fd); lastAuthenticatedActivity = Date(); lock.unlock()
+                try? send("HELLO_OK", ["authenticated": true], fd)
                 continue
             }
             guard authenticated else { try? send("ERROR", ["detail": "HELLO required"], fd); continue }

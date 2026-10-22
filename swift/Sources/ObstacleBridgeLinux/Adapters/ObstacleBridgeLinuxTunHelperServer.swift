@@ -135,6 +135,7 @@ public final class ObstacleBridgeLinuxTunHelperServer: @unchecked Sendable {
                 guard let message = decodeControl(body) else { try? sendError("bad_control_payload", "invalid protocol-v1 control message", to: client); continue }
                 let operation = message.operation.uppercased()
                 if operation == "HELLO" {
+                    guard !authenticated else { try? sendError("already_authenticated", "HELLO is accepted only once", to: client); continue }
                     guard message.payload["token"] as? String == sessionToken else { try? sendError("auth_failed", "invalid session token", to: client); continue }
                     authenticated = true
                     lock.lock(); authenticatedClients.insert(client); lastAuthenticatedActivity = Date(); lock.unlock()

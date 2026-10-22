@@ -218,6 +218,16 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
             writer.close()
             await writer.wait_closed()
 
+    async def test_authenticated_client_cannot_renegotiate_hello(self) -> None:
+        client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
+        await client.connect()
+        try:
+            with self.assertRaisesRegex(RuntimeError, "HELLO is accepted only once"):
+                await client.request("HELLO", {"token": "wrong"})
+            self.assertEqual((await client.snapshot())["backend"], "fake")
+        finally:
+            await client.close()
+
     async def test_server_stops_after_authenticated_client_disconnects(self) -> None:
         client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
         await client.connect()

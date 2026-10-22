@@ -303,6 +303,13 @@ class TunHelperServer:
         op = str(message.op or "").strip().upper()
         payload = dict(message.payload)
         if op == "HELLO":
+            if state.authenticated:
+                await self._send_response(
+                    writer,
+                    op="ERROR",
+                    payload={"code": "already_authenticated", "detail": "HELLO is accepted only once"},
+                )
+                return
             token = str(payload.get("token") or "")
             if token != self._session_token:
                 await self._send_response(

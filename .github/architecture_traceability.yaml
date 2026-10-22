@@ -450,7 +450,7 @@ ARC-CMP-004:
   # and Linux-native children; negotiated peer binary-data exchange is covered on macOS and Linux CI launches, snapshots, stops, and exercises the packaged peer. Python/native proxy and private logging
   # supervisor-worker boundaries; peer, proxy, and private logging children negotiate capabilities before
   # bootstrap or readiness, and private logging bounds its child-side hello wait;
-  # Python and macOS/Linux privileged helpers bound unauthenticated initial admission;
+  # Python and macOS/Linux privileged helpers bound unauthenticated initial admission and reject HELLO renegotiation;
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while
