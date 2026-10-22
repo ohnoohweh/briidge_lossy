@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
 import sys
 from typing import Any, Optional
 
@@ -14,11 +15,15 @@ from .bridge_tun_helper_local_transport import (
 )
 
 from .bridge_tun_helper_protocol import (
+    TUN_HELPER_CAPABILITIES,
+    TUN_HELPER_SERVER_ROLE,
     TunHelperControlMessage,
     TunHelperFrameKind,
     decode_control_payload,
     encode_control_frame,
+    encode_hello,
     encode_frame,
+    negotiated_hello,
     try_decode_frame,
 )
 
@@ -61,12 +66,29 @@ class TunHelperClient:
         self._closed = False
         self._read_failed: Optional[BaseException] = None
         self._last_runtime_snapshot: dict[str, Any] = {}
+        self._generation = secrets.randbits(64) or 1
+        self._hello_queue: asyncio.Queue = asyncio.Queue()
+        self._common_ready = False
 
     async def connect(self) -> None:
         if self._reader is not None and self._writer is not None:
             return
         self._reader, self._writer = await _open_local_helper_connection(self._socket_path)
         self._reader_task = asyncio.create_task(self._read_loop())
+        self._writer.write(encode_hello(self._generation))
+        await self._writer.drain()
+        try:
+            peer_hello = await asyncio.wait_for(self._hello_queue.get(), timeout=self._response_timeout_s)
+            ready = await asyncio.wait_for(self._hello_queue.get(), timeout=self._response_timeout_s)
+            role, capabilities = negotiated_hello(peer_hello)
+            if peer_hello.kind != TunHelperFrameKind.HELLO or role != TUN_HELPER_SERVER_ROLE or set(capabilities) != set(TUN_HELPER_CAPABILITIES):
+                raise ConnectionError("TUN helper rejected common IPC capability negotiation")
+            if ready.kind != TunHelperFrameKind.READY or decode_control_payload(ready.payload).op != "READY":
+                raise ConnectionError("TUN helper did not confirm common IPC readiness")
+            self._common_ready = True
+        except Exception:
+            await self.close()
+            raise
         hello = await self.request("HELLO", {"token": self._session_token})
         if hello.op != "HELLO_OK":
             raise ConnectionError(f"unexpected HELLO response: {hello.op}")
@@ -88,6 +110,7 @@ class TunHelperClient:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._reader_task
         self._reader_task = None
+        self._common_ready = False
 
     async def request(self, op: str, payload: Optional[dict[str, Any]] = None) -> TunHelperControlMessage:
         if self._writer is None:
@@ -97,7 +120,8 @@ class TunHelperClient:
             self._log.info("[TUN/HELPER/CLIENT] request start op=%s payload_keys=%s", op, sorted((payload or {}).keys()))
             self._writer.write(
                 encode_control_frame(
-                    TunHelperFrameKind.CONTROL_REQUEST,
+                    TunHelperFrameKind.REQUEST,
+                    self._generation,
                     TunHelperControlMessage(op=str(op), payload=payload or {}),
                 )
             )
@@ -148,7 +172,7 @@ class TunHelperClient:
         if self._writer is None:
             raise ConnectionError("TUN helper client is not connected")
         self._raise_if_read_failed()
-        self._writer.write(encode_frame(TunHelperFrameKind.PACKET_TO_HELPER, bytes(packet)))
+        self._writer.write(encode_frame(TunHelperFrameKind.DATA, self._generation, bytes(packet)))
         await self._writer.drain()
         self._last_runtime_snapshot["packets_from_runtime"] = int(
             self._last_runtime_snapshot.get("packets_from_runtime") or 0
@@ -211,19 +235,25 @@ class TunHelperClient:
                     decoded = try_decode_frame(buffer)
                     if decoded is None:
                         break
-                    kind, payload, remainder = decoded
+                    frame, remainder = decoded
                     buffer = remainder
-                    if kind == TunHelperFrameKind.CONTROL_RESPONSE:
-                        await self._response_queue.put(decode_control_payload(payload))
-                    elif kind == TunHelperFrameKind.PACKET_FROM_HELPER:
+                    if frame.generation != self._generation:
+                        raise ConnectionError("TUN helper sent a stale-generation frame")
+                    if frame.kind in {TunHelperFrameKind.HELLO, TunHelperFrameKind.READY}:
+                        await self._hello_queue.put(frame)
+                    elif frame.kind == TunHelperFrameKind.RESPONSE:
+                        await self._response_queue.put(decode_control_payload(frame.payload))
+                    elif frame.kind == TunHelperFrameKind.ERROR:
+                        await self._response_queue.put(TunHelperControlMessage(op="ERROR", payload=decode_control_payload(frame.payload).payload))
+                    elif frame.kind == TunHelperFrameKind.DATA:
                         self._last_runtime_snapshot["packets_to_runtime"] = int(
                             self._last_runtime_snapshot.get("packets_to_runtime") or 0
                         ) + 1
-                        await self._packet_queue.put(bytes(payload))
-                    elif kind == TunHelperFrameKind.EVENT:
-                        await self._event_queue.put(payload.decode("utf-8", errors="replace"))
+                        await self._packet_queue.put(bytes(frame.payload))
+                    elif frame.kind == TunHelperFrameKind.EVENT:
+                        await self._event_queue.put(str(decode_control_payload(frame.payload).payload.get("detail") or ""))
                     else:
-                        await self._event_queue.put(f"unexpected_frame_kind:{int(kind)}")
+                        await self._event_queue.put(f"unexpected_frame_kind:{int(frame.kind)}")
         except asyncio.CancelledError:
             raise
         except BaseException as exc:

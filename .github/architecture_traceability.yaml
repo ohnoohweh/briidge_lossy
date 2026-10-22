@@ -450,11 +450,11 @@ ARC-CMP-004:
   # and Linux-native children; negotiated peer binary-data exchange is covered on macOS and Linux CI launches, snapshots, stops, and exercises the packaged peer. Python/native proxy and private logging
   # supervisor-worker boundaries; peer, proxy, and private logging children negotiate capabilities before
   # bootstrap or readiness, and private logging bounds its child-side hello wait;
-  # Python and macOS/Linux privileged helpers bound unauthenticated initial admission and reject HELLO renegotiation; Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects duplicate/non-finite/non-object JSON while Swift rejects boolean/fractional versions;
+  # all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; the Python helper now negotiates HELLO/READY capabilities and carries generation-fenced OBIP request/response/event/data frames, while macOS/Linux native helpers remain protocol-v1; Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects duplicate/non-finite/non-object JSON while Swift rejects boolean/fractional versions;
   # the Python Admin child does too, while collector probes and native-proxy supervisor
   # fixtures compile that shared codec;
   # the Python Admin worker has migrated while
-  # helper-frame cutover, native Admin ownership, and host-local lifecycle qualification remain in IPC-1H, IPC-1A, and IPC-1Q. Contract-v1
+  # native helper-frame cutover, native Admin ownership, and host-local lifecycle qualification remain in IPC-1H, IPC-1A, and IPC-1Q. Contract-v1
   # requires explicit auth and rejects malformed
   # loopback bind and configuration before spawn while retaining the existing
   # IPv4/IPv6 egress-family declaration. Both supervisors expose the same
@@ -608,14 +608,15 @@ ARC-CMP-004:
     - tests/unit/test_tun_helper_macos_backend.py::test_open_rejects_non_macos_platform
     - tests/unit/test_tun_helper_macos_backend.py::test_apply_and_remove_local_network_uses_client_macos_hook_env
     - tests/unit/test_tun_helper_macos_backend.py::test_apply_server_network_uses_server_macos_hook_env
-    - tests/unit/test_tun_helper_protocol.py::test_control_frame_round_trip
-    - tests/unit/test_tun_helper_protocol.py::test_decode_control_payload_rejects_unknown_version
+    - tests/unit/test_tun_helper_protocol.py::test_control_frame_uses_common_obip_header_and_generation
+    - tests/unit/test_tun_helper_protocol.py::test_common_hello_negotiates_helper_capabilities
     - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_returns_none_for_incomplete_payload
-    - tests/unit/test_tun_helper_protocol.py::test_packet_frame_preserves_binary_boundaries
-    - tests/unit/test_tun_helper_protocol.py::test_try_decode_frame_rejects_unknown_kind
-    - tests/unit/test_tun_helper_protocol.py::test_frame_size_bound_matches_native_and_rejects_oversized_header
+    - tests/unit/test_tun_helper_protocol.py::test_packet_frames_preserve_boundaries_and_generation
+    - tests/unit/test_tun_helper_protocol.py::test_control_payload_rejects_duplicate_nonfinite_and_invalid_operations
+    - tests/unit/test_tun_helper_protocol.py::test_frame_size_bound_matches_common_ipc_and_rejects_invalid_header
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunPingTests.swift::protocolV1EnforcesPythonCompatibleFrameLimit
     - tests/unit/test_tun_helper_client_server.py::test_oversized_header_closes_only_offending_connection
+    - tests/unit/test_tun_helper_client_server.py::test_stale_common_generation_closes_only_offending_connection
     - tests/unit/test_tun_helper_client_server.py::test_client_server_handshake_open_snapshot_and_packet_loop
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_and_remove_network_round_trip
     - tests/unit/test_tun_helper_client_server.py::test_client_apply_failure_keeps_connection_open_for_snapshot

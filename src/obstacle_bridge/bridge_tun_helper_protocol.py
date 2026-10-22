@@ -1,43 +1,52 @@
+"""Common ``OBIP`` framing for the local privileged TUN-helper boundary.
+
+The connected local socket and one-time token remain the authentication
+capabilities. This module deliberately reuses the desktop worker frame ABI
+instead of retaining the former helper-specific five-byte header.
+"""
 from __future__ import annotations
 
 import enum
-import json
-import struct
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from .worker_ipc import (
+    WORKER_IPC_MAX_FRAME_BYTES,
+    WorkerIPCFrame,
+    WorkerIPCFrameKind,
+    decode_control,
+    encode_control,
+    encode_frame as _encode_frame,
+    hello as _hello,
+    negotiated_capabilities,
+    try_decode_frame as _try_decode_frame,
+)
+
 
 TUN_HELPER_PROTOCOL_VERSION = 1
-TUN_HELPER_MAX_FRAME_BYTES = 1_048_576
+TUN_HELPER_MAX_FRAME_BYTES = WORKER_IPC_MAX_FRAME_BYTES
 TUN_HELPER_MAX_OPERATION_CHARS = 64
-_FRAME_HEADER = struct.Struct(">BI")
-
-
-def _reject_duplicate_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    value: dict[str, Any] = {}
-    for key, item in pairs:
-        if key in value:
-            raise ValueError("duplicate TUN helper JSON field")
-        value[key] = item
-    return value
-
-
-def _reject_nonfinite(_value: str) -> None:
-    raise ValueError("invalid TUN helper JSON number")
-
-
-def _normalise_operation(value: Any) -> str:
-    if not isinstance(value, str) or not (operation := value.strip()) or len(operation) > TUN_HELPER_MAX_OPERATION_CHARS:
-        raise ValueError("TUN helper control payload is missing op")
-    return operation
+TUN_HELPER_CLIENT_ROLE = "tun-helper-client"
+TUN_HELPER_SERVER_ROLE = "tun-helper"
+TUN_HELPER_CAPABILITIES = frozenset({"tun.control", "tun.packet", "tun.event"})
 
 
 class TunHelperFrameKind(enum.IntEnum):
-    CONTROL_REQUEST = 1
-    CONTROL_RESPONSE = 2
-    PACKET_FROM_HELPER = 3
-    PACKET_TO_HELPER = 4
-    EVENT = 5
+    HELLO = WorkerIPCFrameKind.HELLO
+    READY = WorkerIPCFrameKind.READY
+    REQUEST = WorkerIPCFrameKind.REQUEST
+    RESPONSE = WorkerIPCFrameKind.RESPONSE
+    EVENT = WorkerIPCFrameKind.EVENT
+    DATA = WorkerIPCFrameKind.DATA
+    ERROR = WorkerIPCFrameKind.ERROR
+    GOODBYE = WorkerIPCFrameKind.GOODBYE
+
+
+@dataclass(frozen=True)
+class TunHelperFrame:
+    kind: TunHelperFrameKind
+    generation: int
+    payload: bytes
 
 
 @dataclass(frozen=True)
@@ -47,65 +56,46 @@ class TunHelperControlMessage:
     version: int = TUN_HELPER_PROTOCOL_VERSION
 
 
-def encode_frame(kind: TunHelperFrameKind, payload: bytes) -> bytes:
-    body = bytes(payload)
-    if len(body) > TUN_HELPER_MAX_FRAME_BYTES:
-        raise ValueError("TUN helper frame exceeds maximum payload size")
-    return _FRAME_HEADER.pack(int(kind), len(body)) + body
+def _normalise_operation(value: Any) -> str:
+    if not isinstance(value, str) or not (operation := value.strip()) or len(operation) > TUN_HELPER_MAX_OPERATION_CHARS:
+        raise ValueError("TUN helper control payload is missing op")
+    return operation
 
 
-def try_decode_frame(data: bytes) -> Optional[tuple[TunHelperFrameKind, bytes, bytes]]:
-    if len(data) < _FRAME_HEADER.size:
-        return None
-    kind_raw, length = _FRAME_HEADER.unpack(data[: _FRAME_HEADER.size])
+def encode_frame(kind: TunHelperFrameKind, generation: int, payload: bytes = b"") -> bytes:
     try:
-        kind = TunHelperFrameKind(kind_raw)
+        return _encode_frame(WorkerIPCFrameKind(kind), generation, payload)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid TUN helper frame") from exc
+
+
+def try_decode_frame(data: bytes) -> Optional[tuple[TunHelperFrame, bytes]]:
+    try:
+        decoded = _try_decode_frame(data)
     except ValueError as exc:
-        raise ValueError(f"unknown TUN helper frame kind: {kind_raw}") from exc
-    if length > TUN_HELPER_MAX_FRAME_BYTES:
-        raise ValueError("TUN helper frame exceeds maximum payload size")
-    frame_total = _FRAME_HEADER.size + int(length)
-    if len(data) < frame_total:
+        raise ValueError("invalid TUN helper frame") from exc
+    if decoded is None:
         return None
-    payload = data[_FRAME_HEADER.size : frame_total]
-    remainder = data[frame_total:]
-    return kind, payload, remainder
+    frame, remainder = decoded
+    return TunHelperFrame(TunHelperFrameKind(frame.kind), frame.generation, frame.payload), remainder
 
 
-def encode_control_frame(kind: TunHelperFrameKind, message: TunHelperControlMessage) -> bytes:
-    if kind not in {TunHelperFrameKind.CONTROL_REQUEST, TunHelperFrameKind.CONTROL_RESPONSE}:
-        raise ValueError(f"control frames require request/response kinds, got {kind!r}")
+def encode_control_frame(kind: TunHelperFrameKind, generation: int, message: TunHelperControlMessage) -> bytes:
+    if kind not in {TunHelperFrameKind.REQUEST, TunHelperFrameKind.RESPONSE, TunHelperFrameKind.EVENT, TunHelperFrameKind.ERROR, TunHelperFrameKind.READY}:
+        raise ValueError(f"control frames require a common control kind, got {kind!r}")
     operation = _normalise_operation(message.op)
-    encoded = json.dumps(
-        {
-            "version": int(message.version),
-            "op": operation,
-            "payload": dict(message.payload),
-        },
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    return encode_frame(kind, encoded)
+    try:
+        return encode_control(WorkerIPCFrameKind(kind), generation, {"op": operation, "payload": dict(message.payload)})
+    except (TypeError, ValueError) as exc:
+        raise ValueError("invalid TUN helper control payload") from exc
 
 
 def decode_control_payload(payload: bytes) -> TunHelperControlMessage:
+    frame = WorkerIPCFrame(kind=WorkerIPCFrameKind.RESPONSE, generation=1, payload=bytes(payload))
     try:
-        doc = json.loads(
-            bytes(payload).decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_object,
-            parse_constant=_reject_nonfinite,
-        )
-    except Exception as exc:
-        raise ValueError(f"invalid TUN helper control payload: {exc}") from exc
-    if not isinstance(doc, dict):
-        raise ValueError("TUN helper control payload must be an object")
-    version = doc.get("version")
-    if type(version) is not int:
-        raise ValueError("TUN helper control payload has invalid version")
-    if version != TUN_HELPER_PROTOCOL_VERSION:
-        raise ValueError(
-            f"unsupported TUN helper protocol version: {version} != {TUN_HELPER_PROTOCOL_VERSION}"
-        )
+        doc = decode_control(frame)
+    except ValueError as exc:
+        raise ValueError("invalid TUN helper control payload") from exc
     op = _normalise_operation(doc.get("op"))
     raw_payload = doc.get("payload")
     if raw_payload is None:
@@ -114,4 +104,15 @@ def decode_control_payload(payload: bytes) -> TunHelperControlMessage:
         payload_map = dict(raw_payload)
     else:
         raise ValueError("TUN helper control payload field must be an object when present")
-    return TunHelperControlMessage(op=op, payload=payload_map, version=version)
+    return TunHelperControlMessage(op=op, payload=payload_map)
+
+
+def encode_hello(generation: int, *, role: str = TUN_HELPER_CLIENT_ROLE) -> bytes:
+    return _hello(generation, role, TUN_HELPER_CAPABILITIES)
+
+
+def negotiated_hello(frame: TunHelperFrame, *, supported: set[str] | frozenset[str] = TUN_HELPER_CAPABILITIES) -> tuple[str, tuple[str, ...]]:
+    return negotiated_capabilities(
+        WorkerIPCFrame(WorkerIPCFrameKind(frame.kind), frame.generation, frame.payload),
+        set(supported),
+    )
