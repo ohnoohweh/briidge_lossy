@@ -1640,7 +1640,7 @@ REQ-ADM-001:
   # The isolated Admin-worker query path is covered by the same contract.
   # Common desktop-worker framing independently verifies bounded control/data
   # frames, generation fencing, and capability-intersection parity in Python
-  # and Swift. Python and macOS-native peer children use the shared frames end
+  # and Swift. Python plus macOS/Linux-native peer children use the shared frames end
   # to end under the Python supervisor. Python/native proxy and private logging
   # exchanges use those frames too; peer, proxy, and private (not public UDP) logging children exchange a capability hello,
   # while native-supervisor collector builds use the codec, and the Python Admin worker also exchanges a capability hello with generation-

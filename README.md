@@ -1159,7 +1159,7 @@ The common desktop-worker IPC foundation uses only inherited local sockets: its
 bounded versioned frame carries a fenced generation plus either a canonical
 control object or opaque binary data, and its hello exchange deterministically
 negotiates capabilities. Python-supervised peer children and Python/native
-hello-negotiated proxy supervisor-worker pairs, the hello-negotiated peer worker, private Python/native logging collectors (not their public
+hello-negotiated proxy supervisor-worker pairs, hello-negotiated macOS/Linux native and Python peer workers, private Python/native logging collectors (not their public
 UDP endpoint; native supervisor qualification compiles that shared codec), and the hello-negotiated Python Admin
 worker use this contract for their control frames on macOS, whether Python or
 native; helper protocols and a native Admin worker are still being migrated.
