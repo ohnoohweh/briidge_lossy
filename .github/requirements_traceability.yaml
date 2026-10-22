@@ -1641,7 +1641,7 @@ REQ-ADM-001:
   # Common desktop-worker framing independently verifies bounded control/data
   # frames, generation fencing, and capability-intersection parity in Python
   # and Swift. Python plus macOS/Linux-native peer children use the shared frames end
-  # to end under the Python supervisor, with Linux CI launching, snapshotting, and stopping its packaged peer. Python/native proxy and private logging
+  # to end under the Python supervisor, with negotiated opaque data exchange; Linux CI launches, snapshots, stops, and exercises its packaged peer. Python/native proxy and private logging
   # exchanges use those frames too; peer, proxy, and private (not public UDP) logging children exchange a capability hello,
   # while native-supervisor collector builds use the codec and private logging bounds its initial hello wait; the Python Admin worker also exchanges a capability hello with generation-
   # fenced frames too, while helper and native Admin migration remain open.

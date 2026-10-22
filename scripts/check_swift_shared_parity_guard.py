@@ -15,6 +15,8 @@ DESKTOP_WORKER_IPC = "swift/Sources/ObstacleBridgeDesktopShared/ObstacleBridgeWo
 LINUX_DESKTOP_HOST = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxLiveRuntime.swift"
 LINUX_LOG_ADAPTER = "swift/Sources/ObstacleBridgeLinux/Adapters/ObstacleBridgeLinuxObservability.swift"
 MACOS_DESKTOP_HOST = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeHostRunner.swift"
+MACOS_NATIVE_PEER = "swift/Sources/ObstacleBridgeMacOS/ObstacleBridgeNativePeerWorker.swift"
+LINUX_NATIVE_PEER = "swift/Sources/ObstacleBridgeLinux/ObstacleBridgeLinuxNativePeerWorker.swift"
 SWIFT_SUFFIX = ".swift"
 PARITY_TEST_FILES = {
     "ios/tests/test_m3_native_sources.py",
@@ -65,6 +67,10 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
         and ((DESKTOP_PROXY_SUPERVISOR in _normalize(changed) and LINUX_DESKTOP_HOST in _normalize(changed))
              or (DESKTOP_LOG_SUPERVISOR in _normalize(changed) and LINUX_LOG_ADAPTER in _normalize(changed)))
     )
+    native_peer_pair = (
+        set(macos_swift) == {MACOS_NATIVE_PEER}
+        and LINUX_NATIVE_PEER in _normalize(changed)
+    )
     errors: list[str] = []
 
     if ios_swift and not (shared_swift or macos_swift):
@@ -74,7 +80,7 @@ def validate_swift_shared_parity(changed: list[str]) -> list[str]:
             f"Expected one of: files under {SHARED_SWIFT_PREFIX} or files under {MACOS_SWIFT_PREFIX}"
         )
 
-    if macos_swift and not (shared_swift or ios_swift or desktop_pair):
+    if macos_swift and not (shared_swift or ios_swift or desktop_pair or native_peer_pair):
         errors.append(
             "macOS-specific Swift runtime files changed without a shared Swift update or a mirrored iOS Swift update.\n"
             f"Changed macOS files: {', '.join(macos_swift)}\n"

@@ -72,7 +72,7 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     proxy_supervisor = (ROOT / "swift" / "Sources" / "ObstacleBridgeDesktopShared" / "ObstacleBridgeProxyWorkerSupervisor.swift").read_text(encoding="utf-8")
 
     assert build_script.count("ObstacleBridgeNativePeerWorker.swift") == 2
-    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 3
+    assert build_script.count("ObstacleBridgeWorkerIPC.swift") == 4
     assert '"--peer-worker-control-fd"' in entrypoint
     assert '"--log-fd"' in entrypoint
     assert "FileHandle(fileDescriptor: controlFD, closeOnDealloc: true)" in worker
@@ -84,6 +84,9 @@ def test_macos_host_runner_builds_native_peer_worker_with_private_capabilities()
     assert runner.count("NSLog(") == 1
     assert "ObstacleBridgeWorkerIPC.frameSize(header)" in worker
     assert "ObstacleBridgeWorkerIPC.encodeControl" in worker
+    assert '"peer.binary-data", "peer.control"' in worker
+    assert "frame.kind == .data" in worker
+    assert "writeData(control, generation: generation, payload: frame.payload)" in worker
     assert "ObstacleBridgeWorkerIPC.decodeControl" in proxy_worker
     assert "ObstacleBridgeWorkerIPC.encodeControl" in proxy_supervisor
     assert "public static let maximumFrameBytes = 1_048_576" in common_ipc
@@ -166,6 +169,7 @@ def test_macos_native_peer_worker_uses_private_control_logs_and_interoperates_wi
                     "secure_link": {"secure_link": True, "secure_link_mode": "psk", "secure_link_psk": secret},
                     "TUN_routing": {"enabled_on_startup": False},
                 })
+                assert await worker.echo_data(b"macos-native-data\x00") == b"macos-native-data\x00"
                 for _ in range(100):
                     records = collector.fetch(100)
                     if any("peer_worker.started" in line for line in records["lines"]):

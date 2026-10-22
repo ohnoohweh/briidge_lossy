@@ -105,6 +105,7 @@ def test_linux_native_peer_worker_negotiates_common_ipc_and_stops():
             assert worker.generation == 1
             snapshot = await worker.snapshot()
             assert isinstance(snapshot, dict)
+            assert await worker.echo_data(b"linux-native-data\x00") == b"linux-native-data\x00"
         finally:
             await worker.stop()
 
@@ -122,6 +123,18 @@ def test_peer_worker_inherits_stderr_without_managed_collector(monkeypatch, capf
     monkeypatch.setattr(logging.getLogger(), "level", logging.INFO)
     asyncio.run(exercise())
     assert "[SERVER] ObstacleBridge build=" in capfd.readouterr().err
+
+
+def test_peer_worker_echoes_opaque_common_ipc_data():
+    async def exercise():
+        worker = PeerStackWorker("data-test")
+        try:
+            await worker.start(_config())
+            assert await worker.echo_data(b"\x00opaque\xffdata") == b"\x00opaque\xffdata"
+        finally:
+            await worker.stop()
+
+    asyncio.run(exercise())
 
 
 def test_cancelled_peer_retirement_kills_and_reaps_child():
@@ -215,8 +228,9 @@ def test_peer_worker_aborts_inflight_start_when_owner_disappears(monkeypatch):
         parent.setblocking(False)
         reader, writer = await asyncio.open_connection(sock=parent)
         task = asyncio.create_task(_serve(child.detach()))
-        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["peer.control"], "generation": 1})
-        assert await _read_frame(reader) == {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": ["peer.control"], "generation": 1}
+        capabilities = ["peer.binary-data", "peer.control"]
+        await _write_frame(writer, {"v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": capabilities, "generation": 1})
+        assert await _read_frame(reader) == {"v": 1, "kind": "worker.hello", "role": "peer", "capabilities": capabilities, "generation": 1}
         await _write_frame(writer, {"v": 1, "kind": "peer.start", "peer_id": "test", "generation": 1, "config": {}})
         await asyncio.wait_for(started.wait(), 2)
         writer.close()

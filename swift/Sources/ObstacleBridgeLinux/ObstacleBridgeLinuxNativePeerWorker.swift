@@ -18,11 +18,11 @@ enum ObstacleBridgeLinuxNativePeerWorker {
             let hello = try read(handle)
             guard hello["kind"] as? String == "worker.hello",
                   hello["role"] as? String == "supervisor",
-                  hello["capabilities"] as? [String] == ["peer.control"],
+                  hello["capabilities"] as? [String] == ["peer.binary-data", "peer.control"],
                   let helloGeneration = positive(hello["generation"])
             else { throw WorkerError.invalid }
             try write(handle, ["v": 1, "kind": "worker.hello", "role": "peer",
-                               "capabilities": ["peer.control"], "generation": helloGeneration])
+                               "capabilities": ["peer.binary-data", "peer.control"], "generation": helloGeneration])
             let start = try read(handle)
             guard start["kind"] as? String == "peer.start",
                   let peerID = start["peer_id"] as? String, !peerID.isEmpty, peerID.count <= 128,
@@ -37,7 +37,13 @@ enum ObstacleBridgeLinuxNativePeerWorker {
             try write(handle, ["v": 1, "kind": "peer.ready", "peer_id": peerID,
                                "generation": generation, "implementation": "native"])
             while true {
-                let request = try read(handle)
+                let frame = try readIPCFrame(handle)
+                if frame.kind == .data {
+                    guard frame.generation == UInt64(generation) else { throw WorkerError.invalid }
+                    try writeData(handle, generation: generation, payload: frame.payload)
+                    continue
+                }
+                let request = try control(frame)
                 guard request["peer_id"] as? String == peerID, positive(request["generation"]) == generation,
                       let identifier = request["id"] as? String, !identifier.isEmpty, identifier.count <= 128 else { throw WorkerError.invalid }
                 switch request["kind"] as? String {
@@ -71,12 +77,19 @@ enum ObstacleBridgeLinuxNativePeerWorker {
     }
 
     private static func read(_ handle: FileHandle) throws -> [String: Any] {
+        try control(readIPCFrame(handle))
+    }
+
+    private static func readIPCFrame(_ handle: FileHandle) throws -> ObstacleBridgeWorkerIPC.Frame {
         let header = try exact(handle, ObstacleBridgeWorkerIPC.headerBytes)
         guard let length = try ObstacleBridgeWorkerIPC.frameSize(header) else { throw WorkerError.invalid }
         let (frame, remainder) = try ObstacleBridgeWorkerIPC.decode(header + (try exact(handle, length)))
-        guard let frame, remainder.isEmpty,
-              let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame),
-              positive(value["v"]) == 1 else { throw WorkerError.invalid }
+        guard let frame, remainder.isEmpty else { throw WorkerError.invalid }
+        return frame
+    }
+
+    private static func control(_ frame: ObstacleBridgeWorkerIPC.Frame) throws -> [String: Any] {
+        guard let value = try? ObstacleBridgeWorkerIPC.decodeControl(frame), positive(value["v"]) == 1 else { throw WorkerError.invalid }
         return value
     }
 
@@ -96,5 +109,9 @@ enum ObstacleBridgeLinuxNativePeerWorker {
         handle.write(try ObstacleBridgeWorkerIPC.encodeControl(kind: kind,
                                                                 generation: UInt64(positive(value["generation"]) ?? 1),
                                                                 value: value))
+    }
+
+    private static func writeData(_ handle: FileHandle, generation: Int, payload: Data) throws {
+        handle.write(try ObstacleBridgeWorkerIPC.encode(kind: .data, generation: UInt64(generation), payload: payload))
     }
 }
