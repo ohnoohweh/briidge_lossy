@@ -203,6 +203,21 @@ class TunHelperClientServerTests(unittest.IsolatedAsyncioTestCase):
 
         await client.close()
 
+    async def test_unauthenticated_connection_is_closed_after_hello_deadline(self) -> None:
+        await self.server.stop()
+        self.server = TunHelperServer(
+            backend=self.backend,
+            session_token="secret",
+            unauthenticated_client_idle_timeout_s=0.1,
+        )
+        await self.server.start(self.socket_path)
+        reader, writer = await asyncio.open_unix_connection(self.socket_path)
+        try:
+            assert await asyncio.wait_for(reader.read(1), timeout=1.0) == b""
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
     async def test_server_stops_after_authenticated_client_disconnects(self) -> None:
         client = TunHelperClient(socket_path=self.socket_path, session_token="secret")
         await client.connect()

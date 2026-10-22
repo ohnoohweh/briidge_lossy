@@ -72,6 +72,7 @@ class _HelperConnectionState:
 
 class TunHelperServer:
     AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S = 5.0
+    UNAUTHENTICATED_CLIENT_IDLE_TIMEOUT_S = 5.0
 
     def __init__(
         self,
@@ -79,12 +80,14 @@ class TunHelperServer:
         backend: TunHelperBackend,
         session_token: str,
         authenticated_client_idle_timeout_s: float = AUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
+        unauthenticated_client_idle_timeout_s: float = UNAUTHENTICATED_CLIENT_IDLE_TIMEOUT_S,
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._backend = backend
         self._session_token = str(session_token or "")
         self._log = logger or logging.getLogger("tun_helper_server")
         self._authenticated_client_idle_timeout_s = max(float(authenticated_client_idle_timeout_s), 0.5)
+        self._unauthenticated_client_idle_timeout_s = max(float(unauthenticated_client_idle_timeout_s), 0.1)
         self._server: Optional[asyncio.AbstractServer] = None
         self._socket_path = ""
         self._active_writers: set[asyncio.StreamWriter] = set()
@@ -381,7 +384,14 @@ class TunHelperServer:
         buffer = b""
         try:
             while not self._closed:
-                chunk = await reader.read(65536)
+                try:
+                    chunk = await asyncio.wait_for(
+                        reader.read(65536),
+                        timeout=self._unauthenticated_client_idle_timeout_s if not state.authenticated else None,
+                    )
+                except asyncio.TimeoutError:
+                    self._log.warning("[TUN/HELPER] unauthenticated client did not send HELLO before deadline")
+                    return
                 if not chunk:
                     break
                 buffer += chunk
