@@ -827,6 +827,57 @@ def test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss() -> Non
             socket_path.unlink()
 
 
+def test_macos_packaged_host_runner_bootstraps_native_admin_child_and_exits_on_owner_loss() -> None:
+    artifact = build_macos_swift_artifact()
+    parent_control, child_control = socket.socketpair()
+    parent_lifetime, child_lifetime = socket.socketpair()
+    process = subprocess.Popen(
+        [
+            str(artifact.binary_path),
+            "--admin-worker-control-fd", str(child_control.fileno()),
+            "--admin-worker-lifetime-fd", str(child_lifetime.fileno()),
+            "--generation", "7",
+        ],
+        pass_fds=(child_control.fileno(), child_lifetime.fileno()),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    child_control.close()
+    child_lifetime.close()
+    parent_control.settimeout(3)
+    try:
+        from obstacle_bridge.worker_ipc import WorkerIPCFrameKind, decode_control, encode_control, frame_size, try_decode_frame
+
+        def receive_control() -> dict:
+            header = parent_control.recv(20)
+            assert len(header) == 20
+            size = frame_size(header)
+            assert size is not None
+            body = parent_control.recv(size)
+            assert len(body) == size
+            decoded = try_decode_frame(header + body)
+            assert decoded is not None and not decoded[1]
+            return decode_control(decoded[0])
+
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.HELLO, 7, {
+            "v": 1, "kind": "worker.hello", "role": "supervisor", "capabilities": ["admin.control"], "generation": 7,
+        }))
+        assert receive_control() == {
+            "v": 1, "kind": "worker.hello", "role": "admin", "capabilities": ["admin.control"], "generation": 7,
+        }
+        parent_control.sendall(encode_control(WorkerIPCFrameKind.REQUEST, 7, {"v": 1, "kind": "admin.start", "args": {}}))
+        assert receive_control() == {"v": 1, "kind": "admin.ready", "implementation": "native", "port": 0, "generation": 7}
+        parent_lifetime.close()
+        assert process.wait(timeout=3) == 0
+    finally:
+        parent_control.close()
+        with contextlib.suppress(OSError):
+            parent_lifetime.close()
+        if process.poll() is None:
+            process.terminate()
+        process.wait(timeout=5)
+
+
 def test_macos_tun_helper_package_status_reports_stale_helper_version(tmp_path: Path) -> None:
     app_bundle = tmp_path / "ObstacleBridge.app"
     helper_dir = app_bundle / "Contents" / "MacOS"
