@@ -1647,7 +1647,7 @@ REQ-ADM-001:
   # to end under the Python supervisor, with negotiated opaque data exchange; Linux CI launches, snapshots, stops, and exercises its packaged peer. Python/native proxy and private logging
   # exchanges use those frames too; peer, proxy, and private (not public UDP) logging children exchange a capability hello,
   # while native-supervisor collector builds use the codec, private logging and all privileged helpers bound unauthenticated initial admission and reject token-HELLO renegotiation; Python and macOS/Linux-native helpers negotiate HELLO/READY capabilities and carry generation-fenced OBIP request/response/event/data frames; the packaged macOS helper completes a Python-client snapshot exchange and exits after authenticated owner loss. The shared Swift decoder rejects duplicate object members, including escaped-key aliases. Python and shared Swift helper controls normalize nonempty operations to at most 64 characters; Python rejects non-finite/non-object JSON while Swift rejects boolean/fractional versions; the Python Admin worker also exchanges a capability hello with generation-
-  # fenced frames too; Linux host-local runtime/owner-loss, native Admin ownership, and host-local lifecycle qualification remain in IPC-1H, IPC-1A, and IPC-1Q.
+  # fenced frames too; the Linux helper suite contains the matching authenticated-owner-loss case, pending host-local CI evidence. Linux runtime/owner-loss, native Admin ownership, and host-local lifecycle qualification remain in IPC-1H, IPC-1A, and IPC-1Q.
   integration_tests:
     - tests/integration/test_peer_stack_worker_e2e.py::test_module_entrypoint_supervises_peer_worker
     - tests/integration/test_peer_stack_worker_e2e.py::test_python_runner_supervises_peer_worker_and_recovers_secure_service
@@ -1662,6 +1662,7 @@ REQ-ADM-001:
     - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_tun_helper_interoperates_with_python_common_ipc
     - ios/tests/test_macos_swift_host_runner.py::test_macos_packaged_tun_helper_exits_after_authenticated_owner_loss
     - swift/Tests/ObstacleBridgeDesktopSharedTests/ObstacleBridgeWorkerIPCTests.swift::controlDecodeRejectsDuplicateObjectMembersAtEveryDepth
+    - swift/Tests/ObstacleBridgeLinuxAdapterTests/ObstacleBridgeLinuxTunHelperAdapterTests.swift::swiftHelperServerStopsAfterAuthenticatedOwnerLoss
     - tests/unit/test_proxy_worker.py::test_proxy_control_rejects_oversize_header_without_waiting_for_body
     - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input

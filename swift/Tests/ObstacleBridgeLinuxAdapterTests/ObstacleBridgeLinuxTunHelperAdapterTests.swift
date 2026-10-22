@@ -109,6 +109,18 @@ struct ObstacleBridgeLinuxTunHelperAdapterTests {
         #expect(!FileManager.default.fileExists(atPath: path))
     }
 
+    @Test func swiftHelperServerStopsAfterAuthenticatedOwnerLoss() throws {
+        let backend = SwiftHelperBackend()
+        let path = "/tmp/obstaclebridge-swift-helper-owner-loss-\(UUID().uuidString).sock"
+        let server = try ObstacleBridgeLinuxTunHelperServer(socketPath: path, sessionToken: "swift-server-token", backend: backend, authenticatedClientIdleTimeout: 0.5)
+        try server.start(); defer { server.stop() }
+        let client = try ObstacleBridgeLinuxTunHelperAdapter(socketPath: path, sessionToken: "swift-server-token")
+        #expect(try client.send(command: .snapshot, payload: [:])["backend"] as? String == "swift-test")
+        let deadline = Date().addingTimeInterval(1.5)
+        while FileManager.default.fileExists(atPath: path), Date() < deadline { Thread.sleep(forTimeInterval: 0.02) }
+        #expect(!FileManager.default.fileExists(atPath: path))
+    }
+
     @Test func nativeSwiftHelperAppliesAndRollsBackAddressesAndRoutesThroughArgvOnlyCommands() throws {
         let lock = NSLock(); var commands: [[String]] = []
         let backend = ObstacleBridgeLinuxNativeTunHelperBackend(commandRunner: { arguments, _ in
