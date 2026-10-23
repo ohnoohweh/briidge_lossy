@@ -33,7 +33,8 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics = RuntimeMetricAccumulator((
         "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
         "securelink", "compression", "control_tick", "retransmit_tick",
-        "status_snapshot", "connections_snapshot", "peers_snapshot",
+        "status_stats", "status_session_summaries", "status_runtime_state",
+        "runtime_metrics_projection", "connections_snapshot", "peers_snapshot",
         "build_info", "security_advisor", "logging",
     ))
     runner._runtime_metrics_started = {}
@@ -163,10 +164,12 @@ def test_runner_records_completed_runtime_scope_without_retaining_individual_eve
 
 def test_runner_keeps_webadmin_snapshot_components_separate():
     runner = _runner_for_metrics_tests()
-    runner.record_runtime_duration("status_snapshot", 3 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("status_stats", 3 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("status_session_summaries", 5 * NANOSECONDS_PER_MILLISECOND)
     runner.record_runtime_duration("connections_snapshot", 7 * NANOSECONDS_PER_MILLISECOND)
     rows = {item["category"]: item for item in runner._runtime_metrics_status_fields()["categories"]}
-    assert rows["status_snapshot"]["max_ms"] == 3.0
+    assert rows["status_stats"]["max_ms"] == 3.0
+    assert rows["status_session_summaries"]["max_ms"] == 5.0
     assert rows["connections_snapshot"]["max_ms"] == 7.0
     assert rows["peers_snapshot"]["count"] == 0
 

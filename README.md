@@ -1741,7 +1741,8 @@ approved categories, while one Runner-owned task samples process CPU and
 event-loop lateness. Cached redacted status now exposes bounded aggregates;
 the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
-contributors across overlay, SecureLink, compression, timer, status,
+contributors across overlay, SecureLink, compression, timer, status statistics,
+session summaries, runtime state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
 and TUN boundaries are displayed as event-loop occupancy estimates. The
 portable Swift Core supplies the same redacted runtime-metrics

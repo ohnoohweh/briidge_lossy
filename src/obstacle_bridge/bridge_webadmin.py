@@ -1067,7 +1067,7 @@ class AdminWebUI:
 
     def _build_tun_routing_payload_now(self) -> dict:
         snapshot = self._snapshot_component("connections_snapshot", self.runner.get_connections_snapshot) or {}
-        status_snapshot = self._snapshot_component("status_snapshot", self.runner.get_status_snapshot) or {}
+        status_snapshot = self.runner.get_status_snapshot() or {}
         tun_rows = list(snapshot.get("tun") or [])
         tun_cfg = TunRoutingSettings.from_mapping(vars(self.args))
         shared_rows_by_key: dict[tuple, dict] = {}
@@ -2745,7 +2745,7 @@ class AdminWebUI:
 
     def _build_status_payload_now(self) -> dict:
         from .admin_api_contract import logging_worker_status
-        payload = self._snapshot_component("status_snapshot", self.runner.get_status_snapshot)
+        payload = self.runner.get_status_snapshot()
         connections_snapshot = self._snapshot_component("connections_snapshot", self.runner.get_connections_snapshot) or {}
         for aggregate_key in ("open_connections", "traffic", "compress_layer"):
             payload.pop(aggregate_key, None)
