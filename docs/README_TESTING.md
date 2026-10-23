@@ -1110,6 +1110,9 @@ is not additive with contained Core timing scopes.
 
 The TCP delivery split separately covers server data, client open/data,
 local-write enqueue, and close handling.
+Client-open timing further distinguishes Core admission, service/event
+publication, `NWConnection` creation/start, and receive registration or
+immediate activation.
 
 ### Run the full unit suite
 

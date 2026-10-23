@@ -325,44 +325,50 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
     }
 
     private func handleInboundClientOpen(chanID: Int, payload: Data, counter: Int = 0) {
-        let snapshot = runtime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
+        let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClientOpenCore) {
+            runtime.handleInboundClientOpen(chanID: chanID, payload: payload, counter: counter)
+        }
         handleAdmittedClientOpen(chanID: chanID, snapshot: snapshot)
     }
 
     private func handleAdmittedClientOpen(chanID: Int, snapshot: ObstacleBridgeChannelMuxTcpRuntime.InboundClientOpenSnapshot) {
-        guard let spec = runtime.clientServiceSpec(chanID: chanID) else {
+        let admission = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClientOpenPublication) {
+            () -> (ObstacleBridgeChannelMuxCodec.ServiceSpec, Bool)? in
+            guard let spec = runtime.clientServiceSpec(chanID: chanID) else {
+                if !snapshot.accepted {
+                    eventSink?("\(eventPrefix)_tcp_client_open_rejected", ["chan_id": chanID])
+                } else {
+                    eventSink?("\(eventPrefix)_tcp_client_open_parse_failed", ["chan_id": chanID])
+                }
+                return nil
+            }
+            eventSink?("\(eventPrefix)_tcp_client_open_parsed", [
+                "chan_id": chanID,
+                "service_id": spec.svcID,
+                "service_name": spec.name ?? "",
+                "target_host": spec.rHost,
+                "target_port": spec.rPort,
+                "accepted": snapshot.accepted,
+                "connect_requested": snapshot.connectRequested,
+                "connected": snapshot.connected,
+                "pending_count": snapshot.pendingCount,
+            ])
+            if snapshot.accepted {
+                transportEventSink?(.clientAccepted(chanID: chanID, spec: spec, connected: snapshot.connected))
+            }
             if !snapshot.accepted {
                 eventSink?("\(eventPrefix)_tcp_client_open_rejected", ["chan_id": chanID])
-            } else {
-                eventSink?("\(eventPrefix)_tcp_client_open_parse_failed", ["chan_id": chanID])
             }
-            return
+            return (spec, snapshot.accepted && snapshot.connectRequested)
         }
-        eventSink?("\(eventPrefix)_tcp_client_open_parsed", [
-            "chan_id": chanID,
-            "service_id": spec.svcID,
-            "service_name": spec.name ?? "",
-            "target_host": spec.rHost,
-            "target_port": spec.rPort,
-            "accepted": snapshot.accepted,
-            "connect_requested": snapshot.connectRequested,
-            "connected": snapshot.connected,
-            "pending_count": snapshot.pendingCount,
-        ])
-        if snapshot.accepted {
-            transportEventSink?(.clientAccepted(chanID: chanID, spec: spec, connected: snapshot.connected))
-        }
-        if snapshot.accepted && snapshot.connectRequested {
-            startOutboundConnection(chanID: chanID, spec: spec)
-            return
-        }
-        if !snapshot.accepted {
-            eventSink?("\(eventPrefix)_tcp_client_open_rejected", ["chan_id": chanID])
-        }
+        guard let (spec, shouldStartConnection) = admission, shouldStartConnection else { return }
+        startOutboundConnection(chanID: chanID, spec: spec)
     }
 
     private func handleInboundClientOpenChunk(chanID: Int, payload: Data, counter: Int) {
-        guard let snapshot = runtime.handleInboundClientOpenChunk(chanID: chanID, payload: payload, counter: counter) else {
+        guard let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClientOpenCore, {
+            runtime.handleInboundClientOpenChunk(chanID: chanID, payload: payload, counter: counter)
+        }) else {
             return
         }
         handleAdmittedClientOpen(chanID: chanID, snapshot: snapshot)
@@ -376,26 +382,32 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
             eventSink?("\(eventPrefix)_tcp_client_connect_invalid_port", ["chan_id": chanID, "port": spec.rPort])
             return
         }
-        eventSink?("\(eventPrefix)_tcp_client_connect_start", [
-            "chan_id": chanID,
-            "service_id": spec.svcID,
-            "service_name": spec.name ?? "",
-            "host": spec.rHost,
-            "port": spec.rPort,
-        ])
-        let connection = NWConnection(host: NWEndpoint.Host(spec.rHost), port: port, using: .tcp)
-        clientConnections[chanID] = connection
-        metricSink?("client_dialed")
-        connection.stateUpdateHandler = { [weak self] state in
-            self?.queue.async {
-                self?.handleClientConnectionState(state, chanID: chanID, spec: spec)
+        let connection = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpConnectionStart) {
+            eventSink?("\(eventPrefix)_tcp_client_connect_start", [
+                "chan_id": chanID,
+                "service_id": spec.svcID,
+                "service_name": spec.name ?? "",
+                "host": spec.rHost,
+                "port": spec.rPort,
+            ])
+            let connection = NWConnection(host: NWEndpoint.Host(spec.rHost), port: port, using: .tcp)
+            clientConnections[chanID] = connection
+            metricSink?("client_dialed")
+            connection.stateUpdateHandler = { [weak self] state in
+                self?.queue.async {
+                    self?.handleClientConnectionState(state, chanID: chanID, spec: spec)
+                }
             }
+            connection.start(queue: queue)
+            return connection
         }
-        connection.start(queue: queue)
-        if !activateClientOnReady {
-            activateClientConnection(chanID: chanID, spec: spec)
+        ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpReceiveRegistration) {
+            if !activateClientOnReady {
+                activateClientConnection(chanID: chanID, spec: spec)
+            }
+            receiveFromClientConnection(chanID: chanID)
         }
-        receiveFromClientConnection(chanID: chanID)
+        _ = connection
     }
 
     private func handleClientConnectionState(_ state: NWConnection.State, chanID: Int, spec: ObstacleBridgeChannelMuxCodec.ServiceSpec) {

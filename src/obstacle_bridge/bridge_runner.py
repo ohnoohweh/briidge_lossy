@@ -284,6 +284,8 @@ class Runner:
             "apple_transport_tcp_server_data", "apple_transport_tcp_client_open",
             "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue",
             "apple_transport_tcp_close",
+            "apple_transport_tcp_client_open_core", "apple_transport_tcp_client_open_publication",
+            "apple_transport_tcp_connection_start", "apple_transport_tcp_receive_registration",
             "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
             "status_stats", "status_session_summaries", "status_worker_state",
             "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",

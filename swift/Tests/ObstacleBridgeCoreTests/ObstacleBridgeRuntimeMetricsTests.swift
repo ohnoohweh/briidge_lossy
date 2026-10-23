@@ -15,6 +15,7 @@ struct ObstacleBridgeRuntimeMetricsTests {
         metrics.record(.appleTransportDeliveredPayload, durationNS: 10_000_000, completedNS: 2_000_000_000)
         metrics.record(.appleTransportTunPayload, durationNS: 11_000_000, completedNS: 2_000_000_000)
         metrics.record(.appleTransportTcpWriteEnqueue, durationNS: 12_000_000, completedNS: 2_000_000_000)
+        metrics.record(.appleTransportTcpConnectionStart, durationNS: 13_000_000, completedNS: 2_000_000_000)
         let payload = metrics.snapshotPayload(nowNS: 2_000_000_000)
         let rows = payload["categories"] as? [[String: Any]]
         let secureLink = rows?.first { ($0["category"] as? String) == "securelink" }
@@ -22,7 +23,7 @@ struct ObstacleBridgeRuntimeMetricsTests {
         #expect(secureLink?["max_ms"] as? Double == 7.0)
         let retransmit = rows?.first { ($0["category"] as? String) == "retransmit_unconfirmed" }
         #expect(retransmit?["max_ms"] as? Double == 6.0)
-        #expect(payload["longest_uninterrupted_category"] as? String == "apple_transport_tcp_write_enqueue")
+        #expect(payload["longest_uninterrupted_category"] as? String == "apple_transport_tcp_connection_start")
         #expect(payload["payload"] == nil)
 
         let expired = metrics.snapshotPayload(nowNS: 5_000_000_001)
