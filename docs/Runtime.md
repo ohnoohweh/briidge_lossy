@@ -634,7 +634,9 @@ zlib decode. It records SecureLink worker boundaries across every wrapped
 transport and splits Apple myUDP owner work into protocol parse/dispatch,
 payload routing, SecureLink handoff, delivered ChannelMux/TUN payload work,
 ChannelMux dispatch/service-catalog processing, and TUN/TCP/UDP payload
-branches, socket egress, and connection lifecycle. The owner-queue row
+branches. TCP payload work further distinguishes server data, client
+open/data, local-write enqueue, and close work. Socket egress and connection
+lifecycle remain separate. The owner-queue row
 is an inclusive boundary measurement: it is useful for finding a long
 serialized owner turn, but must not be summed with the Core sub-stage rows it
 contains. The fixed, aggregate-only vocabulary permits up to 48 categories.

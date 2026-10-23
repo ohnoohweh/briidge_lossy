@@ -181,18 +181,22 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         if let connection = serverConnections[frame.chanID] {
             switch frame.mtype {
             case .data:
-                let snapshot = runtime.handleInboundServerData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
+                let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpServerData) {
+                    runtime.handleInboundServerData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
+                }
                 for buffer in snapshot.writtenBuffers {
                     enqueueTCPWrite(connection, payload: buffer, chanID: frame.chanID, role: .server, event: "\(eventPrefix)_tcp_server_write_failed")
                     transportEventSink?(.serverInbound(chanID: frame.chanID, bytes: buffer.count))
                 }
             case .close:
-                let snapshot = runtime.handleInboundServerClose(chanID: frame.chanID, counter: frame.counter)
-                if snapshot.localConnectionClosed {
-                    cancelTCPWriteDrain(chanID: frame.chanID)
-                    serverConnections.removeValue(forKey: frame.chanID)
-                    cancelConnection(connection)
-                    transportEventSink?(.serverClosed(chanID: frame.chanID))
+                ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClose) {
+                    let snapshot = runtime.handleInboundServerClose(chanID: frame.chanID, counter: frame.counter)
+                    if snapshot.localConnectionClosed {
+                        cancelTCPWriteDrain(chanID: frame.chanID)
+                        serverConnections.removeValue(forKey: frame.chanID)
+                        cancelConnection(connection)
+                        transportEventSink?(.serverClosed(chanID: frame.chanID))
+                    }
                 }
             default:
                 break
@@ -202,21 +206,28 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
 
         switch frame.mtype {
         case .open:
-            eventSink?("\(eventPrefix)_tcp_client_open_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
-            handleInboundClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClientOpen) {
+                eventSink?("\(eventPrefix)_tcp_client_open_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
+                handleInboundClientOpen(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
+            }
         case .openChunk:
-            eventSink?("\(eventPrefix)_tcp_client_open_chunk_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
-            handleInboundClientOpenChunk(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClientOpen) {
+                eventSink?("\(eventPrefix)_tcp_client_open_chunk_received", ["chan_id": frame.chanID, "bytes": frame.body.count])
+                handleInboundClientOpenChunk(chanID: frame.chanID, payload: frame.body, counter: frame.counter)
+            }
         case .data:
-            let snapshot = runtime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
-            eventSink?("\(eventPrefix)_tcp_client_data_received", [
-                "chan_id": frame.chanID,
-                "bytes": frame.body.count,
-                "buffered": snapshot.buffered,
-                "sent_immediately": snapshot.sentImmediately,
-                "pending_count": snapshot.pendingCount,
-                "local_connection_present": clientConnections[frame.chanID] != nil,
-            ])
+            let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClientData) {
+                let snapshot = runtime.handleInboundClientData(chanID: frame.chanID, body: frame.body, counter: frame.counter)
+                eventSink?("\(eventPrefix)_tcp_client_data_received", [
+                    "chan_id": frame.chanID,
+                    "bytes": frame.body.count,
+                    "buffered": snapshot.buffered,
+                    "sent_immediately": snapshot.sentImmediately,
+                    "pending_count": snapshot.pendingCount,
+                    "local_connection_present": clientConnections[frame.chanID] != nil,
+                ])
+                return snapshot
+            }
             if let connection = clientConnections[frame.chanID] {
                 for buffer in snapshot.writtenBuffers {
                     enqueueTCPWrite(connection, payload: buffer, chanID: frame.chanID, role: .client, event: "\(eventPrefix)_tcp_client_write_failed")
@@ -226,15 +237,17 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
                 transportEventSink?(.clientInbound(chanID: frame.chanID, bytes: frame.body.count))
             }
         case .close:
-            let snapshot = runtime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
-            if snapshot.closed {
-                cancelTCPWriteDrain(chanID: frame.chanID)
-                if let connection = clientConnections.removeValue(forKey: frame.chanID) {
-                    cancelConnection(connection)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpClose) {
+                let snapshot = runtime.handleInboundClientClose(chanID: frame.chanID, counter: frame.counter)
+                if snapshot.closed {
+                    cancelTCPWriteDrain(chanID: frame.chanID)
+                    if let connection = clientConnections.removeValue(forKey: frame.chanID) {
+                        cancelConnection(connection)
+                    }
                 }
+                activatedClientChannels.remove(frame.chanID)
+                transportEventSink?(.clientClosed(chanID: frame.chanID))
             }
-            activatedClientChannels.remove(frame.chanID)
-            transportEventSink?(.clientClosed(chanID: frame.chanID))
         default:
             break
         }
@@ -503,13 +516,15 @@ final class ObstacleBridgeChannelMuxTCPTransportOwner {
         role: ConnectionRole,
         event: String
     ) {
-        guard active, connectionIsCurrent(connection, chanID: chanID, role: role) else {
-            return
+        ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpWriteEnqueue) {
+            guard active, connectionIsCurrent(connection, chanID: chanID, role: role) else {
+                return
+            }
+            var pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
+            pending.buffers.append(payload)
+            pendingTCPWrites[chanID] = pending
+            drainTCPWrites(connection, chanID: chanID, role: role, event: event)
         }
-        var pending = pendingTCPWrites[chanID] ?? PendingTCPWrites()
-        pending.buffers.append(payload)
-        pendingTCPWrites[chanID] = pending
-        drainTCPWrites(connection, chanID: chanID, role: role, event: event)
     }
 
     private func drainTCPWrites(_ connection: NWConnection, chanID: Int, role: ConnectionRole, event: String) {

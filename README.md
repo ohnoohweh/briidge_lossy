@@ -1745,7 +1745,7 @@ contributors across overlay receive preparation/data/idle/control, retransmit
 reported-missing/unconfirmed sweeps, SecureLink worker/crypto, compression
 frame/encode/decode, Apple transport parse/route/SecureLink/delivered-payload/
 ChannelMux/TUN/TCP/UDP/egress/lifecycle and inclusive owner-queue boundaries,
-timer, status statistics,
+TCP server/client/write/close boundaries, timer, status statistics,
 session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,

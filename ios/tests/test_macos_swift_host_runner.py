@@ -251,7 +251,7 @@ def test_macos_runtime_metrics_keep_swift_worker_and_owner_boundaries() -> None:
     compression = (CORE_SWIFT_DIR / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
     adapter = (CORE_SWIFT_DIR / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_owner_queue", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_payload_route", "apple_transport_securelink_route", "apple_transport_delivered_payload", "apple_transport_mux_dispatch", "apple_transport_tun_payload", "apple_transport_tcp_payload", "apple_transport_udp_payload", "apple_transport_lifecycle"):
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_owner_queue", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_payload_route", "apple_transport_securelink_route", "apple_transport_delivered_payload", "apple_transport_mux_dispatch", "apple_transport_tun_payload", "apple_transport_tcp_payload", "apple_transport_udp_payload", "apple_transport_tcp_server_data", "apple_transport_tcp_client_open", "apple_transport_tcp_client_data", "apple_transport_tcp_write_enqueue", "apple_transport_tcp_close", "apple_transport_lifecycle"):
         assert category in metrics
     assert ".compressionEncode" in compression
     assert ".compressionDecode" in compression
@@ -267,6 +267,12 @@ def test_macos_runtime_metrics_keep_swift_worker_and_owner_boundaries() -> None:
     assert ".appleTransportTunPayload" in owner
     assert ".appleTransportTcpPayload" in owner
     assert ".appleTransportUdpPayload" in owner
+    tcp_owner = (SHARED_NATIVE_DIR / "ObstacleBridgeChannelMuxTCPTransportOwner.swift").read_text(encoding="utf-8")
+    assert ".appleTransportTcpServerData" in tcp_owner
+    assert ".appleTransportTcpClientOpen" in tcp_owner
+    assert ".appleTransportTcpClientData" in tcp_owner
+    assert ".appleTransportTcpWriteEnqueue" in tcp_owner
+    assert ".appleTransportTcpClose" in tcp_owner
     assert ".appleTransportLifecycle" in owner
 
 

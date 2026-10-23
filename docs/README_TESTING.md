@@ -1108,6 +1108,9 @@ ChannelMux dispatch/service catalog, TUN/TCP/UDP branches, lifecycle, and the in
 transport-owner queue measurement. The queue-boundary row is diagnostic and
 is not additive with contained Core timing scopes.
 
+The TCP delivery split separately covers server data, client open/data,
+local-write enqueue, and close handling.
+
 ### Run the full unit suite
 
 ```bash
