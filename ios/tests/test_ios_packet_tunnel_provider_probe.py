@@ -201,6 +201,7 @@ def _compile_swift_packet_tunnel_provider_probe(source_path: Path, binary_path: 
         str(CORE_SWIFT_DIR / "ObstacleBridgeTunProbeDiagnosticsSupport.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeTunProbeAddressResolver.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeRuntimeMetrics.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeChannelMuxTcpRuntime.swift"),

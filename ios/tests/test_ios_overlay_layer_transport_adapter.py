@@ -44,6 +44,7 @@ def _compile_swift_overlay_layer_transport_probe(source_path: Path, binary_path:
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayCoordinator.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayBackpressure.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPSKTranscript.swift"),
+        str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeMetrics.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPskCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPskRuntime.swift"),

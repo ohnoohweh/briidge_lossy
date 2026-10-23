@@ -1651,6 +1651,7 @@ def _compile_swift_udp_overlay_peer_probe(source_path: Path, binary_path: Path) 
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(CORE_SWIFT_DIR / "ObstacleBridgeRuntimeMetrics.swift"),
         str(CORE_SWIFT_DIR / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(source_path),
     ]
