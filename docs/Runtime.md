@@ -632,7 +632,8 @@ transport slice.
 Swift additionally separates compression frame handling, zlib encode, and
 zlib decode. It records SecureLink worker boundaries across every wrapped
 transport and splits Apple myUDP owner work into protocol parse/dispatch,
-payload routing, socket egress, and connection lifecycle. The owner-queue row
+payload routing, SecureLink handoff, delivered ChannelMux/TUN payload work,
+socket egress, and connection lifecycle. The owner-queue row
 is an inclusive boundary measurement: it is useful for finding a long
 serialized owner turn, but must not be summed with the Core sub-stage rows it
 contains. The fixed, aggregate-only vocabulary permits up to 40 categories.

@@ -1055,22 +1055,29 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
         }
         for payload in payloads {
             if let adapter = overlayLayerTransportAdapter {
-                overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
-                let snapshot = adapter.handleInboundFrame(
-                    payload,
-                    observedPeerHost: currentPeerAddress?.host,
-                    observedPeerPort: currentPeerAddress?.port
-                )
-                for emitted in snapshot.emittedFrames {
-                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
-                    sendOverlayTransportPayload(emitted)
+                let snapshot = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportSecureLinkRoute) {
+                    overlayRuntime.recordSecureLinkBoundaryFrame(direction: "to_securelink")
+                    let snapshot = adapter.handleInboundFrame(
+                        payload,
+                        observedPeerHost: currentPeerAddress?.host,
+                        observedPeerPort: currentPeerAddress?.port
+                    )
+                    for emitted in snapshot.emittedFrames {
+                        overlayRuntime.recordSecureLinkBoundaryFrame(direction: "from_securelink")
+                        sendOverlayTransportPayload(emitted)
+                    }
+                    return snapshot
                 }
                 for delivered in snapshot.deliveredPayloads {
-                    handleOverlayPayload(delivered)
+                    ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportDeliveredPayload) {
+                        handleOverlayPayload(delivered)
+                    }
                 }
                 continue
             }
-            handleOverlayPayload(payload)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportDeliveredPayload) {
+                handleOverlayPayload(payload)
+            }
         }
     }
 

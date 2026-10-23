@@ -1103,7 +1103,8 @@ The CI workflow labels the platform-local lifecycle matrix as PXY-3B and its exa
 
 Runtime-metrics coverage includes the bounded Swift category vocabulary for
 compression frame/encode/decode, SecureLink worker boundaries, Apple myUDP
-parse/dispatch, payload-routing, egress, lifecycle, and the inclusive
+parse/dispatch, payload-routing, SecureLink handoff, delivered-payload, egress,
+lifecycle, and the inclusive
 transport-owner queue measurement. The queue-boundary row is diagnostic and
 is not additive with contained Core timing scopes.
 

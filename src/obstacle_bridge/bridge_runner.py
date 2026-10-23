@@ -278,6 +278,7 @@ class Runner:
             "apple_transport_owner_queue", "securelink_worker",
             "apple_transport_parse_dispatch", "apple_transport_egress",
             "apple_transport_payload_route", "apple_transport_lifecycle",
+            "apple_transport_securelink_route", "apple_transport_delivered_payload",
             "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
             "status_stats", "status_session_summaries", "status_worker_state",
             "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
