@@ -647,29 +647,16 @@ startup, status, and cancellation. WebAdmin now renders compact graphical
 meters beside Restart and supplies exact aggregate detail through Runtime
 Analysis. There is no remaining L-RM work package gap.
 
-### Swift monitoring implementation plan
+### Swift runtime monitoring
 
-The next monitoring work is split by ownership, not by the operating system
-used to compile it. The portable Swift Core metrics model is shared runtime
-logic and may be implemented and locally validated with `swift test` on either
-Linux or macOS. It must not be unnecessarily held behind a macOS app build,
-an iOS simulator, a Python peer, or mixed-runtime CI.
-
-- **S-RM.1 — Portable Swift Core metrics:** implement the same bounded
-  histogram, rolling-window, approved-category, and redacted snapshot contract
-  in `ObstacleBridgeCore`. Linux or macOS may own this effort; its definition
-  of done is a Core-only `swift test` suite with injected clocks and fixture
-  payloads covering lifetime/two-second maxima, leaders, empty/unavailable
-  state, and bounded storage.
-- **S-RM.2 — Apple product adapters:** macOS/iOS work begins only after the
-  Core contract exists. It owns Apple-specific process accounting, HostRunner
-  or packet-tunnel scheduling, lifecycle cancellation, and native status/UI
-  projection. It must consume the Core model rather than fork timing,
-  percentile, window, or redaction semantics.
-
-The current residual Swift gap is S-RM.1 followed by S-RM.2. Linux Swift work
-can complete S-RM.1 independently; macOS effort is deliberately scoped to
-Apple-product integration after that portable Core slice is available.
+The portable Swift Core owns the shared fixed-category, aggregate-only timing
+model. Linux, macOS, and iOS consume its `runtime_metrics` status payload, so
+the same lifetime/two-second maxima, source categories, and CPU-core semantics
+are available without a mixed-runtime build. Core records overlay receive/send,
+SecureLink, compression, and control/retransmit work; CPU sampling uses
+process user-plus-system time divided by elapsed monotonic time. The current
+Swift payload deliberately reports unavailable event-loop lag and percentile
+fields as null rather than inventing platform-specific estimates.
 
 ### Dashboard and alert on relationships
 

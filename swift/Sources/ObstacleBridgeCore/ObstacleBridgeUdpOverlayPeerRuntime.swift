@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 public final class ObstacleBridgeUdpOverlayPeerRuntime {
     public struct OutboundDataSnapshot {
@@ -187,6 +188,8 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
     }
 
     func sendApplicationPayload(_ payload: Data, nowNS: UInt64, echoNS: UInt64 = 0) throws -> OutboundDataSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlaySend, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         try enqueueApplicationPayload(payload, nowNS: nowNS)
         return try flushSendQueue(nowNS: nowNS, echoNS: echoNS)
     }
@@ -281,6 +284,8 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
     }
 
     func handleControlTimerTick(nowNS: UInt64, sendPortPresent: Bool) -> ControlTimerSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.controlTick, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         let decision = peerEngine.controlTimer(nowNanoseconds: nowNS, transportWritable: sendPortPresent)
         let core = peerEngine.snapshot()
         synchronizePeerEngine(core)
@@ -293,6 +298,8 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
     }
 
     func handleRetransmitTimerTick(nowNS: UInt64, sendPortPresent: Bool) throws -> RetransmitTimerSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.retransmitTick, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard sendPortPresent else {
             let core = peerEngine.snapshot()
             return RetransmitTimerSnapshot(
@@ -391,6 +398,8 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
         echoNS: UInt64,
         sendPortPresent: Bool
     ) -> InboundDataSnapshot? {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceive, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         do {
             let effect = try peerEngine.receiveWire(frame, nowNanoseconds: nowNS, transportWritable: sendPortPresent)
             let core = peerEngine.snapshot()

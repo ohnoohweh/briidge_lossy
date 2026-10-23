@@ -1568,6 +1568,7 @@ final class ObstacleBridgeHostRunner {
     }
 
     private func snapshotUncached() -> [String: Any] {
+        ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()
         let uptimeMS = Int(Date().timeIntervalSince(startedAt) * 1000)
         let uptimeSec = Int(Date().timeIntervalSince(startedAt))
         let health = runtimeHealthMetadata()
@@ -1586,6 +1587,7 @@ final class ObstacleBridgeHostRunner {
             "runtime_health_record_count": health.count,
             "previous_runtime_lifetime_ended_cleanly": health.previousClean as Any,
             "runtime_health_recent_records": healthRecords,
+            "runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload(),
             "bootstrap_state": bootstrapState,
             "admin_web_name": Self.stringValue(from: runtimeConfig["admin_web_name"]) ?? "",
             "build": buildSummary(),

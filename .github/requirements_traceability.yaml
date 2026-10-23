@@ -1655,6 +1655,7 @@ REQ-ADM-001:
     # Covers the lifetime and trailing-two-second uninterrupted-peak source fields.
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
     - tests/unit/test_runtime_metrics.py::test_runner_records_completed_runtime_scope_without_retaining_individual_events
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::retainsOnlyApprovedAggregateTimingAndTrailingWindow
     - tests/unit/test_runtime_metrics.py::test_linux_local_runtime_metrics_smoke_lifecycle
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
