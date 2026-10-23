@@ -272,8 +272,10 @@ class Runner:
         self._runtime_metrics_lag_probe_count = 0
         self._runtime_metrics = RuntimeMetricAccumulator(("channelmux_callback", "tun_callback", "admin_snapshot"))
         self._runtime_metrics_started: Dict[str, int] = {}
-        self._runtime_metrics_cpu_peaks: list[tuple[int, float]] = []
+        self._runtime_metrics_cpu_peaks: list[dict[str, Any]] = []
         self._runtime_metrics_cpu_peak_overall: Optional[float] = None
+        self._runtime_metrics_cpu_peak_overall_contributor: Optional[dict[str, Any]] = None
+        self._runtime_metrics_cpu_interval_by_category: Dict[str, int] = {}
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._async_diag_lock = threading.Lock()
@@ -701,6 +703,7 @@ class Runner:
         self._runtime_metrics_last_sample_monotonic_ns = wall_now
         self._runtime_metrics_last_sample_cpu_ns = cpu_now
         if previous_wall is None or previous_cpu is None:
+            self._runtime_metrics_cpu_interval_by_category.clear()
             return None
         wall_delta = wall_now - previous_wall
         cpu_delta = cpu_now - previous_cpu
@@ -709,9 +712,15 @@ class Runner:
         cores = float(cpu_delta) / float(wall_delta)
         self._runtime_metrics_last_cpu_cores = cores
         self._runtime_metrics_sample_count += 1
-        self._runtime_metrics_cpu_peaks.append((wall_now, cores))
-        self._runtime_metrics_cpu_peaks = [item for item in self._runtime_metrics_cpu_peaks if wall_now - item[0] < 2 * NANOSECONDS_PER_SECOND]
-        self._runtime_metrics_cpu_peak_overall = max(float(self._runtime_metrics_cpu_peak_overall or 0.0), cores)
+        category, occupied_ns = max(self._runtime_metrics_cpu_interval_by_category.items(), key=lambda item: (item[1], item[0]), default=("", 0))
+        contributor = None if not category else {"category": category, "observed_cores": float(occupied_ns) / float(wall_delta)}
+        sample = {"timestamp_ns": wall_now, "cores": cores, "contributor": contributor}
+        self._runtime_metrics_cpu_peaks.append(sample)
+        self._runtime_metrics_cpu_peaks = [item for item in self._runtime_metrics_cpu_peaks if wall_now - int(item["timestamp_ns"]) < 2 * NANOSECONDS_PER_SECOND]
+        if self._runtime_metrics_cpu_peak_overall is None or cores >= self._runtime_metrics_cpu_peak_overall:
+            self._runtime_metrics_cpu_peak_overall = cores
+            self._runtime_metrics_cpu_peak_overall_contributor = contributor
+        self._runtime_metrics_cpu_interval_by_category.clear()
         return cores
 
     def _record_runtime_loop_lag(self, *, deadline_ns: int, actual_ns: Optional[int] = None) -> int:
@@ -772,8 +781,11 @@ class Runner:
                          "max_ms": item.lifetime.max_ms, "last_2_seconds_max_ms": item.recent.max_ms})
         slice_leader = max(rows, key=lambda row: (row["max_ms"] or 0.0, row["category"]), default=None)
         recent_slice_leader = max(rows, key=lambda row: (row["last_2_seconds_max_ms"] or 0.0, row["category"]), default=None)
+        recent_cpu_peak = max(self._runtime_metrics_cpu_peaks, key=lambda item: float(item["cores"]), default=None)
         return {"cpu_cores_max": {"overall": self._runtime_metrics_cpu_peak_overall,
-                "last_2_seconds": max((value for _, value in self._runtime_metrics_cpu_peaks), default=None)},
+                "last_2_seconds": recent_cpu_peak["cores"] if recent_cpu_peak else None,
+                "overall_contributor": self._runtime_metrics_cpu_peak_overall_contributor,
+                "last_2_seconds_contributor": recent_cpu_peak["contributor"] if recent_cpu_peak else None},
                 "work_slice_ms_max": {"overall": max((row["max_ms"] or 0.0 for row in rows), default=None),
                 "last_2_seconds": max((row["last_2_seconds_max_ms"] or 0.0 for row in rows), default=None)},
                 "event_loop_lag_ms": {"last": None if self._runtime_metrics_last_loop_lag_ns is None else self._runtime_metrics_last_loop_lag_ns / 1_000_000.0,
@@ -806,7 +818,9 @@ class Runner:
         elif phase in {"finished", "failed"}:
             started = self._runtime_metrics_started.pop(category, None)
             if started is not None:
-                self._runtime_metrics.record(category, max(0, now_ns - started), completed_at_ns=now_ns)
+                duration_ns = max(0, now_ns - started)
+                self._runtime_metrics.record(category, duration_ns, completed_at_ns=now_ns)
+                self._runtime_metrics_cpu_interval_by_category[category] = self._runtime_metrics_cpu_interval_by_category.get(category, 0) + duration_ns
         now_mono = time.monotonic()
         with self._async_diag_lock:
             if phase == "started":

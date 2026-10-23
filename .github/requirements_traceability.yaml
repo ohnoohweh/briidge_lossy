@@ -1650,6 +1650,7 @@ REQ-ADM-001:
     - tests/unit/test_runtime_metrics.py::test_accumulator_bounds_categories_and_uses_injected_clock
     - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
     - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
+    - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
     - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
     # Covers the lifetime and trailing-two-second uninterrupted-peak source fields.
     - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted

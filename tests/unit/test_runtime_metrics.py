@@ -34,6 +34,8 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics_started = {}
     runner._runtime_metrics_cpu_peaks = []
     runner._runtime_metrics_cpu_peak_overall = None
+    runner._runtime_metrics_cpu_peak_overall_contributor = None
+    runner._runtime_metrics_cpu_interval_by_category = {}
     runner._async_diag_lock = threading.Lock()
     runner._sync_diag = {"last_started_name": "", "last_started_kind": "", "last_started_monotonic": None,
                         "last_finished_name": "", "last_finished_kind": "", "last_finished_monotonic": None,
@@ -105,6 +107,16 @@ def test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta():
     assert runner._record_runtime_loop_lag(deadline_ns=200, actual_ns=243) == 43
     assert runner._runtime_metrics_last_loop_lag_ns == 43
     assert runner._runtime_metrics_max_loop_lag_ns == 43
+
+
+def test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate():
+    runner = _runner_for_metrics_tests()
+    assert runner._sample_runtime_cpu(monotonic_ns=0, process_cpu_ns=0) is None
+    runner._runtime_metrics_cpu_interval_by_category = {"channelmux_callback": 50, "tun_callback": 10}
+    assert runner._sample_runtime_cpu(monotonic_ns=100, process_cpu_ns=80) == 0.8
+    payload = runner._runtime_metrics_status_fields()["cpu_cores_max"]
+    assert payload["overall_contributor"] == {"category": "channelmux_callback", "observed_cores": 0.5}
+    assert payload["last_2_seconds_contributor"] == {"category": "channelmux_callback", "observed_cores": 0.5}
 
 
 def test_runner_monitor_is_one_owned_task_and_cancels_cleanly():
