@@ -293,13 +293,17 @@ def test_ios_runtime_metrics_include_swift_worker_and_owner_boundaries() -> None
     compression = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeCompressLayerRuntime.swift").read_text(encoding="utf-8")
     adapter = (ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeOverlayLayerTransportAdapter.swift").read_text(encoding="utf-8")
     owner = (SHARED_NATIVE_DIR / "ObstacleBridgeUdpOverlayTransportOwner.swift").read_text(encoding="utf-8")
-    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_owner_queue"):
+    for category in ("compression_encode", "compression_decode", "compression_frame", "securelink_worker", "apple_transport_owner_queue", "apple_transport_parse_dispatch", "apple_transport_egress", "apple_transport_payload_route", "apple_transport_lifecycle"):
         assert category in metrics
     assert ".compressionEncode" in compression
     assert ".compressionDecode" in compression
     assert ".compressionFrame" in compression
     assert ".secureLinkWorker" in adapter
     assert ".appleTransportOwnerQueue" in owner
+    assert ".appleTransportParseDispatch" in owner
+    assert ".appleTransportEgress" in owner
+    assert ".appleTransportPayloadRoute" in owner
+    assert ".appleTransportLifecycle" in owner
 
 
 def test_ipserver_extension_plist_and_entitlements_exist() -> None:

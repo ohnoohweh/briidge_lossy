@@ -870,7 +870,9 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     /// a queue-boundary diagnostic and must not be added to those sub-stages.
     private func handleOverlayDatagramOnOwnerQueue(_ datagram: Data) {
         let wasConnected = overlayConnected
-        guard let frame = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram) else {
+        guard let frame = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
+            ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(datagram)
+        }) else {
             return
         }
         let nowNS = monotonicNowNS()
@@ -888,9 +890,13 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             if !snapshot.controlReasons.isEmpty {
                 snapshot.emittedFrames.forEach(sendDatagram)
             }
-            routeOverlayPayloads(snapshot.completedPayloads)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportPayloadRoute) {
+                routeOverlayPayloads(snapshot.completedPayloads)
+            }
         case ObstacleBridgeUdpOverlayCodec.ptypeControl:
-            guard let control = ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram) else {
+            guard let control = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
+                ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram)
+            }) else {
                 return
             }
             do {
@@ -932,14 +938,16 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             break
         }
         if !wasConnected && overlayConnected {
-            eventSink?("udp_overlay_connected", [
-                "peer_host": currentPeerAddress?.host ?? NSNull(),
-                "peer_port": currentPeerAddress?.port ?? NSNull(),
-                "resolved_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
-            ])
-            maybePrimeSecureLinkHandshake()
-            maybeSendStartupMuxFrames()
-            maybeOpenConfiguredTunIfReady()
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportLifecycle) {
+                eventSink?("udp_overlay_connected", [
+                    "peer_host": currentPeerAddress?.host ?? NSNull(),
+                    "peer_port": currentPeerAddress?.port ?? NSNull(),
+                    "resolved_peer_family": currentPeerAddress.map { ObstacleBridgePeerAddressResolver.familyName($0.family) } ?? NSNull(),
+                ])
+                maybePrimeSecureLinkHandshake()
+                maybeSendStartupMuxFrames()
+                maybeOpenConfiguredTunIfReady()
+            }
         }
         lastOverlayConnectedState = overlayConnected
     }
@@ -1425,19 +1433,21 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func sendDatagram(_ packet: Data) {
-        guard started, socketFD >= 0, let peerAddress = currentPeerAddress else {
-            return
-        }
-        packet.withUnsafeBytes { rawBuffer in
-            guard let base = rawBuffer.baseAddress else { return }
-            peerAddress.storage.withUnsafeBytes { peerBuffer in
-                guard let peerBase = peerBuffer.baseAddress else { return }
-                let sockaddrPtr = peerBase.assumingMemoryBound(to: sockaddr.self)
-                let sent = Darwin.sendto(socketFD, base, rawBuffer.count, 0, sockaddrPtr, peerAddress.length)
-                if sent < 0 {
-                    let err = errno
-                    eventSink?("udp_overlay_send_failed", ["errno": err, "packet_bytes": rawBuffer.count])
-                    handleImmediatePeerFallback(sendErrno: err)
+        ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportEgress) {
+            guard started, socketFD >= 0, let peerAddress = currentPeerAddress else {
+                return
+            }
+            packet.withUnsafeBytes { rawBuffer in
+                guard let base = rawBuffer.baseAddress else { return }
+                peerAddress.storage.withUnsafeBytes { peerBuffer in
+                    guard let peerBase = peerBuffer.baseAddress else { return }
+                    let sockaddrPtr = peerBase.assumingMemoryBound(to: sockaddr.self)
+                    let sent = Darwin.sendto(socketFD, base, rawBuffer.count, 0, sockaddrPtr, peerAddress.length)
+                    if sent < 0 {
+                        let err = errno
+                        eventSink?("udp_overlay_send_failed", ["errno": err, "packet_bytes": rawBuffer.count])
+                        handleImmediatePeerFallback(sendErrno: err)
+                    }
                 }
             }
         }
