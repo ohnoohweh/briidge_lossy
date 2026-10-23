@@ -272,7 +272,9 @@ class Runner:
         self._runtime_metrics_lag_probe_count = 0
         self._runtime_metrics = RuntimeMetricAccumulator((
             "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
-            "securelink", "compression", "control_tick", "retransmit_tick",
+            "overlay_receive_prepare", "overlay_receive_data", "overlay_receive_idle",
+            "overlay_receive_control", "securelink", "compression", "control_tick",
+            "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
             "status_stats", "status_session_summaries", "status_worker_state",
             "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
             "runtime_metrics_projection", "connections_snapshot", "peers_snapshot",

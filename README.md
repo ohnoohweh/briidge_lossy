@@ -1741,7 +1741,8 @@ approved categories, while one Runner-owned task samples process CPU and
 event-loop lateness. Cached redacted status now exposes bounded aggregates;
 the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
-contributors across overlay, SecureLink, compression, timer, status statistics,
+contributors across overlay receive preparation/data/idle/control, retransmit
+reported-missing/unconfirmed sweeps, SecureLink, compression, timer, status statistics,
 session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,

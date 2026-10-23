@@ -33,7 +33,9 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics_lag_probe_count = 0
     runner._runtime_metrics = RuntimeMetricAccumulator((
         "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
-        "securelink", "compression", "control_tick", "retransmit_tick",
+        "overlay_receive_prepare", "overlay_receive_data", "overlay_receive_idle",
+        "overlay_receive_control", "securelink", "compression", "control_tick",
+        "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
         "status_stats", "status_session_summaries", "status_worker_state",
         "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
         "runtime_metrics_projection", "connections_snapshot", "peers_snapshot",
@@ -181,11 +183,15 @@ def test_runner_keeps_webadmin_snapshot_components_separate():
     runner.record_runtime_duration("status_stats", 3 * NANOSECONDS_PER_MILLISECOND)
     runner.record_runtime_duration("status_session_summaries", 5 * NANOSECONDS_PER_MILLISECOND)
     runner.record_runtime_duration("status_telemetry_state", 6 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("overlay_receive_data", 4 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("retransmit_unconfirmed", 2 * NANOSECONDS_PER_MILLISECOND)
     runner.record_runtime_duration("connections_snapshot", 7 * NANOSECONDS_PER_MILLISECOND)
     rows = {item["category"]: item for item in runner._runtime_metrics_status_fields()["categories"]}
     assert rows["status_stats"]["max_ms"] == 3.0
     assert rows["status_session_summaries"]["max_ms"] == 5.0
     assert rows["status_telemetry_state"]["max_ms"] == 6.0
+    assert rows["overlay_receive_data"]["max_ms"] == 4.0
+    assert rows["retransmit_unconfirmed"]["max_ms"] == 2.0
     assert rows["connections_snapshot"]["max_ms"] == 7.0
     assert rows["peers_snapshot"]["count"] == 0
 

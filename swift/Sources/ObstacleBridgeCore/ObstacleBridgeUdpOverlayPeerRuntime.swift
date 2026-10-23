@@ -298,8 +298,6 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
     }
 
     func handleRetransmitTimerTick(nowNS: UInt64, sendPortPresent: Bool) throws -> RetransmitTimerSnapshot {
-        let started = DispatchTime.now().uptimeNanoseconds
-        defer { ObstacleBridgeRuntimeMetrics.shared.record(.retransmitTick, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard sendPortPresent else {
             let core = peerEngine.snapshot()
             return RetransmitTimerSnapshot(
@@ -398,10 +396,11 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
         echoNS: UInt64,
         sendPortPresent: Bool
     ) -> InboundDataSnapshot? {
-        let started = DispatchTime.now().uptimeNanoseconds
-        defer { ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceive, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
+        let receiveStarted = DispatchTime.now().uptimeNanoseconds
         do {
             let effect = try peerEngine.receiveWire(frame, nowNanoseconds: nowNS, transportWritable: sendPortPresent)
+            ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceiveData, durationNS: DispatchTime.now().uptimeNanoseconds &- receiveStarted)
+            let projectionStarted = DispatchTime.now().uptimeNanoseconds
             let core = peerEngine.snapshot()
             synchronizePeerEngine(core)
             if let parsed = ObstacleBridgeUdpOverlayCodec.parseProtocolFrame(frame),
@@ -410,6 +409,7 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
                 batchChunksReceived += chunks.count
                 batchStreamBytesReceived += chunks.reduce(0) { $0 + $1.data.count }
             }
+            ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceivePrepare, durationNS: DispatchTime.now().uptimeNanoseconds &- projectionStarted)
             return .init(
                 controlReasons: effect.outboundDatagrams.isEmpty ? [] : ["core"],
                 emittedFrames: effect.outboundDatagrams,
@@ -426,6 +426,7 @@ public final class ObstacleBridgeUdpOverlayPeerRuntime {
                 lastControlSentNS: core.lastControlSentNanoseconds
             )
         } catch {
+            ObstacleBridgeRuntimeMetrics.shared.record(.overlayReceiveData, durationNS: DispatchTime.now().uptimeNanoseconds &- receiveStarted)
             malformedBatches += 1
             return nil
         }
