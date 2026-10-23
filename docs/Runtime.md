@@ -607,10 +607,13 @@ The Python runtime has dependency-free, bounded timing primitives in
 rolling fixed-slot histograms, and a fixed-category accumulator. `Runner` now
 owns exactly one cancellable monitor task that samples process CPU against
 monotonic elapsed time once per second and records event-loop probe lateness at
-a 250 ms cadence. The primitives retain aggregates only; the monitor has no
-public status projection or traffic-boundary instrumentation yet. Focused unit
-tests use deterministic inputs and do not need a live bridge, root privileges,
-TUN, a network peer, or Swift.
+a 250 ms cadence. The primitives retain aggregates only. Approved synchronous
+scopes cover overlay receive/send, SecureLink encode/decode, compression,
+control and retransmit ticks, WebAdmin snapshot construction, logging, and the
+existing ChannelMux/TUN callbacks. A scope reports just its category and
+completed duration into fixed summaries; it retains neither packet content nor
+per-callback history. Focused unit tests use deterministic inputs and do not
+need a live bridge, root privileges, TUN, a network peer, or Swift.
 
 #### CPU-load and contributor semantics
 

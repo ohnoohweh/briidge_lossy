@@ -9,6 +9,7 @@ import threading
 
 from ._bridge_import import export_bridge_globals
 from .bridge_tun_routing import TunRoutingSettings, auto_overlay_peer_excluded_routes
+from .runtime_metrics import bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
 
@@ -486,8 +487,16 @@ class AdminWebUI:
         return out
 
     def _run_snapshot_builder(self, topic: str, builder: Callable[[], dict], *, timeout: float = 0.35) -> dict:
+        callback = getattr(self.runner, "record_runtime_duration", None)
+
+        def timed_builder() -> dict:
+            # _call_runner executes this closure on the runner loop, so this
+            # excludes WebAdmin socket wait time and measures build work only.
+            with bounded_runtime_scope(callback, "webadmin_snapshot"):
+                return builder()
+
         try:
-            payload = self._call_runner(builder, timeout=timeout)
+            payload = self._call_runner(timed_builder, timeout=timeout)
         except concurrent.futures.TimeoutError:
             return self._cached_snapshot_payload(topic, error="runner_loop_timeout")
         except Exception as exc:

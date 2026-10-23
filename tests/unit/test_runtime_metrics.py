@@ -30,7 +30,11 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics_last_loop_lag_ns = None
     runner._runtime_metrics_max_loop_lag_ns = 0
     runner._runtime_metrics_lag_probe_count = 0
-    runner._runtime_metrics = RuntimeMetricAccumulator(("channelmux_callback", "tun_callback", "admin_snapshot"))
+    runner._runtime_metrics = RuntimeMetricAccumulator((
+        "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
+        "securelink", "compression", "control_tick", "retransmit_tick",
+        "webadmin_snapshot", "logging",
+    ))
     runner._runtime_metrics_started = {}
     runner._runtime_metrics_cpu_peaks = []
     runner._runtime_metrics_cpu_peak_overall = None
@@ -144,6 +148,16 @@ def test_runner_runtime_metrics_status_is_bounded_and_redacted():
     assert payload["longest_uninterrupted_category"] == "channelmux_callback"
     assert payload["longest_uninterrupted_last_2_seconds_category"] == "channelmux_callback"
     assert all("payload" not in row and "address" not in row for row in payload["categories"])
+
+
+def test_runner_records_completed_runtime_scope_without_retaining_individual_events():
+    runner = _runner_for_metrics_tests()
+    runner.record_runtime_duration("securelink", 3 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("unapproved_source", 5 * NANOSECONDS_PER_MILLISECOND)
+    rows = {item["category"]: item for item in runner._runtime_metrics_status_fields()["categories"]}
+    assert rows["securelink"]["count"] == 1
+    assert rows["securelink"]["max_ms"] == 3.0
+    assert runner._runtime_metrics.unknown_category_drops == 0
 
 
 def test_linux_local_runtime_metrics_smoke_lifecycle():

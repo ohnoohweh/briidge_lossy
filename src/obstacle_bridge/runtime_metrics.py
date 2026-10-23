@@ -8,9 +8,10 @@ of categories; later integration layers own sampling and status projection.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 import math
 import time
-from typing import Dict, Iterable, Optional, Protocol, Sequence, Tuple
+from typing import Callable, Dict, Iterable, Iterator, Optional, Protocol, Sequence, Tuple
 
 
 NANOSECONDS_PER_MILLISECOND = 1_000_000
@@ -33,6 +34,29 @@ class SystemRuntimeClock:
 
     def monotonic_ns(self) -> int:
         return time.monotonic_ns()
+
+
+@contextmanager
+def bounded_runtime_scope(
+    callback: Optional[Callable[[str, int], None]], category: str
+) -> Iterator[None]:
+    """Measure one synchronous scope and retain only its aggregate duration.
+
+    The callback is intentionally optional so the production data path does
+    not need a monitoring dependency.  The scope never changes an operation's
+    result or exception behaviour.
+    """
+    if not callable(callback):
+        yield
+        return
+    started_ns = time.monotonic_ns()
+    try:
+        yield
+    finally:
+        try:
+            callback(str(category), max(0, time.monotonic_ns() - started_ns))
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)

@@ -270,7 +270,11 @@ class Runner:
         self._runtime_metrics_last_loop_lag_ns: Optional[int] = None
         self._runtime_metrics_max_loop_lag_ns = 0
         self._runtime_metrics_lag_probe_count = 0
-        self._runtime_metrics = RuntimeMetricAccumulator(("channelmux_callback", "tun_callback", "admin_snapshot"))
+        self._runtime_metrics = RuntimeMetricAccumulator((
+            "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
+            "securelink", "compression", "control_tick", "retransmit_tick",
+            "webadmin_snapshot", "logging",
+        ))
         self._runtime_metrics_started: Dict[str, int] = {}
         self._runtime_metrics_cpu_peaks: list[dict[str, Any]] = []
         self._runtime_metrics_cpu_peak_overall: Optional[float] = None
@@ -836,6 +840,33 @@ class Runner:
                 self._sync_diag["last_failed_kind"] = str(kind or "")
                 self._sync_diag["last_failed_monotonic"] = now_mono
                 self._sync_diag["last_failed_error"] = str(error or "")
+
+    def record_runtime_duration(self, category: str, duration_ns: int) -> None:
+        """Record a completed bounded synchronous scope without retaining it."""
+        if category not in self._runtime_metrics.categories:
+            return
+        completed_at_ns = time.monotonic_ns()
+        duration = max(0, int(duration_ns))
+        self._runtime_metrics.record(category, duration, completed_at_ns=completed_at_ns)
+        self._runtime_metrics_cpu_interval_by_category[category] = (
+            self._runtime_metrics_cpu_interval_by_category.get(category, 0) + duration
+        )
+
+    def _attach_runtime_metric_callback(self, session: Any) -> None:
+        """Wire aggregate-only timing into each layer of one session stack."""
+        seen: set[int] = set()
+        pending = [session]
+        while pending:
+            current = pending.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            with contextlib.suppress(Exception):
+                setattr(current, "_runner_runtime_metric_cb", self.record_runtime_duration)
+            for attribute in ("_inner", "inner_session", "_real"):
+                child = getattr(current, attribute, None)
+                if child is not None:
+                    pending.append(child)
 
     async def _await_with_async_diag(self, name: str, awaitable, *, kind: str = "await") -> Any:
         self._record_async_activity(name, kind=kind, phase="started")
@@ -1656,6 +1687,8 @@ class Runner:
         self._ensure_runtime_events()
         self._begin_runtime_health_lifetime()
         self._start_runtime_metrics_monitor()
+        from .bridge_debug_logging import set_runtime_timing_callback
+        set_runtime_timing_callback(self.record_runtime_duration)
         await self._start_telemetry_client()
         await self._start_telemetry_collector()
         await self._start_tun_helper()
@@ -1700,6 +1733,7 @@ class Runner:
         self._muxes = []
         self._session_labels = []
         for transport_name, session in transport_sessions:
+            self._attach_runtime_metric_callback(session)
             session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
             # Keep status snapshot callbacks wired on iOS too. We still disable
             # the terminal dashboard there, but WebAdmin's /api/status needs
@@ -1864,6 +1898,8 @@ class Runner:
                 await self._runtime_health_task
             self._runtime_health_task = None
         await self._stop_runtime_metrics_monitor()
+        from .bridge_debug_logging import set_runtime_timing_callback
+        set_runtime_timing_callback(None)
         self.log.debug("[RUNNER] stop: entering telemetry_client.stop")
         await _run_stop_step("telemetry_client.stop", self._stop_telemetry_client(), timeout_s=3.0)
         if self.admin_web is not None:

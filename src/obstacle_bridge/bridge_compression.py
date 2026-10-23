@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ._bridge_import import export_bridge_globals
 from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
+from .runtime_metrics import bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
 
@@ -272,6 +273,10 @@ class CompressLayerSession(ISession):
                 self._outer_on_peer_disconnect(peer_id)
 
     def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
+        with bounded_runtime_scope(getattr(self, "_runner_runtime_metric_cb", None), "compression"):
+            self._on_inner_payload_timed(payload, peer_id)
+
+    def _on_inner_payload_timed(self, payload: bytes, peer_id: Optional[int] = None) -> None:
         parsed = self._parse_mux_frame(payload)
         if parsed is None:
             self._deliver_outer_app(payload, peer_id)
@@ -313,6 +318,10 @@ class CompressLayerSession(ISession):
         self._deliver_outer_app(wire, peer_id)
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+        with bounded_runtime_scope(getattr(self, "_runner_runtime_metric_cb", None), "compression"):
+            return self._send_app_timed(payload, peer_id)
+
+    def _send_app_timed(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if self._compression_error_epoch == self._connection_lifecycle_epoch:
             return 0
         parsed = self._parse_mux_frame(payload)
