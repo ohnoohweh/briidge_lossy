@@ -888,9 +888,7 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
             if !snapshot.controlReasons.isEmpty {
                 snapshot.emittedFrames.forEach(sendDatagram)
             }
-            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportPayloadRoute) {
-                routeOverlayPayloads(snapshot.completedPayloads)
-            }
+            routeOverlayPayloads(snapshot.completedPayloads)
         case ObstacleBridgeUdpOverlayCodec.ptypeControl:
             guard let control = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportParseDispatch, {
                 ObstacleBridgeUdpOverlayCodec.parseControlFrame(datagram)

@@ -632,7 +632,7 @@ transport slice.
 Swift additionally separates compression frame handling, zlib encode, and
 zlib decode. It records SecureLink worker boundaries across every wrapped
 transport and splits Apple myUDP owner work into protocol parse/dispatch,
-payload routing, SecureLink handoff, delivered ChannelMux/TUN payload work,
+per-payload SecureLink handoff and delivery, ChannelMux/TUN payload work,
 ChannelMux dispatch/service-catalog processing, and TUN/TCP/UDP payload
 branches. TCP payload work further distinguishes server data, client
 open/data, local-write enqueue, and close work. Client-open work further
@@ -643,9 +643,10 @@ individual uninterrupted work scope. It does not emit inclusive queue,
 transaction, or request-wrapper rows that span separately measurable
 subtasks: such a row can look like the longest block without identifying one
 actionable uninterrupted operation. Consequently,
-`apple_transport_owner_queue` is not a metric category; its former aggregate
-is replaced by the receive, SecureLink, payload-route, and TCP/TUN/UDP leaf
-scopes that identify the leading uninterrupted operation. The fixed,
+`apple_transport_owner_queue` and `apple_transport_payload_route` are not
+metric categories; their former aggregates are replaced by receive,
+per-payload SecureLink/delivery, and TCP/TUN/UDP leaf scopes that identify the
+leading uninterrupted operation. The fixed,
 aggregate-only vocabulary permits up to 56 categories.
 
 The Runtime Analysis trailing-two-second projection reads only the matching

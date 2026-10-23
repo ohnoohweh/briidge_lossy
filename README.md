@@ -1743,7 +1743,7 @@ the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
 shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
 contributors across overlay receive preparation/data/idle/control, retransmit
 reported-missing/unconfirmed sweeps, SecureLink worker/crypto, compression
-frame/encode/decode, Apple transport parse/route/SecureLink/delivered-payload/
+frame/encode/decode, Apple transport parse/per-payload SecureLink/delivered-payload/
 ChannelMux/TUN/TCP/UDP/egress/lifecycle boundaries,
 TCP server/client/write/close and client-open Core/publication/connection/receive
 boundaries, timer, status statistics,
@@ -1751,7 +1751,7 @@ session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
 and TUN boundaries are displayed as event-loop occupancy estimates. Inclusive
-queue or transaction wrappers that span separately measurable subtasks are not
+queue, transaction, or payload-batch wrappers that span separately measurable subtasks are not
 shown as uninterrupted-work signals. The
 portable Swift Core supplies the same redacted runtime-metrics
 status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,

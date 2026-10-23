@@ -22,7 +22,6 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         case compressionFrame = "compression_frame"
         case appleTransportParseDispatch = "apple_transport_parse_dispatch"
         case appleTransportEgress = "apple_transport_egress"
-        case appleTransportPayloadRoute = "apple_transport_payload_route"
         case appleTransportSecureLinkRoute = "apple_transport_securelink_route"
         case appleTransportDeliveredPayload = "apple_transport_delivered_payload"
         case appleTransportMuxDispatch = "apple_transport_mux_dispatch"

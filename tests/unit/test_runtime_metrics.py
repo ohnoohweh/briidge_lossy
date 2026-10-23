@@ -38,7 +38,7 @@ def _runner_for_metrics_tests():
         "compression_encode", "compression_decode", "compression_frame",
         "securelink_worker",
         "apple_transport_parse_dispatch", "apple_transport_egress",
-        "apple_transport_payload_route", "apple_transport_lifecycle",
+        "apple_transport_lifecycle",
         "apple_transport_securelink_route", "apple_transport_delivered_payload",
         "apple_transport_mux_dispatch", "apple_transport_tun_payload",
         "apple_transport_tcp_payload", "apple_transport_udp_payload",
