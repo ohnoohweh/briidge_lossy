@@ -1749,7 +1749,8 @@ connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
 and TUN boundaries are displayed as event-loop occupancy estimates. The
 portable Swift Core supplies the same redacted runtime-metrics
 status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,
-compression, and timer boundaries. Trailing-two-second projection reads only
+compression, timer, and detailed myUDP receive/retransmit boundaries.
+Trailing-two-second projection reads only
 the matching rolling slots per category, and Swift derives recent maxima in one
 pass over its bounded aggregate set.
 

@@ -622,11 +622,12 @@ completed duration into fixed summaries; it retains neither packet content nor
 per-callback history. Focused unit tests use deterministic inputs and do not
 need a live bridge, root privileges, TUN, a network peer, or Swift.
 
-myUDP receive timing distinguishes preparation/frame decoding, data delivery,
-idle handling, and control handling. Its retransmission timer separately
-measures peer-reported-missing and unconfirmed-send sweeps. Those component
-scopes replace the aggregate receive/retransmit timer scopes, avoiding nested
-occupancy accounting while exposing the source of a long transport slice.
+Python and Swift myUDP receive timing distinguishes preparation/frame decoding,
+data delivery, idle handling, and control handling. Their retransmission timer
+separately measures peer-reported-missing and unconfirmed-send sweeps. Those
+component scopes replace the aggregate receive/retransmit timer scopes,
+avoiding nested occupancy accounting while exposing the source of a long
+transport slice.
 
 The Runtime Analysis trailing-two-second projection reads only the matching
 fixed rolling slots for each category rather than scanning the full retained
