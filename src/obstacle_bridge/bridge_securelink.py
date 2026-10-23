@@ -3,6 +3,7 @@ from __future__ import annotations
 from ._bridge_import import export_bridge_globals
 from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
 from .bridge_transport_common import _has_configured_overlay_peer
+from .runtime_metrics import bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
 
@@ -3341,6 +3342,10 @@ class SecureLinkPskSession(ISession):
         self._deliver_outer_app(plaintext, None if self._client_mode else peer_id)
 
     def _on_inner_payload(self, payload: bytes, peer_id: Optional[int] = None) -> None:
+        with bounded_runtime_scope(getattr(self, "_runner_runtime_metric_cb", None), "securelink"):
+            self._on_inner_payload_timed(payload, peer_id)
+
+    def _on_inner_payload_timed(self, payload: bytes, peer_id: Optional[int] = None) -> None:
         self._record_protocol_frame("to_securelink", peer_id)
         try:
             self._log.debug("[SECURE-LINK/RX] raw payload len=%d peer_id=%r", len(payload or b""), peer_id)
@@ -3487,6 +3492,10 @@ class SecureLinkPskSession(ISession):
             self._record_passed_data_frame(state, from_client=False)
 
     def send_app(self, payload: bytes, peer_id: Optional[int] = None) -> int:
+        with bounded_runtime_scope(getattr(self, "_runner_runtime_metric_cb", None), "securelink"):
+            return self._send_app_timed(payload, peer_id)
+
+    def _send_app_timed(self, payload: bytes, peer_id: Optional[int] = None) -> int:
         if self._client_mode and self._client_rekey_hold_after_commit:
             return len(payload) if self._queue_client_rekey_app_payload(payload, peer_id) else 0
         return self._send_app_immediate(payload, peer_id=peer_id)

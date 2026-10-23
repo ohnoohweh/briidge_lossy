@@ -18,6 +18,7 @@ from .bridge_transport_common import (
     _wildcard_host_for_family,
 )
 from .bridge_connection_lifecycle import ConnectionLifecycleEmitter, ConnectionRotationResult, ConnectionState
+from .runtime_metrics import bounded_runtime_scope
 
 _bridge = export_bridge_globals(globals())
 
@@ -1055,6 +1056,10 @@ class MyUDP2Session(_MyUDP2SessionCore):
         self.try_flush_send_queue(transport)
 
     def send_application_payload(self, data: bytes, transport: Any) -> int:
+        with bounded_runtime_scope(getattr(self, "_runner_runtime_metric_cb", None), "overlay_send"):
+            return self._send_application_payload_timed(data, transport)
+
+    def _send_application_payload_timed(self, data: bytes, transport: Any) -> int:
         if transport is None:
             return 0
         encoded = self._stream_serializer.encode(data)
@@ -1596,6 +1601,10 @@ class PeerProtocol(asyncio.DatagramProtocol):
             self._schedule_completed_pending()
 
     def _process_one_rx_datagram(self) -> None:
+        with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "overlay_receive"):
+            self._process_one_rx_datagram_timed()
+
+    def _process_one_rx_datagram_timed(self) -> None:
         if not self._rx_pending:
             return
         data, addr = self._rx_pending.popleft()
@@ -1796,7 +1805,8 @@ class PeerProtocol(asyncio.DatagramProtocol):
         try:
             while True:
                 await asyncio.sleep(0.025)
-                self._evaluate_control_policy_timer()
+                with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "control_tick"):
+                    self._evaluate_control_policy_timer()
         except asyncio.CancelledError:
             return
 
@@ -1816,8 +1826,9 @@ class PeerProtocol(asyncio.DatagramProtocol):
         try:
             while True:
                 await asyncio.sleep(RETRANSMIT_UNCONFIRMED_MS / 1000.0)
-                self._retx_sweep_reported_missing()
-                self._retx_sweep_unconfirmed()
+                with bounded_runtime_scope(getattr(self.session, "_runner_runtime_metric_cb", None), "retransmit_tick"):
+                    self._retx_sweep_reported_missing()
+                    self._retx_sweep_unconfirmed()
         except asyncio.CancelledError:
             return
 

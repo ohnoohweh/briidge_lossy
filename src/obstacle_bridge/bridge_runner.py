@@ -25,6 +25,7 @@ from .bridge_telemetry import TelemetryEmitter, TelemetryRuntimeSettings, Teleme
 from .bridge_telemetry_credentials import client_certificate_paths
 from .bridge_telemetry_uploader import TelemetryUploader
 from .runtime_health import RuntimeHealthRecord, RuntimeHealthStore
+from .runtime_metrics import NANOSECONDS_PER_SECOND, RuntimeMetricAccumulator
 
 _bridge = export_bridge_globals(globals())
 
@@ -192,6 +193,9 @@ class Runner:
     Thin orchestrator: wires ISession + ChannelMux + StatsBoard and manages lifecycle.
     """
 
+    RUNTIME_METRICS_SAMPLE_INTERVAL_NS = 1_000_000_000
+    RUNTIME_METRICS_LAG_INTERVAL_NS = 250_000_000
+
     def __init__(self, args: argparse.Namespace):
         self.args = args
         self.log = logging.getLogger("runner")
@@ -255,6 +259,27 @@ class Runner:
         self._runtime_health_sequence = 0
         self._runtime_health_task: Optional[asyncio.Task] = None
         self._runtime_health_last_error = ""
+        # One runner-owned monitor task samples process CPU and observes event
+        # loop lateness. It deliberately has no status projection yet: later
+        # runtime-aggregation work owns the public schema and categories.
+        self._runtime_metrics_task: Optional[asyncio.Task] = None
+        self._runtime_metrics_last_sample_monotonic_ns: Optional[int] = None
+        self._runtime_metrics_last_sample_cpu_ns: Optional[int] = None
+        self._runtime_metrics_last_cpu_cores: Optional[float] = None
+        self._runtime_metrics_sample_count = 0
+        self._runtime_metrics_last_loop_lag_ns: Optional[int] = None
+        self._runtime_metrics_max_loop_lag_ns = 0
+        self._runtime_metrics_lag_probe_count = 0
+        self._runtime_metrics = RuntimeMetricAccumulator((
+            "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
+            "securelink", "compression", "control_tick", "retransmit_tick",
+            "webadmin_snapshot", "logging",
+        ))
+        self._runtime_metrics_started: Dict[str, int] = {}
+        self._runtime_metrics_cpu_peaks: list[dict[str, Any]] = []
+        self._runtime_metrics_cpu_peak_overall: Optional[float] = None
+        self._runtime_metrics_cpu_peak_overall_contributor: Optional[dict[str, Any]] = None
+        self._runtime_metrics_cpu_interval_by_category: Dict[str, int] = {}
         self._peer_traffic_rate_state: Dict[str, Tuple[float, int, int]] = {}
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._async_diag_lock = threading.Lock()
@@ -673,6 +698,74 @@ class Runner:
             await asyncio.sleep(15.0)
             self._record_runtime_health("heartbeat")
 
+    def _sample_runtime_cpu(self, *, monotonic_ns: Optional[int] = None, process_cpu_ns: Optional[int] = None) -> Optional[float]:
+        """Record one process-CPU delta; the first sample establishes a baseline."""
+        wall_now = time.monotonic_ns() if monotonic_ns is None else int(monotonic_ns)
+        cpu_now = time.process_time_ns() if process_cpu_ns is None else int(process_cpu_ns)
+        previous_wall = self._runtime_metrics_last_sample_monotonic_ns
+        previous_cpu = self._runtime_metrics_last_sample_cpu_ns
+        self._runtime_metrics_last_sample_monotonic_ns = wall_now
+        self._runtime_metrics_last_sample_cpu_ns = cpu_now
+        if previous_wall is None or previous_cpu is None:
+            self._runtime_metrics_cpu_interval_by_category.clear()
+            return None
+        wall_delta = wall_now - previous_wall
+        cpu_delta = cpu_now - previous_cpu
+        if wall_delta <= 0 or cpu_delta < 0:
+            return None
+        cores = float(cpu_delta) / float(wall_delta)
+        self._runtime_metrics_last_cpu_cores = cores
+        self._runtime_metrics_sample_count += 1
+        category, occupied_ns = max(self._runtime_metrics_cpu_interval_by_category.items(), key=lambda item: (item[1], item[0]), default=("", 0))
+        contributor = None if not category else {"category": category, "observed_cores": float(occupied_ns) / float(wall_delta)}
+        sample = {"timestamp_ns": wall_now, "cores": cores, "contributor": contributor}
+        self._runtime_metrics_cpu_peaks.append(sample)
+        self._runtime_metrics_cpu_peaks = [item for item in self._runtime_metrics_cpu_peaks if wall_now - int(item["timestamp_ns"]) < 2 * NANOSECONDS_PER_SECOND]
+        if self._runtime_metrics_cpu_peak_overall is None or cores >= self._runtime_metrics_cpu_peak_overall:
+            self._runtime_metrics_cpu_peak_overall = cores
+            self._runtime_metrics_cpu_peak_overall_contributor = contributor
+        self._runtime_metrics_cpu_interval_by_category.clear()
+        return cores
+
+    def _record_runtime_loop_lag(self, *, deadline_ns: int, actual_ns: Optional[int] = None) -> int:
+        """Record lateness of the runner-owned periodic probe in nanoseconds."""
+        now = time.monotonic_ns() if actual_ns is None else int(actual_ns)
+        lag_ns = max(0, now - int(deadline_ns))
+        self._runtime_metrics_last_loop_lag_ns = lag_ns
+        self._runtime_metrics_max_loop_lag_ns = max(self._runtime_metrics_max_loop_lag_ns, lag_ns)
+        self._runtime_metrics_lag_probe_count += 1
+        return lag_ns
+
+    async def _runtime_metrics_monitor(self) -> None:
+        """Use one cheap task for cadence CPU samples and event-loop lag probes."""
+        sample_deadline = time.monotonic_ns()
+        lag_deadline = sample_deadline + self.RUNTIME_METRICS_LAG_INTERVAL_NS
+        while True:
+            now = time.monotonic_ns()
+            if now >= sample_deadline:
+                self._sample_runtime_cpu(monotonic_ns=now)
+                sample_deadline = now + self.RUNTIME_METRICS_SAMPLE_INTERVAL_NS
+            if now >= lag_deadline:
+                self._record_runtime_loop_lag(deadline_ns=lag_deadline, actual_ns=now)
+                lag_deadline = now + self.RUNTIME_METRICS_LAG_INTERVAL_NS
+            next_deadline = min(sample_deadline, lag_deadline)
+            await asyncio.sleep(max(0.0, (next_deadline - time.monotonic_ns()) / 1_000_000_000.0))
+
+    def _start_runtime_metrics_monitor(self) -> None:
+        if self._runtime_metrics_task is None:
+            self._runtime_metrics_task = asyncio.create_task(
+                self._runtime_metrics_monitor(), name="runtime-metrics-monitor"
+            )
+
+    async def _stop_runtime_metrics_monitor(self) -> None:
+        task = self._runtime_metrics_task
+        self._runtime_metrics_task = None
+        if task is None:
+            return
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
     def _runtime_health_status_fields(self) -> dict[str, Any]:
         store = self._runtime_health_store
         return {
@@ -681,6 +774,28 @@ class Runner:
             "runtime_health_recent_records": [record.as_payload() for record in (store.ring.records[-16:] if store is not None else ())],
             "runtime_health_last_error": self._runtime_health_last_error or None,
         }
+
+    def _runtime_metrics_status_fields(self) -> dict[str, Any]:
+        now = time.monotonic_ns()
+        rows = []
+        for item in self._runtime_metrics.snapshot(now_ns=now, window_ns=2 * NANOSECONDS_PER_SECOND):
+            rows.append({"category": item.category, "count": item.lifetime.count, "total_ms": item.lifetime.total_ms,
+                         "mean_ms": (item.lifetime.total_ms / item.lifetime.count) if item.lifetime.count else None,
+                         "p95_ms": item.lifetime.p95_ms, "p99_ms": item.lifetime.p99_ms,
+                         "max_ms": item.lifetime.max_ms, "last_2_seconds_max_ms": item.recent.max_ms})
+        slice_leader = max(rows, key=lambda row: (row["max_ms"] or 0.0, row["category"]), default=None)
+        recent_slice_leader = max(rows, key=lambda row: (row["last_2_seconds_max_ms"] or 0.0, row["category"]), default=None)
+        recent_cpu_peak = max(self._runtime_metrics_cpu_peaks, key=lambda item: float(item["cores"]), default=None)
+        return {"cpu_cores_max": {"overall": self._runtime_metrics_cpu_peak_overall,
+                "last_2_seconds": recent_cpu_peak["cores"] if recent_cpu_peak else None,
+                "overall_contributor": self._runtime_metrics_cpu_peak_overall_contributor,
+                "last_2_seconds_contributor": recent_cpu_peak["contributor"] if recent_cpu_peak else None},
+                "work_slice_ms_max": {"overall": max((row["max_ms"] or 0.0 for row in rows), default=None),
+                "last_2_seconds": max((row["last_2_seconds_max_ms"] or 0.0 for row in rows), default=None)},
+                "event_loop_lag_ms": {"last": None if self._runtime_metrics_last_loop_lag_ns is None else self._runtime_metrics_last_loop_lag_ns / 1_000_000.0,
+                "max": self._runtime_metrics_max_loop_lag_ns / 1_000_000.0}, "categories": rows,
+                "longest_uninterrupted_category": slice_leader["category"] if slice_leader and slice_leader["count"] else None,
+                "longest_uninterrupted_last_2_seconds_category": recent_slice_leader["category"] if recent_slice_leader and recent_slice_leader["last_2_seconds_max_ms"] is not None else None}
 
     def _record_async_activity(self, name: str, *, kind: str, phase: str, error: str = "") -> None:
         now_mono = time.monotonic()
@@ -700,6 +815,16 @@ class Runner:
                 self._async_diag["last_failed_error"] = str(error or "")
 
     def record_sync_activity(self, name: str, *, kind: str = "callback", phase: str, error: str = "") -> None:
+        category = "tun_callback" if str(name).startswith("tun") else "channelmux_callback"
+        now_ns = time.monotonic_ns()
+        if phase == "started":
+            self._runtime_metrics_started[category] = now_ns
+        elif phase in {"finished", "failed"}:
+            started = self._runtime_metrics_started.pop(category, None)
+            if started is not None:
+                duration_ns = max(0, now_ns - started)
+                self._runtime_metrics.record(category, duration_ns, completed_at_ns=now_ns)
+                self._runtime_metrics_cpu_interval_by_category[category] = self._runtime_metrics_cpu_interval_by_category.get(category, 0) + duration_ns
         now_mono = time.monotonic()
         with self._async_diag_lock:
             if phase == "started":
@@ -715,6 +840,33 @@ class Runner:
                 self._sync_diag["last_failed_kind"] = str(kind or "")
                 self._sync_diag["last_failed_monotonic"] = now_mono
                 self._sync_diag["last_failed_error"] = str(error or "")
+
+    def record_runtime_duration(self, category: str, duration_ns: int) -> None:
+        """Record a completed bounded synchronous scope without retaining it."""
+        if category not in self._runtime_metrics.categories:
+            return
+        completed_at_ns = time.monotonic_ns()
+        duration = max(0, int(duration_ns))
+        self._runtime_metrics.record(category, duration, completed_at_ns=completed_at_ns)
+        self._runtime_metrics_cpu_interval_by_category[category] = (
+            self._runtime_metrics_cpu_interval_by_category.get(category, 0) + duration
+        )
+
+    def _attach_runtime_metric_callback(self, session: Any) -> None:
+        """Wire aggregate-only timing into each layer of one session stack."""
+        seen: set[int] = set()
+        pending = [session]
+        while pending:
+            current = pending.pop()
+            if current is None or id(current) in seen:
+                continue
+            seen.add(id(current))
+            with contextlib.suppress(Exception):
+                setattr(current, "_runner_runtime_metric_cb", self.record_runtime_duration)
+            for attribute in ("_inner", "inner_session", "_real"):
+                child = getattr(current, attribute, None)
+                if child is not None:
+                    pending.append(child)
 
     async def _await_with_async_diag(self, name: str, awaitable, *, kind: str = "await") -> Any:
         self._record_async_activity(name, kind=kind, phase="started")
@@ -1534,6 +1686,9 @@ class Runner:
         )
         self._ensure_runtime_events()
         self._begin_runtime_health_lifetime()
+        self._start_runtime_metrics_monitor()
+        from .bridge_debug_logging import set_runtime_timing_callback
+        set_runtime_timing_callback(self.record_runtime_duration)
         await self._start_telemetry_client()
         await self._start_telemetry_collector()
         await self._start_tun_helper()
@@ -1578,6 +1733,7 @@ class Runner:
         self._muxes = []
         self._session_labels = []
         for transport_name, session in transport_sessions:
+            self._attach_runtime_metric_callback(session)
             session.set_on_state_change(lambda connected, transport_name=transport_name, session=session: self._on_state_change(transport_name, session, connected))
             # Keep status snapshot callbacks wired on iOS too. We still disable
             # the terminal dashboard there, but WebAdmin's /api/status needs
@@ -1741,6 +1897,9 @@ class Runner:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._runtime_health_task
             self._runtime_health_task = None
+        await self._stop_runtime_metrics_monitor()
+        from .bridge_debug_logging import set_runtime_timing_callback
+        set_runtime_timing_callback(None)
         self.log.debug("[RUNNER] stop: entering telemetry_client.stop")
         await _run_stop_step("telemetry_client.stop", self._stop_telemetry_client(), timeout_s=3.0)
         if self.admin_web is not None:
@@ -2272,6 +2431,7 @@ class Runner:
             "collector": self.get_telemetry_collector_snapshot(),
         }
         payload["tun_helper"] = self._tun_helper_snapshot()
+        payload["runtime_metrics"] = self._runtime_metrics_status_fields()
         payload.update(self._runtime_health_status_fields())
         if str(getattr(getattr(self, "args", None), "peer_stack_worker", "off") or "off") in {"python", "native"}:
             snapshot = self._current_peer_stack_snapshot()

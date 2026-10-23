@@ -7,6 +7,13 @@ import ObstacleBridgeDesktopShared
 import Glibc
 #endif
 
+private func obstacleBridgeLinuxProcessCPUNS() -> UInt64? {
+    var usage = rusage()
+    guard getrusage(Int32(RUSAGE_SELF.rawValue), &usage) == 0 else { return nil }
+    func ns(_ value: timeval) -> UInt64 { UInt64(max(0, value.tv_sec)) * 1_000_000_000 + UInt64(max(0, value.tv_usec)) * 1_000 }
+    return ns(usage.ru_utime) &+ ns(usage.ru_stime)
+}
+
 public enum ObstacleBridgeLinuxAdminServerError: Error, Equatable, LocalizedError {
     case invalidBindHost
     case socketFailure(Int32)
@@ -605,6 +612,9 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     }
 
     private func statusPayload() -> [String: Any] {
+        if let cpuNS = obstacleBridgeLinuxProcessCPUNS() {
+            ObstacleBridgeRuntimeMetrics.shared.recordCPUSample(processCPUNS: cpuNS)
+        }
         let status = statusProvider()
         let health = runtimeHealthProvider()
         let healthRecords = runtimeHealthRecordsProvider().compactMap { record -> [String: Any]? in
@@ -616,7 +626,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             status: status.state,
             extra: ["app_ready": status.appReady, "failure_reason": status.failureReason as Any]
         )
-        let payload: [String: Any] = [
+        var payload: [String: Any] = [
             "platform": "linux-swift",
             "overlay_transport": status.transport,
             "transport_state": status.state,
@@ -657,6 +667,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
             "peer": peerPayload(status.peer),
             "build": buildInfoProvider(),
         ]
+        payload["runtime_metrics"] = ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()
         return payload
     }
 
@@ -701,7 +712,7 @@ public final class ObstacleBridgeLinuxAdminServer: @unchecked Sendable {
     /// configuration secrets or construct protocol counters in this HTTP
     /// adapter: all SecureLink fields arrive through `status.peer`.
     private func peerPayload(_ peer: ObstacleBridgeLinuxPeerSnapshot, identity: String = "configured-peer") -> [String: Any] {
-        [
+        return [
             "peer_id": identity,
             "transport": peer.transport,
             "state": peer.lifecycleState,

@@ -1,6 +1,15 @@
 import Foundation
 import Darwin
 
+enum ObstacleBridgeAppleRuntimeMetricsSampler {
+    static func recordProcessCPU() {
+        var usage = rusage()
+        guard getrusage(RUSAGE_SELF, &usage) == 0 else { return }
+        func ns(_ value: timeval) -> UInt64 { UInt64(max(0, value.tv_sec)) * 1_000_000_000 + UInt64(max(0, value.tv_usec)) * 1_000 }
+        ObstacleBridgeRuntimeMetrics.shared.recordCPUSample(processCPUNS: ns(usage.ru_utime) &+ ns(usage.ru_stime))
+    }
+}
+
 enum ObstacleBridgeRuntimeConfig {
     /// Version shared by desktop hosts when handing runtime configuration to an isolated worker.
     static let isolatedWorkerProtocolVersion = 1

@@ -532,6 +532,18 @@ ARC-CMP-004:
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_packaged_xpc_helper_carries_packets_when_approved
     - tests/integration/test_macos_swift_elevated.py::test_macos_swift_elevated_installed_signed_app_admin_helper_actions
   unit_tests:
+    - tests/unit/test_runtime_metrics.py::test_histogram_reports_bounded_percentiles_and_no_samples
+    - tests/unit/test_runtime_metrics.py::test_rolling_histogram_expires_old_slots_without_retaining_samples
+    - tests/unit/test_runtime_metrics.py::test_accumulator_bounds_categories_and_uses_injected_clock
+    - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
+    - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
+    - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
+    # Covers the lifetime and trailing-two-second uninterrupted-peak source fields.
+    - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
+    - tests/unit/test_runtime_metrics.py::test_runner_records_completed_runtime_scope_without_retaining_individual_events
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::retainsOnlyApprovedAggregateTimingAndTrailingWindow
+    - tests/unit/test_runtime_metrics.py::test_linux_local_runtime_metrics_smoke_lifecycle
     - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeTunProbeDiagnosticsPolicyTests.swift::buildsPortableProbeCountersAndResultProjection
     - tests/unit/test_peer_stack_worker.py::test_cancelled_peer_retirement_kills_and_reaps_child
     - tests/unit/test_peer_stack_worker.py::test_peer_control_deadline_kills_and_reaps_unresponsive_child

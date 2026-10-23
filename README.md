@@ -1725,6 +1725,17 @@ Important caveat:
 Debugging in a project like this can be difficult because the behavior emerges from the interaction of different peers, while the relevant evidence is often hidden in a large amount of runtime data.
 
 For CPU, memory, wakeup, and performance-regression diagnosis, use the [runtime performance investigation and monitoring guide](docs/Runtime.md).
+The Python runtime's in-process monitoring foundation is bounded and
+dependency-free: it keeps fixed-bucket, fixed-window aggregate timing for
+approved categories, while one Runner-owned task samples process CPU and
+event-loop lateness. Cached redacted status now exposes bounded aggregates;
+the local smoke is socket/TUN-free, and the WebAdmin Runtime Analysis view
+shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
+contributors across overlay, SecureLink, compression, timer, snapshot,
+logging, ChannelMux, and TUN boundaries are displayed as event-loop occupancy
+estimates. The portable Swift Core supplies the same redacted runtime-metrics
+status shape to Linux, macOS, and iOS hosts for its shared overlay, SecureLink,
+compression, and timer boundaries.
 
 - Enable logging on the relevant component, generate log files, and analyze them carefully. In practice it is often effective to use AI assistance to summarize the logs and provide reasoning about the likely sequence of events.
 - Avoid guessing. If the evidence is not strong enough, extend the logging so that the next run produces harder facts instead of more assumptions.
