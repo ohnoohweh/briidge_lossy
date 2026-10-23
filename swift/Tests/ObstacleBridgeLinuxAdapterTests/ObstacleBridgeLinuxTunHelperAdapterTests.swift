@@ -592,6 +592,11 @@ private final class UnixHelperPeer: @unchecked Sendable {
                 lock.lock(); capturedOperations.append(request.op); capturedPayloads.append(request.payload); lock.unlock()
                 if disconnectFirstCommandReply && index == 0 { continue }
                 try? writeControl("\(request.op)_OK", ["handled": true], generation: hello.generation, fd)
+            } catch {
+                // This test peer deliberately models owner loss and malformed
+                // connection shutdowns. A single client failure must not stop
+                // the remaining expected socketpair exchanges.
+                continue
             }
         }
     }

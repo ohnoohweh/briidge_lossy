@@ -75,7 +75,7 @@ struct ObstacleBridgeLinuxTunDeviceTests {
         #expect(request["kind"] as? String == "admin.call")
         #expect(request["id"] as? String == "bootstrap-status")
         #expect(request["method"] as? String == "get_status_snapshot")
-        #expect(request["args"] as? [Any] == [])
+        #expect((request["args"] as? [Any])?.isEmpty == true)
         #expect(request["kwargs"] as? [String: Any] != nil)
         try writeAll(try ObstacleBridgeWorkerIPC.encodeControl(kind: .response, generation: 7, value: ["v": 1, "kind": "admin.reply", "id": "bootstrap-status", "ok": true, "result": [String: Any]()]), to: control.0)
         let ready = try readControl(from: control.0)
