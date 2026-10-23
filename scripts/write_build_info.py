@@ -107,7 +107,7 @@ def _write_generated_json(
 
 
 def main() -> int:
-    commit = _git(["rev-parse", "--short=12", "HEAD"]) or "unknown"
+    commit = _git(["rev-parse", "--short=8", "HEAD"]) or "unknown"
     status = _git(["status", "--porcelain"])
     diff = _git(["diff", "--binary", "HEAD"])
     diff_sha = hashlib.sha256(diff.encode("utf-8")).hexdigest()[:12] if diff else ""

@@ -1090,7 +1090,7 @@ The admin-web design note in [docs/WEBADMIN_DESIGN.md](docs/WEBADMIN_DESIGN.md) 
 
 An open WebAdmin page receives status and peer updates through the shared `/api/live` WebSocket subscription; if a browser cannot keep that subscription, the page falls back to bounded HTTP polling.
 
-Packaged native clients also show their embedded build identity in the WebAdmin headline and Runtime Metadata view, including commit, build timestamp, and whether the build was tainted.
+Packaged native clients show their embedded build identity in the WebAdmin headline and Runtime Metadata view, including the standard eight-character commit id, build timestamp, and whether the build was tainted.
 
 The broader security design note in [docs/SECURITY_DESIGN.md](docs/SECURITY_DESIGN.md) summarizes secure-link protection, WebAdmin auth, encrypted config-secret persistence, controlled secret reveal, API attack scenarios, malformed-frame handling, file-access threats, and remaining deployment boundaries.
 

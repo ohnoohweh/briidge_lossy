@@ -44,3 +44,4 @@ def test_device_build_script_accepts_release_version_and_generic_signing_update(
     assert 'OB_IOS_ALLOW_PROVISIONING_UPDATES' in source
     assert 'OB_IOS_PREPARE_ONLY' in source
     assert 'skipping Debug xcodebuild' in source
+    assert 'rev-parse --short=8 HEAD' in source
