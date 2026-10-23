@@ -1174,20 +1174,33 @@ final class ObstacleBridgeUdpOverlayTransportOwner {
     }
 
     private func handleOverlayPayload(_ payload: Data) {
-        guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
+        guard let result = ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportMuxDispatch, {
+            () -> (ObstacleBridgeChannelMuxCodec.MuxFrame, ObstacleBridgeAppleServiceCatalog.Install?)? in
+            guard let frame = ObstacleBridgeChannelMuxCodec.unpackMux(payload) else {
+                return nil
+            }
+            return (frame, serviceCatalog.receive(frame))
+        }) else {
             return
         }
-        if let install = serviceCatalog.receive(frame) {
+        let (frame, install) = result
+        if let install {
             serviceCatalogSink?(install)
             return
         }
         switch frame.proto {
         case .tun:
-            handleInboundTunMuxFrame(frame)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTunPayload) {
+                handleInboundTunMuxFrame(frame)
+            }
         case .tcp:
-            tcpTransportOwner.handleInboundMuxFrame(frame)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportTcpPayload) {
+                tcpTransportOwner.handleInboundMuxFrame(frame)
+            }
         case .udp:
-            handleInboundUDPMuxFrame(frame)
+            ObstacleBridgeRuntimeMetrics.shared.measure(.appleTransportUdpPayload) {
+                handleInboundUDPMuxFrame(frame)
+            }
         }
     }
 

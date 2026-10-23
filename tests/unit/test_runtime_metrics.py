@@ -40,6 +40,8 @@ def _runner_for_metrics_tests():
         "apple_transport_parse_dispatch", "apple_transport_egress",
         "apple_transport_payload_route", "apple_transport_lifecycle",
         "apple_transport_securelink_route", "apple_transport_delivered_payload",
+        "apple_transport_mux_dispatch", "apple_transport_tun_payload",
+        "apple_transport_tcp_payload", "apple_transport_udp_payload",
         "retransmit_tick", "retransmit_reported_missing", "retransmit_unconfirmed",
         "status_stats", "status_session_summaries", "status_worker_state",
         "status_telemetry_state", "status_tun_helper_state", "status_peer_stack_state",
@@ -122,7 +124,7 @@ def test_accumulator_rejects_unbounded_category_definitions():
     with unittest.TestCase().assertRaises(ValueError):
         RuntimeMetricAccumulator(("x" * 65,))
     with unittest.TestCase().assertRaises(ValueError):
-        RuntimeMetricAccumulator(tuple(str(index) for index in range(41)))
+        RuntimeMetricAccumulator(tuple(str(index) for index in range(49)))
 
 
 def test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta():

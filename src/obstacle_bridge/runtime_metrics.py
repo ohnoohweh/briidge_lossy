@@ -224,7 +224,7 @@ class RuntimeMetricAccumulator:
         categories: Iterable[str],
         *,
         clock: Optional[RuntimeClock] = None,
-        max_categories: int = 40,
+        max_categories: int = 48,
         rolling_slot_count: int = 60,
         rolling_slot_duration_ns: int = NANOSECONDS_PER_SECOND,
         buckets_ns: Sequence[int] = DEFAULT_DURATION_BUCKETS_NS,

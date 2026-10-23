@@ -1744,7 +1744,8 @@ shows lifetime and trailing-two-second peak CPU and uninterrupted-work signals;
 contributors across overlay receive preparation/data/idle/control, retransmit
 reported-missing/unconfirmed sweeps, SecureLink worker/crypto, compression
 frame/encode/decode, Apple transport parse/route/SecureLink/delivered-payload/
-egress/lifecycle and inclusive owner-queue boundaries, timer, status statistics,
+ChannelMux/TUN/TCP/UDP/egress/lifecycle and inclusive owner-queue boundaries,
+timer, status statistics,
 session summaries, worker state, telemetry state, TUN-helper state, peer-stack
 state, runtime-metrics/health projection,
 connections, peer inventory, build-info, security-advisor, logging, ChannelMux,
