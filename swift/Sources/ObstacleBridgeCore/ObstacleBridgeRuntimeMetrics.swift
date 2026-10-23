@@ -15,7 +15,11 @@ public final class ObstacleBridgeRuntimeMetrics: @unchecked Sendable {
         case compression
         case controlTick = "control_tick"
         case retransmitTick = "retransmit_tick"
-        case webAdminSnapshot = "webadmin_snapshot"
+        case statusSnapshot = "status_snapshot"
+        case connectionsSnapshot = "connections_snapshot"
+        case peersSnapshot = "peers_snapshot"
+        case buildInfo = "build_info"
+        case securityAdvisor = "security_advisor"
         case logging
     }
 

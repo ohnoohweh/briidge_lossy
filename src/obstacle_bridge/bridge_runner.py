@@ -273,7 +273,8 @@ class Runner:
         self._runtime_metrics = RuntimeMetricAccumulator((
             "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
             "securelink", "compression", "control_tick", "retransmit_tick",
-            "webadmin_snapshot", "logging",
+            "status_snapshot", "connections_snapshot", "peers_snapshot",
+            "build_info", "security_advisor", "logging",
         ))
         self._runtime_metrics_started: Dict[str, int] = {}
         self._runtime_metrics_cpu_peaks: list[dict[str, Any]] = []

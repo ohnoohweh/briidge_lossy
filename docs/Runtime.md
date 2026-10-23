@@ -609,8 +609,11 @@ owns exactly one cancellable monitor task that samples process CPU against
 monotonic elapsed time once per second and records event-loop probe lateness at
 a 250 ms cadence. The primitives retain aggregates only. Approved synchronous
 scopes cover overlay receive/send, SecureLink encode/decode, compression,
-control and retransmit ticks, WebAdmin snapshot construction, logging, and the
-existing ChannelMux/TUN callbacks. A scope reports just its category and
+control and retransmit ticks, WebAdmin snapshot components, logging, and the
+existing ChannelMux/TUN callbacks. Python WebAdmin records status, connections,
+peer inventory, build-info, and security-advisor construction separately, so a
+snapshot peak identifies the responsible component instead of grouping all
+admin work together. A scope reports just its category and
 completed duration into fixed summaries; it retains neither packet content nor
 per-callback history. Focused unit tests use deterministic inputs and do not
 need a live bridge, root privileges, TUN, a network peer, or Swift.

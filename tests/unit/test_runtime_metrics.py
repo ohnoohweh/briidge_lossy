@@ -33,7 +33,8 @@ def _runner_for_metrics_tests():
     runner._runtime_metrics = RuntimeMetricAccumulator((
         "channelmux_callback", "tun_callback", "overlay_receive", "overlay_send",
         "securelink", "compression", "control_tick", "retransmit_tick",
-        "webadmin_snapshot", "logging",
+        "status_snapshot", "connections_snapshot", "peers_snapshot",
+        "build_info", "security_advisor", "logging",
     ))
     runner._runtime_metrics_started = {}
     runner._runtime_metrics_cpu_peaks = []
@@ -158,6 +159,16 @@ def test_runner_records_completed_runtime_scope_without_retaining_individual_eve
     assert rows["securelink"]["count"] == 1
     assert rows["securelink"]["max_ms"] == 3.0
     assert runner._runtime_metrics.unknown_category_drops == 0
+
+
+def test_runner_keeps_webadmin_snapshot_components_separate():
+    runner = _runner_for_metrics_tests()
+    runner.record_runtime_duration("status_snapshot", 3 * NANOSECONDS_PER_MILLISECOND)
+    runner.record_runtime_duration("connections_snapshot", 7 * NANOSECONDS_PER_MILLISECOND)
+    rows = {item["category"]: item for item in runner._runtime_metrics_status_fields()["categories"]}
+    assert rows["status_snapshot"]["max_ms"] == 3.0
+    assert rows["connections_snapshot"]["max_ms"] == 7.0
+    assert rows["peers_snapshot"]["count"] == 0
 
 
 def test_linux_local_runtime_metrics_smoke_lifecycle():
