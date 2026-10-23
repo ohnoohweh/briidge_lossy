@@ -11,8 +11,29 @@ import time
 from collections import deque
 from typing import Deque, Optional
 
+from .runtime_metrics import bounded_runtime_scope
+
 DEFAULT_ADMIN_WEB_LOG_MAX_LINES = 1200
 DEBUG_LOG_RING: Deque[str] = deque(maxlen=DEFAULT_ADMIN_WEB_LOG_MAX_LINES)
+_RUNTIME_TIMING_CALLBACK = None
+
+
+def set_runtime_timing_callback(callback) -> None:
+    """Install the aggregate logging timing sink owned by the active runner."""
+    global _RUNTIME_TIMING_CALLBACK
+    _RUNTIME_TIMING_CALLBACK = callback
+
+
+def instrument_logging_handler(handler: logging.Handler) -> logging.Handler:
+    """Time one configured standard sink without changing logging semantics."""
+    original_emit = handler.emit
+
+    def emit(record: logging.LogRecord) -> None:
+        with bounded_runtime_scope(_RUNTIME_TIMING_CALLBACK, "logging"):
+            original_emit(record)
+
+    handler.emit = emit  # type: ignore[assignment]
+    return handler
 
 
 def configure_debug_log_ring(max_lines: int) -> None:
@@ -36,19 +57,21 @@ def debug_print(msg: str):
 
 class DebugToStderrHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            if record.levelno <= logging.DEBUG:
-                debug_print(self.format(record))
-        except Exception:
-            pass
+        with bounded_runtime_scope(_RUNTIME_TIMING_CALLBACK, "logging"):
+            try:
+                if record.levelno <= logging.DEBUG:
+                    debug_print(self.format(record))
+            except Exception:
+                pass
 
 
 class InMemoryDebugLogHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            DEBUG_LOG_RING.append(self.format(record))
-        except Exception:
-            pass
+        with bounded_runtime_scope(_RUNTIME_TIMING_CALLBACK, "logging"):
+            try:
+                DEBUG_LOG_RING.append(self.format(record))
+            except Exception:
+                pass
 
 
 class DebugLoggingConfigurator:
@@ -287,7 +310,7 @@ class DebugLoggingConfigurator:
                     fh = logging.FileHandler(self.file_path, encoding="utf-8")
                 fh.setLevel(file_level)
                 fh.setFormatter(fmt)
-                root.addHandler(fh)
+                root.addHandler(instrument_logging_handler(fh))
             except Exception as exc:
                 sys.stderr.write(f"Failed to open log file {self.file_path}: {exc}\n")
                 sys.stderr.flush()
@@ -295,7 +318,7 @@ class DebugLoggingConfigurator:
         ch = logging.StreamHandler(stream=sys.stdout)
         ch.setLevel(console_level)
         ch.setFormatter(fmt)
-        root.addHandler(ch)
+        root.addHandler(instrument_logging_handler(ch))
 
         mem = InMemoryDebugLogHandler()
         mem.setLevel(logging.DEBUG)

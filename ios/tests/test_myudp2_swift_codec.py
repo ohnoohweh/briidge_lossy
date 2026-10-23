@@ -160,6 +160,7 @@ def test_swift_myudp2_batch_codec_and_stream_receive_state(tmp_path: Path) -> No
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeServiceCodec.swift"),
         str(ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeMyUDPCodec.swift"),
         str(CORE / "ObstacleBridgeUdpOverlayCodec.swift"),
+        str(CORE / "ObstacleBridgeRuntimeMetrics.swift"),
         str(CORE / "ObstacleBridgeUdpOverlayPeerRuntime.swift"),
         str(source),
     ]

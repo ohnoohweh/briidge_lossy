@@ -74,6 +74,7 @@
       </div>
       <div class="topbar-right">
         <button id="logoutBtn" class="btn btn-secondary hidden" type="button">Logout</button>
+        <div id="runtimeMeters" class="runtime-meters" aria-label="Runtime pressure meters"><div class="runtime-meter" title="CPU load: dark bar is lifetime peak; bright bar is last 2 seconds"><span>CPU</span><i id="cpuMeter"></i></div><div class="runtime-meter" title="Uninterrupted computation: dark bar is lifetime peak; bright bar is last 2 seconds"><span>Slice</span><i id="sliceMeter"></i></div></div>
         <button id="restartBtn" class="btn btn-danger" type="button">Restart</button>
       </div>
     </header>
@@ -90,6 +91,7 @@
           <button class="nav-tab" data-tab="secure-link" type="button">Secure-Link</button>
           <button class="nav-tab" data-tab="configuration" type="button">Configuration</button>
           <button class="nav-tab" data-tab="logs" type="button">Debug Logs</button>
+          <button class="nav-tab" data-tab="runtime-analysis" type="button">Runtime Analysis</button>
           <button class="nav-tab" data-tab="misc" type="button">Misc</button>
         </nav>
 
@@ -681,6 +683,7 @@
           </section>
         </section>
 
+        <section id="tab-runtime-analysis" class="tab-panel"><section class="section-block card"><h2>Runtime Analysis</h2><p id="runtimeAnalysisSummary">Waiting for runtime samples.</p><div id="runtimeAnalysisRows" class="kv-list"></div></section></section>
         <section id="tab-misc" class="tab-panel">
           <section class="section-block card">
             <div class="section-header compact">

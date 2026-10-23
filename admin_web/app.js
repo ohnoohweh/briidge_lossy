@@ -2081,6 +2081,29 @@ function isTabActive(tabName) {
   return Boolean(panel && panel.classList.contains('active'));
 }
 
+function renderRuntimeMetrics(status) {
+  const metrics = status?.runtime_metrics || {};
+  const renderMeter = (id, values, ceiling) => {
+    const el = document.getElementById(id); if (!el) return;
+    const overall = Number(values?.overall); const recent = Number(values?.last_2_seconds);
+    if (!Number.isFinite(overall) && !Number.isFinite(recent)) { el.style.setProperty('--overall', '0%'); el.style.setProperty('--recent', '0%'); return; }
+    const outer = Math.min(100, (overall / ceiling) * 100); const inner = Math.min(100, (recent / ceiling) * 100);
+    el.style.setProperty('--overall', `${outer}%`); el.style.setProperty('--recent', `${inner}%`);
+  };
+  renderMeter('cpuMeter', metrics.cpu_cores_max, 1); renderMeter('sliceMeter', metrics.work_slice_ms_max, 100);
+  const summary = document.getElementById('runtimeAnalysisSummary'); const rows = document.getElementById('runtimeAnalysisRows');
+  if (!summary || !rows) return;
+  const cpu = metrics.cpu_cores_max || {}; const slice = metrics.work_slice_ms_max || {};
+  const cpuContributor = (item) => item?.category ? ` · ${item.category} ${(Number(item.observed_cores) * 100).toFixed(1)}% occupancy` : '';
+  summary.textContent = 'Peak values since start and over the trailing two seconds.';
+  rows.innerHTML = [
+    ['Longest uninterrupted — since start', slice.overall == null ? '—' : `${Number(slice.overall).toFixed(1)} ms · ${metrics.longest_uninterrupted_category || 'unknown source'}`],
+    ['Longest uninterrupted — last 2 s', slice.last_2_seconds == null ? '—' : `${Number(slice.last_2_seconds).toFixed(1)} ms · ${metrics.longest_uninterrupted_last_2_seconds_category || 'unknown source'}`],
+    ['Max CPU load — since start', cpu.overall == null ? '—' : `${(Number(cpu.overall) * 100).toFixed(1)}% of one core${cpuContributor(cpu.overall_contributor)}`],
+    ['Max CPU load — last 2 s', cpu.last_2_seconds == null ? '—' : `${(Number(cpu.last_2_seconds) * 100).toFixed(1)}% of one core${cpuContributor(cpu.last_2_seconds_contributor)}`]
+  ].map(([label, value]) => `<div class="kv-row"><span>${label}</span><strong>${value}</strong></div>`).join('');
+}
+
 function setActiveTab(tabName) {
   const tabs = document.querySelectorAll('.nav-tab');
   const panels = document.querySelectorAll('.tab-panel');
@@ -3268,6 +3291,7 @@ function applyMetaDoc(j) {
 
 function applyStatusDoc(j) {
   uiState.statusDoc = j || {};
+  renderRuntimeMetrics(uiState.statusDoc);
   if (j?.admin_ui?.runtime_dependencies) {
     uiState.runtimeDependencies = j.admin_ui.runtime_dependencies;
     renderOnboardingDependencyWarnings();

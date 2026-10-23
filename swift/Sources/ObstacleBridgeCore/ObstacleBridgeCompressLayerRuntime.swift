@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 /// Apple configuration, peer accounting, and status publication around the
 /// common Core mux-compression policy.  The wrapper deliberately has no zlib
@@ -107,6 +108,8 @@ final class ObstacleBridgeCompressLayerRuntime {
     }
 
     func handleInboundPayload(_ payload: Data, peerID: Int? = nil) -> ReceiveSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.compression, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else {
             return ReceiveSnapshot(deliveredPayload: payload, deliveredPeerID: peerID, dropped: false, decompressed: false)
         }
@@ -125,6 +128,8 @@ final class ObstacleBridgeCompressLayerRuntime {
     }
 
     func handleSendPayload(_ payload: Data, peerID: Int? = nil) -> SendSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.compression, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         guard let frame = try? ObstacleBridgeChannelMuxFrameCodec.decode(payload) else {
             return SendSnapshot(wirePayload: payload, sentBytes: payload.count, compressed: false)
         }

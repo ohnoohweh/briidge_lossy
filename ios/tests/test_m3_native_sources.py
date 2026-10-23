@@ -277,6 +277,14 @@ def test_ipserver_runtime_health_keeps_redacted_prior_lifetime_evidence() -> Non
     assert "runtimeHealthRing = prior ?? ObstacleBridgeRuntimeHealthRing()" in provider
     assert '"runtime_health_recent_records"' in provider
     assert '"runtime_health_recent_records": runtimeHealth["runtime_health_recent_records"] ?? []' in provider
+
+
+def test_ios_runtime_status_projects_shared_runtime_metrics() -> None:
+    provider = (IOS_SWIFT_DIR / "PacketTunnelProvider.swift").read_text(encoding="utf-8")
+    shared = (SHARED_NATIVE_DIR / "ObstacleBridgeRuntimeConfig.swift").read_text(encoding="utf-8")
+    assert '"runtime_metrics": ObstacleBridgeRuntimeMetrics.shared.snapshotPayload()' in provider
+    assert "ObstacleBridgeAppleRuntimeMetricsSampler.recordProcessCPU()" in provider
+    assert "enum ObstacleBridgeAppleRuntimeMetricsSampler" in shared
     assert "runtimeHealthRecordsPayload" in provider
 
 

@@ -1672,6 +1672,20 @@ REQ-ADM-001:
     - tests/unit/test_native_proxy_supervisor.py::test_swift_supervisor_owns_python_or_native_proxy
     - tests/unit/test_managed_logging_worker.py::test_private_worker_records_queries_and_rejects_bad_input
     - tests/unit/test_native_log_supervisor.py::test_swift_host_logging_records_queries_and_restarts
+    - tests/unit/test_runtime_metrics.py::test_histogram_reports_bounded_percentiles_and_no_samples
+    - tests/unit/test_runtime_metrics.py::test_rolling_histogram_expires_old_slots_without_retaining_samples
+    - tests/unit/test_runtime_metrics.py::test_accumulator_bounds_categories_and_uses_injected_clock
+    - tests/unit/test_runtime_metrics.py::test_accumulator_rejects_unbounded_category_definitions
+    - tests/unit/test_runtime_metrics.py::test_runner_cpu_sampler_uses_process_delta_over_monotonic_wall_delta
+    - tests/unit/test_runtime_metrics.py::test_runner_cpu_peak_keeps_largest_callback_occupancy_estimate
+    - tests/unit/test_runtime_metrics.py::test_runner_monitor_is_one_owned_task_and_cancels_cleanly
+    # Covers the lifetime and trailing-two-second uninterrupted-peak source fields.
+    - tests/unit/test_runtime_metrics.py::test_runner_runtime_metrics_status_is_bounded_and_redacted
+    - tests/unit/test_runtime_metrics.py::test_runner_records_completed_runtime_scope_without_retaining_individual_events
+    - swift/Tests/ObstacleBridgeCoreTests/ObstacleBridgeRuntimeMetricsTests.swift::retainsOnlyApprovedAggregateTimingAndTrailingWindow
+    # Compiles the instrumented Core overlay paths with the metrics dependency.
+    - tests/unit/test_channel_mux_swift_parity.py::test_swift_securelink_nonce_parity
+    - tests/unit/test_runtime_metrics.py::test_linux_local_runtime_metrics_smoke_lifecycle
     - tests/unit/test_managed_logging_worker.py::test_peer_child_logs_follow_collector_replacement
     - tests/unit/test_peer_stack_worker.py::test_peer_worker_inherits_stderr_without_managed_collector
     - tests/unit/test_admin_worker.py::test_python_admin_worker_serves_runner_config_and_authenticates

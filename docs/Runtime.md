@@ -596,6 +596,68 @@ peer addresses, channel IDs, service IDs, exception text, or session IDs.
 Keep detailed per-peer information in the authenticated admin APIs and expose
 bounded aggregates to the monitoring system.
 
+### In-process monitoring implementation state
+
+This section lists only unfinished work packages. When a package is complete,
+remove its package entry and fold its durable result into the present-state
+description rather than retaining completed work-package IDs.
+
+The Python runtime has dependency-free, bounded timing primitives in
+`runtime_metrics.py`: an injectable monotonic clock, fixed duration buckets,
+rolling fixed-slot histograms, and a fixed-category accumulator. `Runner` now
+owns exactly one cancellable monitor task that samples process CPU against
+monotonic elapsed time once per second and records event-loop probe lateness at
+a 250 ms cadence. The primitives retain aggregates only. Approved synchronous
+scopes cover overlay receive/send, SecureLink encode/decode, compression,
+control and retransmit ticks, WebAdmin snapshot construction, logging, and the
+existing ChannelMux/TUN callbacks. A scope reports just its category and
+completed duration into fixed summaries; it retains neither packet content nor
+per-callback history. Focused unit tests use deterministic inputs and do not
+need a live bridge, root privileges, TUN, a network peer, or Swift.
+
+#### CPU-load and contributor semantics
+
+The CPU-load indicators are process measurements, not callback-duration
+ratios. On each approximately one-second monitor sample, the runtime computes:
+
+```text
+CPU cores = delta(time.process_time_ns()) / delta(time.monotonic_ns())
+CPU percent of one core = CPU cores * 100
+```
+
+The actual elapsed monotonic interval is used as the denominator, so an
+event-loop delay extends the observation period instead of producing a false
+one-second result. The lifetime indicator is the greatest completed sample
+since process start; the two-second indicator is the greatest sample ending in
+the trailing two seconds.
+
+The displayed contributor is an explicitly labelled **synchronous occupancy
+estimate** for that same sample: the timed duration of the largest approved
+callback category divided by the sample's wall interval. It identifies which
+instrumented path occupied the event loop most (for example,
+`channelmux_callback 50% occupancy`), but it is not claimed to be exact CPU
+attribution. Process CPU time also includes native code, other threads, and
+work outside the instrumented boundaries.
+
+`Runner` now projects cached redacted CPU/load peaks, loop lag, approved
+callback timing summaries, two-second maxima, and the source category for each
+overall/trailing-two-second uninterrupted peak through
+`/api/status`; its local no-TUN/no-peer lifecycle smoke test covers monitor
+startup, status, and cancellation. WebAdmin now renders compact graphical
+meters beside Restart and supplies exact aggregate detail through Runtime
+Analysis. There is no remaining L-RM work package gap.
+
+### Swift runtime monitoring
+
+The portable Swift Core owns the shared fixed-category, aggregate-only timing
+model. Linux, macOS, and iOS consume its `runtime_metrics` status payload, so
+the same lifetime/two-second maxima, source categories, and CPU-core semantics
+are available without a mixed-runtime build. Core records overlay receive/send,
+SecureLink, compression, and control/retransmit work; CPU sampling uses
+process user-plus-system time divided by elapsed monotonic time. The current
+Swift payload deliberately reports unavailable event-loop lag and percentile
+fields as null rather than inventing platform-specific estimates.
+
 ### Dashboard and alert on relationships
 
 Place these graphs on one time axis:

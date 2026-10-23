@@ -1,4 +1,5 @@
 import Foundation
+import Dispatch
 
 enum ObstacleBridgeSecureLinkPskRuntimeError: Error { case invalidState, invalidFrame, authFailed(Int) }
 
@@ -67,11 +68,15 @@ final class ObstacleBridgeSecureLinkPskRuntime {
         let f = try coreClient.begin(sessionID: selectedSessionID, clientNonce: selectedNonce); return outbound([f])
     }
     func sendApp(_ payload: Data) throws -> OutboundSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.secureLink, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         if clientMode, let coreClient { var frames = [try coreClient.protect(payload)]; let trigger = coreClient.automaticRekeyTrigger(); if let r = try coreClient.pollAutomaticRekey() { lastRekeyTrigger = trigger ?? "automatic"; record("rekey_started"); frames.append(r) }; framesFromClientPassedTotal &+= 1; return outbound(frames) }
         if !clientMode, let coreServer { let f = try coreServer.protect(payload); framesToClientPassedTotal &+= 1; return outbound([f]) }
         throw ObstacleBridgeSecureLinkPskRuntimeError.invalidState
     }
     func handleInboundFrame(_ wire: Data) -> InboundSnapshot {
+        let started = DispatchTime.now().uptimeNanoseconds
+        defer { ObstacleBridgeRuntimeMetrics.shared.record(.secureLink, durationNS: DispatchTime.now().uptimeNanoseconds &- started) }
         expireHandshakeIfNeeded()
         guard let frame = ObstacleBridgeSecureLinkPskCodec.parseFrame(wire) else { return fail(0, Self.authFailDecode) }
         switch frame.slType {

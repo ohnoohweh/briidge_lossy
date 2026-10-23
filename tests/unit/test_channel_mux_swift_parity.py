@@ -27,6 +27,7 @@ SWIFT_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "Obstac
 SWIFT_CHANNELMUX_CORE_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxCodec.swift"
 SWIFT_SECURELINK_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeSecureLinkPskCodec.swift"
 SWIFT_UDP_CODEC_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayCodec.swift"
+SWIFT_RUNTIME_METRICS_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeRuntimeMetrics.swift"
 SWIFT_UDP_PEER_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeUdpOverlayPeerRuntime.swift"
 SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgeChannelMuxTunRuntime.swift"
 SWIFT_PACKET_MODEL_SOURCE = ROOT / "swift" / "Sources" / "ObstacleBridgeCore" / "ObstacleBridgePacketModel.swift"
@@ -158,6 +159,7 @@ def swift_channelmux_runner(tmp_path_factory: pytest.TempPathFactory) -> Path:
         str(SWIFT_CODEC_SOURCE),
         str(SWIFT_SECURELINK_SOURCE),
         str(SWIFT_UDP_CODEC_SOURCE),
+        str(SWIFT_RUNTIME_METRICS_SOURCE),
         str(SWIFT_UDP_PEER_RUNTIME_SOURCE),
         str(SWIFT_CHANNELMUX_TUN_RUNTIME_SOURCE),
         str(SWIFT_PACKET_MODEL_SOURCE),
